@@ -62,6 +62,10 @@ pub struct App {
     default_font_size: f32,
     /// When copy flash started (for animation), None if not flashing
     copy_flash_start: Option<Instant>,
+    /// Whether the window is currently focused
+    window_focused: bool,
+    /// When focus state last changed (for smooth transition)
+    focus_change_time: Instant,
 }
 
 impl App {
@@ -95,6 +99,8 @@ impl App {
             mouse_pressed: false,
             default_font_size: 35.0,
             copy_flash_start: None,
+            window_focused: true,
+            focus_change_time: Instant::now(),
         })
     }
 
@@ -186,6 +192,7 @@ impl App {
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
         let copy_flash = self.copy_flash_intensity();
+        let focus_dim = self.focus_dim();
 
         // Get cursor target position and active tab ID from grid
         let cursor_info = self.tabs
@@ -211,7 +218,7 @@ impl App {
         let terminal = &tab.terminal;
         let tab_info = tabs.tab_info();
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash) {
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -485,6 +492,27 @@ impl App {
         }
     }
 
+    /// Calculate focus dim amount (0.0 = fully bright/focused, 1.0 = dimmed/unfocused)
+    /// Smoothly transitions over ~100ms when focus changes
+    fn focus_dim(&self) -> f32 {
+        const TRANSITION_DURATION: f32 = 0.1; // 100ms transition
+        const DIM_AMOUNT: f32 = 0.3; // How much to dim when unfocused (30%)
+
+        let elapsed = self.focus_change_time.elapsed().as_secs_f32();
+        let t = (elapsed / TRANSITION_DURATION).min(1.0);
+
+        // Ease-out for smooth transition
+        let eased_t = 1.0 - (1.0 - t) * (1.0 - t);
+
+        if self.window_focused {
+            // Transitioning to focused: dim -> bright
+            DIM_AMOUNT * (1.0 - eased_t)
+        } else {
+            // Transitioning to unfocused: bright -> dim
+            DIM_AMOUNT * eased_t
+        }
+    }
+
     /// Paste from clipboard
     fn paste_clipboard(&mut self) {
         let Some(clipboard) = &mut self.clipboard else { return };
@@ -679,6 +707,14 @@ impl ApplicationHandler for App {
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 10.0,
                 };
                 self.handle_scroll(y_delta);
+            }
+
+            WindowEvent::Focused(focused) => {
+                if self.window_focused != focused {
+                    self.window_focused = focused;
+                    self.focus_change_time = Instant::now();
+                    log::debug!("Window focus changed: {}", focused);
+                }
             }
 
             WindowEvent::RedrawRequested => {

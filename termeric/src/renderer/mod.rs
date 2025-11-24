@@ -176,7 +176,8 @@ impl Renderer {
     /// cursor_opacity: 0.0 = invisible, 1.0 = fully visible (for smooth blink animation)
     /// cursor_pos: animated cursor position (col, row) as floats for smooth movement
     /// copy_flash: 0.0 = no flash, 1.0 = full flash (for copy confirmation)
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32) -> Result<(), SurfaceError> {
+    /// focus_dim: 0.0 = fully bright (focused), higher = dimmed (unfocused)
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -185,7 +186,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -226,13 +227,16 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
         let window_width = self.size.0 as f32;
+
+        // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
+        let brightness = 1.0 - focus_dim;
 
         // Render tab bar first
         self.build_tab_bar(tabs, window_width);
@@ -242,9 +246,9 @@ impl Renderer {
         let base_selection_color = [0.79, 0.64, 0.15, 0.35]; // #C9A227 at 35% opacity
         let flash_color = [1.0, 1.0, 0.9, 0.7]; // Bright cream flash
         let selection_color = [
-            base_selection_color[0] + (flash_color[0] - base_selection_color[0]) * copy_flash,
-            base_selection_color[1] + (flash_color[1] - base_selection_color[1]) * copy_flash,
-            base_selection_color[2] + (flash_color[2] - base_selection_color[2]) * copy_flash,
+            (base_selection_color[0] + (flash_color[0] - base_selection_color[0]) * copy_flash) * brightness,
+            (base_selection_color[1] + (flash_color[1] - base_selection_color[1]) * copy_flash) * brightness,
+            (base_selection_color[2] + (flash_color[2] - base_selection_color[2]) * copy_flash) * brightness,
             base_selection_color[3] + (flash_color[3] - base_selection_color[3]) * copy_flash,
         ];
 
@@ -276,18 +280,28 @@ impl Renderer {
                     self.rect_pipeline.push_rect(
                         x, y,
                         cell_width, cell_height,
-                        [bg.r as f32 / 255.0, bg.g as f32 / 255.0, bg.b as f32 / 255.0, 1.0],
+                        [
+                            bg.r as f32 / 255.0 * brightness,
+                            bg.g as f32 / 255.0 * brightness,
+                            bg.b as f32 / 255.0 * brightness,
+                            1.0
+                        ],
                     );
                 }
 
-                // Draw character
+                // Draw character with focus dimming applied
                 if let Some(c) = cell.content.char() {
                     if !c.is_whitespace() {
                         let fg = cell.fg;
                         self.text_pipeline.push_char(
                             c,
                             x, y,
-                            [fg.r as f32 / 255.0, fg.g as f32 / 255.0, fg.b as f32 / 255.0, 1.0],
+                            [
+                                fg.r as f32 / 255.0 * brightness,
+                                fg.g as f32 / 255.0 * brightness,
+                                fg.b as f32 / 255.0 * brightness,
+                                1.0
+                            ],
                         );
                     }
                 }
@@ -302,11 +316,11 @@ impl Renderer {
                 let x = cursor_pos.0 * cell_width;
                 let y = TAB_BAR_HEIGHT + cursor_pos.1 * cell_height;
 
-                // Bright orange cursor (turmeric core) with animated opacity
+                // Bright orange cursor (turmeric core) with animated opacity and focus dimming
                 self.rect_pipeline.push_rect(
                     x, y,
                     cell_width, cell_height,
-                    [0.88, 0.48, 0.13, cursor_opacity], // #E07B20 with animated alpha
+                    [0.88 * brightness, 0.48 * brightness, 0.13 * brightness, cursor_opacity], // #E07B20 with animated alpha
                 );
             }
         }
