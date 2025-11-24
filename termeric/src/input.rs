@@ -300,14 +300,18 @@ impl MouseState {
 }
 
 /// Convert screen coordinates to grid cell position
+/// tab_bar_height: height of the tab bar in pixels (subtracted from y before conversion)
 pub fn screen_to_grid(
     x: f64,
     y: f64,
     cell_width: f32,
     cell_height: f32,
+    tab_bar_height: f32,
     scroll_offset: i32,
 ) -> Point {
     let col = (x as f32 / cell_width).floor() as usize;
-    let row = (y as f32 / cell_height).floor() as i32 - scroll_offset;
+    // Subtract tab bar height from y to get position relative to terminal area
+    let adjusted_y = (y as f32 - tab_bar_height).max(0.0);
+    let row = (adjusted_y / cell_height).floor() as i32 - scroll_offset;
     Point::new(row, col)
 }

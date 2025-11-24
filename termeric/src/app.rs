@@ -503,7 +503,8 @@ impl App {
     fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, position: (f64, f64)) {
         let Some(renderer) = &self.renderer else { return };
         let (cell_width, cell_height) = renderer.cell_size();
-        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, 0);
+        let tab_bar_height = renderer.tab_bar_height();
+        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, tab_bar_height, 0);
 
         match state {
             ElementState::Pressed => {
@@ -537,7 +538,8 @@ impl App {
     fn handle_mouse_move(&mut self, position: (f64, f64)) {
         let Some(renderer) = &self.renderer else { return };
         let (cell_width, cell_height) = renderer.cell_size();
-        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, 0);
+        let tab_bar_height = renderer.tab_bar_height();
+        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, tab_bar_height, 0);
 
         // Only update selection when mouse is pressed (dragging)
         if self.mouse_pressed {
