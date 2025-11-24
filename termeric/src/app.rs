@@ -37,6 +37,11 @@ pub struct App {
     cursor_blink_start: Instant,
     /// Cursor blink period in seconds
     cursor_blink_period: f32,
+    /// Animated cursor display position (for smooth movement)
+    cursor_display_col: f32,
+    cursor_display_row: f32,
+    /// Last frame time for delta calculation
+    last_frame_time: Instant,
     /// Mouse input state
     mouse_state: MouseState,
     /// Current keyboard modifiers
@@ -69,6 +74,9 @@ impl App {
             rows: 24,
             cursor_blink_start: Instant::now(),
             cursor_blink_period: 1.0, // 1 second full cycle (fade out + fade in)
+            cursor_display_col: 0.0,
+            cursor_display_row: 0.0,
+            last_frame_time: Instant::now(),
             mouse_state: MouseState::new(),
             modifiers: ModifiersState::empty(),
             clipboard,
@@ -163,8 +171,24 @@ impl App {
 
     /// Render the terminal
     fn render(&mut self) {
-        // Calculate cursor opacity before borrowing renderer
+        // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
+
+        // Get cursor target position from grid
+        let cursor_target = self.tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab())
+            .map(|tab| {
+                let cursor = tab.terminal.grid().cursor();
+                (cursor.col, cursor.row, cursor.visible)
+            });
+
+        // Update cursor animation if we have a target
+        let cursor_display_pos = if let Some((col, row, _visible)) = cursor_target {
+            self.update_cursor_animation(col, row)
+        } else {
+            (0.0, 0.0)
+        };
 
         let Some(renderer) = &mut self.renderer else { return };
         let Some(tabs) = &self.tabs else { return };
@@ -173,7 +197,7 @@ impl App {
         let terminal = &tab.terminal;
         let tab_info = tabs.tab_info();
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, &tab_info) {
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -211,6 +235,36 @@ impl App {
     /// Reset cursor blink animation (e.g., after typing)
     fn reset_cursor_blink(&mut self) {
         self.cursor_blink_start = Instant::now();
+    }
+
+    /// Update animated cursor position, interpolating toward target
+    /// Returns the current display position (col, row) as floats
+    fn update_cursor_animation(&mut self, target_col: usize, target_row: usize) -> (f32, f32) {
+        let now = Instant::now();
+        let delta = now.duration_since(self.last_frame_time).as_secs_f32();
+        self.last_frame_time = now;
+
+        let target_col = target_col as f32;
+        let target_row = target_row as f32;
+
+        // Easing speed - higher = faster snap to target
+        // 15.0 gives a quick but visible ease (reaches target in ~100-150ms)
+        let ease_speed = 15.0;
+        let t = (ease_speed * delta).min(1.0);
+
+        // Lerp toward target
+        self.cursor_display_col += (target_col - self.cursor_display_col) * t;
+        self.cursor_display_row += (target_row - self.cursor_display_row) * t;
+
+        // Snap if very close to avoid endless tiny movements
+        if (self.cursor_display_col - target_col).abs() < 0.01 {
+            self.cursor_display_col = target_col;
+        }
+        if (self.cursor_display_row - target_row).abs() < 0.01 {
+            self.cursor_display_row = target_row;
+        }
+
+        (self.cursor_display_col, self.cursor_display_row)
     }
 
     /// Handle an action triggered by a keybinding

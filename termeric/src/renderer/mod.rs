@@ -174,7 +174,8 @@ impl Renderer {
 
     /// Render the terminal grid with tab bar
     /// cursor_opacity: 0.0 = invisible, 1.0 = fully visible (for smooth blink animation)
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, tabs: &[TabInfo]) -> Result<(), SurfaceError> {
+    /// cursor_pos: animated cursor position (col, row) as floats for smooth movement
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo]) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -183,7 +184,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs
-        self.build_render_data(grid, selection, cursor_opacity, tabs);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -224,7 +225,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, tabs: &[TabInfo]) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo]) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -288,8 +289,9 @@ impl Renderer {
         if cursor_opacity > 0.0 && scroll_offset == 0 {
             let cursor = grid.cursor();
             if cursor.visible {
-                let x = cursor.col as f32 * cell_width;
-                let y = TAB_BAR_HEIGHT + cursor.row as f32 * cell_height;
+                // Use animated cursor position for smooth movement
+                let x = cursor_pos.0 * cell_width;
+                let y = TAB_BAR_HEIGHT + cursor_pos.1 * cell_height;
 
                 // Bright orange cursor (turmeric core) with animated opacity
                 self.rect_pipeline.push_rect(
