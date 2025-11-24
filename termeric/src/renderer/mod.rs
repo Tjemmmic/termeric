@@ -175,7 +175,8 @@ impl Renderer {
     /// Render the terminal grid with tab bar
     /// cursor_opacity: 0.0 = invisible, 1.0 = fully visible (for smooth blink animation)
     /// cursor_pos: animated cursor position (col, row) as floats for smooth movement
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo]) -> Result<(), SurfaceError> {
+    /// copy_flash: 0.0 = no flash, 1.0 = full flash (for copy confirmation)
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -184,7 +185,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -225,7 +226,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo]) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -237,7 +238,15 @@ impl Renderer {
         self.build_tab_bar(tabs, window_width);
 
         // Selection highlight color - earthy yellow (inner layer) with transparency
-        let selection_color = [0.79, 0.64, 0.15, 0.35]; // #C9A227 at 35% opacity
+        // When copy_flash > 0, brighten the selection to white for a flash effect
+        let base_selection_color = [0.79, 0.64, 0.15, 0.35]; // #C9A227 at 35% opacity
+        let flash_color = [1.0, 1.0, 0.9, 0.7]; // Bright cream flash
+        let selection_color = [
+            base_selection_color[0] + (flash_color[0] - base_selection_color[0]) * copy_flash,
+            base_selection_color[1] + (flash_color[1] - base_selection_color[1]) * copy_flash,
+            base_selection_color[2] + (flash_color[2] - base_selection_color[2]) * copy_flash,
+            base_selection_color[3] + (flash_color[3] - base_selection_color[3]) * copy_flash,
+        ];
 
         // Get scroll offset to determine if cursor should be shown
         let scroll_offset = grid.scroll_offset();

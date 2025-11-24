@@ -60,6 +60,8 @@ pub struct App {
     mouse_pressed: bool,
     /// Default font size (for reset)
     default_font_size: f32,
+    /// When copy flash started (for animation), None if not flashing
+    copy_flash_start: Option<Instant>,
 }
 
 impl App {
@@ -92,6 +94,7 @@ impl App {
             last_cursor_pos: None,
             mouse_pressed: false,
             default_font_size: 35.0,
+            copy_flash_start: None,
         })
     }
 
@@ -182,6 +185,7 @@ impl App {
     fn render(&mut self) {
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
+        let copy_flash = self.copy_flash_intensity();
 
         // Get cursor target position and active tab ID from grid
         let cursor_info = self.tabs
@@ -207,7 +211,7 @@ impl App {
         let terminal = &tab.terminal;
         let tab_info = tabs.tab_info();
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info) {
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -456,7 +460,28 @@ impl App {
                 log::error!("Failed to copy to clipboard: {}", e);
             } else {
                 log::debug!("Copied {} bytes to clipboard", text.len());
+                // Start copy flash animation
+                self.copy_flash_start = Some(Instant::now());
             }
+        }
+    }
+
+    /// Calculate copy flash intensity (0.0 = no flash, 1.0 = full flash)
+    /// Flash fades out over ~150ms
+    fn copy_flash_intensity(&self) -> f32 {
+        const FLASH_DURATION: f32 = 0.15; // 150ms
+
+        match self.copy_flash_start {
+            Some(start) => {
+                let elapsed = start.elapsed().as_secs_f32();
+                if elapsed >= FLASH_DURATION {
+                    0.0
+                } else {
+                    // Fade out: 1.0 -> 0.0
+                    1.0 - (elapsed / FLASH_DURATION)
+                }
+            }
+            None => 0.0,
         }
     }
 
