@@ -1,0 +1,54 @@
+# Custom Theme Example for Termeric
+# Place custom themes in ~/.config/termeric/themes/
+
+[meta]
+name = "Custom Example"
+author = "Your Name"
+description = "A custom theme template"
+
+# Primary colors (ANSI 0-7)
+[primary]
+black = "#1A1A1A"
+red = "#FF5555"
+green = "#50FA7B"
+yellow = "#F1FA8C"
+blue = "#BD93F9"
+magenta = "#FF79C6"
+cyan = "#8BE9FD"
+white = "#F8F8F2"
+
+# Bright colors (ANSI 8-15)
+[bright]
+black = "#6272A4"
+red = "#FF6E6E"
+green = "#69FF94"
+yellow = "#FFFFA5"
+blue = "#D6ACFF"
+magenta = "#FF92DF"
+cyan = "#A4FFFF"
+white = "#FFFFFF"
+
+# UI-specific colors
+[ui]
+# Terminal background
+background = "#282A36"
+# Default text color
+foreground = "#F8F8F2"
+# Cursor color
+cursor = "#F8F8F2"
+# Text under cursor
+cursor_text = "#282A36"
+# Selection highlight
+selection = "#44475A"
+# Optional: text color when selected (uncomment to use)
+# selection_text = "#FFFFFF"
+# Border/separator color
+border = "#44475A"
+# Active tab color
+tab_active = "#BD93F9"
+# Inactive tab color
+tab_inactive = "#44475A"
+# Search match highlight
+search_match = "#F1FA8C80"  # with alpha
+# URL underline color
+url = "#8BE9FD"

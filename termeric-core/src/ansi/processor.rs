@@ -62,7 +62,9 @@ mod tests {
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(80, 24);
 
-        processor.process(&mut terminal, b"Line1\nLine2");
+        // Note: \n is LF (line feed), \r is CR (carriage return)
+        // To start at column 0 on new line, need \r\n
+        processor.process(&mut terminal, b"Line1\r\nLine2");
 
         let grid = terminal.grid();
         assert_eq!(grid.cell(0, 0).unwrap().content.char(), Some('L'));

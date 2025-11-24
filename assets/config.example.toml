@@ -1,0 +1,41 @@
+# Termeric Configuration
+# Copy this to ~/.config/termeric/config.toml
+
+# Shell configuration
+[shell]
+# Path to shell program (leave empty for default shell)
+# program = "/bin/zsh"
+# Arguments to pass to shell
+# args = ["-l"]
+
+# Font configuration
+[font]
+# Font family (use "monospace" for system default monospace)
+family = "monospace"
+# Font size in points
+size = 14.0
+# Fallback fonts (tried in order if primary font doesn't have a glyph)
+# fallback = ["Noto Sans Mono", "DejaVu Sans Mono"]
+
+# Scrollback configuration
+[scrollback]
+# Maximum number of lines to keep in scrollback buffer
+lines = 10000
+
+# Theme configuration
+[theme]
+# Theme name (built-in: turmeric, dracula, nord, solarized-dark, solarized-light)
+name = "turmeric"
+# Or explicit path to theme file
+# path = "/path/to/custom-theme.toml"
+
+# Window configuration
+[window]
+# Initial window width
+width = 800
+# Initial window height
+height = 600
+# Window opacity (0.0 - 1.0, may not work on all platforms)
+opacity = 1.0
+# Padding around terminal content in pixels
+padding = 8

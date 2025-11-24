@@ -84,6 +84,41 @@ impl Grid {
         self.storage.cell(row, col)
     }
 
+    /// Get a reference to a cell accounting for current scroll offset
+    /// When scrolled up, this returns cells from scrollback buffer
+    pub fn cell_scrolled(&self, row: usize, col: usize) -> Option<&Cell> {
+        if self.scroll_offset == 0 {
+            // Not scrolled - return visible cell
+            self.storage.cell(row, col)
+        } else {
+            // Scrolled - need to look into scrollback
+            // Row 0 with offset N should show scrollback line (scrollback_len - N)
+            let scrollback_len = self.storage.scrollback_len();
+            if scrollback_len == 0 {
+                return self.storage.cell(row, col);
+            }
+
+            // Calculate which line to show
+            // If scroll_offset is scrollback_len, row 0 shows oldest scrollback line
+            // If scroll_offset is 1, row 0 shows most recent scrollback line
+            let offset_row = row + self.scroll_offset;
+            if offset_row < scrollback_len {
+                // This row is in scrollback
+                let scrollback_idx = scrollback_len - offset_row - 1;
+                self.storage.scrollback_row(scrollback_idx)
+                    .and_then(|r| r.get(col))
+            } else {
+                // This row is in active buffer
+                let active_row = offset_row - scrollback_len;
+                if active_row < self.rows {
+                    self.storage.cell(active_row, col)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     /// Get a mutable reference to a cell at the given position
     pub fn cell_mut(&mut self, row: usize, col: usize) -> Option<&mut Cell> {
         self.storage.cell_mut(row, col)

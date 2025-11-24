@@ -1,7 +1,6 @@
 //! Application state and event handling
 
 use anyhow::Result;
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
@@ -12,12 +11,10 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use termeric_core::{Pty, Terminal};
-use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
-
 use crate::config::Config;
-use crate::input::{Action, MouseState, check_keybinding, screen_to_grid};
+use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
 use crate::renderer::Renderer;
+use crate::tabs::TabManager;
 
 /// Main application state
 pub struct App {
@@ -28,12 +25,8 @@ pub struct App {
     window: Option<Arc<Window>>,
     /// The renderer
     renderer: Option<Renderer>,
-    /// The terminal state
-    terminal: Option<Terminal>,
-    /// PTY handle for writing to shell
-    pty: Option<PtyHandle>,
-    /// Receiver for PTY output
-    pty_rx: Option<Receiver<PtyEvent>>,
+    /// Tab manager for multiple terminals
+    tabs: Option<TabManager>,
     /// Whether the application should exit
     should_exit: bool,
     /// Terminal dimensions
@@ -47,6 +40,12 @@ pub struct App {
     modifiers: ModifiersState,
     /// Clipboard
     clipboard: Option<arboard::Clipboard>,
+    /// Last cursor screen position (for mouse input events)
+    last_cursor_pos: Option<(f64, f64)>,
+    /// Whether mouse is currently pressed (for selection)
+    mouse_pressed: bool,
+    /// Default font size (for reset)
+    default_font_size: f32,
 }
 
 impl App {
@@ -61,9 +60,7 @@ impl App {
             config,
             window: None,
             renderer: None,
-            terminal: None,
-            pty: None,
-            pty_rx: None,
+            tabs: None,
             should_exit: false,
             cols: 80,
             rows: 24,
@@ -71,6 +68,9 @@ impl App {
             mouse_state: MouseState::new(),
             modifiers: ModifiersState::empty(),
             clipboard,
+            last_cursor_pos: None,
+            mouse_pressed: false,
+            default_font_size: 20.0,
         })
     }
 
@@ -92,58 +92,38 @@ impl App {
         Ok(())
     }
 
-    /// Initialize the terminal and PTY
-    fn init_terminal(&mut self) -> Result<()> {
-        let cols = self.cols as u16;
-        let rows = self.rows as u16;
+    /// Initialize the tab manager with the first tab
+    fn init_tabs(&mut self) -> Result<()> {
+        let mut tabs = TabManager::new(self.cols, self.rows);
+        tabs.new_tab()?;
 
-        // Create terminal
-        let terminal = Terminal::new(self.cols, self.rows);
+        self.tabs = Some(tabs);
 
-        // Create PTY and spawn shell
-        let pty = Pty::new(cols, rows)?;
-        let (handle, reader) = pty.take_reader();
-
-        // Spawn reader thread
-        let rx = spawn_reader_thread(reader);
-
-        self.terminal = Some(terminal);
-        self.pty = Some(handle);
-        self.pty_rx = Some(rx);
-
-        log::info!("Terminal initialized: {}x{}", cols, rows);
+        log::info!("Tab manager initialized with first tab: {}x{}", self.cols, self.rows);
 
         Ok(())
     }
 
-    /// Process PTY events
+    /// Process PTY events for all tabs
     fn process_pty_events(&mut self) {
-        let Some(rx) = &self.pty_rx else { return };
-        let Some(terminal) = &mut self.terminal else { return };
+        let Some(tabs) = &mut self.tabs else { return };
 
-        // Process all available events
-        while let Ok(event) = rx.try_recv() {
-            match event {
-                PtyEvent::Output(data) => {
-                    terminal.process(&data);
-                }
-                PtyEvent::Closed => {
-                    log::info!("Shell exited");
-                    self.should_exit = true;
-                }
-                PtyEvent::Error(e) => {
-                    log::error!("PTY error: {}", e);
-                    self.should_exit = true;
-                }
-            }
+        tabs.process_all_events();
+
+        // Check if all tabs are closed
+        if tabs.cleanup_closed() && tabs.is_empty() {
+            log::info!("All tabs closed, exiting");
+            self.should_exit = true;
         }
     }
 
-    /// Write input to the PTY
+    /// Write input to the active tab's PTY
     fn write_to_pty(&mut self, data: &[u8]) {
-        if let Some(pty) = &mut self.pty {
-            if let Err(e) = pty.write_all(data) {
-                log::error!("Failed to write to PTY: {}", e);
+        if let Some(tabs) = &mut self.tabs {
+            if let Some(tab) = tabs.active_tab_mut() {
+                if let Err(e) = tab.write(data) {
+                    log::error!("Failed to write to PTY: {}", e);
+                }
             }
         }
     }
@@ -161,14 +141,9 @@ impl App {
                 self.cols = new_cols;
                 self.rows = new_rows;
 
-                if let Some(terminal) = &mut self.terminal {
-                    terminal.resize(self.cols, self.rows);
-                }
-
-                if let Some(pty) = &self.pty {
-                    if let Err(e) = pty.resize(self.cols as u16, self.rows as u16) {
-                        log::error!("Failed to resize PTY: {}", e);
-                    }
+                // Resize all tabs
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.resize(self.cols, self.rows);
                 }
 
                 log::debug!("Resized to {}x{}", self.cols, self.rows);
@@ -179,7 +154,10 @@ impl App {
     /// Render the terminal
     fn render(&mut self) {
         let Some(renderer) = &mut self.renderer else { return };
-        let Some(terminal) = &self.terminal else { return };
+        let Some(tabs) = &self.tabs else { return };
+        let Some(tab) = tabs.active_tab() else { return };
+
+        let terminal = &tab.terminal;
 
         match renderer.render(terminal.grid(), terminal.selection(), self.cursor_visible) {
             Ok(()) => {}
@@ -199,6 +177,11 @@ impl App {
         }
     }
 
+    /// Get active terminal mutably (helper)
+    fn active_terminal_mut(&mut self) -> Option<&mut termeric_core::Terminal> {
+        self.tabs.as_mut()?.active_tab_mut().map(|t| &mut t.terminal)
+    }
+
     /// Handle an action triggered by a keybinding
     fn handle_action(&mut self, action: Action) {
         match action {
@@ -209,46 +192,123 @@ impl App {
                 self.paste_clipboard();
             }
             Action::ScrollUp(lines) => {
-                if let Some(terminal) = &mut self.terminal {
+                if let Some(terminal) = self.active_terminal_mut() {
                     let offset = terminal.grid().scroll_offset();
                     terminal.grid_mut().set_scroll_offset(offset + lines);
                 }
             }
             Action::ScrollDown(lines) => {
-                if let Some(terminal) = &mut self.terminal {
+                if let Some(terminal) = self.active_terminal_mut() {
                     let offset = terminal.grid().scroll_offset();
                     terminal.grid_mut().set_scroll_offset(offset.saturating_sub(lines));
                 }
             }
             Action::ScrollToTop => {
-                if let Some(terminal) = &mut self.terminal {
+                if let Some(terminal) = self.active_terminal_mut() {
                     let max_offset = terminal.grid().scrollback_len();
                     terminal.grid_mut().set_scroll_offset(max_offset);
                 }
             }
             Action::ScrollToBottom => {
-                if let Some(terminal) = &mut self.terminal {
+                if let Some(terminal) = self.active_terminal_mut() {
                     terminal.grid_mut().set_scroll_offset(0);
                 }
             }
             Action::ClearSelection => {
                 self.mouse_state.clear_selection();
-                if let Some(terminal) = &mut self.terminal {
+                if let Some(terminal) = self.active_terminal_mut() {
                     terminal.set_selection(None);
                 }
             }
-            Action::IncreaseFontSize | Action::DecreaseFontSize | Action::ResetFontSize => {
-                // TODO: Implement font size changes
-                log::debug!("Font size change requested: {:?}", action);
+            Action::IncreaseFontSize => {
+                self.change_font_size(2.0);
+            }
+            Action::DecreaseFontSize => {
+                self.change_font_size(-2.0);
+            }
+            Action::ResetFontSize => {
+                self.set_font_size(self.default_font_size);
+            }
+            Action::NewTab => {
+                if let Some(tabs) = &mut self.tabs {
+                    match tabs.new_tab() {
+                        Ok(id) => log::info!("Created new tab {}", id),
+                        Err(e) => log::error!("Failed to create new tab: {}", e),
+                    }
+                }
+            }
+            Action::CloseTab => {
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.close_active_tab();
+                    if tabs.is_empty() {
+                        log::info!("Last tab closed, exiting");
+                        self.should_exit = true;
+                    }
+                }
+            }
+            Action::NextTab => {
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.next_tab();
+                }
+            }
+            Action::PrevTab => {
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.prev_tab();
+                }
+            }
+            Action::SwitchToTab(index) => {
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.switch_to(index);
+                }
+            }
+            Action::ToggleSearch => {
+                // TODO: Implement search UI
+                log::debug!("Toggle search requested");
             }
             Action::None => {}
         }
     }
 
+    /// Change font size by delta
+    fn change_font_size(&mut self, delta: f32) {
+        let Some(renderer) = &mut self.renderer else { return };
+        let current = renderer.font_size();
+        let new_size = (current + delta).clamp(8.0, 72.0);
+        self.set_font_size(new_size);
+    }
+
+    /// Set font size to a specific value
+    fn set_font_size(&mut self, size: f32) {
+        let Some(renderer) = &mut self.renderer else { return };
+        let Some(window) = &self.window else { return };
+
+        renderer.set_font_size(size);
+
+        // Recalculate grid size after font change
+        let window_size = window.inner_size();
+        let (new_cols, new_rows) = renderer.calculate_grid_size(window_size.width, window_size.height);
+
+        if new_cols != self.cols || new_rows != self.rows {
+            self.cols = new_cols;
+            self.rows = new_rows;
+
+            // Resize all tabs
+            if let Some(tabs) = &mut self.tabs {
+                tabs.resize(self.cols, self.rows);
+            }
+
+            log::info!("Font size set to {}, grid resized to {}x{}", size, self.cols, self.rows);
+        }
+
+        // Request redraw
+        window.request_redraw();
+    }
+
     /// Copy selection to clipboard
     fn copy_selection(&mut self) {
-        let Some(terminal) = &self.terminal else { return };
-        let Some(text) = terminal.get_selection_text() else { return };
+        let Some(tabs) = &self.tabs else { return };
+        let Some(tab) = tabs.active_tab() else { return };
+        let Some(text) = tab.terminal.get_selection_text() else { return };
 
         if let Some(clipboard) = &mut self.clipboard {
             if let Err(e) = clipboard.set_text(&text) {
@@ -281,19 +341,29 @@ impl App {
 
         match state {
             ElementState::Pressed => {
+                if button == MouseButton::Left {
+                    self.mouse_pressed = true;
+                }
                 if let Some(selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
-                    if let Some(terminal) = &mut self.terminal {
+                    if let Some(terminal) = self.active_terminal_mut() {
                         terminal.set_selection(Some(selection));
                     }
                 }
             }
             ElementState::Released => {
-                if let Some(selection) = self.mouse_state.handle_release(button) {
-                    if let Some(terminal) = &mut self.terminal {
-                        terminal.set_selection(Some(selection));
-                    }
+                if button == MouseButton::Left {
+                    self.mouse_pressed = false;
                 }
+                // Finalize selection on release
+                let _ = self.mouse_state.handle_release(button);
+                // Clear active selection state (but keep the selection visible)
+                // The selection in terminal remains, but mouse_state no longer tracks it
             }
+        }
+
+        // Request redraw to show selection changes
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
 
@@ -303,20 +373,26 @@ impl App {
         let (cell_width, cell_height) = renderer.cell_size();
         let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, 0);
 
-        if let Some(selection) = self.mouse_state.handle_move(grid_pos) {
-            if let Some(terminal) = &mut self.terminal {
-                terminal.set_selection(Some(selection));
+        // Only update selection when mouse is pressed (dragging)
+        if self.mouse_pressed {
+            if let Some(selection) = self.mouse_state.handle_move(grid_pos) {
+                if let Some(terminal) = self.active_terminal_mut() {
+                    terminal.set_selection(Some(selection));
+                }
+                // Request redraw for selection update
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
-            // Request redraw for selection update
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+        } else {
+            // Just update position tracking when not dragging
+            self.mouse_state.last_position = Some(grid_pos);
         }
     }
 
     /// Handle scroll wheel
     fn handle_scroll(&mut self, delta: f64) {
-        if let Some(terminal) = &mut self.terminal {
+        if let Some(terminal) = self.active_terminal_mut() {
             let lines = (delta.abs() / 3.0).max(1.0) as usize;
             let offset = terminal.grid().scroll_offset();
 
@@ -356,9 +432,9 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Initialize terminal and PTY
-                if let Err(e) = self.init_terminal() {
-                    log::error!("Failed to initialize terminal: {}", e);
+                // Initialize tabs with first tab
+                if let Err(e) = self.init_tabs() {
+                    log::error!("Failed to initialize tabs: {}", e);
                     event_loop.exit();
                     return;
                 }
@@ -404,24 +480,20 @@ impl ApplicationHandler for App {
                 }
 
                 // Convert key event to terminal input
-                if let Some(data) = crate::input::key_to_bytes(&event) {
+                if let Some(data) = key_to_bytes_with_modifiers(&event, self.modifiers) {
                     self.write_to_pty(&data);
                 }
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                // Get current cursor position from mouse state
-                if let Some(pos) = self.mouse_state.last_position {
-                    let renderer_cell_size = self.renderer.as_ref().map(|r| r.cell_size());
-                    if let Some((cw, ch)) = renderer_cell_size {
-                        let screen_x = pos.col as f64 * cw as f64;
-                        let screen_y = pos.row as f64 * ch as f64;
-                        self.handle_mouse_input(button, state, (screen_x, screen_y));
-                    }
+                // Use tracked cursor position
+                if let Some(pos) = self.last_cursor_pos {
+                    self.handle_mouse_input(button, state, pos);
                 }
             }
 
             WindowEvent::CursorMoved { position, .. } => {
+                self.last_cursor_pos = Some((position.x, position.y));
                 self.handle_mouse_move((position.x, position.y));
             }
 

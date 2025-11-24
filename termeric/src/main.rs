@@ -3,10 +3,13 @@
 //! This is the main entry point for the Termeric terminal emulator.
 
 mod app;
+mod bell;
 mod config;
 mod input;
 mod renderer;
 mod search;
+mod tabs;
+mod theme;
 mod url;
 mod window;
 

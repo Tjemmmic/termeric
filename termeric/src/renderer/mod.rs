@@ -97,7 +97,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         // Create glyph cache
-        let font_size = 14.0;
+        let font_size = 20.0;
         let glyph_cache = GlyphCache::new(&device, &queue, font_size)?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
@@ -144,6 +144,19 @@ impl Renderer {
         let cols = (width as f32 / self.cell_width).floor() as usize;
         let rows = (height as f32 / self.cell_height).floor() as usize;
         (cols.max(1), rows.max(1))
+    }
+
+    /// Get current font size
+    pub fn font_size(&self) -> f32 {
+        self.glyph_cache.font_size()
+    }
+
+    /// Change font size
+    pub fn set_font_size(&mut self, font_size: f32) {
+        self.glyph_cache.set_font_size(font_size, &self.queue);
+        let (cell_width, cell_height) = self.glyph_cache.cell_size();
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
     }
 
     /// Render the terminal grid
@@ -207,10 +220,13 @@ impl Renderer {
         // Selection highlight color - turmeric gold with transparency
         let selection_color = [0.91, 0.66, 0.22, 0.3]; // #E8A838 at 30% opacity
 
+        // Get scroll offset to determine if cursor should be shown
+        let scroll_offset = grid.scroll_offset();
+
         // Iterate over grid cells
         for row in 0..grid.rows() {
             for col in 0..grid.cols() {
-                let Some(cell) = grid.cell(row, col) else { continue };
+                let Some(cell) = grid.cell_scrolled(row, col) else { continue };
 
                 let x = col as f32 * cell_width;
                 let y = row as f32 * cell_height;
@@ -250,8 +266,8 @@ impl Renderer {
             }
         }
 
-        // Draw cursor
-        if cursor_visible {
+        // Draw cursor (only when not scrolled back into history)
+        if cursor_visible && scroll_offset == 0 {
             let cursor = grid.cursor();
             if cursor.visible {
                 let x = cursor.col as f32 * cell_width;
