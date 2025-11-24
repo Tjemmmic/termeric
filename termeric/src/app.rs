@@ -70,7 +70,7 @@ impl App {
             clipboard,
             last_cursor_pos: None,
             mouse_pressed: false,
-            default_font_size: 20.0,
+            default_font_size: 35.0,
         })
     }
 
@@ -121,6 +121,9 @@ impl App {
     fn write_to_pty(&mut self, data: &[u8]) {
         if let Some(tabs) = &mut self.tabs {
             if let Some(tab) = tabs.active_tab_mut() {
+                // Jump to bottom when user types while scrolled up
+                tab.terminal.grid_mut().set_scroll_offset(0);
+
                 if let Err(e) = tab.write(data) {
                     log::error!("Failed to write to PTY: {}", e);
                 }

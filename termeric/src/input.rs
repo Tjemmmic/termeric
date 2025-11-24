@@ -135,14 +135,21 @@ pub fn check_keybinding(event: &KeyEvent, modifiers: ModifiersState) -> Option<A
 
     match &event.logical_key {
         Key::Character(c) => {
+            let c_str = c.as_str();
             let c_lower = c.to_lowercase();
+
+            // Font size - check original string since + and = don't change with to_lowercase
+            if ctrl && (c_str == "+" || c_str == "=") {
+                return Some(Action::IncreaseFontSize);
+            }
+            if ctrl && c_str == "-" {
+                return Some(Action::DecreaseFontSize);
+            }
+
             match c_lower.as_str() {
                 // Clipboard
                 "c" if ctrl && shift => Some(Action::Copy),
                 "v" if ctrl && shift => Some(Action::Paste),
-                // Font size
-                "+" | "=" if ctrl => Some(Action::IncreaseFontSize),
-                "-" if ctrl => Some(Action::DecreaseFontSize),
                 // Tabs
                 "t" if ctrl && shift => Some(Action::NewTab),
                 "w" if ctrl && shift => Some(Action::CloseTab),

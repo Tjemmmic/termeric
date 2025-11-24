@@ -103,7 +103,7 @@ impl Renderer {
         surface.configure(&device, &config);
 
         // Create glyph cache
-        let font_size = 20.0;
+        let font_size = 35.0;
         let glyph_cache = GlyphCache::new(&device, &queue, font_size)?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
