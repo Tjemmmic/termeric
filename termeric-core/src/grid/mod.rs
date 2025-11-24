@@ -88,34 +88,52 @@ impl Grid {
     /// When scrolled up, this returns cells from scrollback buffer
     pub fn cell_scrolled(&self, row: usize, col: usize) -> Option<&Cell> {
         if self.scroll_offset == 0 {
-            // Not scrolled - return visible cell
-            self.storage.cell(row, col)
-        } else {
-            // Scrolled - need to look into scrollback
-            // Row 0 with offset N should show scrollback line (scrollback_len - N)
-            let scrollback_len = self.storage.scrollback_len();
-            if scrollback_len == 0 {
-                return self.storage.cell(row, col);
-            }
+            // Not scrolled - return visible cell from active buffer
+            return self.storage.cell(row, col);
+        }
 
-            // Calculate which line to show
-            // If scroll_offset is scrollback_len, row 0 shows oldest scrollback line
-            // If scroll_offset is 1, row 0 shows most recent scrollback line
-            let offset_row = row + self.scroll_offset;
-            if offset_row < scrollback_len {
-                // This row is in scrollback
-                let scrollback_idx = scrollback_len - offset_row - 1;
-                self.storage.scrollback_row(scrollback_idx)
-                    .and_then(|r| r.get(col))
+        let scrollback_len = self.storage.scrollback_len();
+        if scrollback_len == 0 {
+            return self.storage.cell(row, col);
+        }
+
+        // When scrolled up by N lines:
+        // - Screen row 0 shows what was N lines above current view
+        // - If scroll_offset <= scrollback_len, we're viewing scrollback
+        //
+        // Scrollback is stored oldest-first: index 0 is oldest, index (len-1) is newest
+        // When scroll_offset = 1, row 0 should show the newest scrollback line (index len-1)
+        // When scroll_offset = scrollback_len, row 0 should show oldest (index 0)
+
+        // How many lines into scrollback does this row fall?
+        // Row 0 with offset N is N lines back
+        // Row 1 with offset N is N-1 lines back, etc.
+        let lines_back = self.scroll_offset.saturating_sub(row);
+
+        if lines_back > 0 && lines_back <= scrollback_len {
+            // This row is in scrollback
+            // lines_back=1 means newest scrollback (index scrollback_len-1)
+            // lines_back=scrollback_len means oldest (index 0)
+            let scrollback_idx = scrollback_len - lines_back;
+            self.storage.scrollback_row(scrollback_idx)
+                .and_then(|r| r.get(col))
+        } else if lines_back == 0 {
+            // This row is in active buffer
+            // scroll_offset = 3, scrollback_len = 5, rows = 10
+            // row 0: lines_back = 3, in scrollback at idx 5-3=2
+            // row 1: lines_back = 2, in scrollback at idx 5-2=3
+            // row 2: lines_back = 1, in scrollback at idx 5-1=4 (newest)
+            // row 3: lines_back = 0, active buffer row 0
+            // row 4: lines_back = 0, active buffer row 1
+            let active_row = row - self.scroll_offset.min(scrollback_len);
+            if active_row < self.rows {
+                self.storage.cell(active_row, col)
             } else {
-                // This row is in active buffer
-                let active_row = offset_row - scrollback_len;
-                if active_row < self.rows {
-                    self.storage.cell(active_row, col)
-                } else {
-                    None
-                }
+                None
             }
+        } else {
+            // lines_back > scrollback_len - we've scrolled past all scrollback (shouldn't happen with proper clamping)
+            None
         }
     }
 

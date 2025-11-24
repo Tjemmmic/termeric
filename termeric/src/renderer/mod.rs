@@ -4,6 +4,7 @@
 //! - Text glyph rendering with texture atlas
 //! - Background rectangle rendering
 //! - Cursor rendering
+//! - Tab bar rendering
 
 mod glyph_cache;
 mod text;
@@ -20,6 +21,11 @@ use termeric_core::{Grid, Selection};
 
 use text::TextPipeline;
 use rect::RectPipeline;
+
+use crate::tabs::TabInfo;
+
+/// Height of the tab bar in pixels
+const TAB_BAR_HEIGHT: f32 = 28.0;
 
 /// Main renderer that manages all GPU resources
 pub struct Renderer {
@@ -139,11 +145,18 @@ impl Renderer {
         (self.cell_width, self.cell_height)
     }
 
-    /// Calculate terminal dimensions from window size
+    /// Calculate terminal dimensions from window size (accounting for tab bar)
     pub fn calculate_grid_size(&self, width: u32, height: u32) -> (usize, usize) {
         let cols = (width as f32 / self.cell_width).floor() as usize;
-        let rows = (height as f32 / self.cell_height).floor() as usize;
+        // Subtract tab bar height from available height
+        let available_height = (height as f32 - TAB_BAR_HEIGHT).max(0.0);
+        let rows = (available_height / self.cell_height).floor() as usize;
         (cols.max(1), rows.max(1))
+    }
+
+    /// Get the tab bar height
+    pub fn tab_bar_height(&self) -> f32 {
+        TAB_BAR_HEIGHT
     }
 
     /// Get current font size
@@ -159,8 +172,8 @@ impl Renderer {
         self.cell_height = cell_height;
     }
 
-    /// Render the terminal grid
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_visible: bool) -> Result<(), SurfaceError> {
+    /// Render the terminal grid with tab bar
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_visible: bool, tabs: &[TabInfo]) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -168,8 +181,8 @@ impl Renderer {
             label: Some("Render Encoder"),
         });
 
-        // Build render data from grid
-        self.build_render_data(grid, selection, cursor_visible);
+        // Build render data from grid and tabs
+        self.build_render_data(grid, selection, cursor_visible, tabs);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -196,10 +209,10 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Draw rectangles (backgrounds, cursor)
+            // Draw rectangles (backgrounds, cursor, tab bar)
             self.rect_pipeline.draw(&mut render_pass);
 
-            // Draw text
+            // Draw text (terminal content and tab labels)
             self.text_pipeline.draw(&mut render_pass, &self.glyph_cache);
         }
 
@@ -209,13 +222,17 @@ impl Renderer {
         Ok(())
     }
 
-    /// Build render data from the grid
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_visible: bool) {
+    /// Build render data from the grid and tabs
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_visible: bool, tabs: &[TabInfo]) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
+        let window_width = self.size.0 as f32;
+
+        // Render tab bar first
+        self.build_tab_bar(tabs, window_width);
 
         // Selection highlight color - turmeric gold with transparency
         let selection_color = [0.91, 0.66, 0.22, 0.3]; // #E8A838 at 30% opacity
@@ -223,13 +240,13 @@ impl Renderer {
         // Get scroll offset to determine if cursor should be shown
         let scroll_offset = grid.scroll_offset();
 
-        // Iterate over grid cells
+        // Iterate over grid cells (offset by tab bar height)
         for row in 0..grid.rows() {
             for col in 0..grid.cols() {
                 let Some(cell) = grid.cell_scrolled(row, col) else { continue };
 
                 let x = col as f32 * cell_width;
-                let y = row as f32 * cell_height;
+                let y = TAB_BAR_HEIGHT + row as f32 * cell_height;
 
                 // Check if cell is selected
                 let is_selected = selection
@@ -271,7 +288,7 @@ impl Renderer {
             let cursor = grid.cursor();
             if cursor.visible {
                 let x = cursor.col as f32 * cell_width;
-                let y = cursor.row as f32 * cell_height;
+                let y = TAB_BAR_HEIGHT + cursor.row as f32 * cell_height;
 
                 // Turmeric gold cursor
                 self.rect_pipeline.push_rect(
@@ -281,5 +298,76 @@ impl Renderer {
                 );
             }
         }
+    }
+
+    /// Build tab bar render data
+    fn build_tab_bar(&mut self, tabs: &[TabInfo], window_width: f32) {
+        // Tab bar background - slightly lighter than terminal background
+        let tab_bar_bg = [0.15, 0.12, 0.10, 1.0]; // #261F1A
+        self.rect_pipeline.push_rect(0.0, 0.0, window_width, TAB_BAR_HEIGHT, tab_bar_bg);
+
+        // Tab colors
+        let active_tab_bg = [0.91, 0.66, 0.22, 1.0];   // #E8A838 - Turmeric gold
+        let inactive_tab_bg = [0.20, 0.16, 0.13, 1.0]; // #332920 - Darker
+        let activity_indicator = [0.70, 0.50, 0.18, 1.0]; // Dimmer gold for activity
+        let active_text_color = [0.10, 0.08, 0.07, 1.0];  // Dark text on gold
+        let inactive_text_color = [0.85, 0.85, 0.80, 1.0]; // Light text
+
+        // Calculate tab width - minimum 80px, maximum 200px, or divide space evenly
+        let tab_count = tabs.len().max(1);
+        let tab_width = ((window_width / tab_count as f32).min(200.0)).max(80.0);
+        let tab_padding = 8.0;
+        let tab_height = TAB_BAR_HEIGHT - 4.0; // Leave some margin
+
+        for (i, tab) in tabs.iter().enumerate() {
+            let x = i as f32 * tab_width;
+            let y = 2.0; // Small top margin
+
+            // Tab background
+            let bg_color = if tab.is_active {
+                active_tab_bg
+            } else if tab.has_activity {
+                activity_indicator
+            } else {
+                inactive_tab_bg
+            };
+
+            self.rect_pipeline.push_rect(x + 1.0, y, tab_width - 2.0, tab_height, bg_color);
+
+            // Tab text
+            let text_color = if tab.is_active {
+                active_text_color
+            } else {
+                inactive_text_color
+            };
+
+            // Render tab title (truncate if needed)
+            let title = if tab.title.len() > 15 {
+                format!("{}...", &tab.title[..12])
+            } else {
+                tab.title.clone()
+            };
+
+            // Add tab number prefix
+            let label = format!("{}: {}", i + 1, title);
+
+            // Render each character of the label
+            let text_y = y + (tab_height - self.cell_height) / 2.0; // Center vertically
+            let mut text_x = x + tab_padding;
+
+            for c in label.chars() {
+                if text_x + self.cell_width > x + tab_width - tab_padding {
+                    break; // Don't overflow tab
+                }
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, text_x, text_y, text_color);
+                }
+                text_x += self.cell_width * 0.6; // Tighter spacing for tab labels
+            }
+        }
+
+        // Bottom border of tab bar
+        let border_color = [0.30, 0.24, 0.20, 1.0]; // #4D3D33
+        self.rect_pipeline.push_rect(0.0, TAB_BAR_HEIGHT - 1.0, window_width, 1.0, border_color);
     }
 }

@@ -158,8 +158,9 @@ impl App {
         let Some(tab) = tabs.active_tab() else { return };
 
         let terminal = &tab.terminal;
+        let tab_info = tabs.tab_info();
 
-        match renderer.render(terminal.grid(), terminal.selection(), self.cursor_visible) {
+        match renderer.render(terminal.grid(), terminal.selection(), self.cursor_visible, &tab_info) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
