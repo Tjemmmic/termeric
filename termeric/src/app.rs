@@ -393,15 +393,23 @@ impl App {
 
     /// Handle scroll wheel
     fn handle_scroll(&mut self, delta: f64) {
+        // Filter out near-zero deltas (release artifacts from trackpad/mouse)
+        // These appear as -0.000 or very small values on scroll release
+        if delta.abs() < 0.001 {
+            return;
+        }
+
         if let Some(terminal) = self.active_terminal_mut() {
             let lines = (delta.abs() / 3.0).max(1.0) as usize;
             let offset = terminal.grid().scroll_offset();
 
-            if delta > 0.0 {
-                terminal.grid_mut().set_scroll_offset(offset + lines);
+            let new_offset = if delta > 0.0 {
+                offset + lines
             } else {
-                terminal.grid_mut().set_scroll_offset(offset.saturating_sub(lines));
-            }
+                offset.saturating_sub(lines)
+            };
+
+            terminal.grid_mut().set_scroll_offset(new_offset);
 
             if let Some(window) = &self.window {
                 window.request_redraw();

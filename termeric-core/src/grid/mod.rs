@@ -99,41 +99,38 @@ impl Grid {
 
         // When scrolled up by N lines:
         // - Screen row 0 shows what was N lines above current view
-        // - If scroll_offset <= scrollback_len, we're viewing scrollback
+        // - Scrollback is stored oldest-first: index 0 is oldest, index (len-1) is newest
         //
-        // Scrollback is stored oldest-first: index 0 is oldest, index (len-1) is newest
-        // When scroll_offset = 1, row 0 should show the newest scrollback line (index len-1)
-        // When scroll_offset = scrollback_len, row 0 should show oldest (index 0)
+        // With scroll_offset = N:
+        // - Rows 0..(N-1) show scrollback content (if available)
+        // - Rows N.. show active buffer content
+        //
+        // Example: scroll_offset = 3, scrollback_len = 100
+        // - row 0: 3 lines back from current → scrollback[97]
+        // - row 1: 2 lines back → scrollback[98]
+        // - row 2: 1 line back → scrollback[99] (newest)
+        // - row 3: active buffer row 0
+        // - row 4: active buffer row 1
 
-        // How many lines into scrollback does this row fall?
-        // Row 0 with offset N is N lines back
-        // Row 1 with offset N is N-1 lines back, etc.
-        let lines_back = self.scroll_offset.saturating_sub(row);
-
-        if lines_back > 0 && lines_back <= scrollback_len {
-            // This row is in scrollback
-            // lines_back=1 means newest scrollback (index scrollback_len-1)
-            // lines_back=scrollback_len means oldest (index 0)
-            let scrollback_idx = scrollback_len - lines_back;
-            self.storage.scrollback_row(scrollback_idx)
-                .and_then(|r| r.get(col))
-        } else if lines_back == 0 {
-            // This row is in active buffer
-            // scroll_offset = 3, scrollback_len = 5, rows = 10
-            // row 0: lines_back = 3, in scrollback at idx 5-3=2
-            // row 1: lines_back = 2, in scrollback at idx 5-2=3
-            // row 2: lines_back = 1, in scrollback at idx 5-1=4 (newest)
-            // row 3: lines_back = 0, active buffer row 0
-            // row 4: lines_back = 0, active buffer row 1
-            let active_row = row - self.scroll_offset.min(scrollback_len);
+        if row < self.scroll_offset {
+            // This row shows scrollback content
+            let lines_back = self.scroll_offset - row;
+            if lines_back <= scrollback_len {
+                let scrollback_idx = scrollback_len - lines_back;
+                self.storage.scrollback_row(scrollback_idx)
+                    .and_then(|r| r.get(col))
+            } else {
+                // Scrolled past available scrollback (shouldn't happen with clamping)
+                None
+            }
+        } else {
+            // This row shows active buffer content
+            let active_row = row - self.scroll_offset;
             if active_row < self.rows {
                 self.storage.cell(active_row, col)
             } else {
                 None
             }
-        } else {
-            // lines_back > scrollback_len - we've scrolled past all scrollback (shouldn't happen with proper clamping)
-            None
         }
     }
 
@@ -160,7 +157,24 @@ impl Grid {
 
     /// Scroll the grid up by one line, pushing the top line to scrollback
     pub fn scroll_up(&mut self) {
+        let old_len = self.storage.scrollback_len();
+        let was_at_max = self.scroll_offset > 0 && self.scroll_offset >= old_len;
+
         self.storage.scroll_up();
+        let new_len = self.storage.scrollback_len();
+
+        // If user is scrolled into history, maintain their view position
+        if self.scroll_offset > 0 {
+            if was_at_max {
+                // User was at max scroll - keep them at max (viewing oldest content)
+                self.scroll_offset = new_len;
+            } else if new_len > old_len {
+                // Scrollback grew - increment offset to maintain position
+                self.scroll_offset += 1;
+            }
+            // If scrollback didn't grow (at capacity), content shifts but we can't
+            // maintain the exact same view since the oldest line was deleted
+        }
     }
 
     /// Scroll the grid down by one line (reverse scroll)

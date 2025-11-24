@@ -186,6 +186,8 @@ impl Cell {
     /// Clear the cell to default state
     pub fn clear(&mut self) {
         self.content = CellContent::Empty;
+        self.fg = Color::default_fg();
+        self.bg = Color::default_bg();
         self.attrs = CellAttrs::empty();
         self.flags = CellFlags::DIRTY; // Keep dirty flag to trigger re-render
     }
