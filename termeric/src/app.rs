@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::sync::Arc;
+use std::time::Instant;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -32,8 +33,10 @@ pub struct App {
     /// Terminal dimensions
     cols: usize,
     rows: usize,
-    /// Cursor blink state
-    cursor_visible: bool,
+    /// Cursor animation start time (for smooth blink)
+    cursor_blink_start: Instant,
+    /// Cursor blink period in seconds
+    cursor_blink_period: f32,
     /// Mouse input state
     mouse_state: MouseState,
     /// Current keyboard modifiers
@@ -64,7 +67,8 @@ impl App {
             should_exit: false,
             cols: 80,
             rows: 24,
-            cursor_visible: true,
+            cursor_blink_start: Instant::now(),
+            cursor_blink_period: 1.0, // 1 second full cycle (fade out + fade in)
             mouse_state: MouseState::new(),
             modifiers: ModifiersState::empty(),
             clipboard,
@@ -119,6 +123,9 @@ impl App {
 
     /// Write input to the active tab's PTY
     fn write_to_pty(&mut self, data: &[u8]) {
+        // Reset cursor blink so cursor is fully visible when typing
+        self.reset_cursor_blink();
+
         if let Some(tabs) = &mut self.tabs {
             if let Some(tab) = tabs.active_tab_mut() {
                 // Jump to bottom when user types while scrolled up
@@ -156,6 +163,9 @@ impl App {
 
     /// Render the terminal
     fn render(&mut self) {
+        // Calculate cursor opacity before borrowing renderer
+        let cursor_opacity = self.cursor_opacity();
+
         let Some(renderer) = &mut self.renderer else { return };
         let Some(tabs) = &self.tabs else { return };
         let Some(tab) = tabs.active_tab() else { return };
@@ -163,7 +173,7 @@ impl App {
         let terminal = &tab.terminal;
         let tab_info = tabs.tab_info();
 
-        match renderer.render(terminal.grid(), terminal.selection(), self.cursor_visible, &tab_info) {
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, &tab_info) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -184,6 +194,23 @@ impl App {
     /// Get active terminal mutably (helper)
     fn active_terminal_mut(&mut self) -> Option<&mut termeric_core::Terminal> {
         self.tabs.as_mut()?.active_tab_mut().map(|t| &mut t.terminal)
+    }
+
+    /// Calculate cursor opacity for smooth blink animation
+    /// Returns a value between 0.0 (invisible) and 1.0 (fully visible)
+    fn cursor_opacity(&self) -> f32 {
+        let elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
+        let phase = (elapsed / self.cursor_blink_period) * std::f32::consts::TAU;
+        // Use cosine for smooth fade: cos goes from 1 to -1
+        // We want 1.0 (visible) -> 0.3 (dim but visible) -> 1.0
+        // Map cos [-1, 1] to [0.3, 1.0] for a subtle blink
+        let cos_val = phase.cos();
+        0.65 + 0.35 * cos_val // Range: 0.3 to 1.0
+    }
+
+    /// Reset cursor blink animation (e.g., after typing)
+    fn reset_cursor_blink(&mut self) {
+        self.cursor_blink_start = Instant::now();
     }
 
     /// Handle an action triggered by a keybinding
