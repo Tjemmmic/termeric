@@ -326,19 +326,27 @@ impl Renderer {
         let mut current_x = 0.0;
 
         for (i, tab) in tabs.iter().enumerate() {
-            // Apply ease-out curve for smoother animation: t' = 1 - (1-t)^2
-            let t = tab.slide_progress;
-            let eased_progress = 1.0 - (1.0 - t) * (1.0 - t);
+            // Calculate animation multiplier based on slide-in and close animations
+            let anim_multiplier = if tab.close_progress > 0.0 {
+                // Closing: shrink from full to 0 with ease-in curve (accelerate)
+                let t = tab.close_progress;
+                let eased = t * t; // ease-in: starts slow, speeds up
+                1.0 - eased
+            } else {
+                // Opening: grow from 0 to full with ease-out curve (decelerate)
+                let t = tab.slide_progress;
+                1.0 - (1.0 - t) * (1.0 - t) // ease-out
+            };
 
-            // Animated tab width grows from 0 to full width
-            let tab_width = full_tab_width * eased_progress;
+            // Animated tab width
+            let tab_width = full_tab_width * anim_multiplier;
 
             let x = current_x;
             let y = 2.0; // Small top margin
 
             // Only render if the tab has some visible width
             if tab_width > 2.0 {
-                // Tab background with animated alpha for fade-in effect
+                // Tab background with animated alpha for fade effect
                 let base_bg_color = if tab.is_active {
                     active_tab_bg
                 } else if tab.has_activity {
@@ -347,19 +355,19 @@ impl Renderer {
                     inactive_tab_bg
                 };
 
-                // Fade in the background
+                // Fade the background based on animation progress
                 let bg_color = [
                     base_bg_color[0],
                     base_bg_color[1],
                     base_bg_color[2],
-                    base_bg_color[3] * eased_progress,
+                    base_bg_color[3] * anim_multiplier,
                 ];
 
                 self.rect_pipeline.push_rect(x + 1.0, y, tab_width - 2.0, tab_height, bg_color);
 
-                // Tab text - only render when animation is far enough along
-                if eased_progress > 0.3 {
-                    let text_alpha = ((eased_progress - 0.3) / 0.7).min(1.0); // Fade in text after 30%
+                // Tab text - only render when animation progress is significant
+                if anim_multiplier > 0.3 {
+                    let text_alpha = ((anim_multiplier - 0.3) / 0.7).min(1.0); // Fade text
 
                     let base_text_color = if tab.is_active {
                         active_text_color

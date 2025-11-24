@@ -11,6 +11,9 @@ use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 /// Duration of tab slide-in animation in seconds
 const TAB_SLIDE_DURATION: f32 = 0.15;
 
+/// Duration of tab close/shrink animation in seconds
+const TAB_CLOSE_DURATION: f32 = 0.12;
+
 /// Get the current working directory of a process by its PID
 /// Uses /proc/<pid>/cwd on Linux
 fn get_process_cwd(pid: u32) -> Option<String> {
@@ -54,6 +57,8 @@ pub struct Tab {
     pub closed: bool,
     /// When this tab was created (for slide-in animation)
     pub created_at: Instant,
+    /// When this tab started closing (for shrink animation), None if not closing
+    pub closing_at: Option<Instant>,
 }
 
 impl Tab {
@@ -79,6 +84,7 @@ impl Tab {
             has_activity: false,
             closed: false,
             created_at: Instant::now(),
+            closing_at: None,
         })
     }
 
@@ -137,6 +143,34 @@ impl Tab {
         let elapsed = self.created_at.elapsed().as_secs_f32();
         (elapsed / TAB_SLIDE_DURATION).min(1.0)
     }
+
+    /// Start the close animation
+    pub fn start_closing(&mut self) {
+        if self.closing_at.is_none() {
+            self.closing_at = Some(Instant::now());
+        }
+    }
+
+    /// Check if this tab is currently in the closing animation
+    pub fn is_closing(&self) -> bool {
+        self.closing_at.is_some()
+    }
+
+    /// Get close animation progress (0.0 = just started closing, 1.0 = fully closed)
+    pub fn close_progress(&self) -> f32 {
+        match self.closing_at {
+            Some(started) => {
+                let elapsed = started.elapsed().as_secs_f32();
+                (elapsed / TAB_CLOSE_DURATION).min(1.0)
+            }
+            None => 0.0,
+        }
+    }
+
+    /// Check if close animation is complete and tab should be removed
+    pub fn is_close_complete(&self) -> bool {
+        self.close_progress() >= 1.0
+    }
 }
 
 /// Manager for multiple tabs
@@ -177,30 +211,57 @@ impl TabManager {
         Ok(id)
     }
 
-    /// Close a tab by index
+    /// Start closing a tab by index (begins shrink animation)
     pub fn close_tab(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
             return false;
         }
 
-        let tab = self.tabs.remove(index);
-        log::info!("Closed tab {}", tab.id);
+        // Don't close if already closing
+        if self.tabs[index].is_closing() {
+            return false;
+        }
 
-        // Adjust active index if needed
-        if self.tabs.is_empty() {
-            self.active = 0;
-        } else if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
-        } else if self.active > index {
-            self.active -= 1;
+        self.tabs[index].start_closing();
+        log::info!("Starting close animation for tab {}", self.tabs[index].id);
+
+        // If closing the active tab, switch to another tab
+        if index == self.active {
+            // Find the next non-closing tab to switch to
+            let next_active = self.find_next_active_tab(index);
+            if let Some(new_active) = next_active {
+                self.active = new_active;
+            }
         }
 
         true
     }
 
+    /// Find the next suitable active tab when the current one is closing
+    fn find_next_active_tab(&self, closing_index: usize) -> Option<usize> {
+        // Try to find a non-closing tab, preferring ones after the current
+        let non_closing: Vec<usize> = self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, tab)| *i != closing_index && !tab.is_closing())
+            .map(|(i, _)| i)
+            .collect();
+
+        if non_closing.is_empty() {
+            return None;
+        }
+
+        // Prefer tab after current, otherwise before
+        non_closing
+            .iter()
+            .find(|&&i| i > closing_index)
+            .or_else(|| non_closing.last())
+            .copied()
+    }
+
     /// Close the active tab
     pub fn close_active_tab(&mut self) -> bool {
-        if !self.tabs.is_empty() {
+        if !self.tabs.is_empty() && !self.tabs[self.active].is_closing() {
             self.close_tab(self.active)
         } else {
             false
@@ -284,10 +345,14 @@ impl TabManager {
         }
     }
 
-    /// Remove closed tabs, returns true if any tabs were removed
+    /// Remove closed tabs and tabs with completed close animations
+    /// Returns true if any tabs were removed
     pub fn cleanup_closed(&mut self) -> bool {
         let initial_count = self.tabs.len();
-        self.tabs.retain(|tab| !tab.closed);
+        // Remove tabs that are either:
+        // - Marked as closed (shell exited)
+        // - Have completed their close animation
+        self.tabs.retain(|tab| !tab.closed && !tab.is_close_complete());
 
         if self.tabs.len() != initial_count {
             if self.active >= self.tabs.len() && !self.tabs.is_empty() {
@@ -297,6 +362,11 @@ impl TabManager {
         } else {
             false
         }
+    }
+
+    /// Check if all remaining tabs are closing (app should exit)
+    pub fn all_tabs_closing(&self) -> bool {
+        !self.tabs.is_empty() && self.tabs.iter().all(|tab| tab.is_closing())
     }
 
     /// Iterate over all tabs with their indices
@@ -312,10 +382,11 @@ impl TabManager {
             .map(|(i, tab)| TabInfo {
                 index: i,
                 title: tab.title.clone(),
-                is_active: i == self.active,
+                is_active: i == self.active && !tab.is_closing(),
                 has_activity: tab.has_activity,
                 is_closed: tab.closed,
                 slide_progress: tab.slide_progress(),
+                close_progress: tab.close_progress(),
             })
             .collect()
     }
@@ -331,6 +402,8 @@ pub struct TabInfo {
     pub is_closed: bool,
     /// Slide-in animation progress (0.0 = just created, 1.0 = fully visible)
     pub slide_progress: f32,
+    /// Close animation progress (0.0 = not closing, 1.0 = fully closed)
+    pub close_progress: f32,
 }
 
 #[cfg(test)]
