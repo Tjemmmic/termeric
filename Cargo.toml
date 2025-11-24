@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = ["termeric", "termeric-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Termeric Contributors"]
+license = "MIT"
+repository = "https://github.com/yourusername/termeric"
+description = "A GPU-accelerated terminal emulator with a warm, turmeric-inspired theme"
+keywords = ["terminal", "emulator", "gpu", "rust"]
+categories = ["command-line-utilities"]
+
+[workspace.dependencies]
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Utilities
+bitflags = "2.6"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

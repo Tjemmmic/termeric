@@ -1,0 +1,33 @@
+[package]
+name = "termeric-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core terminal emulation library for Termeric"
+
+[lib]
+name = "termeric_core"
+path = "src/lib.rs"
+
+[dependencies]
+# PTY handling
+portable-pty = "0.8"
+
+# Escape sequence parsing
+vte = "0.13"
+
+# Utilities
+bitflags.workspace = true
+unicode-width = "0.2"
+unicode-segmentation = "1.12"
+
+# Logging
+log.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+# Testing dependencies

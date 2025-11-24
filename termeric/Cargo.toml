@@ -1,0 +1,55 @@
+[package]
+name = "termeric"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "A GPU-accelerated terminal emulator with a warm, turmeric-inspired theme"
+
+[[bin]]
+name = "termeric"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+termeric-core = { path = "../termeric-core" }
+
+# Windowing
+winit = "0.30"
+raw-window-handle = "0.6"
+
+# GPU rendering
+wgpu = "24"
+pollster = "0.4"
+bytemuck = { version = "1.21", features = ["derive"] }
+
+# Text rendering
+cosmic-text = "0.12"
+
+# Clipboard
+arboard = "3.4"
+
+# Configuration
+serde.workspace = true
+toml.workspace = true
+directories = "6.0"
+
+# Logging
+log.workspace = true
+env_logger.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS-specific dependencies if needed
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows-specific dependencies if needed
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-specific dependencies if needed
+
+[dev-dependencies]
+# Testing dependencies
