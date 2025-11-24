@@ -196,9 +196,9 @@ impl Renderer {
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(Color {
-                            r: 0.102, // #1A1612 - Turmeric background
-                            g: 0.086,
-                            b: 0.071,
+                            r: 0.110, // #1C1410 - Dark brown (dried turmeric skin)
+                            g: 0.078,
+                            b: 0.063,
                             a: 1.0,
                         }),
                         store: StoreOp::Store,
@@ -234,8 +234,8 @@ impl Renderer {
         // Render tab bar first
         self.build_tab_bar(tabs, window_width);
 
-        // Selection highlight color - turmeric gold with transparency
-        let selection_color = [0.91, 0.66, 0.22, 0.3]; // #E8A838 at 30% opacity
+        // Selection highlight color - earthy yellow (inner layer) with transparency
+        let selection_color = [0.79, 0.64, 0.15, 0.35]; // #C9A227 at 35% opacity
 
         // Get scroll offset to determine if cursor should be shown
         let scroll_offset = grid.scroll_offset();
@@ -290,11 +290,11 @@ impl Renderer {
                 let x = cursor.col as f32 * cell_width;
                 let y = TAB_BAR_HEIGHT + cursor.row as f32 * cell_height;
 
-                // Turmeric gold cursor
+                // Bright orange cursor (turmeric core)
                 self.rect_pipeline.push_rect(
                     x, y,
                     cell_width, cell_height,
-                    [0.91, 0.66, 0.22, 1.0], // #E8A838
+                    [0.88, 0.48, 0.13, 1.0], // #E07B20
                 );
             }
         }
@@ -302,16 +302,16 @@ impl Renderer {
 
     /// Build tab bar render data
     fn build_tab_bar(&mut self, tabs: &[TabInfo], window_width: f32) {
-        // Tab bar background - slightly lighter than terminal background
-        let tab_bar_bg = [0.15, 0.12, 0.10, 1.0]; // #261F1A
+        // Tab bar background - medium brown (between skin tones)
+        let tab_bar_bg = [0.18, 0.14, 0.13, 1.0]; // #2D2420
         self.rect_pipeline.push_rect(0.0, 0.0, window_width, TAB_BAR_HEIGHT, tab_bar_bg);
 
-        // Tab colors
-        let active_tab_bg = [0.91, 0.66, 0.22, 1.0];   // #E8A838 - Turmeric gold
-        let inactive_tab_bg = [0.20, 0.16, 0.13, 1.0]; // #332920 - Darker
-        let activity_indicator = [0.70, 0.50, 0.18, 1.0]; // Dimmer gold for activity
-        let active_text_color = [0.10, 0.08, 0.07, 1.0];  // Dark text on gold
-        let inactive_text_color = [0.85, 0.85, 0.80, 1.0]; // Light text
+        // Tab colors - turmeric-inspired
+        let active_tab_bg = [0.88, 0.48, 0.13, 1.0];   // #E07B20 - Bright orange (core)
+        let inactive_tab_bg = [0.24, 0.19, 0.16, 1.0]; // #3D3028 - Lighter brown
+        let activity_indicator = [0.79, 0.64, 0.15, 1.0]; // #C9A227 - Earthy yellow (inner layer)
+        let active_text_color = [0.11, 0.08, 0.06, 1.0];  // Dark brown text on orange
+        let inactive_text_color = [0.83, 0.77, 0.66, 1.0]; // #D4C4A8 - Cream/tan text
 
         // Calculate tab width - minimum 80px, maximum 200px, or divide space evenly
         let tab_count = tabs.len().max(1);
@@ -366,8 +366,8 @@ impl Renderer {
             }
         }
 
-        // Bottom border of tab bar
-        let border_color = [0.30, 0.24, 0.20, 1.0]; // #4D3D33
+        // Bottom border of tab bar - earthy yellow accent
+        let border_color = [0.79, 0.64, 0.15, 0.6]; // #C9A227 at 60% opacity
         self.rect_pipeline.push_rect(0.0, TAB_BAR_HEIGHT - 1.0, window_width, 1.0, border_color);
     }
 }

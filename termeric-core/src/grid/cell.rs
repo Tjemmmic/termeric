@@ -18,14 +18,14 @@ impl Color {
         Self { r, g, b }
     }
 
-    /// Default foreground color (white)
+    /// Default foreground color - cream/tan (turmeric skin)
     pub const fn default_fg() -> Self {
-        Self::rgb(229, 229, 229)
+        Self::rgb(212, 196, 168) // #D4C4A8
     }
 
-    /// Default background color (black)
+    /// Default background color - dark brown (dried turmeric)
     pub const fn default_bg() -> Self {
-        Self::rgb(0, 0, 0)
+        Self::rgb(28, 20, 16) // #1C1410
     }
 
     /// Convert to floating point array for shaders

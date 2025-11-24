@@ -46,46 +46,52 @@ impl Theme {
         }
     }
 
-    /// The default Turmeric theme - warm, golden tones
+    /// The default Turmeric theme - colors inspired by the turmeric root
+    /// - Background: Dark brown (like dried turmeric skin)
+    /// - Foreground: Cream/tan (like fresh turmeric skin)
+    /// - Primary accent: Earthy yellow (first inner layer)
+    /// - Secondary accent: Bright orange (turmeric core)
+    /// - Tertiary: Fresh green (turmeric leaves)
     pub fn turmeric() -> Self {
         Self {
             meta: ThemeMeta {
                 name: "Turmeric".to_string(),
                 author: "Termeric".to_string(),
-                description: "Warm, golden theme inspired by turmeric spice".to_string(),
+                description: "Colors inspired by the turmeric root - skin, flesh, and leaves".to_string(),
             },
             primary: PrimaryColors {
-                black: Color::hex("#1A1612"),
-                red: Color::hex("#C75646"),
-                green: Color::hex("#8EB33B"),
-                yellow: Color::hex("#D0B03C"),
-                blue: Color::hex("#72A0C1"),
-                magenta: Color::hex("#C8A0D1"),
-                cyan: Color::hex("#218693"),
-                white: Color::hex("#E8DCC4"),
+                // Dark colors based on dried/dark turmeric skin
+                black: Color::hex("#1C1410"),   // Deep brown-black (dried skin)
+                red: Color::hex("#C75646"),     // Earthy red
+                green: Color::hex("#5D8C4A"),   // Turmeric leaf green
+                yellow: Color::hex("#C9A227"),  // Earthy yellow (inner layer)
+                blue: Color::hex("#6B8E9B"),    // Muted teal
+                magenta: Color::hex("#A67B8A"), // Dusty rose
+                cyan: Color::hex("#4A8C7B"),    // Leaf green-cyan
+                white: Color::hex("#D4C4A8"),   // Cream/tan (turmeric skin)
             },
             bright: BrightColors {
-                black: Color::hex("#3D352D"),
-                red: Color::hex("#E09690"),
-                green: Color::hex("#CDEE69"),
-                yellow: Color::hex("#E8A838"),
-                blue: Color::hex("#9CD9F0"),
-                magenta: Color::hex("#FBB1F9"),
-                cyan: Color::hex("#77DFD8"),
-                white: Color::hex("#F7F3E8"),
+                black: Color::hex("#3D3028"),   // Lighter brown
+                red: Color::hex("#E07B5F"),     // Warm coral
+                green: Color::hex("#7CB86A"),   // Bright leaf green
+                yellow: Color::hex("#E8A838"),  // Bright orange-yellow (turmeric core)
+                blue: Color::hex("#8BB0C0"),    // Lighter teal
+                magenta: Color::hex("#C899A8"), // Light dusty rose
+                cyan: Color::hex("#6BB89E"),    // Bright leaf green
+                white: Color::hex("#F5EBD9"),   // Light cream
             },
             ui: UiColors {
-                background: Color::hex("#1A1612"),
-                foreground: Color::hex("#E8DCC4"),
-                cursor: Color::hex("#E8A838"),
-                cursor_text: Color::hex("#1A1612"),
-                selection: Color::hex("#E8A838").with_alpha(0.3),
+                background: Color::hex("#1C1410"),  // Dark brown (dried turmeric)
+                foreground: Color::hex("#D4C4A8"),  // Cream/tan (skin color)
+                cursor: Color::hex("#E07B20"),      // Bright orange (turmeric core)
+                cursor_text: Color::hex("#1C1410"), // Dark brown
+                selection: Color::hex("#C9A227").with_alpha(0.35), // Earthy yellow selection
                 selection_text: None,
-                border: Color::hex("#3D352D"),
-                tab_active: Color::hex("#E8A838"),
-                tab_inactive: Color::hex("#3D352D"),
-                search_match: Color::hex("#E8A838").with_alpha(0.5),
-                url: Color::hex("#72A0C1"),
+                border: Color::hex("#3D3028"),      // Medium brown
+                tab_active: Color::hex("#E07B20"), // Bright orange (core)
+                tab_inactive: Color::hex("#2D2420"), // Darker brown
+                search_match: Color::hex("#7CB86A").with_alpha(0.4), // Leaf green
+                url: Color::hex("#6BB89E"),         // Bright leaf green for URLs
             },
         }
     }
