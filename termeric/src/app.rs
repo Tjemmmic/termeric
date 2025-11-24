@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -14,13 +15,17 @@ use termeric_core::{Pty, Terminal};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 
 use crate::config::Config;
+use crate::renderer::Renderer;
 
 /// Main application state
 pub struct App {
     /// Application configuration
+    #[allow(dead_code)]
     config: Config,
     /// The window (created on resume)
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
+    /// The renderer
+    renderer: Option<Renderer>,
     /// The terminal state
     terminal: Option<Terminal>,
     /// PTY handle for writing to shell
@@ -32,6 +37,8 @@ pub struct App {
     /// Terminal dimensions
     cols: usize,
     rows: usize,
+    /// Cursor blink state
+    cursor_visible: bool,
 }
 
 impl App {
@@ -42,13 +49,33 @@ impl App {
         Ok(Self {
             config,
             window: None,
+            renderer: None,
             terminal: None,
             pty: None,
             pty_rx: None,
             should_exit: false,
             cols: 80,
             rows: 24,
+            cursor_visible: true,
         })
+    }
+
+    /// Initialize the renderer
+    fn init_renderer(&mut self, window: Arc<Window>) -> Result<()> {
+        let renderer = Renderer::new(window.clone())?;
+
+        // Calculate grid size from renderer's cell size
+        let size = window.inner_size();
+        let (cols, rows) = renderer.calculate_grid_size(size.width, size.height);
+        self.cols = cols;
+        self.rows = rows;
+
+        self.renderer = Some(renderer);
+        self.window = Some(window);
+
+        log::info!("Renderer initialized, grid size: {}x{}", cols, rows);
+
+        Ok(())
     }
 
     /// Initialize the terminal and PTY
@@ -109,29 +136,52 @@ impl App {
 
     /// Handle window resize
     fn handle_resize(&mut self, width: u32, height: u32) {
-        // Calculate new terminal dimensions based on cell size
-        // For now, use approximate cell dimensions
-        let cell_width = 10.0_f32;
-        let cell_height = 20.0_f32;
+        // Resize renderer
+        if let Some(renderer) = &mut self.renderer {
+            renderer.resize(width, height);
 
-        let new_cols = ((width as f32) / cell_width).floor() as usize;
-        let new_rows = ((height as f32) / cell_height).floor() as usize;
+            // Calculate new terminal dimensions
+            let (new_cols, new_rows) = renderer.calculate_grid_size(width, height);
 
-        if new_cols != self.cols || new_rows != self.rows {
-            self.cols = new_cols.max(1);
-            self.rows = new_rows.max(1);
+            if new_cols != self.cols || new_rows != self.rows {
+                self.cols = new_cols;
+                self.rows = new_rows;
 
-            if let Some(terminal) = &mut self.terminal {
-                terminal.resize(self.cols, self.rows);
+                if let Some(terminal) = &mut self.terminal {
+                    terminal.resize(self.cols, self.rows);
+                }
+
+                if let Some(pty) = &self.pty {
+                    if let Err(e) = pty.resize(self.cols as u16, self.rows as u16) {
+                        log::error!("Failed to resize PTY: {}", e);
+                    }
+                }
+
+                log::debug!("Resized to {}x{}", self.cols, self.rows);
             }
+        }
+    }
 
-            if let Some(pty) = &self.pty {
-                if let Err(e) = pty.resize(self.cols as u16, self.rows as u16) {
-                    log::error!("Failed to resize PTY: {}", e);
+    /// Render the terminal
+    fn render(&mut self) {
+        let Some(renderer) = &mut self.renderer else { return };
+        let Some(terminal) = &self.terminal else { return };
+
+        match renderer.render(terminal.grid(), self.cursor_visible) {
+            Ok(()) => {}
+            Err(wgpu::SurfaceError::Lost) => {
+                if let Some(window) = &self.window {
+                    let size = window.inner_size();
+                    renderer.resize(size.width, size.height);
                 }
             }
-
-            log::debug!("Resized to {}x{}", self.cols, self.rows);
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                log::error!("Out of GPU memory");
+                self.should_exit = true;
+            }
+            Err(e) => {
+                log::warn!("Render error: {:?}", e);
+            }
         }
     }
 }
@@ -150,18 +200,24 @@ impl ApplicationHandler for App {
         match event_loop.create_window(window_attrs) {
             Ok(window) => {
                 log::info!("Window created");
+                let window = Arc::new(window);
 
-                // Calculate initial terminal size
-                let size = window.inner_size();
-                self.handle_resize(size.width, size.height);
-
-                self.window = Some(window);
+                // Initialize renderer
+                if let Err(e) = self.init_renderer(window.clone()) {
+                    log::error!("Failed to initialize renderer: {}", e);
+                    event_loop.exit();
+                    return;
+                }
 
                 // Initialize terminal and PTY
                 if let Err(e) = self.init_terminal() {
                     log::error!("Failed to initialize terminal: {}", e);
                     event_loop.exit();
+                    return;
                 }
+
+                // Initial render
+                self.render();
             }
             Err(e) => {
                 log::error!("Failed to create window: {}", e);
@@ -205,11 +261,8 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // TODO: Render the terminal grid
-                // For now, just request another redraw to keep processing events
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                // Render
+                self.render();
             }
 
             _ => {}
