@@ -6,8 +6,9 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
-    event::WindowEvent,
+    event::{ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
+    keyboard::ModifiersState,
     window::{Window, WindowId},
 };
 
@@ -15,6 +16,7 @@ use termeric_core::{Pty, Terminal};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 
 use crate::config::Config;
+use crate::input::{Action, MouseState, check_keybinding, screen_to_grid};
 use crate::renderer::Renderer;
 
 /// Main application state
@@ -39,12 +41,21 @@ pub struct App {
     rows: usize,
     /// Cursor blink state
     cursor_visible: bool,
+    /// Mouse input state
+    mouse_state: MouseState,
+    /// Current keyboard modifiers
+    modifiers: ModifiersState,
+    /// Clipboard
+    clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
     /// Create a new application instance
     pub fn new() -> Result<Self> {
         let config = Config::load_or_default()?;
+
+        // Initialize clipboard (may fail on some systems)
+        let clipboard = arboard::Clipboard::new().ok();
 
         Ok(Self {
             config,
@@ -57,6 +68,9 @@ impl App {
             cols: 80,
             rows: 24,
             cursor_visible: true,
+            mouse_state: MouseState::new(),
+            modifiers: ModifiersState::empty(),
+            clipboard,
         })
     }
 
@@ -167,7 +181,7 @@ impl App {
         let Some(renderer) = &mut self.renderer else { return };
         let Some(terminal) = &self.terminal else { return };
 
-        match renderer.render(terminal.grid(), self.cursor_visible) {
+        match renderer.render(terminal.grid(), terminal.selection(), self.cursor_visible) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -181,6 +195,139 @@ impl App {
             }
             Err(e) => {
                 log::warn!("Render error: {:?}", e);
+            }
+        }
+    }
+
+    /// Handle an action triggered by a keybinding
+    fn handle_action(&mut self, action: Action) {
+        match action {
+            Action::Copy => {
+                self.copy_selection();
+            }
+            Action::Paste => {
+                self.paste_clipboard();
+            }
+            Action::ScrollUp(lines) => {
+                if let Some(terminal) = &mut self.terminal {
+                    let offset = terminal.grid().scroll_offset();
+                    terminal.grid_mut().set_scroll_offset(offset + lines);
+                }
+            }
+            Action::ScrollDown(lines) => {
+                if let Some(terminal) = &mut self.terminal {
+                    let offset = terminal.grid().scroll_offset();
+                    terminal.grid_mut().set_scroll_offset(offset.saturating_sub(lines));
+                }
+            }
+            Action::ScrollToTop => {
+                if let Some(terminal) = &mut self.terminal {
+                    let max_offset = terminal.grid().scrollback_len();
+                    terminal.grid_mut().set_scroll_offset(max_offset);
+                }
+            }
+            Action::ScrollToBottom => {
+                if let Some(terminal) = &mut self.terminal {
+                    terminal.grid_mut().set_scroll_offset(0);
+                }
+            }
+            Action::ClearSelection => {
+                self.mouse_state.clear_selection();
+                if let Some(terminal) = &mut self.terminal {
+                    terminal.set_selection(None);
+                }
+            }
+            Action::IncreaseFontSize | Action::DecreaseFontSize | Action::ResetFontSize => {
+                // TODO: Implement font size changes
+                log::debug!("Font size change requested: {:?}", action);
+            }
+            Action::None => {}
+        }
+    }
+
+    /// Copy selection to clipboard
+    fn copy_selection(&mut self) {
+        let Some(terminal) = &self.terminal else { return };
+        let Some(text) = terminal.get_selection_text() else { return };
+
+        if let Some(clipboard) = &mut self.clipboard {
+            if let Err(e) = clipboard.set_text(&text) {
+                log::error!("Failed to copy to clipboard: {}", e);
+            } else {
+                log::debug!("Copied {} bytes to clipboard", text.len());
+            }
+        }
+    }
+
+    /// Paste from clipboard
+    fn paste_clipboard(&mut self) {
+        let Some(clipboard) = &mut self.clipboard else { return };
+
+        match clipboard.get_text() {
+            Ok(text) => {
+                self.write_to_pty(text.as_bytes());
+            }
+            Err(e) => {
+                log::error!("Failed to paste from clipboard: {}", e);
+            }
+        }
+    }
+
+    /// Handle mouse input
+    fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, position: (f64, f64)) {
+        let Some(renderer) = &self.renderer else { return };
+        let (cell_width, cell_height) = renderer.cell_size();
+        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, 0);
+
+        match state {
+            ElementState::Pressed => {
+                if let Some(selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
+                    if let Some(terminal) = &mut self.terminal {
+                        terminal.set_selection(Some(selection));
+                    }
+                }
+            }
+            ElementState::Released => {
+                if let Some(selection) = self.mouse_state.handle_release(button) {
+                    if let Some(terminal) = &mut self.terminal {
+                        terminal.set_selection(Some(selection));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle mouse movement
+    fn handle_mouse_move(&mut self, position: (f64, f64)) {
+        let Some(renderer) = &self.renderer else { return };
+        let (cell_width, cell_height) = renderer.cell_size();
+        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, 0);
+
+        if let Some(selection) = self.mouse_state.handle_move(grid_pos) {
+            if let Some(terminal) = &mut self.terminal {
+                terminal.set_selection(Some(selection));
+            }
+            // Request redraw for selection update
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+
+    /// Handle scroll wheel
+    fn handle_scroll(&mut self, delta: f64) {
+        if let Some(terminal) = &mut self.terminal {
+            let lines = (delta.abs() / 3.0).max(1.0) as usize;
+            let offset = terminal.grid().scroll_offset();
+
+            if delta > 0.0 {
+                terminal.grid_mut().set_scroll_offset(offset + lines);
+            } else {
+                terminal.grid_mut().set_scroll_offset(offset.saturating_sub(lines));
+            }
+
+            if let Some(window) = &self.window {
+                window.request_redraw();
             }
         }
     }
@@ -245,11 +392,45 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+            }
+
             WindowEvent::KeyboardInput { event, .. } => {
+                // Check for keybindings first
+                if let Some(action) = check_keybinding(&event, self.modifiers) {
+                    self.handle_action(action);
+                    return;
+                }
+
                 // Convert key event to terminal input
                 if let Some(data) = crate::input::key_to_bytes(&event) {
                     self.write_to_pty(&data);
                 }
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                // Get current cursor position from mouse state
+                if let Some(pos) = self.mouse_state.last_position {
+                    let renderer_cell_size = self.renderer.as_ref().map(|r| r.cell_size());
+                    if let Some((cw, ch)) = renderer_cell_size {
+                        let screen_x = pos.col as f64 * cw as f64;
+                        let screen_y = pos.row as f64 * ch as f64;
+                        self.handle_mouse_input(button, state, (screen_x, screen_y));
+                    }
+                }
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                self.handle_mouse_move((position.x, position.y));
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => {
+                let y_delta = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64 * 3.0,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 10.0,
+                };
+                self.handle_scroll(y_delta);
             }
 
             WindowEvent::RedrawRequested => {

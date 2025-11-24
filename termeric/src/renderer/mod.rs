@@ -16,7 +16,7 @@ use std::sync::Arc;
 use wgpu::*;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
-use termeric_core::Grid;
+use termeric_core::{Grid, Selection};
 
 use text::TextPipeline;
 use rect::RectPipeline;
@@ -147,7 +147,7 @@ impl Renderer {
     }
 
     /// Render the terminal grid
-    pub fn render(&mut self, grid: &Grid, cursor_visible: bool) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_visible: bool) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -156,7 +156,7 @@ impl Renderer {
         });
 
         // Build render data from grid
-        self.build_render_data(grid, cursor_visible);
+        self.build_render_data(grid, selection, cursor_visible);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -197,12 +197,15 @@ impl Renderer {
     }
 
     /// Build render data from the grid
-    fn build_render_data(&mut self, grid: &Grid, cursor_visible: bool) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_visible: bool) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
+
+        // Selection highlight color - turmeric gold with transparency
+        let selection_color = [0.91, 0.66, 0.22, 0.3]; // #E8A838 at 30% opacity
 
         // Iterate over grid cells
         for row in 0..grid.rows() {
@@ -212,9 +215,20 @@ impl Renderer {
                 let x = col as f32 * cell_width;
                 let y = row as f32 * cell_height;
 
-                // Draw background if not default
+                // Check if cell is selected
+                let is_selected = selection
+                    .map(|s| s.contains(row as i32, col))
+                    .unwrap_or(false);
+
+                // Draw background if not default or if selected
                 let bg = cell.bg;
-                if bg.r != 0 || bg.g != 0 || bg.b != 0 {
+                if is_selected {
+                    self.rect_pipeline.push_rect(
+                        x, y,
+                        cell_width, cell_height,
+                        selection_color,
+                    );
+                } else if bg.r != 0 || bg.g != 0 || bg.b != 0 {
                     self.rect_pipeline.push_rect(
                         x, y,
                         cell_width, cell_height,

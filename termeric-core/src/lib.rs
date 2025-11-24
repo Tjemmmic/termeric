@@ -36,6 +36,6 @@ pub mod event;
 
 // Re-export commonly used types
 pub use grid::{Cell, CellContent, CellAttrs, CellFlags, Color, Grid, Row, Cursor};
-pub use term::Terminal;
+pub use term::{Terminal, Selection, SelectionType, Point};
 pub use pty::Pty;
 pub use event::TerminalEvent;

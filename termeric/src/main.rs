@@ -6,6 +6,8 @@ mod app;
 mod config;
 mod input;
 mod renderer;
+mod search;
+mod url;
 mod window;
 
 use anyhow::Result;
