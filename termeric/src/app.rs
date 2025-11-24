@@ -42,6 +42,12 @@ pub struct App {
     cursor_display_row: f32,
     /// Last frame time for delta calculation
     last_frame_time: Instant,
+    /// Last known cursor visibility (for snap detection)
+    last_cursor_visible: bool,
+    /// Last active tab ID (for animation state)
+    last_active_tab_id: Option<usize>,
+    /// Highest tab ID we've seen (to detect truly new tabs)
+    max_seen_tab_id: Option<usize>,
     /// Mouse input state
     mouse_state: MouseState,
     /// Current keyboard modifiers
@@ -77,6 +83,9 @@ impl App {
             cursor_display_col: 0.0,
             cursor_display_row: 0.0,
             last_frame_time: Instant::now(),
+            last_cursor_visible: true,
+            last_active_tab_id: None,
+            max_seen_tab_id: None,
             mouse_state: MouseState::new(),
             modifiers: ModifiersState::empty(),
             clipboard,
@@ -174,20 +183,21 @@ impl App {
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
 
-        // Get cursor target position from grid
-        let cursor_target = self.tabs
+        // Get cursor target position and active tab ID from grid
+        let cursor_info = self.tabs
             .as_ref()
-            .and_then(|tabs| tabs.active_tab())
-            .map(|tab| {
+            .and_then(|tabs| tabs.active_tab().map(|tab| (tab, tabs)))
+            .map(|(tab, _tabs)| {
                 let cursor = tab.terminal.grid().cursor();
-                (cursor.col, cursor.row, cursor.visible)
+                (cursor.col, cursor.row, cursor.visible, tab.id)
             });
 
         // Update cursor animation if we have a target
-        let cursor_display_pos = if let Some((col, row, _visible)) = cursor_target {
-            self.update_cursor_animation(col, row)
+        let cursor_display_pos = if let Some((col, row, visible, tab_id)) = cursor_info {
+            self.update_cursor_animation(col, row, visible, Some(tab_id))
         } else {
-            (0.0, 0.0)
+            // No active tab - snap to origin and mark as not visible
+            self.update_cursor_animation(0, 0, false, None)
         };
 
         let Some(renderer) = &mut self.renderer else { return };
@@ -239,13 +249,59 @@ impl App {
 
     /// Update animated cursor position, interpolating toward target
     /// Returns the current display position (col, row) as floats
-    fn update_cursor_animation(&mut self, target_col: usize, target_row: usize) -> (f32, f32) {
+    ///
+    /// Snaps immediately (no animation) when:
+    /// - Cursor visibility changes (reappears after being hidden)
+    /// - A new tab is created (to avoid animating from old tab's position)
+    ///
+    /// Animates smoothly for:
+    /// - Switching between existing tabs
+    /// - All cursor movement including large jumps (e.g., after `cd`, `clear`)
+    fn update_cursor_animation(
+        &mut self,
+        target_col: usize,
+        target_row: usize,
+        cursor_visible: bool,
+        active_tab_id: Option<usize>,
+    ) -> (f32, f32) {
         let now = Instant::now();
         let delta = now.duration_since(self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
 
-        let target_col = target_col as f32;
-        let target_row = target_row as f32;
+        let target_col_f = target_col as f32;
+        let target_row_f = target_row as f32;
+
+        // Check for snap conditions:
+        // - Visibility change: cursor was hidden and reappears (e.g., command finished)
+        // - New tab: tab ID is higher than any we've EVER seen (truly new tab)
+        // We explicitly DON'T snap on tab switches - animate between existing tabs!
+        // We explicitly DON'T snap on large jumps - that's the animation we want!
+        let visibility_changed = cursor_visible != self.last_cursor_visible;
+
+        // Detect truly new tab: compare against the highest ID we've ever seen,
+        // not just the last active tab (which could be lower when switching tabs)
+        let is_new_tab = match (active_tab_id, self.max_seen_tab_id) {
+            (Some(current), Some(max)) => current > max,
+            (Some(_), None) => true, // First tab ever
+            _ => false,
+        };
+
+        // Update tracking state
+        self.last_cursor_visible = cursor_visible;
+        self.last_active_tab_id = active_tab_id;
+        // Update max seen tab ID
+        if let Some(current) = active_tab_id {
+            self.max_seen_tab_id = Some(
+                self.max_seen_tab_id.map_or(current, |max| max.max(current))
+            );
+        }
+
+        // Snap immediately if cursor reappears or it's a truly new tab
+        if visibility_changed || is_new_tab {
+            self.cursor_display_col = target_col_f;
+            self.cursor_display_row = target_row_f;
+            return (self.cursor_display_col, self.cursor_display_row);
+        }
 
         // Easing speed - higher = faster snap to target
         // 15.0 gives a quick but visible ease (reaches target in ~100-150ms)
@@ -253,15 +309,15 @@ impl App {
         let t = (ease_speed * delta).min(1.0);
 
         // Lerp toward target
-        self.cursor_display_col += (target_col - self.cursor_display_col) * t;
-        self.cursor_display_row += (target_row - self.cursor_display_row) * t;
+        self.cursor_display_col += (target_col_f - self.cursor_display_col) * t;
+        self.cursor_display_row += (target_row_f - self.cursor_display_row) * t;
 
         // Snap if very close to avoid endless tiny movements
-        if (self.cursor_display_col - target_col).abs() < 0.01 {
-            self.cursor_display_col = target_col;
+        if (self.cursor_display_col - target_col_f).abs() < 0.01 {
+            self.cursor_display_col = target_col_f;
         }
-        if (self.cursor_display_row - target_row).abs() < 0.01 {
-            self.cursor_display_row = target_row;
+        if (self.cursor_display_row - target_row_f).abs() < 0.01 {
+            self.cursor_display_row = target_row_f;
         }
 
         (self.cursor_display_col, self.cursor_display_row)
