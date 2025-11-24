@@ -155,6 +155,11 @@ impl PtyHandle {
     pub fn is_running(&mut self) -> bool {
         self.child.try_wait().ok().flatten().is_none()
     }
+
+    /// Get the child process ID (if available)
+    pub fn child_id(&self) -> Option<u32> {
+        self.child.process_id()
+    }
 }
 
 /// Spawn a reader thread that sends PTY output via a channel

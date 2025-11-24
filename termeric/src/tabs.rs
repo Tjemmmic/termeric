@@ -2,9 +2,35 @@
 //!
 //! Provides support for tabbed terminal sessions within a single window.
 
+use std::path::Path;
 use std::sync::mpsc::Receiver;
 use termeric_core::{Pty, Terminal};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
+
+/// Get the current working directory of a process by its PID
+/// Uses /proc/<pid>/cwd on Linux
+fn get_process_cwd(pid: u32) -> Option<String> {
+    let cwd_path = format!("/proc/{}/cwd", pid);
+    std::fs::read_link(&cwd_path)
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+}
+
+/// Extract the directory name from a path, showing ~ for home directory
+fn dir_name_from_path(path: &str) -> String {
+    // Check if this is the home directory
+    if let Some(home) = std::env::var_os("HOME") {
+        if path == home.to_str().unwrap_or("") {
+            return "~".to_string();
+        }
+    }
+
+    Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| path.to_string())
+}
 
 /// A single terminal tab
 pub struct Tab {
@@ -32,9 +58,15 @@ impl Tab {
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
 
+        // Get initial title from current working directory
+        let title = handle.child_id()
+            .and_then(get_process_cwd)
+            .map(|cwd| dir_name_from_path(&cwd))
+            .unwrap_or_else(|| format!("Tab {}", id + 1));
+
         Ok(Self {
             id,
-            title: format!("Tab {}", id + 1),
+            title,
             terminal,
             pty: handle,
             pty_rx: rx,
@@ -64,6 +96,11 @@ impl Tab {
             }
         }
 
+        // Update title when there's output (directory may have changed)
+        if had_output {
+            self.update_title();
+        }
+
         had_output
     }
 
@@ -79,10 +116,13 @@ impl Tab {
         Ok(())
     }
 
-    /// Update tab title from terminal title (if set by escape sequence)
+    /// Update tab title based on the shell's current working directory
     pub fn update_title(&mut self) {
-        // TODO: Get title from terminal escape sequences
-        // For now, just use default
+        if let Some(pid) = self.pty.child_id() {
+            if let Some(cwd) = get_process_cwd(pid) {
+                self.title = dir_name_from_path(&cwd);
+            }
+        }
     }
 }
 
