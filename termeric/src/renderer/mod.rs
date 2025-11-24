@@ -318,55 +318,89 @@ impl Renderer {
 
         // Calculate tab width - minimum 80px, maximum 200px, or divide space evenly
         let tab_count = tabs.len().max(1);
-        let tab_width = ((window_width / tab_count as f32).min(200.0)).max(80.0);
+        let full_tab_width = ((window_width / tab_count as f32).min(200.0)).max(80.0);
         let tab_padding = 8.0;
         let tab_height = TAB_BAR_HEIGHT - 4.0; // Leave some margin
 
+        // Track cumulative x position (accounting for animated widths)
+        let mut current_x = 0.0;
+
         for (i, tab) in tabs.iter().enumerate() {
-            let x = i as f32 * tab_width;
+            // Apply ease-out curve for smoother animation: t' = 1 - (1-t)^2
+            let t = tab.slide_progress;
+            let eased_progress = 1.0 - (1.0 - t) * (1.0 - t);
+
+            // Animated tab width grows from 0 to full width
+            let tab_width = full_tab_width * eased_progress;
+
+            let x = current_x;
             let y = 2.0; // Small top margin
 
-            // Tab background
-            let bg_color = if tab.is_active {
-                active_tab_bg
-            } else if tab.has_activity {
-                activity_indicator
-            } else {
-                inactive_tab_bg
-            };
+            // Only render if the tab has some visible width
+            if tab_width > 2.0 {
+                // Tab background with animated alpha for fade-in effect
+                let base_bg_color = if tab.is_active {
+                    active_tab_bg
+                } else if tab.has_activity {
+                    activity_indicator
+                } else {
+                    inactive_tab_bg
+                };
 
-            self.rect_pipeline.push_rect(x + 1.0, y, tab_width - 2.0, tab_height, bg_color);
+                // Fade in the background
+                let bg_color = [
+                    base_bg_color[0],
+                    base_bg_color[1],
+                    base_bg_color[2],
+                    base_bg_color[3] * eased_progress,
+                ];
 
-            // Tab text
-            let text_color = if tab.is_active {
-                active_text_color
-            } else {
-                inactive_text_color
-            };
+                self.rect_pipeline.push_rect(x + 1.0, y, tab_width - 2.0, tab_height, bg_color);
 
-            // Render tab title (truncate if needed)
-            let title = if tab.title.len() > 15 {
-                format!("{}...", &tab.title[..12])
-            } else {
-                tab.title.clone()
-            };
+                // Tab text - only render when animation is far enough along
+                if eased_progress > 0.3 {
+                    let text_alpha = ((eased_progress - 0.3) / 0.7).min(1.0); // Fade in text after 30%
 
-            // Add tab number prefix
-            let label = format!("{}: {}", i + 1, title);
+                    let base_text_color = if tab.is_active {
+                        active_text_color
+                    } else {
+                        inactive_text_color
+                    };
 
-            // Render each character of the label
-            let text_y = y + (tab_height - self.cell_height) / 2.0; // Center vertically
-            let mut text_x = x + tab_padding;
+                    let text_color = [
+                        base_text_color[0],
+                        base_text_color[1],
+                        base_text_color[2],
+                        base_text_color[3] * text_alpha,
+                    ];
 
-            for c in label.chars() {
-                if text_x + self.cell_width > x + tab_width - tab_padding {
-                    break; // Don't overflow tab
+                    // Render tab title (truncate if needed)
+                    let title = if tab.title.len() > 15 {
+                        format!("{}...", &tab.title[..12])
+                    } else {
+                        tab.title.clone()
+                    };
+
+                    // Add tab number prefix
+                    let label = format!("{}: {}", i + 1, title);
+
+                    // Render each character of the label
+                    let text_y = y + (tab_height - self.cell_height) / 2.0; // Center vertically
+                    let mut text_x = x + tab_padding;
+
+                    for c in label.chars() {
+                        if text_x + self.cell_width > x + tab_width - tab_padding {
+                            break; // Don't overflow tab
+                        }
+                        if !c.is_whitespace() {
+                            self.text_pipeline.push_char(c, text_x, text_y, text_color);
+                        }
+                        text_x += self.cell_width * 0.6; // Tighter spacing for tab labels
+                    }
                 }
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, text_x, text_y, text_color);
-                }
-                text_x += self.cell_width * 0.6; // Tighter spacing for tab labels
             }
+
+            current_x += tab_width;
         }
 
         // Bottom border of tab bar - earthy yellow accent

@@ -4,8 +4,12 @@
 
 use std::path::Path;
 use std::sync::mpsc::Receiver;
+use std::time::Instant;
 use termeric_core::{Pty, Terminal};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
+
+/// Duration of tab slide-in animation in seconds
+const TAB_SLIDE_DURATION: f32 = 0.15;
 
 /// Get the current working directory of a process by its PID
 /// Uses /proc/<pid>/cwd on Linux
@@ -48,6 +52,8 @@ pub struct Tab {
     pub has_activity: bool,
     /// Whether the shell process has exited
     pub closed: bool,
+    /// When this tab was created (for slide-in animation)
+    pub created_at: Instant,
 }
 
 impl Tab {
@@ -72,6 +78,7 @@ impl Tab {
             pty_rx: rx,
             has_activity: false,
             closed: false,
+            created_at: Instant::now(),
         })
     }
 
@@ -123,6 +130,12 @@ impl Tab {
                 self.title = dir_name_from_path(&cwd);
             }
         }
+    }
+
+    /// Get slide-in animation progress (0.0 = just created, 1.0 = fully visible)
+    pub fn slide_progress(&self) -> f32 {
+        let elapsed = self.created_at.elapsed().as_secs_f32();
+        (elapsed / TAB_SLIDE_DURATION).min(1.0)
     }
 }
 
@@ -302,6 +315,7 @@ impl TabManager {
                 is_active: i == self.active,
                 has_activity: tab.has_activity,
                 is_closed: tab.closed,
+                slide_progress: tab.slide_progress(),
             })
             .collect()
     }
@@ -315,6 +329,8 @@ pub struct TabInfo {
     pub is_active: bool,
     pub has_activity: bool,
     pub is_closed: bool,
+    /// Slide-in animation progress (0.0 = just created, 1.0 = fully visible)
+    pub slide_progress: f32,
 }
 
 #[cfg(test)]
