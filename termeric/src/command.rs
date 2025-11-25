@@ -36,6 +36,16 @@ pub enum CommandResult {
     ReloadConfig,
     /// Show help text
     ShowHelp(String),
+    /// List all available themes
+    ListThemes,
+    /// List all available commands
+    ListCommands,
+    /// List all keyboard shortcuts
+    ListKeybindings,
+    /// Show version information
+    ShowVersion,
+    /// Show about/credits information
+    ShowAbout,
     /// Exit command mode without action
     Cancel,
 }
@@ -67,6 +77,16 @@ pub enum Command {
     Reload,
     /// Show help
     Help(Option<String>),
+    /// List all available themes
+    ListThemes,
+    /// List all available commands
+    ListCommands,
+    /// List all keyboard shortcuts
+    ListKeybindings,
+    /// Show version information
+    Version,
+    /// Show about/credits information
+    About,
     /// Unknown command
     Unknown(String),
 }
@@ -153,6 +173,11 @@ impl Command {
             "help" | "h" | "?" => {
                 Command::Help(args.first().map(|s| s.to_string()))
             }
+            "list-themes" | "listthemes" | "themes" => Command::ListThemes,
+            "list-commands" | "listcommands" | "commands" | "list" => Command::ListCommands,
+            "list-keybindings" | "listkeybindings" | "keybindings" | "keys" | "shortcuts" => Command::ListKeybindings,
+            "version" | "v" | "ver" => Command::Version,
+            "about" | "credits" | "info" => Command::About,
             "" => Command::Unknown("empty command".to_string()),
             other => Command::Unknown(format!("unknown command: {}", other)),
         })
@@ -173,6 +198,11 @@ impl Command {
             Command::Save => CommandResult::SaveConfig,
             Command::Reload => CommandResult::ReloadConfig,
             Command::Help(topic) => CommandResult::ShowHelp(Self::help_text(topic.as_deref())),
+            Command::ListThemes => CommandResult::ListThemes,
+            Command::ListCommands => CommandResult::ListCommands,
+            Command::ListKeybindings => CommandResult::ListKeybindings,
+            Command::Version => CommandResult::ShowVersion,
+            Command::About => CommandResult::ShowAbout,
             Command::Unknown(msg) => CommandResult::Error(msg),
         }
     }
@@ -223,8 +253,14 @@ impl Command {
                  reset-config       - Reset to defaults (reset)\n\
                  config             - Open config UI (c)\n\
                  save               - Save settings (s)\n\
-                 reload             - Reload settings (r)\n\
-                 help [cmd]         - Show help (h, ?)\n\n\
+                 reload             - Reload settings (r)\n\n\
+                 HELP & DISCOVERY:\n\
+                 help [cmd]         - Show help (h, ?)\n\
+                 list-themes        - List available themes (themes)\n\
+                 list-commands      - List all commands (commands, list)\n\
+                 list-keybindings   - Show keyboard shortcuts (keys)\n\
+                 version            - Show version info (v)\n\
+                 about              - Show about/credits (info)\n\n\
                  Press Escape to cancel.".to_string()
             }
         }
@@ -346,6 +382,41 @@ impl CommandRegistry {
                     category: "Help",
                     description: "Show command help",
                     usage: "help [command]",
+                },
+                CommandDef {
+                    name: "list-themes",
+                    alias: Some("themes"),
+                    category: "Help",
+                    description: "List all available themes",
+                    usage: "list-themes",
+                },
+                CommandDef {
+                    name: "list-commands",
+                    alias: Some("commands"),
+                    category: "Help",
+                    description: "List all available commands",
+                    usage: "list-commands",
+                },
+                CommandDef {
+                    name: "list-keybindings",
+                    alias: Some("keys"),
+                    category: "Help",
+                    description: "Show keyboard shortcuts",
+                    usage: "list-keybindings",
+                },
+                CommandDef {
+                    name: "version",
+                    alias: Some("v"),
+                    category: "Help",
+                    description: "Show version information",
+                    usage: "version",
+                },
+                CommandDef {
+                    name: "about",
+                    alias: Some("info"),
+                    category: "Help",
+                    description: "Show about/credits",
+                    usage: "about",
                 },
             ],
         }
@@ -707,6 +778,19 @@ impl CommandMode {
             CommandResult::ShowHelp(text) => {
                 self.set_message(text.clone(), false);
                 // Keep command mode active to show help, but clear input
+                self.input.clear();
+                self.cursor = 0;
+                self.phase = CommandInputPhase::SelectingCommand;
+                self.selected_command = None;
+                self.update_suggestions();
+            }
+            CommandResult::ListThemes |
+            CommandResult::ListCommands |
+            CommandResult::ListKeybindings |
+            CommandResult::ShowVersion |
+            CommandResult::ShowAbout => {
+                // These are handled by App and will set messages
+                // Keep command mode active to show the result, clear input
                 self.input.clear();
                 self.cursor = 0;
                 self.phase = CommandInputPhase::SelectingCommand;
@@ -1237,6 +1321,11 @@ impl CommandMode {
     /// Get current message scroll offset
     pub fn message_scroll_offset(&self) -> usize {
         self.message_scroll_offset
+    }
+
+    /// Get access to the command registry
+    pub fn registry(&self) -> &CommandRegistry {
+        &self.registry
     }
 }
 

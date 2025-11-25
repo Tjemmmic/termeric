@@ -838,6 +838,99 @@ impl App {
                 // Help text is already displayed as message in command module
                 log::info!("Help: {}", text);
             }
+            CommandResult::ListThemes => {
+                let themes = "Available Themes:\n\n\
+                             • turmeric (default) - Warm, earthy colors inspired by turmeric root\n\
+                             • solarized-dark - Precision colors for machines and people\n\
+                             • solarized-light - Light variant of Solarized\n\
+                             • dracula - A dark theme for vampires\n\
+                             • nord - Arctic, north-bluish clean theme\n\n\
+                             Use 'theme <name>' to switch themes.";
+                self.command_mode.set_message(themes.to_string(), false);
+            }
+            CommandResult::ListCommands => {
+                let mut commands_text = String::from("Available Commands:\n\n");
+                let registry = self.command_mode.registry();
+
+                // Group commands by category
+                let mut categories: std::collections::HashMap<&str, Vec<&crate::command::CommandDef>> = std::collections::HashMap::new();
+                for cmd in registry.all() {
+                    categories.entry(cmd.category).or_insert_with(Vec::new).push(cmd);
+                }
+
+                // Sort categories
+                let mut cat_names: Vec<&str> = categories.keys().copied().collect();
+                cat_names.sort();
+
+                for category in cat_names {
+                    commands_text.push_str(&format!("{}:\n", category));
+                    if let Some(cmds) = categories.get(category) {
+                        for cmd in cmds {
+                            let alias_str = cmd.alias.map(|a| format!(" ({})", a)).unwrap_or_default();
+                            commands_text.push_str(&format!("  • {}{} - {}\n", cmd.name, alias_str, cmd.description));
+                        }
+                    }
+                    commands_text.push('\n');
+                }
+
+                self.command_mode.set_message(commands_text, false);
+            }
+            CommandResult::ListKeybindings => {
+                let keybindings = "Keyboard Shortcuts:\n\n\
+                                   COMMAND PALETTE:\n\
+                                   Ctrl+Shift+P       - Open command palette\n\
+                                   Escape             - Close command palette\n\n\
+                                   CLIPBOARD:\n\
+                                   Ctrl+Shift+C       - Copy selection\n\
+                                   Ctrl+Shift+V       - Paste\n\n\
+                                   SCROLLING:\n\
+                                   Shift+PageUp       - Scroll up 10 lines\n\
+                                   Shift+PageDown     - Scroll down 10 lines\n\
+                                   Ctrl+Shift+Home    - Scroll to top\n\
+                                   Ctrl+Shift+End     - Scroll to bottom\n\n\
+                                   FONT SIZE:\n\
+                                   Ctrl+Plus/Equal    - Increase font size\n\
+                                   Ctrl+Minus         - Decrease font size\n\
+                                   Ctrl+0             - Reset font size\n\n\
+                                   TABS:\n\
+                                   Ctrl+Shift+T       - New tab\n\
+                                   Ctrl+Shift+W       - Close tab\n\
+                                   Ctrl+Tab           - Next tab\n\
+                                   Ctrl+Shift+Tab     - Previous tab\n\
+                                   Ctrl+1-9           - Switch to tab by number\n\n\
+                                   SELECTION:\n\
+                                   Escape             - Clear selection\n\
+                                   Click              - Simple selection\n\
+                                   Double-click       - Word selection\n\
+                                   Triple-click       - Line selection\n\
+                                   Alt+Click          - Block selection";
+                self.command_mode.set_message(keybindings.to_string(), false);
+            }
+            CommandResult::ShowVersion => {
+                let version = env!("CARGO_PKG_VERSION");
+                let version_info = format!(
+                    "Termeric v{}\n\n\
+                     A GPU-accelerated terminal emulator built with Rust.\n\
+                     Features smooth rendering, warm turmeric-inspired theme,\n\
+                     and modern terminal capabilities.\n\n\
+                     Repository: https://github.com/tjemmmic/termeric",
+                    version
+                );
+                self.command_mode.set_message(version_info, false);
+            }
+            CommandResult::ShowAbout => {
+                let about = "Termeric Terminal Emulator\n\n\
+                            A modern, GPU-accelerated terminal emulator\n\
+                            built with Rust and wgpu.\n\n\
+                            Built with:\n\
+                            • Rust - Systems programming language\n\
+                            • wgpu - GPU rendering\n\
+                            • cosmic-text - Text shaping\n\
+                            • termeric-core - Terminal emulation\n\n\
+                            License: MIT or Apache 2.0\n\n\
+                            Use 'version' to see version info.";
+                self.command_mode.set_message(about.to_string(), false);
+            }
             CommandResult::Success(_) | CommandResult::Error(_) | CommandResult::Cancel => {
                 // Already handled in CommandMode
             }
