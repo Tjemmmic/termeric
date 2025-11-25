@@ -269,6 +269,17 @@ impl Renderer {
             0.0
         };
 
+        // Calculate dropdown height if showing suggestions
+        let dropdown_height = if let Some(cmd_bar) = command_bar {
+            if !cmd_bar.suggestions.is_empty() {
+                self.calculate_dropdown_height(cmd_bar, window_height - command_bar_height)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
         // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
         let brightness = 1.0 - focus_dim;
 
@@ -289,8 +300,8 @@ impl Renderer {
         // Get scroll offset to determine if cursor should be shown
         let scroll_offset = grid.scroll_offset();
 
-        // Calculate maximum y position for grid content (don't overlap command bar)
-        let max_grid_y = window_height - command_bar_height;
+        // Calculate maximum y position for grid content (don't overlap command bar or dropdown)
+        let max_grid_y = window_height - command_bar_height - dropdown_height - 8.0; // 8px gap for dropdown
 
         // Iterate over grid cells (offset by tab bar height)
         for row in 0..grid.rows() {
@@ -523,6 +534,25 @@ impl Renderer {
         }
     }
 
+    /// Calculate dropdown height based on number of suggestions
+    fn calculate_dropdown_height(&self, info: &CommandBarInfo, available_height: f32) -> f32 {
+        const SUGGESTION_HEIGHT: f32 = 28.0;
+        const PADDING: f32 = 12.0;
+        const SPACING: f32 = 1.0;
+        const BORDER_WIDTH: f32 = 1.0;
+        const TAB_BAR_HEIGHT: f32 = 40.0;
+
+        let actual_available_height = available_height - TAB_BAR_HEIGHT - 8.0;
+        let max_suggestions_that_fit = ((actual_available_height - PADDING * 2.0 - BORDER_WIDTH * 2.0) / (SUGGESTION_HEIGHT + SPACING)).floor() as usize;
+        let num_suggestions = info.suggestions.len().min(6).min(max_suggestions_that_fit.max(1));
+
+        if num_suggestions == 0 {
+            return 0.0;
+        }
+
+        num_suggestions as f32 * (SUGGESTION_HEIGHT + SPACING) - SPACING + PADDING * 2.0 + BORDER_WIDTH * 2.0
+    }
+
     /// Build command bar render data
     fn build_command_bar(&mut self, info: &CommandBarInfo, window_width: f32, window_height: f32, bar_height: f32) {
         let padding = 8.0;
@@ -690,56 +720,83 @@ impl Renderer {
 
     /// Build autocomplete dropdown above command bar
     fn build_autocomplete_dropdown(&mut self, info: &CommandBarInfo, command_bar_y: f32, window_width: f32) {
-        const SUGGESTION_HEIGHT: f32 = 32.0;
-        const PADDING: f32 = 8.0;
-        const SPACING: f32 = 2.0;
+        const SUGGESTION_HEIGHT: f32 = 28.0; // Slightly more compact
+        const PADDING: f32 = 12.0; // More padding for breathing room
+        const SPACING: f32 = 1.0; // Tighter spacing between items
+        const MARGIN: f32 = 16.0; // Margin from window edges
+        const BORDER_WIDTH: f32 = 1.0;
 
         // Calculate how many suggestions can fit above the command bar
         const TAB_BAR_HEIGHT: f32 = 40.0;
-        let available_height = command_bar_y - TAB_BAR_HEIGHT - 4.0; // Space between tab bar and command bar
-        let max_suggestions_that_fit = ((available_height - PADDING * 2.0) / (SUGGESTION_HEIGHT + SPACING)).floor() as usize;
+        let available_height = command_bar_y - TAB_BAR_HEIGHT - 8.0; // 8px gap from tab bar
+        let max_suggestions_that_fit = ((available_height - PADDING * 2.0 - BORDER_WIDTH * 2.0) / (SUGGESTION_HEIGHT + SPACING)).floor() as usize;
         let num_suggestions = info.suggestions.len().min(6).min(max_suggestions_that_fit.max(1));
 
-        let dropdown_height = num_suggestions as f32 * (SUGGESTION_HEIGHT + SPACING) + PADDING * 2.0;
-        let dropdown_y = command_bar_y - dropdown_height - 4.0; // 4px gap above command bar
+        // Dropdown dimensions - centered with margins
+        let dropdown_width = window_width - MARGIN * 2.0;
+        let dropdown_height = num_suggestions as f32 * (SUGGESTION_HEIGHT + SPACING) - SPACING + PADDING * 2.0 + BORDER_WIDTH * 2.0;
+        let dropdown_x = MARGIN;
+        let dropdown_y = command_bar_y - dropdown_height - 8.0; // 8px gap above command bar
 
-        // Dropdown background - slightly darker with more opacity
-        let dropdown_bg = [0.12, 0.08, 0.06, 0.97];
-        self.rect_pipeline.push_rect(0.0, dropdown_y, window_width, dropdown_height, dropdown_bg);
+        // Shadow effect - draw multiple slightly offset darker rects
+        let shadow_color = [0.0, 0.0, 0.0, 0.3];
+        for i in 1..=3 {
+            let offset = i as f32 * 2.0;
+            self.rect_pipeline.push_rect(
+                dropdown_x + offset,
+                dropdown_y + offset,
+                dropdown_width,
+                dropdown_height,
+                shadow_color,
+            );
+        }
 
-        // Top border - accent color
-        let border_color = [0.79, 0.64, 0.15, 0.8];
-        self.rect_pipeline.push_rect(0.0, dropdown_y, window_width, 1.0, border_color);
+        // Main dropdown background - solid dark background
+        let dropdown_bg = [0.10, 0.08, 0.06, 0.98];
+        self.rect_pipeline.push_rect(dropdown_x, dropdown_y, dropdown_width, dropdown_height, dropdown_bg);
+
+        // Border - all sides with accent color
+        let border_color = [0.79, 0.64, 0.15, 0.6];
+        // Top border
+        self.rect_pipeline.push_rect(dropdown_x, dropdown_y, dropdown_width, BORDER_WIDTH, border_color);
+        // Bottom border
+        self.rect_pipeline.push_rect(dropdown_x, dropdown_y + dropdown_height - BORDER_WIDTH, dropdown_width, BORDER_WIDTH, border_color);
+        // Left border
+        self.rect_pipeline.push_rect(dropdown_x, dropdown_y, BORDER_WIDTH, dropdown_height, border_color);
+        // Right border
+        self.rect_pipeline.push_rect(dropdown_x + dropdown_width - BORDER_WIDTH, dropdown_y, BORDER_WIDTH, dropdown_height, border_color);
 
         // Render each suggestion (only those that fit)
         for (idx, suggestion) in info.suggestions.iter().take(num_suggestions).enumerate() {
-            let suggestion_y = dropdown_y + PADDING + idx as f32 * (SUGGESTION_HEIGHT + SPACING);
+            let suggestion_y = dropdown_y + BORDER_WIDTH + PADDING + idx as f32 * (SUGGESTION_HEIGHT + SPACING);
             let is_selected = idx == info.selected_suggestion;
 
-            // Selection highlight
+            // Selection highlight with rounded effect
             if is_selected {
-                let selection_color = [0.88, 0.48, 0.13, 0.15]; // Orange highlight
+                let selection_color = [0.88, 0.48, 0.13, 0.20]; // Orange highlight, more visible
+                let highlight_margin = 4.0;
                 self.rect_pipeline.push_rect(
-                    PADDING,
+                    dropdown_x + highlight_margin,
                     suggestion_y,
-                    window_width - PADDING * 2.0,
+                    dropdown_width - highlight_margin * 2.0,
                     SUGGESTION_HEIGHT,
                     selection_color,
                 );
 
                 // Left accent bar for selected item
                 let accent_color = [0.88, 0.48, 0.13, 1.0];
+                let accent_width = 3.0;
                 self.rect_pipeline.push_rect(
-                    PADDING,
+                    dropdown_x + highlight_margin,
                     suggestion_y,
-                    3.0,
+                    accent_width,
                     SUGGESTION_HEIGHT,
                     accent_color,
                 );
             }
 
             let text_y = suggestion_y + (SUGGESTION_HEIGHT - self.cell_height) / 2.0;
-            let mut text_x = PADDING + (if is_selected { 8.0 } else { 4.0 });
+            let mut text_x = dropdown_x + PADDING + (if is_selected { 10.0 } else { 6.0 });
 
             // Category icon/prefix
             let category_color = if is_selected {
@@ -749,16 +806,16 @@ impl Renderer {
             };
 
             let category_icon = match suggestion.category {
-                "Theme" => "🎨",
-                "Font" => "📝",
+                "Theme" => "◆",
+                "Font" => "A",
                 "Config" => "⚙",
-                "Help" => "❓",
+                "Help" => "?",
                 _ => "▸",
             };
 
             for c in category_icon.chars() {
                 self.text_pipeline.push_char(c, text_x, text_y, category_color);
-                text_x += self.cell_width * 1.5; // Emoji width
+                text_x += self.cell_width; // Standard character width
             }
             text_x += self.cell_width * 0.5; // Space after icon
 
@@ -791,29 +848,41 @@ impl Renderer {
                 text_x += self.cell_width;
             }
 
-            // Description (right side)
-            text_x = window_width / 2.0;
+            // Description (right side) - add some spacing
+            text_x += self.cell_width * 2.0; // Add spacing before description
+            let max_desc_x = dropdown_x + dropdown_width - PADDING - 4.0; // Leave margin on right
+
             let desc_color = if is_selected {
-                [0.9, 0.9, 0.9, 0.9]
+                [0.85, 0.85, 0.85, 0.95]
             } else {
-                [0.6, 0.55, 0.5, 0.9]
+                [0.55, 0.52, 0.48, 0.85]
             };
 
+            // Add separator before description
+            let separator = "—";
+            for c in separator.chars() {
+                if text_x + self.cell_width < max_desc_x {
+                    self.text_pipeline.push_char(c, text_x, text_y, [0.5, 0.45, 0.4, 0.5]);
+                    text_x += self.cell_width * 0.8;
+                }
+            }
+            text_x += self.cell_width * 0.5; // Small gap after separator
+
             for c in suggestion.description.chars() {
-                if text_x + self.cell_width > window_width - PADDING * 2.0 {
-                    // Add ellipsis
-                    self.text_pipeline.push_char('.', text_x, text_y, desc_color);
-                    text_x += self.cell_width * 0.5;
-                    self.text_pipeline.push_char('.', text_x, text_y, desc_color);
-                    text_x += self.cell_width * 0.5;
-                    self.text_pipeline.push_char('.', text_x, text_y, desc_color);
+                if text_x + self.cell_width * 3.0 > max_desc_x {
+                    // Add ellipsis if we're running out of space
+                    if text_x + self.cell_width * 1.5 <= max_desc_x {
+                        self.text_pipeline.push_char('.', text_x, text_y, desc_color);
+                        text_x += self.cell_width * 0.4;
+                        self.text_pipeline.push_char('.', text_x, text_y, desc_color);
+                        text_x += self.cell_width * 0.4;
+                        self.text_pipeline.push_char('.', text_x, text_y, desc_color);
+                    }
                     break;
                 }
 
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, text_x, text_y, desc_color);
-                }
-                text_x += self.cell_width;
+                self.text_pipeline.push_char(c, text_x, text_y, desc_color);
+                text_x += self.cell_width * 0.95; // Slightly compressed for descriptions
             }
         }
     }
