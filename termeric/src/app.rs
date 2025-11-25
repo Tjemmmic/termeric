@@ -9,7 +9,7 @@ use winit::{
     event::{ElementState, MouseButton, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::ModifiersState,
-    window::{Window, WindowId},
+    window::{Icon, Window, WindowId},
 };
 
 use crate::config::Config;
@@ -102,6 +102,40 @@ impl App {
             window_focused: true,
             focus_change_time: Instant::now(),
         })
+    }
+
+    /// Load window icon from embedded PNG data
+    ///
+    /// The icon is embedded directly in the binary at compile time,
+    /// so it works on all platforms without requiring external files.
+    fn load_icon() -> Option<Icon> {
+        // Icon is embedded in the binary at compile time
+        let icon_bytes = include_bytes!("../../assets/icons/termeric.png");
+
+        match image::load_from_memory(icon_bytes) {
+            Ok(img) => {
+                // Resize to 256x256 for optimal display across platforms
+                let img = img.resize_exact(256, 256, image::imageops::FilterType::Lanczos3);
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                let icon_data = rgba.into_raw();
+
+                match Icon::from_rgba(icon_data, width, height) {
+                    Ok(icon) => {
+                        log::info!("Successfully loaded window icon ({}x{})", width, height);
+                        Some(icon)
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create icon from image data: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to decode embedded icon image: {}", e);
+                None
+            }
+        }
     }
 
     /// Initialize the renderer
@@ -620,9 +654,14 @@ impl ApplicationHandler for App {
         }
 
         // Create window
-        let window_attrs = Window::default_attributes()
+        let mut window_attrs = Window::default_attributes()
             .with_title("Termeric")
             .with_inner_size(LogicalSize::new(800, 600));
+
+        // Load and set window icon if available
+        if let Some(icon) = Self::load_icon() {
+            window_attrs = window_attrs.with_window_icon(Some(icon));
+        }
 
         match event_loop.create_window(window_attrs) {
             Ok(window) => {

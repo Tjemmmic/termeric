@@ -26,6 +26,9 @@ bytemuck = { version = "1.21", features = ["derive"] }
 # Text rendering
 cosmic-text = "0.12"
 
+# Image loading for window icon
+image = "0.25"
+
 # Clipboard
 arboard = "3.4"
 
@@ -53,3 +56,19 @@ thiserror.workspace = true
 
 [dev-dependencies]
 # Testing dependencies
+
+[package.metadata.deb]
+maintainer = "Termeric Contributors"
+copyright = "2025, Termeric Contributors <termeric@example.com>"
+license-file = ["../LICENSE", "4"]
+extended-description = """\
+Termeric is a modern, GPU-accelerated terminal emulator built with Rust.
+It features a warm, turmeric-inspired color theme and smooth rendering."""
+depends = "$auto"
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/termeric", "usr/bin/", "755"],
+    ["../assets/termeric.desktop", "usr/share/applications/", "644"],
+    ["../assets/icons/termeric.png", "usr/share/icons/hicolor/1024x1024/apps/", "644"],
+]
