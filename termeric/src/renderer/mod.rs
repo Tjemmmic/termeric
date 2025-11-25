@@ -23,9 +23,34 @@ use text::TextPipeline;
 use rect::RectPipeline;
 
 use crate::tabs::TabInfo;
+use crate::command::CommandDef;
+
+/// Command bar display information
+#[derive(Debug, Clone)]
+pub struct CommandBarInfo {
+    /// The current command input text
+    pub input: String,
+    /// Cursor position in the input
+    pub cursor_pos: usize,
+    /// Message to display (success or error)
+    pub message: Option<String>,
+    /// Whether the message is an error
+    pub is_error: bool,
+    /// Autocomplete suggestions to display
+    pub suggestions: Vec<CommandDef>,
+    /// Index of selected suggestion
+    pub selected_suggestion: usize,
+    /// Current input phase
+    pub phase: crate::command::CommandInputPhase,
+    /// Scroll offset for message display (in lines)
+    pub message_scroll_offset: usize,
+}
 
 /// Height of the tab bar in pixels
 const TAB_BAR_HEIGHT: f32 = 28.0;
+
+/// Height of the command bar in pixels
+const COMMAND_BAR_HEIGHT: f32 = 32.0;
 
 /// Main renderer that manages all GPU resources
 pub struct Renderer {
@@ -177,7 +202,8 @@ impl Renderer {
     /// cursor_pos: animated cursor position (col, row) as floats for smooth movement
     /// copy_flash: 0.0 = no flash, 1.0 = full flash (for copy confirmation)
     /// focus_dim: 0.0 = fully bright (focused), higher = dimmed (unfocused)
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32) -> Result<(), SurfaceError> {
+    /// command_bar: optional command bar info when in command mode
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -186,7 +212,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -227,13 +253,21 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
         let window_width = self.size.0 as f32;
+        let window_height = self.size.1 as f32;
+
+        // Calculate command bar height to know where grid ends
+        let command_bar_height = if let Some(cmd_bar) = command_bar {
+            self.calculate_command_bar_height(cmd_bar, window_width, window_height)
+        } else {
+            0.0
+        };
 
         // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
         let brightness = 1.0 - focus_dim;
@@ -255,6 +289,9 @@ impl Renderer {
         // Get scroll offset to determine if cursor should be shown
         let scroll_offset = grid.scroll_offset();
 
+        // Calculate maximum y position for grid content (don't overlap command bar)
+        let max_grid_y = window_height - command_bar_height;
+
         // Iterate over grid cells (offset by tab bar height)
         for row in 0..grid.rows() {
             for col in 0..grid.cols() {
@@ -262,6 +299,11 @@ impl Renderer {
 
                 let x = col as f32 * cell_width;
                 let y = TAB_BAR_HEIGHT + row as f32 * cell_height;
+
+                // Skip rendering if this row would overlap with command bar
+                if y + cell_height > max_grid_y {
+                    break;
+                }
 
                 // Check if cell is selected
                 let is_selected = selection
@@ -316,13 +358,21 @@ impl Renderer {
                 let x = cursor_pos.0 * cell_width;
                 let y = TAB_BAR_HEIGHT + cursor_pos.1 * cell_height;
 
-                // Bright orange cursor (turmeric core) with animated opacity and focus dimming
-                self.rect_pipeline.push_rect(
-                    x, y,
-                    cell_width, cell_height,
-                    [0.88 * brightness, 0.48 * brightness, 0.13 * brightness, cursor_opacity], // #E07B20 with animated alpha
-                );
+                // Only draw cursor if it won't overlap with command bar
+                if y + cell_height <= max_grid_y {
+                    // Bright orange cursor (turmeric core) with animated opacity and focus dimming
+                    self.rect_pipeline.push_rect(
+                        x, y,
+                        cell_width, cell_height,
+                        [0.88 * brightness, 0.48 * brightness, 0.13 * brightness, cursor_opacity], // #E07B20 with animated alpha
+                    );
+                }
             }
+        }
+
+        // Render command bar last (on top of everything)
+        if let Some(cmd_bar) = command_bar {
+            self.build_command_bar(cmd_bar, window_width, window_height, command_bar_height);
         }
     }
 
@@ -437,5 +487,334 @@ impl Renderer {
         // Bottom border of tab bar - earthy yellow accent
         let border_color = [0.79, 0.64, 0.15, 0.6]; // #C9A227 at 60% opacity
         self.rect_pipeline.push_rect(0.0, TAB_BAR_HEIGHT - 1.0, window_width, 1.0, border_color);
+    }
+
+    /// Calculate command bar height based on content
+    fn calculate_command_bar_height(&self, info: &CommandBarInfo, window_width: f32, window_height: f32) -> f32 {
+        let padding = 8.0;
+
+        if let Some(msg) = &info.message {
+            // Count lines in message (considering newlines and wrapping)
+            let max_chars_per_line = ((window_width - padding * 2.0) / self.cell_width) as usize;
+            let mut line_count = 0;
+            let mut current_line_len = 0;
+
+            for c in msg.chars() {
+                if c == '\n' {
+                    line_count += 1;
+                    current_line_len = 0;
+                } else {
+                    current_line_len += 1;
+                    if current_line_len >= max_chars_per_line {
+                        line_count += 1;
+                        current_line_len = 0;
+                    }
+                }
+            }
+            if current_line_len > 0 {
+                line_count += 1;
+            }
+
+            // Use dynamic height for messages, capped at 60% of window height
+            let needed_height = (line_count as f32 * self.cell_height) + padding * 2.0;
+            needed_height.min(window_height * 0.6).max(COMMAND_BAR_HEIGHT)
+        } else {
+            COMMAND_BAR_HEIGHT
+        }
+    }
+
+    /// Build command bar render data
+    fn build_command_bar(&mut self, info: &CommandBarInfo, window_width: f32, window_height: f32, bar_height: f32) {
+        let padding = 8.0;
+        let bar_y = window_height - bar_height;
+
+        // Command bar background - darker brown
+        let bar_bg = [0.14, 0.10, 0.08, 0.95]; // Semi-transparent dark brown
+        self.rect_pipeline.push_rect(0.0, bar_y, window_width, bar_height, bar_bg);
+
+        // Top border - accent color
+        let border_color = [0.79, 0.64, 0.15, 0.8]; // #C9A227
+        self.rect_pipeline.push_rect(0.0, bar_y, window_width, 1.0, border_color);
+
+        // Render message and/or input
+        let text_y = bar_y + padding;
+        let mut text_x = padding;
+
+        // Reserve space for input line if we're typing
+        let has_input = !info.input.is_empty();
+        let input_line_height = if has_input { self.cell_height + padding } else { 0.0 };
+
+        if let Some(msg) = &info.message {
+            // Show message (supports multi-line and scrolling)
+            let text_color = if info.is_error {
+                [0.9, 0.3, 0.3, 1.0] // Red for errors
+            } else {
+                [0.7, 0.9, 0.7, 1.0] // Light green for success
+            };
+
+            let mut current_line_y = text_y;
+            let mut current_x = text_x;
+            let max_y = bar_y + bar_height - padding - input_line_height; // Leave room for input if typing
+            let mut line_number = 0; // Track which line we're on (accounting for wraps)
+            let scroll_offset = info.message_scroll_offset;
+            let mut visible_line_y = text_y; // Y position for rendering (after applying scroll)
+
+            for c in msg.chars() {
+                if c == '\n' {
+                    // Move to next line
+                    line_number += 1;
+                    current_x = text_x;
+                    // Update visible Y if we're past scroll offset
+                    if line_number > scroll_offset {
+                        visible_line_y += self.cell_height;
+                        if visible_line_y + self.cell_height > max_y {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // Word wrap if line is too long
+                if current_x + self.cell_width > window_width - padding {
+                    line_number += 1;
+                    current_x = text_x;
+                    if line_number > scroll_offset {
+                        visible_line_y += self.cell_height;
+                        if visible_line_y + self.cell_height > max_y {
+                            break;
+                        }
+                    }
+                }
+
+                // Only render if we're past the scroll offset
+                if line_number >= scroll_offset {
+                    self.text_pipeline.push_char(c, current_x, visible_line_y, text_color);
+                }
+                current_x += self.cell_width; // Use same spacing as terminal for readability
+            }
+        }
+
+        // Show command input (always show if there's input, positioned at bottom when message is present)
+        if has_input || info.message.is_none() {
+            let input_text_y = if info.message.is_some() && has_input {
+                // Position at bottom when message is showing
+                bar_y + bar_height - self.cell_height - padding
+            } else {
+                // Center text vertically when no message
+                bar_y + (bar_height - self.cell_height) / 2.0
+            };
+
+            text_x = padding; // Reset x position
+
+            let (prompt_text, prompt_color) = match info.phase {
+                crate::command::CommandInputPhase::SelectingCommand => {
+                    ("> ", [0.88, 0.48, 0.13, 1.0]) // Orange
+                }
+                crate::command::CommandInputPhase::EnteringArguments => {
+                    (": ", [0.79, 0.64, 0.15, 1.0]) // Yellow
+                }
+                crate::command::CommandInputPhase::BrowsingHistory => {
+                    ("⏮ ", [0.6, 0.8, 0.9, 1.0]) // Light blue
+                }
+            };
+            let text_color = [0.83, 0.77, 0.66, 1.0]; // Cream text
+
+            // Draw prompt
+            for c in prompt_text.chars() {
+                self.text_pipeline.push_char(c, text_x, input_text_y, prompt_color);
+                text_x += self.cell_width;
+            }
+            text_x += self.cell_width * 0.2; // Small space after prompt
+
+            // Draw input text
+            let mut char_index = 0;
+            for c in info.input.chars() {
+                if text_x + self.cell_width > window_width - padding {
+                    break;
+                }
+
+                // Draw cursor at current position
+                if char_index == info.cursor_pos {
+                    let cursor_color = [0.88, 0.48, 0.13, 0.8]; // Orange cursor
+                    self.rect_pipeline.push_rect(
+                        text_x, input_text_y,
+                        2.0, self.cell_height,
+                        cursor_color,
+                    );
+                }
+
+                self.text_pipeline.push_char(c, text_x, input_text_y, text_color);
+                text_x += self.cell_width;
+                char_index += c.len_utf8();
+            }
+
+            // Draw cursor at end if at end of input
+            if info.cursor_pos >= info.input.len() {
+                let cursor_color = [0.88, 0.48, 0.13, 0.8]; // Orange cursor
+                self.rect_pipeline.push_rect(
+                    text_x, input_text_y,
+                    2.0, self.cell_height,
+                    cursor_color,
+                );
+            }
+
+            // Phase-aware hint text on the right (only when not showing message)
+            if info.message.is_none() {
+                let hint = match info.phase {
+                    crate::command::CommandInputPhase::SelectingCommand => {
+                        "↑↓ Navigate  ⭾ Complete  Ctrl+↑↓ History  Esc Cancel"
+                    }
+                    crate::command::CommandInputPhase::EnteringArguments => {
+                        "↑↓ Navigate  ⭾ Complete  ⏎ Execute  Esc Cancel"
+                    }
+                    crate::command::CommandInputPhase::BrowsingHistory => {
+                        "Ctrl+↑↓ Browse  ⏎ Select  Esc Cancel"
+                    }
+                };
+                let hint_color = [0.5, 0.45, 0.4, 0.7]; // Dim text
+                let hint_width = hint.chars().count() as f32 * self.cell_width * 0.6;
+                let mut hint_x = window_width - hint_width - padding;
+
+                for c in hint.chars() {
+                    self.text_pipeline.push_char(c, hint_x, input_text_y, hint_color);
+                    hint_x += self.cell_width * 0.6;
+                }
+            }
+        }
+
+        // Render autocomplete dropdown above command bar
+        if !info.suggestions.is_empty() {
+            self.build_autocomplete_dropdown(info, bar_y, window_width);
+        }
+    }
+
+    /// Build autocomplete dropdown above command bar
+    fn build_autocomplete_dropdown(&mut self, info: &CommandBarInfo, command_bar_y: f32, window_width: f32) {
+        const SUGGESTION_HEIGHT: f32 = 32.0;
+        const PADDING: f32 = 8.0;
+        const SPACING: f32 = 2.0;
+
+        // Calculate how many suggestions can fit above the command bar
+        const TAB_BAR_HEIGHT: f32 = 40.0;
+        let available_height = command_bar_y - TAB_BAR_HEIGHT - 4.0; // Space between tab bar and command bar
+        let max_suggestions_that_fit = ((available_height - PADDING * 2.0) / (SUGGESTION_HEIGHT + SPACING)).floor() as usize;
+        let num_suggestions = info.suggestions.len().min(6).min(max_suggestions_that_fit.max(1));
+
+        let dropdown_height = num_suggestions as f32 * (SUGGESTION_HEIGHT + SPACING) + PADDING * 2.0;
+        let dropdown_y = command_bar_y - dropdown_height - 4.0; // 4px gap above command bar
+
+        // Dropdown background - slightly darker with more opacity
+        let dropdown_bg = [0.12, 0.08, 0.06, 0.97];
+        self.rect_pipeline.push_rect(0.0, dropdown_y, window_width, dropdown_height, dropdown_bg);
+
+        // Top border - accent color
+        let border_color = [0.79, 0.64, 0.15, 0.8];
+        self.rect_pipeline.push_rect(0.0, dropdown_y, window_width, 1.0, border_color);
+
+        // Render each suggestion (only those that fit)
+        for (idx, suggestion) in info.suggestions.iter().take(num_suggestions).enumerate() {
+            let suggestion_y = dropdown_y + PADDING + idx as f32 * (SUGGESTION_HEIGHT + SPACING);
+            let is_selected = idx == info.selected_suggestion;
+
+            // Selection highlight
+            if is_selected {
+                let selection_color = [0.88, 0.48, 0.13, 0.15]; // Orange highlight
+                self.rect_pipeline.push_rect(
+                    PADDING,
+                    suggestion_y,
+                    window_width - PADDING * 2.0,
+                    SUGGESTION_HEIGHT,
+                    selection_color,
+                );
+
+                // Left accent bar for selected item
+                let accent_color = [0.88, 0.48, 0.13, 1.0];
+                self.rect_pipeline.push_rect(
+                    PADDING,
+                    suggestion_y,
+                    3.0,
+                    SUGGESTION_HEIGHT,
+                    accent_color,
+                );
+            }
+
+            let text_y = suggestion_y + (SUGGESTION_HEIGHT - self.cell_height) / 2.0;
+            let mut text_x = PADDING + (if is_selected { 8.0 } else { 4.0 });
+
+            // Category icon/prefix
+            let category_color = if is_selected {
+                [0.88, 0.48, 0.13, 1.0] // Orange when selected
+            } else {
+                [0.79, 0.64, 0.15, 0.7] // Dim yellow
+            };
+
+            let category_icon = match suggestion.category {
+                "Theme" => "🎨",
+                "Font" => "📝",
+                "Config" => "⚙",
+                "Help" => "❓",
+                _ => "▸",
+            };
+
+            for c in category_icon.chars() {
+                self.text_pipeline.push_char(c, text_x, text_y, category_color);
+                text_x += self.cell_width * 1.5; // Emoji width
+            }
+            text_x += self.cell_width * 0.5; // Space after icon
+
+            // Command name
+            let name_color = if is_selected {
+                [1.0, 1.0, 1.0, 1.0] // Bright white when selected
+            } else {
+                [0.83, 0.77, 0.66, 1.0] // Cream
+            };
+
+            for c in suggestion.name.chars() {
+                self.text_pipeline.push_char(c, text_x, text_y, name_color);
+                text_x += self.cell_width;
+            }
+
+            // Alias (if present)
+            if let Some(alias) = suggestion.alias {
+                text_x += self.cell_width * 0.5;
+                let alias_color = [0.6, 0.55, 0.5, 0.8]; // Dim
+
+                self.text_pipeline.push_char('(', text_x, text_y, alias_color);
+                text_x += self.cell_width;
+
+                for c in alias.chars() {
+                    self.text_pipeline.push_char(c, text_x, text_y, alias_color);
+                    text_x += self.cell_width;
+                }
+
+                self.text_pipeline.push_char(')', text_x, text_y, alias_color);
+                text_x += self.cell_width;
+            }
+
+            // Description (right side)
+            text_x = window_width / 2.0;
+            let desc_color = if is_selected {
+                [0.9, 0.9, 0.9, 0.9]
+            } else {
+                [0.6, 0.55, 0.5, 0.9]
+            };
+
+            for c in suggestion.description.chars() {
+                if text_x + self.cell_width > window_width - PADDING * 2.0 {
+                    // Add ellipsis
+                    self.text_pipeline.push_char('.', text_x, text_y, desc_color);
+                    text_x += self.cell_width * 0.5;
+                    self.text_pipeline.push_char('.', text_x, text_y, desc_color);
+                    text_x += self.cell_width * 0.5;
+                    self.text_pipeline.push_char('.', text_x, text_y, desc_color);
+                    break;
+                }
+
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, text_x, text_y, desc_color);
+                }
+                text_x += self.cell_width;
+            }
+        }
     }
 }

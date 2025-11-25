@@ -37,6 +37,9 @@ serde.workspace = true
 toml.workspace = true
 directories = "6.0"
 
+# Fuzzy matching for command palette
+sublime_fuzzy = "0.7"
+
 # Logging
 log.workspace = true
 env_logger.workspace = true

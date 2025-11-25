@@ -12,9 +12,10 @@ use winit::{
     window::{Icon, Window, WindowId},
 };
 
+use crate::command::{CommandMode, CommandResult};
 use crate::config::Config;
 use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
-use crate::renderer::Renderer;
+use crate::renderer::{CommandBarInfo, Renderer};
 use crate::tabs::TabManager;
 
 /// Main application state
@@ -66,6 +67,8 @@ pub struct App {
     window_focused: bool,
     /// When focus state last changed (for smooth transition)
     focus_change_time: Instant,
+    /// Command mode state
+    command_mode: CommandMode,
 }
 
 impl App {
@@ -101,6 +104,7 @@ impl App {
             copy_flash_start: None,
             window_focused: true,
             focus_change_time: Instant::now(),
+            command_mode: CommandMode::new(),
         })
     }
 
@@ -223,6 +227,9 @@ impl App {
 
     /// Render the terminal
     fn render(&mut self) {
+        // Update command mode (for message timeout)
+        self.command_mode.update();
+
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
         let copy_flash = self.copy_flash_intensity();
@@ -252,7 +259,35 @@ impl App {
         let terminal = &tab.terminal;
         let tab_info = tabs.tab_info();
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim) {
+        // Build command bar info if in command mode
+        let command_bar = if self.command_mode.is_active() {
+            Some(CommandBarInfo {
+                input: self.command_mode.input().to_string(),
+                cursor_pos: self.command_mode.cursor_position(),
+                message: self.command_mode.message().map(|m| m.text.clone()),
+                is_error: self.command_mode.message().map(|m| m.is_error).unwrap_or(false),
+                suggestions: self.command_mode.suggestions().to_vec(),
+                selected_suggestion: self.command_mode.selected_suggestion(),
+                phase: self.command_mode.phase(),
+                message_scroll_offset: self.command_mode.message_scroll_offset(),
+            })
+        } else if let Some(msg) = self.command_mode.message() {
+            // Show message briefly after command mode exits
+            Some(CommandBarInfo {
+                input: String::new(),
+                cursor_pos: 0,
+                message: Some(msg.text.clone()),
+                is_error: msg.is_error,
+                suggestions: Vec::new(),
+                selected_suggestion: 0,
+                phase: crate::command::CommandInputPhase::SelectingCommand,
+                message_scroll_offset: self.command_mode.message_scroll_offset(),
+            })
+        } else {
+            None
+        };
+
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -561,6 +596,289 @@ impl App {
         }
     }
 
+    /// Handle keyboard input when in command mode
+    /// Returns true if the input was handled by command mode
+    fn handle_command_mode_input(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+
+        if event.state != winit::event::ElementState::Pressed {
+            return self.command_mode.is_active();
+        }
+
+        if !self.command_mode.is_active() {
+            return false;
+        }
+
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.command_mode.deactivate();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Enter) => {
+                // Handle Enter with phase-aware logic
+                let should_execute = self.command_mode.handle_enter();
+
+                if should_execute {
+                    if let Some(result) = self.command_mode.execute() {
+                        self.handle_command_result(result);
+                    }
+                }
+
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Backspace) => {
+                self.command_mode.handle_backspace();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Delete) => {
+                self.command_mode.handle_delete();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                // If showing message AND input is empty, scroll the message
+                // Otherwise, navigate suggestions/history as normal
+                if self.command_mode.message().is_some() && self.command_mode.input().is_empty() {
+                    self.command_mode.scroll_message_up();
+                } else if self.modifiers.control_key() {
+                    // Ctrl+Up for history
+                    self.command_mode.history_prev();
+                } else {
+                    // Regular Up for suggestions
+                    self.command_mode.prev_suggestion();
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                // If showing message AND input is empty, scroll the message
+                // Otherwise, navigate suggestions/history as normal
+                if self.command_mode.message().is_some() && self.command_mode.input().is_empty() {
+                    self.command_mode.scroll_message_down();
+                } else if self.modifiers.control_key() {
+                    // Ctrl+Down for history
+                    self.command_mode.history_next();
+                } else {
+                    // Regular Down for suggestions
+                    self.command_mode.next_suggestion();
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                self.command_mode.cursor_left();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                self.command_mode.cursor_right();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Tab) => {
+                // Only apply suggestion if we have suggestions
+                if !self.command_mode.suggestions().is_empty() {
+                    self.command_mode.apply_suggestion();
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+                // Don't consume Tab if no suggestions - let it fall through
+            }
+            Key::Named(NamedKey::Home) => {
+                self.command_mode.cursor_home();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::End) => {
+                self.command_mode.cursor_end();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::PageUp) => {
+                // Scroll message up by multiple lines
+                if self.command_mode.message().is_some() {
+                    for _ in 0..5 {
+                        self.command_mode.scroll_message_up();
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+            Key::Named(NamedKey::PageDown) => {
+                // Scroll message down by multiple lines
+                if self.command_mode.message().is_some() {
+                    for _ in 0..5 {
+                        self.command_mode.scroll_message_down();
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+            Key::Character(c) => {
+                for ch in c.chars() {
+                    self.command_mode.handle_char(ch);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            _ => {}
+        }
+
+        true // Input was handled by command mode
+    }
+
+    /// Handle the result of executing a command
+    fn handle_command_result(&mut self, result: CommandResult) {
+        match result {
+            CommandResult::SetTheme(name) => {
+                // TODO: Implement theme switching
+                log::info!("Theme switch requested: {}", name);
+                self.command_mode.set_message(format!("Theme set to: {}", name), false);
+            }
+            CommandResult::SetFontSize(size) => {
+                self.set_font_size(size);
+                self.command_mode.set_message(format!("Font size set to: {}", size), false);
+            }
+            CommandResult::SetFontFamily(family) => {
+                self.config.font.family = family.clone();
+                // TODO: Apply font family to renderer
+                log::info!("Font family changed to: {}", family);
+                self.command_mode.set_message(format!("Font family set to: {} (restart required)", family), false);
+            }
+            CommandResult::SetOpacity(opacity) => {
+                self.config.window.opacity = opacity;
+                // TODO: Apply opacity to window
+                log::info!("Opacity set to: {}", opacity);
+                self.command_mode.set_message(format!("Opacity set to: {}", opacity), false);
+            }
+            CommandResult::SetPadding(padding) => {
+                self.config.window.padding = padding;
+                // TODO: Apply padding to renderer
+                log::info!("Padding set to: {}", padding);
+                self.command_mode.set_message(format!("Padding set to: {}", padding), false);
+            }
+            CommandResult::SetScrollback(lines) => {
+                self.config.scrollback.lines = lines;
+                // TODO: Apply scrollback limit to terminal
+                log::info!("Scrollback set to: {} lines", lines);
+                self.command_mode.set_message(format!("Scrollback set to: {} lines", lines), false);
+            }
+            CommandResult::ShowConfig => {
+                let shell = self.config.shell.program.as_deref().unwrap_or("default");
+                let config_text = format!(
+                    "Current Configuration:\n\n\
+                     Font Family: {}\n\
+                     Font Size: {}\n\
+                     Window Opacity: {}\n\
+                     Window Padding: {}\n\
+                     Scrollback Lines: {}\n\
+                     Shell: {}",
+                    self.config.font.family,
+                    self.config.font.size,
+                    self.config.window.opacity,
+                    self.config.window.padding,
+                    self.config.scrollback.lines,
+                    shell
+                );
+                self.command_mode.set_message(config_text, false);
+            }
+            CommandResult::ResetConfig => {
+                self.config = Config::default();
+                // Apply default font size
+                self.set_font_size(self.config.font.size);
+                self.command_mode.set_message("Configuration reset to defaults".to_string(), false);
+                log::info!("Configuration reset to defaults");
+            }
+            CommandResult::OpenConfigUI => {
+                // TODO: Implement configuration UI
+                log::info!("Config UI requested");
+                self.command_mode.set_message("Config UI coming soon!".to_string(), false);
+            }
+            CommandResult::SaveConfig => {
+                match self.save_config() {
+                    Ok(path) => {
+                        self.command_mode.set_message(format!("Config saved to: {}", path), false);
+                    }
+                    Err(e) => {
+                        self.command_mode.set_message(format!("Failed to save: {}", e), true);
+                    }
+                }
+            }
+            CommandResult::ReloadConfig => {
+                match Config::load_or_default() {
+                    Ok(config) => {
+                        // Apply font size from config
+                        self.set_font_size(config.font.size);
+                        self.config = config;
+                        self.command_mode.set_message("Config reloaded".to_string(), false);
+                    }
+                    Err(e) => {
+                        self.command_mode.set_message(format!("Failed to reload: {}", e), true);
+                    }
+                }
+            }
+            CommandResult::ShowHelp(text) => {
+                // Help text is already displayed as message in command module
+                log::info!("Help: {}", text);
+            }
+            CommandResult::Success(_) | CommandResult::Error(_) | CommandResult::Cancel => {
+                // Already handled in CommandMode
+            }
+        }
+    }
+
+    /// Save current configuration to file
+    fn save_config(&self) -> Result<String> {
+        let config_path = Config::config_path();
+
+        // Ensure config directory exists
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Build current config
+        let font_size = self.renderer.as_ref().map(|r| r.font_size()).unwrap_or(self.default_font_size);
+
+        let config_content = format!(
+r#"# Termeric Configuration
+
+[font]
+size = {}
+
+[theme]
+name = "{}"
+
+[window]
+width = {}
+height = {}
+"#,
+            font_size,
+            self.config.theme.name,
+            self.config.window.width,
+            self.config.window.height,
+        );
+
+        std::fs::write(&config_path, config_content)?;
+        Ok(config_path.display().to_string())
+    }
+
     /// Handle mouse input
     fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, position: (f64, f64)) {
         let Some(renderer) = &self.renderer else { return };
@@ -716,7 +1034,30 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                // Check for keybindings first
+                // Handle command mode input first
+                if self.handle_command_mode_input(&event) {
+                    return;
+                }
+
+                // Check for Ctrl+Shift+P to enter command mode
+                if event.state == winit::event::ElementState::Pressed {
+                    use winit::keyboard::{Key, NamedKey};
+
+                    // Ctrl+Shift+P activates command palette
+                    if self.modifiers.control_key() && self.modifiers.shift_key() {
+                        if let Key::Character(c) = &event.logical_key {
+                            if c.eq_ignore_ascii_case("p") {
+                                self.command_mode.activate();
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Check for keybindings
                 if let Some(action) = check_keybinding(&event, self.modifiers) {
                     self.handle_action(action);
                     return;

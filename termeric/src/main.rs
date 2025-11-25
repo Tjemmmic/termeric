@@ -4,6 +4,7 @@
 
 mod app;
 mod bell;
+mod command;
 mod config;
 mod input;
 mod renderer;
