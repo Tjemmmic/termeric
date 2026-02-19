@@ -1,11 +1,11 @@
 //! Configuration management
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Application configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     /// Shell configuration
@@ -66,7 +66,7 @@ impl Config {
 }
 
 /// Shell configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShellConfig {
     /// Path to shell program
@@ -85,7 +85,7 @@ impl Default for ShellConfig {
 }
 
 /// Font configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FontConfig {
     /// Font family name
@@ -107,7 +107,7 @@ impl Default for FontConfig {
 }
 
 /// Scrollback configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ScrollbackConfig {
     /// Maximum number of lines to keep
@@ -123,7 +123,7 @@ impl Default for ScrollbackConfig {
 }
 
 /// Theme configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ThemeConfig {
     /// Theme name (looks in themes directory)
@@ -142,7 +142,7 @@ impl Default for ThemeConfig {
 }
 
 /// Window configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WindowConfig {
     /// Initial width

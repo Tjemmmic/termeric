@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
 use crate::renderer::{CommandBarInfo, Renderer};
 use crate::tabs::TabManager;
+use crate::theme::Theme;
 
 /// Main application state
 pub struct App {
@@ -69,12 +70,16 @@ pub struct App {
     focus_change_time: Instant,
     /// Command mode state
     command_mode: CommandMode,
+    /// Active UI theme
+    theme: Theme,
 }
 
 impl App {
     /// Create a new application instance
     pub fn new() -> Result<Self> {
         let config = Config::load_or_default()?;
+        let default_font_size = config.font.size;
+        let theme = Self::load_theme_from_config(&config);
 
         // Initialize clipboard (may fail on some systems)
         let clipboard = arboard::Clipboard::new().ok();
@@ -100,11 +105,12 @@ impl App {
             clipboard,
             last_cursor_pos: None,
             mouse_pressed: false,
-            default_font_size: 35.0,
+            default_font_size,
             copy_flash_start: None,
             window_focused: true,
             focus_change_time: Instant::now(),
             command_mode: CommandMode::new(),
+            theme,
         })
     }
 
@@ -144,7 +150,15 @@ impl App {
 
     /// Initialize the renderer
     fn init_renderer(&mut self, window: Arc<Window>) -> Result<()> {
-        let renderer = Renderer::new(window.clone())?;
+        let scale_factor = window.scale_factor() as f32;
+        let renderer = Renderer::new(
+            window.clone(),
+            self.config.font.size,
+            &self.config.font.family,
+            self.config.window.padding as f32,
+            scale_factor,
+            &self.theme,
+        )?;
 
         // Calculate grid size from renderer's cell size
         let size = window.inner_size();
@@ -162,7 +176,12 @@ impl App {
 
     /// Initialize the tab manager with the first tab
     fn init_tabs(&mut self) -> Result<()> {
-        let mut tabs = TabManager::new(self.cols, self.rows);
+        let mut tabs = TabManager::new(
+            self.cols,
+            self.rows,
+            self.config.shell.clone(),
+            self.config.scrollback.lines,
+        );
         tabs.new_tab()?;
 
         self.tabs = Some(tabs);
@@ -221,6 +240,23 @@ impl App {
                 }
 
                 log::debug!("Resized to {}x{}", self.cols, self.rows);
+            }
+        }
+    }
+
+    fn handle_scale_factor_change(&mut self, scale_factor: f64, new_inner_size: winit::dpi::PhysicalSize<u32>) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_scale_factor(scale_factor as f32);
+            renderer.resize(new_inner_size.width, new_inner_size.height);
+
+            let (new_cols, new_rows) = renderer.calculate_grid_size(new_inner_size.width, new_inner_size.height);
+            if new_cols != self.cols || new_rows != self.rows {
+                self.cols = new_cols;
+                self.rows = new_rows;
+
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.resize(self.cols, self.rows);
+                }
             }
         }
     }
@@ -503,6 +539,7 @@ impl App {
         let Some(renderer) = &mut self.renderer else { return };
         let Some(window) = &self.window else { return };
 
+        self.config.font.size = size;
         renderer.set_font_size(size);
 
         // Recalculate grid size after font change
@@ -523,6 +560,85 @@ impl App {
 
         // Request redraw
         window.request_redraw();
+    }
+
+    /// Set font family to a specific value
+    fn set_font_family(&mut self, family: String) {
+        let Some(renderer) = &mut self.renderer else { return };
+        let Some(window) = &self.window else { return };
+
+        self.config.font.family = family.clone();
+        renderer.set_font_family(family);
+
+        let window_size = window.inner_size();
+        let (new_cols, new_rows) = renderer.calculate_grid_size(window_size.width, window_size.height);
+
+        if new_cols != self.cols || new_rows != self.rows {
+            self.cols = new_cols;
+            self.rows = new_rows;
+
+            if let Some(tabs) = &mut self.tabs {
+                tabs.resize(self.cols, self.rows);
+            }
+
+            log::info!("Font family updated, grid resized to {}x{}", self.cols, self.rows);
+        }
+
+        window.request_redraw();
+    }
+
+    /// Set padding around terminal content
+    fn set_padding(&mut self, padding: u32) {
+        let Some(renderer) = &mut self.renderer else { return };
+        let Some(window) = &self.window else { return };
+
+        self.config.window.padding = padding;
+        renderer.set_padding(padding as f32);
+
+        let window_size = window.inner_size();
+        let (new_cols, new_rows) = renderer.calculate_grid_size(window_size.width, window_size.height);
+
+        if new_cols != self.cols || new_rows != self.rows {
+            self.cols = new_cols;
+            self.rows = new_rows;
+
+            if let Some(tabs) = &mut self.tabs {
+                tabs.resize(self.cols, self.rows);
+            }
+
+            log::info!("Padding updated, grid resized to {}x{}", self.cols, self.rows);
+        }
+
+        window.request_redraw();
+    }
+
+    fn load_theme_from_config(config: &Config) -> Theme {
+        if let Some(path) = &config.theme.path {
+            match Theme::load(path) {
+                Ok(theme) => return theme,
+                Err(err) => {
+                    log::warn!("Failed to load theme at {}: {}", path.display(), err);
+                }
+            }
+        }
+
+        match Theme::load_builtin(&config.theme.name) {
+            Ok(theme) => theme,
+            Err(err) => {
+                log::warn!("Failed to load theme '{}': {}", config.theme.name, err);
+                Theme::default()
+            }
+        }
+    }
+
+    fn apply_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_theme(&self.theme);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
     }
 
     /// Copy selection to clipboard
@@ -748,19 +864,28 @@ impl App {
     fn handle_command_result(&mut self, result: CommandResult) {
         match result {
             CommandResult::SetTheme(name) => {
-                // TODO: Implement theme switching
-                log::info!("Theme switch requested: {}", name);
-                self.command_mode.set_message(format!("Theme set to: {}", name), false);
+                match Theme::load_builtin(&name) {
+                    Ok(theme) => {
+                        self.config.theme.name = name.clone();
+                        self.config.theme.path = None;
+                        self.apply_theme(theme);
+                        log::info!("Theme switched to: {}", name);
+                        self.command_mode.set_message(format!("Theme set to: {}", name), false);
+                    }
+                    Err(err) => {
+                        let msg = format!("Theme '{}' not found: {}", name, err);
+                        self.command_mode.set_message(msg, true);
+                    }
+                }
             }
             CommandResult::SetFontSize(size) => {
                 self.set_font_size(size);
                 self.command_mode.set_message(format!("Font size set to: {}", size), false);
             }
             CommandResult::SetFontFamily(family) => {
-                self.config.font.family = family.clone();
-                // TODO: Apply font family to renderer
+                self.set_font_family(family.clone());
                 log::info!("Font family changed to: {}", family);
-                self.command_mode.set_message(format!("Font family set to: {} (restart required)", family), false);
+                self.command_mode.set_message(format!("Font family set to: {}", family), false);
             }
             CommandResult::SetOpacity(opacity) => {
                 self.config.window.opacity = opacity;
@@ -769,14 +894,15 @@ impl App {
                 self.command_mode.set_message(format!("Opacity set to: {}", opacity), false);
             }
             CommandResult::SetPadding(padding) => {
-                self.config.window.padding = padding;
-                // TODO: Apply padding to renderer
+                self.set_padding(padding);
                 log::info!("Padding set to: {}", padding);
                 self.command_mode.set_message(format!("Padding set to: {}", padding), false);
             }
             CommandResult::SetScrollback(lines) => {
                 self.config.scrollback.lines = lines;
-                // TODO: Apply scrollback limit to terminal
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.set_scrollback_limit(lines);
+                }
                 log::info!("Scrollback set to: {} lines", lines);
                 self.command_mode.set_message(format!("Scrollback set to: {} lines", lines), false);
             }
@@ -801,8 +927,16 @@ impl App {
             }
             CommandResult::ResetConfig => {
                 self.config = Config::default();
+                self.default_font_size = self.config.font.size;
+                self.set_font_family(self.config.font.family.clone());
                 // Apply default font size
                 self.set_font_size(self.config.font.size);
+                self.set_padding(self.config.window.padding);
+                let theme = Self::load_theme_from_config(&self.config);
+                self.apply_theme(theme);
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.set_scrollback_limit(self.config.scrollback.lines);
+                }
                 self.command_mode.set_message("Configuration reset to defaults".to_string(), false);
                 log::info!("Configuration reset to defaults");
             }
@@ -824,9 +958,16 @@ impl App {
             CommandResult::ReloadConfig => {
                 match Config::load_or_default() {
                     Ok(config) => {
-                        // Apply font size from config
-                        self.set_font_size(config.font.size);
                         self.config = config;
+                        self.default_font_size = self.config.font.size;
+                        self.set_font_family(self.config.font.family.clone());
+                        self.set_font_size(self.config.font.size);
+                        self.set_padding(self.config.window.padding);
+                        let theme = Self::load_theme_from_config(&self.config);
+                        self.apply_theme(theme);
+                        if let Some(tabs) = &mut self.tabs {
+                            tabs.set_scrollback_limit(self.config.scrollback.lines);
+                        }
                         self.command_mode.set_message("Config reloaded".to_string(), false);
                     }
                     Err(e) => {
@@ -946,27 +1087,13 @@ impl App {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Build current config
-        let font_size = self.renderer.as_ref().map(|r| r.font_size()).unwrap_or(self.default_font_size);
+        // Build current config, syncing any live values
+        let mut config = self.config.clone();
+        if let Some(renderer) = &self.renderer {
+            config.font.size = renderer.font_size();
+        }
 
-        let config_content = format!(
-r#"# Termeric Configuration
-
-[font]
-size = {}
-
-[theme]
-name = "{}"
-
-[window]
-width = {}
-height = {}
-"#,
-            font_size,
-            self.config.theme.name,
-            self.config.window.width,
-            self.config.window.height,
-        );
+        let config_content = toml::to_string_pretty(&config)?;
 
         std::fs::write(&config_path, config_content)?;
         Ok(config_path.display().to_string())
@@ -977,7 +1104,21 @@ height = {}
         let Some(renderer) = &self.renderer else { return };
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
-        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, tab_bar_height, 0);
+        let padding = renderer.padding();
+        let scroll_offset = self.tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
+            .and_then(|offset| i32::try_from(offset).ok())
+            .unwrap_or(0);
+        let grid_pos = screen_to_grid(
+            position.0,
+            position.1,
+            cell_width,
+            cell_height,
+            tab_bar_height,
+            padding,
+            scroll_offset,
+        );
 
         match state {
             ElementState::Pressed => {
@@ -1012,7 +1153,21 @@ height = {}
         let Some(renderer) = &self.renderer else { return };
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
-        let grid_pos = screen_to_grid(position.0, position.1, cell_width, cell_height, tab_bar_height, 0);
+        let padding = renderer.padding();
+        let scroll_offset = self.tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
+            .and_then(|offset| i32::try_from(offset).ok())
+            .unwrap_or(0);
+        let grid_pos = screen_to_grid(
+            position.0,
+            position.1,
+            cell_width,
+            cell_height,
+            tab_bar_height,
+            padding,
+            scroll_offset,
+        );
 
         // Only update selection when mouse is pressed (dragging)
         if self.mouse_pressed {
@@ -1067,7 +1222,10 @@ impl ApplicationHandler for App {
         // Create window
         let mut window_attrs = Window::default_attributes()
             .with_title("Termeric")
-            .with_inner_size(LogicalSize::new(800, 600));
+            .with_inner_size(LogicalSize::new(
+                self.config.window.width,
+                self.config.window.height,
+            ));
 
         // Load and set window icon if available
         if let Some(icon) = Self::load_icon() {
@@ -1121,6 +1279,15 @@ impl ApplicationHandler for App {
                     window.request_redraw();
                 }
             }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                let size = self.window.as_ref().map(|window| window.inner_size());
+                if let Some(size) = size {
+                    self.handle_scale_factor_change(scale_factor, size);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
 
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
@@ -1134,7 +1301,7 @@ impl ApplicationHandler for App {
 
                 // Check for Ctrl+Shift+P to enter command mode
                 if event.state == winit::event::ElementState::Pressed {
-                    use winit::keyboard::{Key, NamedKey};
+                    use winit::keyboard::Key;
 
                     // Ctrl+Shift+P activates command palette
                     if self.modifiers.control_key() && self.modifiers.shift_key() {

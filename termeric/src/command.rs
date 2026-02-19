@@ -125,7 +125,7 @@ impl Command {
                 }
             }
             "font-family" | "fontfamily" | "font" | "ff" => {
-                if let Some(family) = args.first() {
+                if let Some(_family) = args.first() {
                     // Join all args for multi-word font names
                     Command::FontFamily(args.join(" "))
                 } else {
@@ -1242,7 +1242,7 @@ impl CommandMode {
 
                 // Check if the input is a command that needs arguments
                 let input_trimmed = self.input.trim();
-                if let Some(space_idx) = input_trimmed.find(' ') {
+                if let Some(_space_idx) = input_trimmed.find(' ') {
                     // Already has arguments, execute
                     return true;
                 }
