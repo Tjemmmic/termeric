@@ -119,6 +119,8 @@ pub enum Action {
     SwitchToTab(usize),
     /// Toggle search mode
     ToggleSearch,
+    /// Toggle settings panel
+    ToggleSettings,
     /// No action (pass through to PTY)
     None,
 }
@@ -165,6 +167,7 @@ pub fn check_keybinding(event: &KeyEvent, modifiers: ModifiersState) -> Option<A
                 "8" if ctrl => Some(Action::SwitchToTab(7)),
                 "9" if ctrl => Some(Action::SwitchToTab(8)),
                 "0" if ctrl => Some(Action::ResetFontSize),
+                "," if ctrl => Some(Action::ToggleSettings),
                 _ => None,
             }
         }

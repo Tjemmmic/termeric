@@ -18,6 +18,10 @@ pub struct Config {
     pub theme: ThemeConfig,
     /// Window configuration
     pub window: WindowConfig,
+    /// Cursor configuration
+    pub cursor: CursorConfig,
+    /// Bell configuration
+    pub bell: BellConfigFile,
 }
 
 impl Default for Config {
@@ -28,6 +32,8 @@ impl Default for Config {
             scrollback: ScrollbackConfig::default(),
             theme: ThemeConfig::default(),
             window: WindowConfig::default(),
+            cursor: CursorConfig::default(),
+            bell: BellConfigFile::default(),
         }
     }
 }
@@ -92,6 +98,8 @@ pub struct FontConfig {
     pub family: String,
     /// Font size in points
     pub size: f32,
+    /// Line height multiplier (e.g. 1.2 = 120%)
+    pub line_height: f32,
     /// Fallback font families
     pub fallback: Vec<String>,
 }
@@ -101,6 +109,7 @@ impl Default for FontConfig {
         Self {
             family: "monospace".to_string(),
             size: 14.0,
+            line_height: 1.2,
             fallback: vec![],
         }
     }
@@ -153,6 +162,8 @@ pub struct WindowConfig {
     pub opacity: f32,
     /// Padding around terminal content
     pub padding: u32,
+    /// Show window decorations
+    pub decorations: bool,
 }
 
 impl Default for WindowConfig {
@@ -162,6 +173,78 @@ impl Default for WindowConfig {
             height: 600,
             opacity: 1.0,
             padding: 8,
+            decorations: true,
+        }
+    }
+}
+
+/// Cursor style
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    Block,
+    Underline,
+    Beam,
+}
+
+impl CursorStyle {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Block => "Block",
+            Self::Underline => "Underline",
+            Self::Beam => "Beam",
+        }
+    }
+
+    pub const ALL: &[CursorStyle] = &[Self::Block, Self::Underline, Self::Beam];
+}
+
+impl Default for CursorStyle {
+    fn default() -> Self {
+        Self::Block
+    }
+}
+
+/// Cursor configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CursorConfig {
+    /// Cursor style
+    pub style: CursorStyle,
+    /// Enable cursor blinking
+    pub blink: bool,
+    /// Blink rate in milliseconds
+    pub blink_rate: u32,
+}
+
+impl Default for CursorConfig {
+    fn default() -> Self {
+        Self {
+            style: CursorStyle::Block,
+            blink: true,
+            blink_rate: 530,
+        }
+    }
+}
+
+/// Bell configuration (serializable version)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BellConfigFile {
+    /// Enable visual bell (screen flash)
+    pub visual: bool,
+    /// Enable audio bell
+    pub audio: bool,
+    /// Duration of visual bell flash in milliseconds
+    pub visual_duration_ms: u64,
+}
+
+impl Default for BellConfigFile {
+    fn default() -> Self {
+        Self {
+            visual: true,
+            audio: false,
+            visual_duration_ms: 100,
         }
     }
 }

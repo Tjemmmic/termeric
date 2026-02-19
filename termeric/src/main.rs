@@ -9,6 +9,7 @@ mod config;
 mod input;
 mod renderer;
 mod search;
+mod settings;
 mod tabs;
 mod theme;
 mod url;

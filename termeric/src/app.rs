@@ -16,6 +16,7 @@ use crate::command::{CommandMode, CommandResult};
 use crate::config::Config;
 use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
 use crate::renderer::{CommandBarInfo, Renderer};
+use crate::settings::{SettingsPanel, SettingsAction, SettingsKey};
 use crate::tabs::TabManager;
 use crate::theme::Theme;
 
@@ -72,6 +73,8 @@ pub struct App {
     command_mode: CommandMode,
     /// Active UI theme
     theme: Theme,
+    /// Settings panel state
+    settings_panel: SettingsPanel,
 }
 
 impl App {
@@ -111,6 +114,7 @@ impl App {
             focus_change_time: Instant::now(),
             command_mode: CommandMode::new(),
             theme,
+            settings_panel: SettingsPanel::new(),
         })
     }
 
@@ -151,7 +155,7 @@ impl App {
     /// Initialize the renderer
     fn init_renderer(&mut self, window: Arc<Window>) -> Result<()> {
         let scale_factor = window.scale_factor() as f32;
-        let renderer = Renderer::new(
+        let mut renderer = Renderer::new(
             window.clone(),
             self.config.font.size,
             &self.config.font.family,
@@ -159,6 +163,9 @@ impl App {
             scale_factor,
             &self.theme,
         )?;
+
+        // Apply initial opacity from config
+        renderer.set_opacity(self.config.window.opacity);
 
         // Calculate grid size from renderer's cell size
         let size = window.inner_size();
@@ -323,7 +330,21 @@ impl App {
             None
         };
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref()) {
+        // Build settings panel info if visible
+        let settings_info = if self.settings_panel.is_visible() {
+            Some(self.settings_panel.build_info(&self.config))
+        } else {
+            None
+        };
+
+        // Update settings panel animation
+        if self.settings_panel.update_animation() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -522,6 +543,12 @@ impl App {
                 // TODO: Implement search UI
                 log::debug!("Toggle search requested");
             }
+            Action::ToggleSettings => {
+                self.settings_panel.toggle();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
             Action::None => {}
         }
     }
@@ -638,6 +665,89 @@ impl App {
         }
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+    }
+
+    /// Apply a settings panel action to the app config
+    fn apply_settings_action(&mut self, action: SettingsAction) {
+        match action {
+            SettingsAction::SetFontSize(size) => {
+                self.set_font_size(size);
+            }
+            SettingsAction::SetFontFamily(family) => {
+                self.set_font_family(family);
+            }
+            SettingsAction::SetTheme(name) => {
+                if let Ok(theme) = Theme::load_builtin(&name) {
+                    self.config.theme.name = name;
+                    self.config.theme.path = None;
+                    self.apply_theme(theme);
+                }
+            }
+            SettingsAction::SetPadding(padding) => {
+                self.set_padding(padding);
+            }
+            SettingsAction::SetOpacity(opacity) => {
+                self.config.window.opacity = opacity;
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_opacity(opacity);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            SettingsAction::SetScrollback(lines) => {
+                self.config.scrollback.lines = lines;
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.set_scrollback_limit(lines);
+                }
+            }
+            SettingsAction::SetDecorations(enabled) => {
+                self.config.window.decorations = enabled;
+                if let Some(window) = &self.window {
+                    window.set_decorations(enabled);
+                }
+            }
+            SettingsAction::SetCursorStyle(style_name) => {
+                use crate::config::CursorStyle;
+                let style = match style_name.as_str() {
+                    "Underline" => CursorStyle::Underline,
+                    "Beam" => CursorStyle::Beam,
+                    _ => CursorStyle::Block,
+                };
+                self.config.cursor.style = style;
+            }
+            SettingsAction::SetCursorBlink(enabled) => {
+                self.config.cursor.blink = enabled;
+            }
+            SettingsAction::SetCursorBlinkRate(rate) => {
+                self.config.cursor.blink_rate = rate;
+            }
+            SettingsAction::SetVisualBell(enabled) => {
+                self.config.bell.visual = enabled;
+            }
+            SettingsAction::SetAudioBell(enabled) => {
+                self.config.bell.audio = enabled;
+            }
+            SettingsAction::SaveConfig => {
+                match self.save_config() {
+                    Ok(path) => log::info!("Config saved to: {}", path),
+                    Err(e) => log::error!("Failed to save config: {}", e),
+                }
+            }
+            SettingsAction::ResetConfig => {
+                self.config = Config::default();
+                self.default_font_size = self.config.font.size;
+                self.set_font_family(self.config.font.family.clone());
+                self.set_font_size(self.config.font.size);
+                self.set_padding(self.config.window.padding);
+                let theme = Self::load_theme_from_config(&self.config);
+                self.apply_theme(theme);
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.set_scrollback_limit(self.config.scrollback.lines);
+                }
+            }
+            SettingsAction::None => {}
         }
     }
 
@@ -889,7 +999,12 @@ impl App {
             }
             CommandResult::SetOpacity(opacity) => {
                 self.config.window.opacity = opacity;
-                // TODO: Apply opacity to window
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_opacity(opacity);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
                 log::info!("Opacity set to: {}", opacity);
                 self.command_mode.set_message(format!("Opacity set to: {}", opacity), false);
             }
@@ -941,9 +1056,11 @@ impl App {
                 log::info!("Configuration reset to defaults");
             }
             CommandResult::OpenConfigUI => {
-                // TODO: Implement configuration UI
-                log::info!("Config UI requested");
-                self.command_mode.set_message("Config UI coming soon!".to_string(), false);
+                self.settings_panel.toggle();
+                log::info!("Settings panel toggled");
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
             CommandResult::SaveConfig => {
                 match self.save_config() {
@@ -1124,6 +1241,27 @@ impl App {
             ElementState::Pressed => {
                 if button == MouseButton::Left {
                     self.mouse_pressed = true;
+
+                    // Intercept clicks for settings panel
+                    if self.settings_panel.is_active() {
+                        let window_size = self.window.as_ref().map(|w| w.inner_size());
+                        if let Some(size) = window_size {
+                            let action = self.settings_panel.handle_click(
+                                position.0 as f32,
+                                position.1 as f32,
+                                &self.config,
+                                size.width as f32,
+                                size.height as f32,
+                                cell_width,
+                                cell_height,
+                            );
+                            self.apply_settings_action(action);
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return;
+                        }
+                    }
                 }
                 if let Some(selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
                     if let Some(terminal) = self.active_terminal_mut() {
@@ -1294,6 +1432,38 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
+                // Handle settings panel input first (highest priority when open)
+                if self.settings_panel.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        let settings_key = match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => Some(SettingsKey::Escape),
+                            Key::Named(NamedKey::ArrowUp) => Some(SettingsKey::Up),
+                            Key::Named(NamedKey::ArrowDown) => Some(SettingsKey::Down),
+                            Key::Named(NamedKey::ArrowLeft) => Some(SettingsKey::Left),
+                            Key::Named(NamedKey::ArrowRight) => Some(SettingsKey::Right),
+                            Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
+                            Key::Character(c) if self.modifiers.control_key() => {
+                                match c.as_str() {
+                                    "s" | "S" => Some(SettingsKey::Save),
+                                    "r" | "R" => Some(SettingsKey::Reset),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(key) = settings_key {
+                            let action = self.settings_panel.handle_key(key, &self.config);
+                            self.apply_settings_action(action);
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 // Handle command mode input first
                 if self.handle_command_mode_input(&event) {
                     return;
