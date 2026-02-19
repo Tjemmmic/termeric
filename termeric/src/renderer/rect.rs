@@ -5,12 +5,16 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::*;
 use wgpu::util::DeviceExt;
 
-/// Vertex for rectangle rendering
+/// Vertex for rectangle rendering (with rounded-corner metadata)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct RectVertex {
     pub position: [f32; 2],
     pub color: [f32; 4],
+    pub rect_center: [f32; 2],
+    pub rect_half_size: [f32; 2],
+    pub corner_radius: f32,
+    pub _pad: f32,
 }
 
 impl RectVertex {
@@ -19,15 +23,35 @@ impl RectVertex {
             array_stride: std::mem::size_of::<RectVertex>() as BufferAddress,
             step_mode: VertexStepMode::Vertex,
             attributes: &[
+                // position
                 VertexAttribute {
                     offset: 0,
                     shader_location: 0,
                     format: VertexFormat::Float32x2,
                 },
+                // color
                 VertexAttribute {
                     offset: 8,
                     shader_location: 1,
                     format: VertexFormat::Float32x4,
+                },
+                // rect_center
+                VertexAttribute {
+                    offset: 24,
+                    shader_location: 2,
+                    format: VertexFormat::Float32x2,
+                },
+                // rect_half_size
+                VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: VertexFormat::Float32x2,
+                },
+                // corner_radius
+                VertexAttribute {
+                    offset: 40,
+                    shader_location: 4,
+                    format: VertexFormat::Float32,
                 },
             ],
         }
@@ -171,8 +195,13 @@ impl RectPipeline {
         self.indices.clear();
     }
 
-    /// Push a rectangle
+    /// Push a sharp rectangle (no rounding)
     pub fn push_rect(&mut self, x: f32, y: f32, width: f32, height: f32, color: [f32; 4]) {
+        self.push_rounded_rect(x, y, width, height, color, 0.0);
+    }
+
+    /// Push a rounded rectangle with the given corner radius
+    pub fn push_rounded_rect(&mut self, x: f32, y: f32, width: f32, height: f32, color: [f32; 4], radius: f32) {
         let base_idx = self.vertices.len() as u32;
 
         let x0 = x;
@@ -180,10 +209,22 @@ impl RectPipeline {
         let x1 = x + width;
         let y1 = y + height;
 
-        self.vertices.push(RectVertex { position: [x0, y0], color });
-        self.vertices.push(RectVertex { position: [x1, y0], color });
-        self.vertices.push(RectVertex { position: [x1, y1], color });
-        self.vertices.push(RectVertex { position: [x0, y1], color });
+        let center = [x + width * 0.5, y + height * 0.5];
+        let half_size = [width * 0.5, height * 0.5];
+
+        let make_vert = |pos: [f32; 2]| RectVertex {
+            position: pos,
+            color,
+            rect_center: center,
+            rect_half_size: half_size,
+            corner_radius: radius,
+            _pad: 0.0,
+        };
+
+        self.vertices.push(make_vert([x0, y0]));
+        self.vertices.push(make_vert([x1, y0]));
+        self.vertices.push(make_vert([x1, y1]));
+        self.vertices.push(make_vert([x0, y1]));
 
         self.indices.extend_from_slice(&[
             base_idx,

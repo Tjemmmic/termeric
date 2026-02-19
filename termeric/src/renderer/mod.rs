@@ -18,6 +18,7 @@ use wgpu::*;
 use winit::window::Window;
 use termeric_core::{Grid, Selection, Color as TermColor};
 use crate::theme::Theme;
+use crate::settings::SettingsPanelInfo;
 
 use text::TextPipeline;
 use rect::RectPipeline;
@@ -72,6 +73,17 @@ struct UiPalette {
     dropdown_bg: [f32; 4],
     dropdown_border: [f32; 4],
     dropdown_shadow: [f32; 4],
+    // Settings panel colors
+    settings_bg: [f32; 4],
+    settings_sidebar_bg: [f32; 4],
+    settings_header: [f32; 4],
+    settings_text: [f32; 4],
+    settings_text_dim: [f32; 4],
+    settings_selected: [f32; 4],
+    settings_value: [f32; 4],
+    settings_accent: [f32; 4],
+    settings_separator: [f32; 4],
+    scrim: [f32; 4],
 }
 
 impl UiPalette {
@@ -113,7 +125,19 @@ impl UiPalette {
             prompt_history: theme.primary.blue.to_f32_array(),
             dropdown_bg: shade(bg.to_f32_array(), 0.75),
             dropdown_border: tab_border.to_f32_array(),
-            dropdown_shadow: [0.0, 0.0, 0.0, 0.3],
+            dropdown_shadow: shade(bg.to_f32_array(), 0.0),
+            // Settings panel
+            settings_bg: adjust_alpha(shade(bg.to_f32_array(), 0.85), 0.97),
+            settings_sidebar_bg: adjust_alpha(shade(bg.to_f32_array(), 0.7), 0.97),
+            settings_header: fg.to_f32_array(),
+            settings_text: fg.to_f32_array(),
+            settings_text_dim: adjust_alpha(fg.to_f32_array(), 0.55),
+            settings_selected: adjust_alpha(cursor.to_f32_array(), 0.25),
+            settings_value: cursor.to_f32_array(),
+            settings_accent: tab_active.to_f32_array(),
+            settings_separator: adjust_alpha(tab_border.to_f32_array(), 0.4),
+            // Warm scrim derived from theme background
+            scrim: adjust_alpha(shade(bg.to_f32_array(), 0.3), 0.30),
         }
     }
 }
@@ -184,6 +208,8 @@ pub struct Renderer {
     font_size: f32,
     // Theme-driven UI palette
     ui: UiPalette,
+    // Window opacity (0.0 - 1.0)
+    opacity: f32,
 }
 
 impl Renderer {
@@ -236,7 +262,11 @@ impl Renderer {
             width: size.width,
             height: size.height,
             present_mode: PresentMode::Fifo,
-            alpha_mode: surface_caps.alpha_modes[0],
+            alpha_mode: if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+                wgpu::CompositeAlphaMode::PreMultiplied
+            } else {
+                surface_caps.alpha_modes[0]
+            },
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -270,6 +300,7 @@ impl Renderer {
             scale_factor,
             font_size,
             ui: UiPalette::from_theme(theme),
+            opacity: 1.0,
         })
     }
 
@@ -363,6 +394,11 @@ impl Renderer {
         self.ui = UiPalette::from_theme(theme);
     }
 
+    /// Set window opacity (0.0 = fully transparent, 1.0 = fully opaque)
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.1, 1.0);
+    }
+
     fn command_bar_base_height(&self) -> f32 {
         (self.cell_height + 16.0).round().max(28.0)
     }
@@ -373,7 +409,7 @@ impl Renderer {
     /// copy_flash: 0.0 = no flash, 1.0 = full flash (for copy confirmation)
     /// focus_dim: 0.0 = fully bright (focused), higher = dimmed (unfocused)
     /// command_bar: optional command bar info when in command mode
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -382,7 +418,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -395,7 +431,12 @@ impl Renderer {
                     view: &view,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(self.ui.background),
+                        load: LoadOp::Clear(Color {
+                            r: self.ui.background.r * self.opacity as f64,
+                            g: self.ui.background.g * self.opacity as f64,
+                            b: self.ui.background.b * self.opacity as f64,
+                            a: self.opacity as f64,
+                        }),
                         store: StoreOp::Store,
                     },
                 })],
@@ -418,7 +459,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -537,10 +578,11 @@ impl Renderer {
                 if y + cell_height <= max_grid_y {
                     // Bright orange cursor (turmeric core) with animated opacity and focus dimming
                     let cursor_color = apply_brightness(self.ui.cursor, brightness);
-                    self.rect_pipeline.push_rect(
+                    self.rect_pipeline.push_rounded_rect(
                         x, y,
                         cell_width, cell_height,
                         [cursor_color[0], cursor_color[1], cursor_color[2], cursor_opacity],
+                        2.0,
                     );
                 }
             }
@@ -549,6 +591,13 @@ impl Renderer {
         // Render command bar last (on top of everything)
         if let Some(cmd_bar) = command_bar {
             self.build_command_bar(cmd_bar, window_width, window_height, command_bar_height);
+        }
+
+        // Render settings panel overlay (on top of everything except command bar)
+        if let Some(sp) = settings_panel {
+            if sp.animation > 0.001 {
+                self.build_settings_panel(sp, window_width, window_height);
+            }
         }
     }
 
@@ -610,7 +659,7 @@ impl Renderer {
                     base_bg_color[3] * anim_multiplier,
                 ];
 
-                self.rect_pipeline.push_rect(x + 1.0, y, tab_width - 2.0, tab_height, bg_color);
+                self.rect_pipeline.push_rounded_rect(x + 1.0, y, tab_width - 2.0, tab_height, bg_color, 4.0);
 
                 // Tab text - only render when animation progress is significant
                 if anim_multiplier > 0.3 {
@@ -898,18 +947,19 @@ impl Renderer {
         let shadow_color = self.ui.dropdown_shadow;
         for i in 1..=3 {
             let offset = i as f32 * 2.0;
-            self.rect_pipeline.push_rect(
+            self.rect_pipeline.push_rounded_rect(
                 dropdown_x + offset,
                 dropdown_y + offset,
                 dropdown_width,
                 dropdown_height,
                 shadow_color,
+                8.0,
             );
         }
 
         // Main dropdown background - solid dark background
         let dropdown_bg = self.ui.dropdown_bg;
-        self.rect_pipeline.push_rect(dropdown_x, dropdown_y, dropdown_width, dropdown_height, dropdown_bg);
+        self.rect_pipeline.push_rounded_rect(dropdown_x, dropdown_y, dropdown_width, dropdown_height, dropdown_bg, 8.0);
 
         let border_color = adjust_alpha(self.ui.dropdown_border, 0.6);
         // Top border
@@ -930,23 +980,25 @@ impl Renderer {
             if is_selected {
                 let selection_color = adjust_alpha(self.ui.cursor, 0.2);
                 let highlight_margin = 4.0;
-                self.rect_pipeline.push_rect(
+                self.rect_pipeline.push_rounded_rect(
                     dropdown_x + highlight_margin,
                     suggestion_y,
                     dropdown_width - highlight_margin * 2.0,
                     SUGGESTION_HEIGHT,
                     selection_color,
+                    4.0,
                 );
 
                 // Left accent bar for selected item
                 let accent_color = self.ui.cursor;
                 let accent_width = 3.0;
-                self.rect_pipeline.push_rect(
+                self.rect_pipeline.push_rounded_rect(
                     dropdown_x + highlight_margin,
                     suggestion_y,
                     accent_width,
                     SUGGESTION_HEIGHT,
                     accent_color,
+                    2.0,
                 );
             }
 
@@ -1039,6 +1091,282 @@ impl Renderer {
                 self.text_pipeline.push_char(c, text_x, text_y, desc_color);
                 text_x += self.cell_width * 0.95; // Slightly compressed for descriptions
             }
+        }
+    }
+
+    /// Build settings panel render data
+    fn build_settings_panel(&mut self, info: &SettingsPanelInfo, window_width: f32, window_height: f32) {
+        let anim = info.animation;
+        if anim <= 0.0 {
+            return;
+        }
+
+        // Panel dimensions
+        let panel_width = (window_width * 0.45).min(520.0).max(360.0);
+        let panel_x = window_width - panel_width * anim; // slide in from right
+        let panel_y = 0.0;
+        let panel_h = window_height;
+
+        // Sidebar dimensions
+        let sidebar_width = (self.cell_width * 14.0).max(120.0).min(160.0);
+        let content_x = panel_x + sidebar_width;
+        let content_width = panel_width - sidebar_width;
+
+        let row_height = (self.cell_height * 2.2).max(32.0);
+        let padding_x = self.cell_width * 1.5;
+        let padding_y = self.cell_height * 0.5;
+
+        // ── Scrim (warm-tinted dimmed overlay on terminal behind panel) ──
+        let scrim = self.ui.scrim;
+        self.rect_pipeline.push_rect(
+            0.0, 0.0,
+            panel_x, window_height,
+            [scrim[0], scrim[1], scrim[2], scrim[3] * anim],
+        );
+
+        // ── Sidebar background ──
+        self.rect_pipeline.push_rect(
+            panel_x, panel_y,
+            sidebar_width, panel_h,
+            self.ui.settings_sidebar_bg,
+        );
+
+        // ── Main panel background ──
+        self.rect_pipeline.push_rect(
+            content_x, panel_y,
+            content_width, panel_h,
+            self.ui.settings_bg,
+        );
+
+        // ── Sidebar border (thin line between sidebar and content) ──
+        self.rect_pipeline.push_rect(
+            content_x - 1.0, panel_y,
+            1.0, panel_h,
+            self.ui.settings_separator,
+        );
+
+        // ── Panel title in sidebar ──
+        let title = "Settings";
+        let title_y = panel_y + self.cell_height * 1.5;
+        let title_x = panel_x + padding_x;
+        for (i, c) in title.chars().enumerate() {
+            self.text_pipeline.push_char(
+                c,
+                title_x + i as f32 * self.cell_width,
+                title_y,
+                self.ui.settings_accent,
+            );
+        }
+
+        // ── Section buttons in sidebar ──
+        let section_start_y = title_y + self.cell_height * 2.5;
+        for (idx, (section, is_active)) in info.sections.iter().enumerate() {
+            let sy = section_start_y + idx as f32 * row_height;
+
+            // Active section highlight bar
+            if *is_active {
+                // Left accent bar
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x, sy,
+                    3.0, row_height,
+                    self.ui.settings_accent,
+                    2.0,
+                );
+                // Highlight background
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x + 3.0, sy,
+                    sidebar_width - 3.0, row_height,
+                    self.ui.settings_selected,
+                    4.0,
+                );
+            }
+
+            // Section icon
+            let icon_x = panel_x + padding_x;
+            let text_y = sy + (row_height - self.cell_height) / 2.0;
+            for (i, c) in section.icon().chars().enumerate() {
+                let color = if *is_active { self.ui.settings_accent } else { self.ui.settings_text_dim };
+                self.text_pipeline.push_char(
+                    c,
+                    icon_x + i as f32 * self.cell_width,
+                    text_y,
+                    color,
+                );
+            }
+
+            // Section label
+            let label_x = icon_x + self.cell_width * 3.0;
+            let color = if *is_active { self.ui.settings_text } else { self.ui.settings_text_dim };
+            for (i, c) in section.label().chars().enumerate() {
+                self.text_pipeline.push_char(
+                    c,
+                    label_x + i as f32 * self.cell_width,
+                    text_y,
+                    color,
+                );
+            }
+        }
+
+        // ── Keyboard hints at bottom of sidebar ──
+        let hints = ["↑↓ Navigate", "←→ Adjust", "Tab Section", "Esc Close"];
+        let hint_start_y = window_height - (hints.len() as f32 * self.cell_height * 1.6) - self.cell_height;
+        for (idx, hint) in hints.iter().enumerate() {
+            let hy = hint_start_y + idx as f32 * self.cell_height * 1.6;
+            let hx = panel_x + padding_x;
+            for (i, c) in hint.chars().enumerate() {
+                if hx + i as f32 * self.cell_width * 0.85 < content_x - padding_x {
+                    self.text_pipeline.push_char(
+                        c,
+                        hx + i as f32 * self.cell_width * 0.85,
+                        hy,
+                        self.ui.settings_text_dim,
+                    );
+                }
+            }
+        }
+
+        // ── Content area: section header ──
+        let header_y = panel_y + self.cell_height * 1.5;
+        let header_x = content_x + padding_x;
+        let section_title = info.section.label();
+        for (i, c) in section_title.chars().enumerate() {
+            self.text_pipeline.push_char(
+                c,
+                header_x + i as f32 * self.cell_width * 1.1,
+                header_y,
+                self.ui.settings_header,
+            );
+        }
+
+        // Separator under header
+        let sep_y = header_y + self.cell_height * 1.8;
+        self.rect_pipeline.push_rect(
+            content_x + padding_x, sep_y,
+            content_width - padding_x * 2.0, 1.0,
+            self.ui.settings_separator,
+        );
+
+        // ── Content area: setting items ──
+        let items_start_y = sep_y + padding_y + self.cell_height * 0.5;
+        for (idx, item) in info.items.iter().enumerate() {
+            let iy = items_start_y + idx as f32 * row_height;
+            let is_selected = idx == info.selected_item;
+
+            // Selection highlight
+            if is_selected {
+                self.rect_pipeline.push_rounded_rect(
+                    content_x + padding_x * 0.5, iy,
+                    content_width - padding_x, row_height,
+                    self.ui.settings_selected,
+                    4.0,
+                );
+                // Left accent bar for selected item
+                self.rect_pipeline.push_rounded_rect(
+                    content_x, iy,
+                    3.0, row_height,
+                    self.ui.settings_accent,
+                    2.0,
+                );
+            }
+
+            let text_y = iy + (row_height - self.cell_height) / 2.0;
+
+            // Label
+            let label_x = content_x + padding_x;
+            let label_color = if is_selected { self.ui.settings_text } else { self.ui.settings_text_dim };
+            for (i, c) in item.label.chars().enumerate() {
+                self.text_pipeline.push_char(
+                    c,
+                    label_x + i as f32 * self.cell_width,
+                    text_y,
+                    label_color,
+                );
+            }
+
+            // Value (right-aligned area)
+            let value_area_x = content_x + content_width * 0.45;
+            let value_color = if is_selected { self.ui.settings_value } else { self.ui.settings_text };
+
+            match &item.kind {
+                crate::settings::SettingKind::Numeric { .. } | crate::settings::SettingKind::Dropdown { .. } | crate::settings::SettingKind::SteppedList { .. } => {
+                    // Draw ◀ value ▶ controls
+                    if is_selected {
+                        // Left arrow
+                        self.text_pipeline.push_char(
+                            '◀',
+                            value_area_x,
+                            text_y,
+                            self.ui.settings_accent,
+                        );
+                    }
+
+                    let val_x = value_area_x + self.cell_width * 2.0;
+                    for (i, c) in item.value.chars().enumerate() {
+                        self.text_pipeline.push_char(
+                            c,
+                            val_x + i as f32 * self.cell_width,
+                            text_y,
+                            value_color,
+                        );
+                    }
+
+                    if is_selected {
+                        // Right arrow
+                        let arrow_x = val_x + item.value.len() as f32 * self.cell_width + self.cell_width;
+                        self.text_pipeline.push_char(
+                            '▶',
+                            arrow_x,
+                            text_y,
+                            self.ui.settings_accent,
+                        );
+                    }
+                }
+                crate::settings::SettingKind::ReadOnly => {
+                    // Just display the value
+                    let val_x = value_area_x + self.cell_width * 2.0;
+                    let max_x = content_x + content_width - padding_x;
+                    for (i, c) in item.value.chars().enumerate() {
+                        let cx = val_x + i as f32 * self.cell_width;
+                        if cx + self.cell_width > max_x {
+                            // Ellipsis
+                            self.text_pipeline.push_char('.', cx, text_y, self.ui.settings_text_dim);
+                            break;
+                        }
+                        self.text_pipeline.push_char(
+                            c, cx, text_y,
+                            self.ui.settings_text_dim,
+                        );
+                    }
+                }
+            }
+
+            // Thin separator between items
+            if idx + 1 < info.items.len() {
+                self.rect_pipeline.push_rect(
+                    content_x + padding_x, iy + row_height - 0.5,
+                    content_width - padding_x * 2.0, 0.5,
+                    self.ui.settings_separator,
+                );
+            }
+        }
+
+        // ── Footer: Save hint ──
+        let footer_y = window_height - self.cell_height * 2.0;
+        let footer_text = "Ctrl+S Save  |  Ctrl+R Reset";
+        let footer_x = content_x + padding_x;
+        // Separator above footer
+        self.rect_pipeline.push_rect(
+            content_x + padding_x, footer_y - padding_y,
+            content_width - padding_x * 2.0, 1.0,
+            self.ui.settings_separator,
+        );
+        for (i, c) in footer_text.chars().enumerate() {
+            self.text_pipeline.push_char(
+                c,
+                footer_x + i as f32 * self.cell_width * 0.9,
+                footer_y,
+                self.ui.settings_text_dim,
+            );
         }
     }
 }
