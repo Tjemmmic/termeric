@@ -176,8 +176,8 @@ pub fn check_keybinding(event: &KeyEvent, modifiers: ModifiersState) -> Option<A
                 NamedKey::Home if ctrl && shift => Some(Action::ScrollToTop),
                 NamedKey::End if ctrl && shift => Some(Action::ScrollToBottom),
                 // Tab navigation
-                NamedKey::Tab if ctrl => Some(Action::NextTab),
                 NamedKey::Tab if ctrl && shift => Some(Action::PrevTab),
+                NamedKey::Tab if ctrl => Some(Action::NextTab),
                 // Selection
                 NamedKey::Escape => Some(Action::ClearSelection),
                 _ => None,
@@ -307,11 +307,13 @@ pub fn screen_to_grid(
     cell_width: f32,
     cell_height: f32,
     tab_bar_height: f32,
+    padding: f32,
     scroll_offset: i32,
 ) -> Point {
-    let col = (x as f32 / cell_width).floor() as usize;
+    let adjusted_x = (x as f32 - padding).max(0.0);
+    let col = (adjusted_x / cell_width).floor() as usize;
     // Subtract tab bar height from y to get position relative to terminal area
-    let adjusted_y = (y as f32 - tab_bar_height).max(0.0);
+    let adjusted_y = (y as f32 - tab_bar_height - padding).max(0.0);
     let row = (adjusted_y / cell_height).floor() as i32 - scroll_offset;
     Point::new(row, col)
 }

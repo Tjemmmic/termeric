@@ -3,7 +3,6 @@
 //! This module provides functionality for detecting URLs in terminal output
 //! and handling click-to-open functionality.
 
-use std::ops::Range;
 
 /// A detected URL in the terminal
 #[derive(Clone, Debug)]
