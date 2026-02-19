@@ -34,6 +34,16 @@ impl Pty {
     /// # Returns
     /// A new PTY instance or an error
     pub fn new(cols: u16, rows: u16) -> Result<Self, PtyError> {
+        Self::new_with_command(cols, rows, None, &[])
+    }
+
+    /// Create a new PTY and spawn a process with an optional program and args
+    pub fn new_with_command(
+        cols: u16,
+        rows: u16,
+        program: Option<&str>,
+        args: &[String],
+    ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {
@@ -43,8 +53,14 @@ impl Pty {
             pixel_height: 0,
         })?;
 
-        // Build the command for the default shell
-        let mut cmd = CommandBuilder::new_default_prog();
+        // Build the command for the shell
+        let mut cmd = match program {
+            Some(program) => CommandBuilder::new(program),
+            None => CommandBuilder::new_default_prog(),
+        };
+        if !args.is_empty() {
+            cmd.args(args);
+        }
 
         // Set terminal environment variables
         cmd.env("TERM", "xterm-256color");

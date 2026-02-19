@@ -7,6 +7,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 use termeric_core::{Pty, Terminal};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
+use crate::config::ShellConfig;
 
 /// Duration of tab slide-in animation in seconds
 const TAB_SLIDE_DURATION: f32 = 0.15;
@@ -15,12 +16,17 @@ const TAB_SLIDE_DURATION: f32 = 0.15;
 const TAB_CLOSE_DURATION: f32 = 0.12;
 
 /// Get the current working directory of a process by its PID
-/// Uses /proc/<pid>/cwd on Linux
+#[cfg(target_os = "linux")]
 fn get_process_cwd(pid: u32) -> Option<String> {
     let cwd_path = format!("/proc/{}/cwd", pid);
     std::fs::read_link(&cwd_path)
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_process_cwd(_pid: u32) -> Option<String> {
+    None
 }
 
 /// Extract the directory name from a path, showing ~ for home directory
@@ -63,9 +69,15 @@ pub struct Tab {
 
 impl Tab {
     /// Create a new tab with a shell
-    pub fn new(id: usize, cols: usize, rows: usize) -> anyhow::Result<Self> {
-        let terminal = Terminal::new(cols, rows);
-        let pty = Pty::new(cols as u16, rows as u16)?;
+    pub fn new(id: usize, cols: usize, rows: usize, shell: &ShellConfig, scrollback_lines: usize) -> anyhow::Result<Self> {
+        let mut terminal = Terminal::new(cols, rows);
+        terminal.grid_mut().set_scrollback_limit(scrollback_lines);
+        let pty = Pty::new_with_command(
+            cols as u16,
+            rows as u16,
+            shell.program.as_deref(),
+            &shell.args,
+        )?;
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
 
@@ -184,17 +196,23 @@ pub struct TabManager {
     /// Terminal dimensions
     cols: usize,
     rows: usize,
+    /// Shell configuration for new tabs
+    shell: ShellConfig,
+    /// Scrollback limit for new tabs
+    scrollback_lines: usize,
 }
 
 impl TabManager {
     /// Create a new tab manager
-    pub fn new(cols: usize, rows: usize) -> Self {
+    pub fn new(cols: usize, rows: usize, shell: ShellConfig, scrollback_lines: usize) -> Self {
         Self {
             tabs: Vec::new(),
             active: 0,
             next_id: 0,
             cols,
             rows,
+            shell,
+            scrollback_lines,
         }
     }
 
@@ -203,7 +221,7 @@ impl TabManager {
         let id = self.next_id;
         self.next_id += 1;
 
-        let tab = Tab::new(id, self.cols, self.rows)?;
+        let tab = Tab::new(id, self.cols, self.rows, &self.shell, self.scrollback_lines)?;
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
 
@@ -390,6 +408,14 @@ impl TabManager {
             })
             .collect()
     }
+
+    /// Update scrollback limit for existing and future tabs
+    pub fn set_scrollback_limit(&mut self, limit: usize) {
+        self.scrollback_lines = limit;
+        for tab in &mut self.tabs {
+            tab.terminal.grid_mut().set_scrollback_limit(limit);
+        }
+    }
 }
 
 /// Tab information for display
@@ -412,7 +438,7 @@ mod tests {
 
     #[test]
     fn test_tab_manager_navigation() {
-        let mut manager = TabManager::new(80, 24);
+        let manager = TabManager::new(80, 24, ShellConfig::default(), 10_000);
 
         // Can't test much without actual PTY, but test navigation logic
         assert!(manager.is_empty());
