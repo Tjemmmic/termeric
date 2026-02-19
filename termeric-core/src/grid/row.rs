@@ -89,12 +89,13 @@ impl Row {
     /// Insert blank cells at a position, shifting content right
     pub fn insert_cells(&mut self, col: usize, count: usize) {
         let cols = self.cells.len();
+        if count == 0 || col >= cols {
+            return;
+        }
 
-        // Shift cells right
-        for c in (col..cols).rev() {
-            if c + count < cols {
-                self.cells.swap(c, c + count);
-            }
+        let shift_end = cols.saturating_sub(count);
+        for c in (col..shift_end).rev() {
+            self.cells[c + count] = self.cells[c].clone();
         }
 
         // Clear inserted cells
@@ -108,11 +109,13 @@ impl Row {
     /// Delete cells at a position, shifting content left
     pub fn delete_cells(&mut self, col: usize, count: usize) {
         let cols = self.cells.len();
+        if count == 0 || col >= cols {
+            return;
+        }
 
-        // Shift cells left
         for c in col..cols {
-            if c + count < cols {
-                self.cells.swap(c, c + count);
+            if let Some(src) = c.checked_add(count).filter(|&idx| idx < cols) {
+                self.cells[c] = self.cells[src].clone();
             } else {
                 self.cells[c].clear();
             }

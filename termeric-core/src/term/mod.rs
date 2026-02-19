@@ -11,7 +11,7 @@ pub use cursor::SavedCursor;
 pub use mode::TerminalMode;
 pub use selection::{Selection, SelectionType, Point};
 
-use crate::grid::{Grid, Cell, CellAttrs, CellContent, Color};
+use crate::grid::{Grid, CellAttrs, CellContent, Color};
 use crate::ansi::Processor;
 
 /// Tab stop interval
@@ -61,12 +61,14 @@ impl Terminal {
         for i in (0..cols).step_by(TAB_INTERVAL) {
             tabs[i] = true;
         }
+        let mut mode = TerminalMode::default();
+        mode.insert(TerminalMode::AUTOWRAP);
 
         Self {
             grid: Grid::new(cols, rows),
             alt_grid: Grid::new(cols, rows),
             alt_screen_active: false,
-            mode: TerminalMode::default(),
+            mode,
             tabs,
             saved_cursor: None,
             alt_saved_cursor: None,
@@ -172,6 +174,12 @@ impl Terminal {
         let bg = self.current_bg;
         let attrs = self.current_attrs;
 
+        if self.mode.contains(TerminalMode::INSERT) {
+            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                row.insert_cells(cursor.col, 1);
+            }
+        }
+
         // Write the character
         if let Some(cell) = self.grid_mut().cell_mut(cursor.row, cursor.col) {
             cell.content = CellContent::Char(c);
@@ -200,19 +208,35 @@ impl Terminal {
         } else {
             self.grid_mut().set_cursor(cursor.row + 1, cursor.col);
         }
+
+        if self.mode.contains(TerminalMode::LINEFEED_NEWLINE) {
+            self.carriage_return();
+        }
     }
 
     /// Scroll the screen up by n lines
     pub fn scroll_up(&mut self, n: usize) {
+        let scroll_top = self.scroll_top;
+        let scroll_bottom = self.scroll_bottom;
         for _ in 0..n {
-            self.grid_mut().scroll_up();
+            if scroll_top == 0 && scroll_bottom == self.rows {
+                self.grid_mut().scroll_up();
+            } else {
+                self.grid_mut().scroll_region_up(scroll_top, scroll_bottom);
+            }
         }
     }
 
     /// Scroll the screen down by n lines
     pub fn scroll_down(&mut self, n: usize) {
+        let scroll_top = self.scroll_top;
+        let scroll_bottom = self.scroll_bottom;
         for _ in 0..n {
-            self.grid_mut().scroll_down();
+            if scroll_top == 0 && scroll_bottom == self.rows {
+                self.grid_mut().scroll_down();
+            } else {
+                self.grid_mut().scroll_region_down(scroll_top, scroll_bottom);
+            }
         }
     }
 
@@ -258,7 +282,11 @@ impl Terminal {
 
     /// Set cursor position (1-indexed input, converted to 0-indexed)
     pub fn set_cursor_position(&mut self, row: usize, col: usize) {
-        let row = row.saturating_sub(1).min(self.rows - 1);
+        let mut row = row.saturating_sub(1);
+        if self.mode.contains(TerminalMode::ORIGIN) {
+            row = row.saturating_add(self.scroll_top);
+        }
+        let row = row.min(self.rows - 1);
         let col = col.saturating_sub(1).min(self.cols - 1);
         self.grid_mut().set_cursor(row, col);
     }
@@ -335,6 +363,93 @@ impl Terminal {
         self.current_bg = Color::default_bg();
     }
 
+    /// Add text attributes to the current set
+    pub fn add_attrs(&mut self, attrs: CellAttrs) {
+        self.current_attrs.insert(attrs);
+    }
+
+    /// Remove text attributes from the current set
+    pub fn remove_attrs(&mut self, attrs: CellAttrs) {
+        self.current_attrs.remove(attrs);
+    }
+
+    /// Set a tab stop at the current column
+    pub fn set_tab_stop(&mut self) {
+        let cursor = self.grid().cursor();
+        if let Some(tab) = self.tabs.get_mut(cursor.col) {
+            *tab = true;
+        }
+    }
+
+    /// Clear all tab stops
+    pub fn clear_tab_stops(&mut self) {
+        for tab in &mut self.tabs {
+            *tab = false;
+        }
+    }
+
+    /// Set the scroll region (1-indexed, inclusive) for DECSTBM
+    pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
+        let top = top.saturating_sub(1);
+        let bottom = bottom.min(self.rows);
+        if bottom <= top || bottom == 0 {
+            self.scroll_top = 0;
+            self.scroll_bottom = self.rows;
+        } else {
+            self.scroll_top = top.min(self.rows.saturating_sub(1));
+            self.scroll_bottom = bottom;
+        }
+        self.set_cursor_position(1, 1);
+    }
+
+    /// Reverse index (move up, scroll down if at top of region)
+    pub fn reverse_index(&mut self) {
+        let cursor = self.grid().cursor();
+        if cursor.row <= self.scroll_top {
+            self.scroll_down(1);
+        } else {
+            self.cursor_up(1);
+        }
+    }
+
+    /// Insert blank characters at cursor position
+    pub fn insert_chars(&mut self, count: usize) {
+        let cursor = self.grid().cursor();
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            row.insert_cells(cursor.col, count);
+        }
+    }
+
+    /// Delete characters at cursor position
+    pub fn delete_chars(&mut self, count: usize) {
+        let cursor = self.grid().cursor();
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            row.delete_cells(cursor.col, count);
+        }
+    }
+
+    /// Insert blank lines at cursor row within the scroll region
+    pub fn insert_lines(&mut self, count: usize) {
+        let cursor = self.grid().cursor();
+        let scroll_bottom = self.scroll_bottom;
+        if cursor.row < scroll_bottom {
+            for _ in 0..count {
+                self.grid_mut().scroll_region_down(cursor.row, scroll_bottom);
+            }
+        }
+    }
+
+    /// Delete lines at cursor row within the scroll region
+    pub fn delete_lines(&mut self, count: usize) {
+        let cursor = self.grid().cursor();
+        let scroll_bottom = self.scroll_bottom;
+        if cursor.row < scroll_bottom {
+            for _ in 0..count {
+                self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
+            }
+        }
+    }
+
     /// Switch to alternate screen buffer
     pub fn enter_alt_screen(&mut self) {
         if !self.alt_screen_active {
@@ -404,6 +519,7 @@ impl Terminal {
         self.alt_grid.clear();
         self.alt_screen_active = false;
         self.mode = TerminalMode::default();
+        self.mode.insert(TerminalMode::AUTOWRAP);
         self.reset_attrs();
         self.saved_cursor = None;
         self.alt_saved_cursor = None;
@@ -425,15 +541,11 @@ impl Terminal {
         let mut text = String::new();
 
         for row in start.row..=end.row {
-            if row < 0 {
-                // Scrollback - not yet implemented
-                continue;
-            }
-
-            let row = row as usize;
-            if let Some(grid_row) = self.grid().row(row) {
-                let start_col = if row == start.row as usize { start.col } else { 0 };
-                let end_col = if row == end.row as usize { end.col } else { self.cols - 1 };
+            if let Some(grid_row) = self.grid().row_at_offset(row) {
+                let start_col = if row == start.row { start.col } else { 0 };
+                let end_col = if row == end.row { end.col } else { self.cols - 1 };
+                let start_col = start_col.min(self.cols.saturating_sub(1));
+                let end_col = end_col.min(self.cols.saturating_sub(1));
 
                 for col in start_col..=end_col {
                     if let Some(cell) = grid_row.get(col) {
@@ -445,7 +557,7 @@ impl Terminal {
                     }
                 }
 
-                if row != end.row as usize {
+                if row != end.row {
                     text.push('\n');
                 }
             }

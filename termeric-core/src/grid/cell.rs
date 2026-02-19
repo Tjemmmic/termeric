@@ -110,7 +110,7 @@ impl CellContent {
     pub fn as_str(&self) -> &str {
         match self {
             CellContent::Empty => "",
-            CellContent::Char(c) => {
+            CellContent::Char(_c) => {
                 // This is a bit of a hack, but chars are always valid UTF-8
                 // We'd need a buffer to return a &str for a char
                 // In practice, callers should handle Char separately

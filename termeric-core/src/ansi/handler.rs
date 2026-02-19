@@ -208,22 +208,22 @@ impl Perform for Handler<'_> {
             '@' => {
                 // ICH - Insert Characters
                 let n = param!(0, 1) as usize;
-                log::trace!("Insert {} characters", n);
+                self.terminal.insert_chars(n);
             }
             'P' => {
                 // DCH - Delete Characters
                 let n = param!(0, 1) as usize;
-                log::trace!("Delete {} characters", n);
+                self.terminal.delete_chars(n);
             }
             'L' => {
                 // IL - Insert Lines
                 let n = param!(0, 1) as usize;
-                log::trace!("Insert {} lines", n);
+                self.terminal.insert_lines(n);
             }
             'M' => {
                 // DL - Delete Lines
                 let n = param!(0, 1) as usize;
-                log::trace!("Delete {} lines", n);
+                self.terminal.delete_lines(n);
             }
 
             // Scroll region
@@ -231,7 +231,7 @@ impl Perform for Handler<'_> {
                 // DECSTBM - Set Top and Bottom Margins
                 let top = param!(0, 1) as usize;
                 let bottom = param!(1, self.terminal.rows() as u16) as usize;
-                log::trace!("Set scroll region: {} to {}", top, bottom);
+                self.terminal.set_scroll_region(top, bottom);
             }
 
             _ => {
@@ -274,12 +274,12 @@ impl Perform for Handler<'_> {
 
             // HTS - Horizontal Tab Set
             (b'H', []) => {
-                log::trace!("Set tab stop");
+                self.terminal.set_tab_stop();
             }
 
             // RI - Reverse Index (move up, possibly scroll)
             (b'M', []) => {
-                self.terminal.cursor_up(1);
+                self.terminal.reverse_index();
             }
 
             // DECKPAM - Application Keypad Mode
@@ -470,6 +470,11 @@ impl Handler<'_> {
                         // DECCKM - Application cursor keys
                         self.terminal.set_mode(TerminalMode::CURSOR_KEYS_APPLICATION, enable);
                     }
+                    6 => {
+                        // DECOM - Origin mode
+                        self.terminal.set_mode(TerminalMode::ORIGIN, enable);
+                        self.terminal.set_cursor_position(1, 1);
+                    }
                     7 => {
                         // DECAWM - Autowrap
                         self.terminal.set_mode(TerminalMode::AUTOWRAP, enable);
@@ -542,13 +547,10 @@ impl Handler<'_> {
     }
 
     fn add_attr(&mut self, attr: CellAttrs) {
-        // This is a simplified implementation - in reality we'd need to
-        // get the current attrs, modify them, and set them back
-        // For now, we just log that we would add this attribute
-        log::trace!("Add attribute: {:?}", attr);
+        self.terminal.add_attrs(attr);
     }
 
     fn remove_attr(&mut self, attr: CellAttrs) {
-        log::trace!("Remove attribute: {:?}", attr);
+        self.terminal.remove_attrs(attr);
     }
 }

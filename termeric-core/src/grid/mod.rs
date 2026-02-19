@@ -182,6 +182,16 @@ impl Grid {
         self.storage.scroll_down();
     }
 
+    /// Scroll a region up by one line
+    pub fn scroll_region_up(&mut self, top: usize, bottom: usize) {
+        self.storage.scroll_region_up(top, bottom);
+    }
+
+    /// Scroll a region down by one line
+    pub fn scroll_region_down(&mut self, top: usize, bottom: usize) {
+        self.storage.scroll_region_down(top, bottom);
+    }
+
     /// Clear all cells in the visible grid
     pub fn clear(&mut self) {
         self.storage.clear();
@@ -218,9 +228,21 @@ impl Grid {
         self.scroll_offset = 0;
     }
 
+    /// Set the scrollback limit
+    pub fn set_scrollback_limit(&mut self, limit: usize) {
+        self.storage.set_scrollback_limit(limit);
+        self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
+    }
+
     /// Get a row from the grid (accounting for scroll offset)
     pub fn row(&self, row: usize) -> Option<&Row> {
         self.storage.row(row)
+    }
+
+    /// Get a row from the grid using a scrollback-aware offset
+    /// 0..rows-1 for visible rows, negative for scrollback (e.g. -1 is newest scrollback)
+    pub fn row_at_offset(&self, offset: i32) -> Option<&Row> {
+        self.storage.row_at_offset(offset)
     }
 
     /// Get a mutable row from the grid
