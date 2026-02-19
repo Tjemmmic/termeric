@@ -1,0 +1,36 @@
+[meta]
+name = "Horseradish"
+author = "Termeric"
+description = "Sandy tan skin with sharp white flesh — bold and pungent"
+
+[primary]
+black = "#181610"   # Dark root earth
+red = "#B06848"     # Sandy reddish-brown
+green = "#3D5C2D"   # Large crinkled leaf green
+yellow = "#F0E8B8"  # Pale yellow core
+blue = "#688090"    # Cool earth shadow
+magenta = "#988068"  # Warm sandy tan
+cyan = "#5A8040"    # Bold leaf green
+white = "#FAFAF8"   # Sharp white flesh
+
+[bright]
+black = "#4A4030"   # Rough scarred skin
+red = "#C88868"     # Light sandy tan
+green = "#5A8040"   # Bright bold leaf
+yellow = "#F8F0D0"  # Bright pale yellow
+blue = "#88A0B0"    # Light blue
+magenta = "#B0A088" # Light sandy
+cyan = "#78A058"    # Mid leaf green
+white = "#FEFEFE"   # Brightest white
+
+[ui]
+background = "#181610"
+foreground = "#FAFAF8"
+cursor = "#F0E8B8"
+cursor_text = "#181610"
+selection = "#C8B89040"
+border = "#4A4030"
+tab_active = "#F0E8B8"
+tab_inactive = "#282418"
+search_match = "#5A804066"
+url = "#78A058"

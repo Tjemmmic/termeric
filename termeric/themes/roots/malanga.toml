@@ -1,0 +1,36 @@
+[meta]
+name = "Malanga"
+author = "Termeric"
+description = "Grey-brown skin with purple splotches — tropical root vibes"
+
+[primary]
+black = "#1C1818"   # Deep root bark
+red = "#7B4A5C"     # Purple-red skin blush
+green = "#2D4A2D"   # Dark earthy leaf green
+yellow = "#D4A82A"  # Rich yellow flower
+blue = "#6A7088"    # Cool grey-violet
+magenta = "#4A2D5C" # Dark purple splotch
+cyan = "#3D5C3D"    # Deep forest green
+white = "#F0E8DC"   # Creamy white flesh
+
+[bright]
+black = "#3D3838"   # Medium grey-brown
+red = "#9B6878"     # Light purple-rose
+green = "#4A6A4A"   # Bright earthy green
+yellow = "#E0C040"  # Bright gold flower
+blue = "#8A90A8"    # Light violet-grey
+magenta = "#6B4878" # Medium purple
+cyan = "#5A7A5A"    # Mid forest
+white = "#FAF4E8"   # Bright cream
+
+[ui]
+background = "#1C1818"
+foreground = "#F0E8DC"
+cursor = "#D4A82A"
+cursor_text = "#1C1818"
+selection = "#4A2D5C40"
+border = "#3D3838"
+tab_active = "#D4A82A"
+tab_inactive = "#2C2828"
+search_match = "#4A6A4A66"
+url = "#9B6878"

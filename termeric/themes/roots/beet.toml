@@ -1,0 +1,36 @@
+[meta]
+name = "Beet"
+author = "Termeric"
+description = "Deep burgundy and vivid crimson from the beetroot"
+
+[primary]
+black = "#1A0810"   # Deepest beet skin
+red = "#C41E3A"     # Vivid crimson flesh
+green = "#3D4A28"   # Dark red-green leaves
+yellow = "#D44D6E"  # Magenta-pink streak
+blue = "#6A4060"    # Deep purple shadow
+magenta = "#8B2252"  # Dark beet magenta
+cyan = "#5A6840"    # Beet leaf vein
+white = "#F0D0D8"   # Pale pink-white rings
+
+[bright]
+black = "#4A1028"   # Dark burgundy
+red = "#E04060"     # Bright beet red
+green = "#5A6840"   # Beet leaf
+yellow = "#E878A0"  # Light magenta
+blue = "#8A6880"    # Light purple
+magenta = "#C83868" # Bright magenta
+cyan = "#7A8858"    # Bright leaf
+white = "#F8E0E8"   # Light blush
+
+[ui]
+background = "#1A0810"
+foreground = "#F0D0D8"
+cursor = "#C41E3A"
+cursor_text = "#F0D0D8"
+selection = "#6B183240"
+border = "#4A1028"
+tab_active = "#C41E3A"
+tab_inactive = "#300818"
+search_match = "#D44D6E66"
+url = "#E878A0"

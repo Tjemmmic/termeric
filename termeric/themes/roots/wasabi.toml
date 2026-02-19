@@ -1,0 +1,36 @@
+[meta]
+name = "Wasabi"
+author = "Termeric"
+description = "Bright green rhizome with vivid chartreuse flesh"
+
+[primary]
+black = "#101810"   # Deep green-black soil
+red = "#A0684A"     # Earthy brown-red
+green = "#5C8C32"   # Bright rhizome green skin
+yellow = "#A0C850"  # Fresh chartreuse flesh
+blue = "#4A786A"    # Cool green-teal
+magenta = "#887050" # Warm earth
+cyan = "#7BC828"    # Vivid wasabi paste green
+white = "#C8D8A0"   # Warm pale green flesh
+
+[bright]
+black = "#2D5C2D"   # Dark heart-shaped leaf
+red = "#C08868"     # Light earthy brown
+green = "#7BC828"   # Bright grated wasabi
+yellow = "#C0E068"  # Bright chartreuse
+blue = "#6A9888"    # Light green-teal
+magenta = "#A08868" # Light earth
+cyan = "#98E040"    # Vivid bright green
+white = "#D8E8B8"   # Light green-white
+
+[ui]
+background = "#101810"
+foreground = "#C8D8A0"
+cursor = "#7BC828"
+cursor_text = "#101810"
+selection = "#5C8C3230"
+border = "#2D5C2D"
+tab_active = "#7BC828"
+tab_inactive = "#182818"
+search_match = "#A0C85066"
+url = "#98E040"

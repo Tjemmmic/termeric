@@ -1,0 +1,36 @@
+[meta]
+name = "One Dark"
+author = "Atom"
+description = "Atom's iconic dark theme"
+
+[primary]
+black = "#282C34"
+red = "#E06C75"
+green = "#98C379"
+yellow = "#E5C07B"
+blue = "#61AFEF"
+magenta = "#C678DD"
+cyan = "#56B6C2"
+white = "#ABB2BF"
+
+[bright]
+black = "#545862"
+red = "#E06C75"
+green = "#98C379"
+yellow = "#E5C07B"
+blue = "#61AFEF"
+magenta = "#C678DD"
+cyan = "#56B6C2"
+white = "#C8CCD4"
+
+[ui]
+background = "#282C34"
+foreground = "#ABB2BF"
+cursor = "#528BFF"
+cursor_text = "#282C34"
+selection = "#3E4452"
+border = "#3E4452"
+tab_active = "#528BFF"
+tab_inactive = "#21252B"
+search_match = "#E5C07B80"
+url = "#61AFEF"

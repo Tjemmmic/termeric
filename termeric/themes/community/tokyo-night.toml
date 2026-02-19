@@ -1,0 +1,36 @@
+[meta]
+name = "Tokyo Night"
+author = "enkia"
+description = "A clean dark theme inspired by Tokyo at night"
+
+[primary]
+black = "#15161E"
+red = "#F7768E"
+green = "#9ECE6A"
+yellow = "#E0AF68"
+blue = "#7AA2F7"
+magenta = "#BB9AF7"
+cyan = "#7DCFFF"
+white = "#A9B1D6"
+
+[bright]
+black = "#414868"
+red = "#F7768E"
+green = "#9ECE6A"
+yellow = "#E0AF68"
+blue = "#7AA2F7"
+magenta = "#BB9AF7"
+cyan = "#7DCFFF"
+white = "#C0CAF5"
+
+[ui]
+background = "#1A1B26"
+foreground = "#C0CAF5"
+cursor = "#C0CAF5"
+cursor_text = "#1A1B26"
+selection = "#33467C"
+border = "#292E42"
+tab_active = "#7AA2F7"
+tab_inactive = "#292E42"
+search_match = "#E0AF6880"
+url = "#7DCFFF"

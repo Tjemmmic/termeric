@@ -1,0 +1,36 @@
+[meta]
+name = "Ginger"
+author = "Termeric"
+description = "Pale sandy tones from ginger root — warm and understated"
+
+[primary]
+black = "#1E1810"   # Dark ginger bark
+red = "#C47B5A"     # Pink ginger shoot
+green = "#6B7D3C"   # Warm olive leaf
+yellow = "#C8A86A"  # Pale straw flesh
+blue = "#7A8C8C"    # Cool ginger shadows
+magenta = "#D4A0A0" # Pink young ginger
+cyan = "#8FA55A"    # Reed green leaf
+white = "#EDE0C0"   # Fibrous cream flesh
+
+[bright]
+black = "#3D3428"   # Medium bark
+red = "#D4907A"     # Light coral
+green = "#8FA55A"   # Bright reed green
+yellow = "#E0C888"  # Bright straw
+blue = "#9AACAC"    # Light blue-grey
+magenta = "#E0B8B8" # Light pink
+cyan = "#A8C470"    # Bright leaf
+white = "#F5EDD8"   # Light fibrous cream
+
+[ui]
+background = "#1E1810"
+foreground = "#EDE0C0"
+cursor = "#D4A068"
+cursor_text = "#1E1810"
+selection = "#C8A86A59"
+border = "#3D3428"
+tab_active = "#D4A068"
+tab_inactive = "#2D2820"
+search_match = "#8FA55A66"
+url = "#A8C470"

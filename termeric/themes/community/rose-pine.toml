@@ -1,0 +1,36 @@
+[meta]
+name = "Rosé Pine"
+author = "Rosé Pine"
+description = "All natural pine, faux fur and a bit of soho vibes"
+
+[primary]
+black = "#26233A"
+red = "#EB6F92"
+green = "#31748F"
+yellow = "#F6C177"
+blue = "#9CCFD8"
+magenta = "#C4A7E7"
+cyan = "#EBBCBA"
+white = "#E0DEF4"
+
+[bright]
+black = "#6E6A86"
+red = "#EB6F92"
+green = "#31748F"
+yellow = "#F6C177"
+blue = "#9CCFD8"
+magenta = "#C4A7E7"
+cyan = "#EBBCBA"
+white = "#E0DEF4"
+
+[ui]
+background = "#191724"
+foreground = "#E0DEF4"
+cursor = "#524F67"
+cursor_text = "#E0DEF4"
+selection = "#2A283E"
+border = "#26233A"
+tab_active = "#C4A7E7"
+tab_inactive = "#26233A"
+search_match = "#F6C17780"
+url = "#9CCFD8"

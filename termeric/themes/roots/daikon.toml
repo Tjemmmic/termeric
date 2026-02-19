@@ -1,0 +1,36 @@
+[meta]
+name = "Daikon"
+author = "Termeric"
+description = "Crisp whites and greens from the Japanese radish"
+
+[primary]
+black = "#1A1F18"   # Deep soil
+red = "#A85C50"     # Radish blush
+green = "#3D5E38"   # Dark leathery leaf
+yellow = "#B8C080"  # Pale green top
+blue = "#6A8090"    # Cool shadow
+magenta = "#9B7088" # Muted rose
+cyan = "#6BA34F"    # Bright leaf green
+white = "#F0EDE8"   # Clean white skin
+
+[bright]
+black = "#3A4238"   # Dark earth
+red = "#C07868"     # Warm blush
+green = "#6BA34F"   # Bright radish leaf
+yellow = "#D4E0C4"  # Pale green fade
+blue = "#8AA0B0"    # Light blue
+magenta = "#B88898" # Light rose
+cyan = "#88C470"    # Spring green
+white = "#FAFAF5"   # Crisp translucent white
+
+[ui]
+background = "#1A1F18"
+foreground = "#F0EDE8"
+cursor = "#6BA34F"
+cursor_text = "#1A1F18"
+selection = "#B8C08040"
+border = "#3A4238"
+tab_active = "#6BA34F"
+tab_inactive = "#2A3028"
+search_match = "#D4E0C466"
+url = "#88C470"

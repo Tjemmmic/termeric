@@ -1,0 +1,36 @@
+[meta]
+name = "Gruvbox Light"
+author = "morhetz"
+description = "Retro groove color scheme (light)"
+
+[primary]
+black = "#FBF1C7"
+red = "#CC241D"
+green = "#98971A"
+yellow = "#D79921"
+blue = "#458588"
+magenta = "#B16286"
+cyan = "#689D6A"
+white = "#7C6F64"
+
+[bright]
+black = "#928374"
+red = "#9D0006"
+green = "#79740E"
+yellow = "#B57614"
+blue = "#076678"
+magenta = "#8F3F71"
+cyan = "#427B58"
+white = "#3C3836"
+
+[ui]
+background = "#FBF1C7"
+foreground = "#3C3836"
+cursor = "#3C3836"
+cursor_text = "#FBF1C7"
+selection = "#D5C4A1"
+border = "#EBDBB2"
+tab_active = "#D79921"
+tab_inactive = "#EBDBB2"
+search_match = "#B5761466"
+url = "#076678"

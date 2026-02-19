@@ -1,0 +1,36 @@
+[meta]
+name = "Catppuccin Mocha"
+author = "Catppuccin"
+description = "Soothing pastel theme (darkest)"
+
+[primary]
+black = "#45475A"
+red = "#F38BA8"
+green = "#A6E3A1"
+yellow = "#F9E2AF"
+blue = "#89B4FA"
+magenta = "#F5C2E7"
+cyan = "#94E2D5"
+white = "#BAC2DE"
+
+[bright]
+black = "#585B70"
+red = "#F38BA8"
+green = "#A6E3A1"
+yellow = "#F9E2AF"
+blue = "#89B4FA"
+magenta = "#F5C2E7"
+cyan = "#94E2D5"
+white = "#CDD6F4"
+
+[ui]
+background = "#1E1E2E"
+foreground = "#CDD6F4"
+cursor = "#F5E0DC"
+cursor_text = "#1E1E2E"
+selection = "#45475A"
+border = "#313244"
+tab_active = "#CBA6F7"
+tab_inactive = "#313244"
+search_match = "#F9E2AF80"
+url = "#89B4FA"

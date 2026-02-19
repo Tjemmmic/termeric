@@ -1,0 +1,36 @@
+[meta]
+name = "Turnip"
+author = "Termeric"
+description = "Cream-to-purple gradient, pure white flesh, sage green leaves"
+
+[primary]
+black = "#18151A"   # Deep root soil
+red = "#9B5BA0"     # Purple-rose top
+green = "#7B9B5C"   # Fuzzy sage green leaf
+yellow = "#C8B878"  # Pale cream skin
+blue = "#7888A0"    # Cool purple-blue
+magenta = "#A06898"  # Mid purple
+cyan = "#A0C46A"    # Bright spring leaf
+white = "#FAF8F0"   # Pure white flesh
+
+[bright]
+black = "#383040"   # Dark purple-grey
+red = "#B878B8"     # Light purple
+green = "#A0C46A"   # Spring green
+yellow = "#E0D8C8"  # Fine hairlike cream
+blue = "#98A8C0"    # Light blue
+magenta = "#C088B8" # Bright purple
+cyan = "#B8D880"    # Bright spring
+white = "#FEFCF8"   # Brightest white
+
+[ui]
+background = "#18151A"
+foreground = "#FAF8F0"
+cursor = "#9B5BA0"
+cursor_text = "#FAF8F0"
+selection = "#9B5BA030"
+border = "#383040"
+tab_active = "#9B5BA0"
+tab_inactive = "#28222A"
+search_match = "#A0C46A66"
+url = "#B8D880"

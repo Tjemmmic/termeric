@@ -1,0 +1,36 @@
+[meta]
+name = "Galangal"
+author = "Termeric"
+description = "Pale pinkish-tan with hot pink shoots — lesser ginger"
+
+[primary]
+black = "#1A1418"   # Deep galangal bark
+red = "#E05A8C"     # Hot pink shoot
+green = "#4A7D3C"   # Long blade leaf green
+yellow = "#D4B878"  # Resinous golden flesh
+blue = "#7A7890"    # Cool purple shadow
+magenta = "#C84080" # Bright magenta shoot
+cyan = "#68A050"    # Tropical blade green
+white = "#F5F0E4"   # Pale ivory flesh
+
+[bright]
+black = "#3D3038"   # Medium bark
+red = "#E878A0"     # Light hot pink
+green = "#68A050"   # Bright blade green
+yellow = "#E0C890"  # Light golden
+blue = "#9898B0"    # Light purple
+magenta = "#E060A0" # Bright pink
+cyan = "#88C068"    # Bright tropical
+white = "#FAF5F0"   # Bright ivory
+
+[ui]
+background = "#1A1418"
+foreground = "#F5F0E4"
+cursor = "#E05A8C"
+cursor_text = "#1A1418"
+selection = "#C8408040"
+border = "#3D3038"
+tab_active = "#E05A8C"
+tab_inactive = "#2A2028"
+search_match = "#D4B87866"
+url = "#E878A0"

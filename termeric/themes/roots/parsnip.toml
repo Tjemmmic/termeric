@@ -1,0 +1,36 @@
+[meta]
+name = "Parsnip"
+author = "Termeric"
+description = "Off-white cream skin with sweet flesh and celery green leaves"
+
+[primary]
+black = "#181810"   # Deep parsnip earth
+red = "#B08858"     # Warm tan
+green = "#5C8C3C"   # Celery green leaf
+yellow = "#E8D898"  # Faint yellow core
+blue = "#708898"    # Cool shadow
+magenta = "#A09070" # Dusty cream-tan
+cyan = "#B4C890"    # Stem green-white
+white = "#FAF5E4"   # Sweet cream flesh
+
+[bright]
+black = "#3A3828"   # Medium earth
+red = "#C8A878"     # Light warm tan
+green = "#80B060"   # Bright celery leaf
+yellow = "#F0E8B8"  # Bright yellow core
+blue = "#90A8B8"    # Light blue
+magenta = "#C0B090" # Light dusty cream
+cyan = "#C8D8A0"    # Ferny bright green
+white = "#FEFAF0"   # Brightest cream
+
+[ui]
+background = "#181810"
+foreground = "#FAF5E4"
+cursor = "#E8D898"
+cursor_text = "#181810"
+selection = "#D8C8A440"
+border = "#3A3828"
+tab_active = "#E8D898"
+tab_inactive = "#282818"
+search_match = "#80B06066"
+url = "#C8D8A0"

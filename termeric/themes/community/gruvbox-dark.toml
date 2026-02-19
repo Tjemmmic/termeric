@@ -1,0 +1,36 @@
+[meta]
+name = "Gruvbox Dark"
+author = "morhetz"
+description = "Retro groove color scheme"
+
+[primary]
+black = "#282828"
+red = "#CC241D"
+green = "#98971A"
+yellow = "#D79921"
+blue = "#458588"
+magenta = "#B16286"
+cyan = "#689D6A"
+white = "#A89984"
+
+[bright]
+black = "#928374"
+red = "#FB4934"
+green = "#B8BB26"
+yellow = "#FABD2F"
+blue = "#83A598"
+magenta = "#D3869B"
+cyan = "#8EC07C"
+white = "#EBDBB2"
+
+[ui]
+background = "#282828"
+foreground = "#EBDBB2"
+cursor = "#EBDBB2"
+cursor_text = "#282828"
+selection = "#504945"
+border = "#3C3836"
+tab_active = "#FABD2F"
+tab_inactive = "#3C3836"
+search_match = "#FABD2F80"
+url = "#83A598"

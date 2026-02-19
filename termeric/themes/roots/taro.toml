@@ -1,0 +1,36 @@
+[meta]
+name = "Taro"
+author = "Termeric"
+description = "Dusty brown skin, pale lavender flesh, purple veins — elephant ear"
+
+[primary]
+black = "#181418"   # Deep taro soil
+red = "#9B6880"     # Muted purple-rose
+green = "#2D4A30"   # Giant elephant ear leaf
+yellow = "#E8D88C"  # Creamy spadix flower
+blue = "#7B5C9B"    # Purple vein blue
+magenta = "#8858A0" # Purple flesh vein
+cyan = "#4A6848"    # Velvety leaf green
+white = "#E8E0F0"   # Pale lavender flesh
+
+[bright]
+black = "#5C4A40"   # Dark dusty brown skin
+red = "#B880A0"     # Light purple-rose
+green = "#4A6848"   # Bright leaf green
+yellow = "#F0E8A8"  # Light flower yellow
+blue = "#9B80B8"    # Light violet
+magenta = "#A878C0" # Bright purple
+cyan = "#689868"    # Bright velvety green
+white = "#F0E8F8"   # Bright lavender
+
+[ui]
+background = "#181418"
+foreground = "#E8E0F0"
+cursor = "#7B5C9B"
+cursor_text = "#E8E0F0"
+selection = "#7B5C9B30"
+border = "#5C4A40"
+tab_active = "#7B5C9B"
+tab_inactive = "#281828"
+search_match = "#E8D88C66"
+url = "#9B80B8"
