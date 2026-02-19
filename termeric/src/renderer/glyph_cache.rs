@@ -72,11 +72,13 @@ pub struct GlyphCache {
     cell_height: f32,
     /// Font size
     font_size: f32,
+    /// Font family name
+    font_family: String,
 }
 
 impl GlyphCache {
     /// Create a new glyph cache
-    pub fn new(device: &Device, queue: &Queue, font_size: f32) -> Result<Self> {
+    pub fn new(device: &Device, queue: &Queue, font_size: f32, font_family: &str) -> Result<Self> {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
 
@@ -85,7 +87,7 @@ impl GlyphCache {
         let metrics = Metrics::new(font_size, line_height);
 
         // Measure a character to get cell dimensions
-        let (cell_width, cell_height) = measure_cell(&mut font_system, &metrics);
+        let (cell_width, cell_height) = measure_cell(&mut font_system, &metrics, font_family);
 
         // Create atlas texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -118,14 +120,14 @@ impl GlyphCache {
         // Initialize with transparent pixels
         let clear_data = vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize];
         queue.write_texture(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &clear_data,
-            ImageDataLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(ATLAS_SIZE),
                 rows_per_image: Some(ATLAS_SIZE),
@@ -151,6 +153,7 @@ impl GlyphCache {
             cell_width,
             cell_height,
             font_size,
+            font_family: font_family.to_string(),
         })
     }
 
@@ -182,7 +185,7 @@ impl GlyphCache {
         // Upload to GPU
         if image.width > 0 && image.height > 0 {
             queue.write_texture(
-                ImageCopyTexture {
+                TexelCopyTextureInfo {
                     texture: &self.texture,
                     mip_level: 0,
                     origin: Origin3d {
@@ -193,7 +196,7 @@ impl GlyphCache {
                     aspect: TextureAspect::All,
                 },
                 &image.data,
-                ImageDataLayout {
+                TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(image.width),
                     rows_per_image: Some(image.height),
@@ -214,10 +217,11 @@ impl GlyphCache {
     fn rasterize_char(&mut self, c: char) -> Option<RasterizedGlyph> {
         // Create a buffer with just this character
         let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
+        let family = family_for(&self.font_family);
         buffer.set_text(
             &mut self.font_system,
             &c.to_string(),
-            Attrs::new().family(Family::Monospace),
+            Attrs::new().family(family),
             Shaping::Advanced,
         );
 
@@ -308,6 +312,11 @@ impl GlyphCache {
         self.font_size
     }
 
+    /// Get current font family
+    pub fn font_family(&self) -> &str {
+        &self.font_family
+    }
+
     /// Change font size, clearing the cache and recalculating metrics
     pub fn set_font_size(&mut self, font_size: f32, queue: &Queue) {
         if (self.font_size - font_size).abs() < 0.01 {
@@ -321,7 +330,7 @@ impl GlyphCache {
         self.metrics = Metrics::new(font_size, line_height);
 
         // Remeasure cell dimensions
-        let (cell_width, cell_height) = measure_cell(&mut self.font_system, &self.metrics);
+        let (cell_width, cell_height) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
         self.cell_width = cell_width;
         self.cell_height = cell_height;
 
@@ -334,14 +343,14 @@ impl GlyphCache {
         // Clear the texture
         let clear_data = vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize];
         queue.write_texture(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &self.texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &clear_data,
-            ImageDataLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(ATLAS_SIZE),
                 rows_per_image: Some(ATLAS_SIZE),
@@ -355,6 +364,47 @@ impl GlyphCache {
 
         log::info!("Font size changed to {}, cell size: {}x{}", font_size, cell_width, cell_height);
     }
+
+    /// Change font family, clearing the cache and recalculating metrics
+    pub fn set_font_family(&mut self, font_family: String, queue: &Queue) {
+        if self.font_family == font_family {
+            return;
+        }
+
+        self.font_family = font_family;
+
+        let (cell_width, cell_height) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+
+        self.entries.clear();
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        self.row_height = 0;
+
+        let clear_data = vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize];
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &clear_data,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(ATLAS_SIZE),
+                rows_per_image: Some(ATLAS_SIZE),
+            },
+            Extent3d {
+                width: ATLAS_SIZE,
+                height: ATLAS_SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        log::info!("Font family changed to {}, cell size: {}x{}", self.font_family, cell_width, cell_height);
+    }
 }
 
 /// A rasterized glyph image
@@ -367,12 +417,13 @@ struct RasterizedGlyph {
 }
 
 /// Measure cell dimensions using a sample character
-fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics) -> (f32, f32) {
+fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &str) -> (f32, f32) {
     let mut buffer = Buffer::new(font_system, *metrics);
+    let family = family_for(font_family);
     buffer.set_text(
         font_system,
         "M",
-        Attrs::new().family(Family::Monospace),
+        Attrs::new().family(family),
         Shaping::Advanced,
     );
 
@@ -385,5 +436,21 @@ fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics) -> (f32, f32) {
         }
     }
 
-    (width, metrics.line_height)
+    let width = width.round().max(1.0);
+    let height = metrics.line_height.round().max(1.0);
+    (width, height)
+}
+
+fn family_for(font_family: &str) -> Family<'_> {
+    let trimmed = font_family.trim();
+    if trimmed.is_empty() {
+        return Family::Monospace;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(lower.as_str(), "monospace" | "mono" | "default") {
+        Family::Monospace
+    } else {
+        Family::Name(trimmed)
+    }
 }

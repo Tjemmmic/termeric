@@ -15,9 +15,9 @@ pub use glyph_cache::GlyphCache;
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::*;
-use wgpu::util::DeviceExt;
 use winit::window::Window;
-use termeric_core::{Grid, Selection};
+use termeric_core::{Grid, Selection, Color as TermColor};
+use crate::theme::Theme;
 
 use text::TextPipeline;
 use rect::RectPipeline;
@@ -46,11 +46,119 @@ pub struct CommandBarInfo {
     pub message_scroll_offset: usize,
 }
 
-/// Height of the tab bar in pixels
-const TAB_BAR_HEIGHT: f32 = 28.0;
+#[derive(Clone)]
+struct UiPalette {
+    background: wgpu::Color,
+    foreground: [f32; 4],
+    selection: [f32; 4],
+    selection_flash: [f32; 4],
+    cursor: [f32; 4],
+    tab_bar_bg: [f32; 4],
+    tab_active: [f32; 4],
+    tab_inactive: [f32; 4],
+    tab_activity: [f32; 4],
+    tab_border: [f32; 4],
+    tab_text_active: [f32; 4],
+    tab_text_inactive: [f32; 4],
+    command_bg: [f32; 4],
+    command_border: [f32; 4],
+    command_text: [f32; 4],
+    command_error: [f32; 4],
+    command_success: [f32; 4],
+    command_hint: [f32; 4],
+    prompt_selecting: [f32; 4],
+    prompt_args: [f32; 4],
+    prompt_history: [f32; 4],
+    dropdown_bg: [f32; 4],
+    dropdown_border: [f32; 4],
+    dropdown_shadow: [f32; 4],
+}
 
-/// Height of the command bar in pixels
-const COMMAND_BAR_HEIGHT: f32 = 32.0;
+impl UiPalette {
+    fn from_theme(theme: &Theme) -> Self {
+        let bg = theme.ui.background;
+        let fg = theme.ui.foreground;
+        let selection = theme.ui.selection;
+        let cursor = theme.ui.cursor;
+        let tab_active = theme.ui.tab_active;
+        let tab_inactive = theme.ui.tab_inactive;
+        let tab_border = theme.ui.border;
+
+        let tab_text_active = contrast_text(tab_active.to_f32_array());
+        let tab_text_inactive = adjust_alpha(fg.to_f32_array(), 0.9);
+        let command_bg = shade(bg.to_f32_array(), 0.9);
+        let command_text = fg.to_f32_array();
+
+        Self {
+            background: bg.to_wgpu(),
+            foreground: fg.to_f32_array(),
+            selection: selection.to_f32_array(),
+            selection_flash: adjust_alpha(fg.to_f32_array(), 0.85),
+            cursor: cursor.to_f32_array(),
+            tab_bar_bg: shade(tab_inactive.to_f32_array(), 0.85),
+            tab_active: tab_active.to_f32_array(),
+            tab_inactive: tab_inactive.to_f32_array(),
+            tab_activity: theme.primary.yellow.to_f32_array(),
+            tab_border: tab_border.to_f32_array(),
+            tab_text_active,
+            tab_text_inactive,
+            command_bg,
+            command_border: tab_border.to_f32_array(),
+            command_text,
+            command_error: theme.primary.red.to_f32_array(),
+            command_success: theme.primary.green.to_f32_array(),
+            command_hint: adjust_alpha(fg.to_f32_array(), 0.6),
+            prompt_selecting: cursor.to_f32_array(),
+            prompt_args: theme.primary.yellow.to_f32_array(),
+            prompt_history: theme.primary.blue.to_f32_array(),
+            dropdown_bg: shade(bg.to_f32_array(), 0.75),
+            dropdown_border: tab_border.to_f32_array(),
+            dropdown_shadow: [0.0, 0.0, 0.0, 0.3],
+        }
+    }
+}
+
+fn shade(color: [f32; 4], factor: f32) -> [f32; 4] {
+    [
+        (color[0] * factor).clamp(0.0, 1.0),
+        (color[1] * factor).clamp(0.0, 1.0),
+        (color[2] * factor).clamp(0.0, 1.0),
+        color[3],
+    ]
+}
+
+fn adjust_alpha(mut color: [f32; 4], alpha: f32) -> [f32; 4] {
+    color[3] = alpha;
+    color
+}
+
+fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
+}
+
+fn apply_brightness(color: [f32; 4], brightness: f32) -> [f32; 4] {
+    [
+        (color[0] * brightness).clamp(0.0, 1.0),
+        (color[1] * brightness).clamp(0.0, 1.0),
+        (color[2] * brightness).clamp(0.0, 1.0),
+        color[3],
+    ]
+}
+
+fn contrast_text(bg: [f32; 4]) -> [f32; 4] {
+    let luminance = 0.2126 * bg[0] + 0.7152 * bg[1] + 0.0722 * bg[2];
+    if luminance > 0.6 {
+        [0.12, 0.09, 0.07, 1.0]
+    } else {
+        [0.95, 0.92, 0.88, 1.0]
+    }
+}
 
 /// Main renderer that manages all GPU resources
 pub struct Renderer {
@@ -69,11 +177,18 @@ pub struct Renderer {
     // Cell dimensions
     cell_width: f32,
     cell_height: f32,
+    // Padding around terminal content
+    padding: f32,
+    padding_logical: f32,
+    scale_factor: f32,
+    font_size: f32,
+    // Theme-driven UI palette
+    ui: UiPalette,
 }
 
 impl Renderer {
     /// Create a new renderer for the given window
-    pub fn new(window: Arc<Window>) -> Result<Self> {
+    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme) -> Result<Self> {
         let size = window.inner_size();
 
         // Create wgpu instance
@@ -128,13 +243,15 @@ impl Renderer {
         surface.configure(&device, &config);
 
         // Create glyph cache
-        let font_size = 35.0;
-        let glyph_cache = GlyphCache::new(&device, &queue, font_size)?;
+        let scaled_font_size = (font_size * scale_factor).max(1.0);
+        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family)?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
         let text_pipeline = TextPipeline::new(&device, surface_format, &glyph_cache)?;
         let rect_pipeline = RectPipeline::new(&device, surface_format)?;
+
+        let padding_physical = (padding * scale_factor).round().max(0.0);
 
         Ok(Self {
             window,
@@ -148,6 +265,11 @@ impl Renderer {
             glyph_cache,
             cell_width,
             cell_height,
+            padding: padding_physical,
+            padding_logical: padding,
+            scale_factor,
+            font_size,
+            ui: UiPalette::from_theme(theme),
         })
     }
 
@@ -172,29 +294,77 @@ impl Renderer {
 
     /// Calculate terminal dimensions from window size (accounting for tab bar)
     pub fn calculate_grid_size(&self, width: u32, height: u32) -> (usize, usize) {
-        let cols = (width as f32 / self.cell_width).floor() as usize;
+        let tab_bar_height = self.tab_bar_height();
+        let available_width = (width as f32 - self.padding * 2.0).max(0.0);
+        let cols = (available_width / self.cell_width).floor() as usize;
         // Subtract tab bar height from available height
-        let available_height = (height as f32 - TAB_BAR_HEIGHT).max(0.0);
+        let available_height = (height as f32 - tab_bar_height - self.padding * 2.0).max(0.0);
         let rows = (available_height / self.cell_height).floor() as usize;
         (cols.max(1), rows.max(1))
     }
 
     /// Get the tab bar height
     pub fn tab_bar_height(&self) -> f32 {
-        TAB_BAR_HEIGHT
+        (self.cell_height * 1.1).round().max(18.0) + 10.0
     }
 
     /// Get current font size
     pub fn font_size(&self) -> f32 {
-        self.glyph_cache.font_size()
+        self.font_size
+    }
+
+    /// Get current font family
+    pub fn font_family(&self) -> &str {
+        self.glyph_cache.font_family()
     }
 
     /// Change font size
     pub fn set_font_size(&mut self, font_size: f32) {
-        self.glyph_cache.set_font_size(font_size, &self.queue);
+        self.font_size = font_size;
+        let scaled = (font_size * self.scale_factor).max(1.0);
+        self.glyph_cache.set_font_size(scaled, &self.queue);
         let (cell_width, cell_height) = self.glyph_cache.cell_size();
         self.cell_width = cell_width;
         self.cell_height = cell_height;
+    }
+
+    /// Change font family
+    pub fn set_font_family(&mut self, font_family: String) {
+        self.glyph_cache.set_font_family(font_family, &self.queue);
+        let (cell_width, cell_height) = self.glyph_cache.cell_size();
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+    }
+
+    /// Get current padding
+    pub fn padding(&self) -> f32 {
+        self.padding
+    }
+
+    /// Change padding
+    pub fn set_padding(&mut self, padding: f32) {
+        self.padding_logical = padding.max(0.0);
+        self.padding = (self.padding_logical * self.scale_factor).round().max(0.0);
+    }
+
+    /// Update scale factor for HiDPI displays
+    pub fn set_scale_factor(&mut self, scale_factor: f32) {
+        self.scale_factor = scale_factor.max(0.1);
+        let scaled = (self.font_size * self.scale_factor).max(1.0);
+        self.glyph_cache.set_font_size(scaled, &self.queue);
+        let (cell_width, cell_height) = self.glyph_cache.cell_size();
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+        self.padding = (self.padding_logical * self.scale_factor).round().max(0.0);
+    }
+
+    /// Set the active theme for UI rendering
+    pub fn set_theme(&mut self, theme: &Theme) {
+        self.ui = UiPalette::from_theme(theme);
+    }
+
+    fn command_bar_base_height(&self) -> f32 {
+        (self.cell_height + 16.0).round().max(28.0)
     }
 
     /// Render the terminal grid with tab bar
@@ -225,12 +395,7 @@ impl Renderer {
                     view: &view,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color {
-                            r: 0.110, // #1C1410 - Dark brown (dried turmeric skin)
-                            g: 0.078,
-                            b: 0.063,
-                            a: 1.0,
-                        }),
+                        load: LoadOp::Clear(self.ui.background),
                         store: StoreOp::Store,
                     },
                 })],
@@ -261,6 +426,8 @@ impl Renderer {
         let cell_height = self.cell_height;
         let window_width = self.size.0 as f32;
         let window_height = self.size.1 as f32;
+        let padding = self.padding;
+        let tab_bar_height = self.tab_bar_height();
 
         // Calculate command bar height to know where grid ends
         let command_bar_height = if let Some(cmd_bar) = command_bar {
@@ -284,32 +451,29 @@ impl Renderer {
         let brightness = 1.0 - focus_dim;
 
         // Render tab bar first
-        self.build_tab_bar(tabs, window_width);
+        self.build_tab_bar(tabs, window_width, tab_bar_height);
 
         // Selection highlight color - earthy yellow (inner layer) with transparency
         // When copy_flash > 0, brighten the selection to white for a flash effect
-        let base_selection_color = [0.79, 0.64, 0.15, 0.35]; // #C9A227 at 35% opacity
-        let flash_color = [1.0, 1.0, 0.9, 0.7]; // Bright cream flash
-        let selection_color = [
-            (base_selection_color[0] + (flash_color[0] - base_selection_color[0]) * copy_flash) * brightness,
-            (base_selection_color[1] + (flash_color[1] - base_selection_color[1]) * copy_flash) * brightness,
-            (base_selection_color[2] + (flash_color[2] - base_selection_color[2]) * copy_flash) * brightness,
-            base_selection_color[3] + (flash_color[3] - base_selection_color[3]) * copy_flash,
-        ];
+        let selection_base = self.ui.selection;
+        let selection_flash = self.ui.selection_flash;
+        let selection_color = apply_brightness(mix(selection_base, selection_flash, copy_flash), brightness);
 
         // Get scroll offset to determine if cursor should be shown
         let scroll_offset = grid.scroll_offset();
+        let scroll_offset_i32 = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
+        let default_bg = TermColor::default_bg();
 
         // Calculate maximum y position for grid content (don't overlap command bar or dropdown)
-        let max_grid_y = window_height - command_bar_height - dropdown_height - 8.0; // 8px gap for dropdown
+        let max_grid_y = window_height - padding - command_bar_height - dropdown_height - 8.0; // 8px gap for dropdown
 
         // Iterate over grid cells (offset by tab bar height)
         for row in 0..grid.rows() {
             for col in 0..grid.cols() {
                 let Some(cell) = grid.cell_scrolled(row, col) else { continue };
 
-                let x = col as f32 * cell_width;
-                let y = TAB_BAR_HEIGHT + row as f32 * cell_height;
+                let x = padding + col as f32 * cell_width;
+                let y = tab_bar_height + padding + row as f32 * cell_height;
 
                 // Skip rendering if this row would overlap with command bar
                 if y + cell_height > max_grid_y {
@@ -318,7 +482,7 @@ impl Renderer {
 
                 // Check if cell is selected
                 let is_selected = selection
-                    .map(|s| s.contains(row as i32, col))
+                    .map(|s| s.contains(row as i32 - scroll_offset_i32, col))
                     .unwrap_or(false);
 
                 // Draw background if not default or if selected
@@ -329,7 +493,7 @@ impl Renderer {
                         cell_width, cell_height,
                         selection_color,
                     );
-                } else if bg.r != 0 || bg.g != 0 || bg.b != 0 {
+                } else if bg != default_bg {
                     self.rect_pipeline.push_rect(
                         x, y,
                         cell_width, cell_height,
@@ -366,16 +530,17 @@ impl Renderer {
             let cursor = grid.cursor();
             if cursor.visible {
                 // Use animated cursor position for smooth movement
-                let x = cursor_pos.0 * cell_width;
-                let y = TAB_BAR_HEIGHT + cursor_pos.1 * cell_height;
+                let x = padding + cursor_pos.0 * cell_width;
+                let y = tab_bar_height + padding + cursor_pos.1 * cell_height;
 
                 // Only draw cursor if it won't overlap with command bar
                 if y + cell_height <= max_grid_y {
                     // Bright orange cursor (turmeric core) with animated opacity and focus dimming
+                    let cursor_color = apply_brightness(self.ui.cursor, brightness);
                     self.rect_pipeline.push_rect(
                         x, y,
                         cell_width, cell_height,
-                        [0.88 * brightness, 0.48 * brightness, 0.13 * brightness, cursor_opacity], // #E07B20 with animated alpha
+                        [cursor_color[0], cursor_color[1], cursor_color[2], cursor_opacity],
                     );
                 }
             }
@@ -388,23 +553,21 @@ impl Renderer {
     }
 
     /// Build tab bar render data
-    fn build_tab_bar(&mut self, tabs: &[TabInfo], window_width: f32) {
-        // Tab bar background - medium brown (between skin tones)
-        let tab_bar_bg = [0.18, 0.14, 0.13, 1.0]; // #2D2420
-        self.rect_pipeline.push_rect(0.0, 0.0, window_width, TAB_BAR_HEIGHT, tab_bar_bg);
+    fn build_tab_bar(&mut self, tabs: &[TabInfo], window_width: f32, tab_bar_height: f32) {
+        let tab_bar_bg = self.ui.tab_bar_bg;
+        self.rect_pipeline.push_rect(0.0, 0.0, window_width, tab_bar_height, tab_bar_bg);
 
-        // Tab colors - turmeric-inspired
-        let active_tab_bg = [0.88, 0.48, 0.13, 1.0];   // #E07B20 - Bright orange (core)
-        let inactive_tab_bg = [0.24, 0.19, 0.16, 1.0]; // #3D3028 - Lighter brown
-        let activity_indicator = [0.79, 0.64, 0.15, 1.0]; // #C9A227 - Earthy yellow (inner layer)
-        let active_text_color = [0.11, 0.08, 0.06, 1.0];  // Dark brown text on orange
-        let inactive_text_color = [0.83, 0.77, 0.66, 1.0]; // #D4C4A8 - Cream/tan text
+        let active_tab_bg = self.ui.tab_active;
+        let inactive_tab_bg = self.ui.tab_inactive;
+        let activity_indicator = self.ui.tab_activity;
+        let active_text_color = self.ui.tab_text_active;
+        let inactive_text_color = self.ui.tab_text_inactive;
 
         // Calculate tab width - minimum 80px, maximum 200px, or divide space evenly
         let tab_count = tabs.len().max(1);
         let full_tab_width = ((window_width / tab_count as f32).min(200.0)).max(80.0);
         let tab_padding = 8.0;
-        let tab_height = TAB_BAR_HEIGHT - 4.0; // Leave some margin
+        let tab_height = tab_bar_height - 4.0; // Leave some margin
 
         // Track cumulative x position (accounting for animated widths)
         let mut current_x = 0.0;
@@ -487,7 +650,7 @@ impl Renderer {
                         if !c.is_whitespace() {
                             self.text_pipeline.push_char(c, text_x, text_y, text_color);
                         }
-                        text_x += self.cell_width * 0.6; // Tighter spacing for tab labels
+                        text_x += self.cell_width * 0.85;
                     }
                 }
             }
@@ -495,9 +658,8 @@ impl Renderer {
             current_x += tab_width;
         }
 
-        // Bottom border of tab bar - earthy yellow accent
-        let border_color = [0.79, 0.64, 0.15, 0.6]; // #C9A227 at 60% opacity
-        self.rect_pipeline.push_rect(0.0, TAB_BAR_HEIGHT - 1.0, window_width, 1.0, border_color);
+        let border_color = adjust_alpha(self.ui.tab_border, 0.7);
+        self.rect_pipeline.push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
     }
 
     /// Calculate command bar height based on content
@@ -528,9 +690,9 @@ impl Renderer {
 
             // Use dynamic height for messages, capped at 60% of window height
             let needed_height = (line_count as f32 * self.cell_height) + padding * 2.0;
-            needed_height.min(window_height * 0.6).max(COMMAND_BAR_HEIGHT)
+            needed_height.min(window_height * 0.6).max(self.command_bar_base_height())
         } else {
-            COMMAND_BAR_HEIGHT
+            self.command_bar_base_height()
         }
     }
 
@@ -540,9 +702,7 @@ impl Renderer {
         const PADDING: f32 = 12.0;
         const SPACING: f32 = 1.0;
         const BORDER_WIDTH: f32 = 1.0;
-        const TAB_BAR_HEIGHT: f32 = 40.0;
-
-        let actual_available_height = available_height - TAB_BAR_HEIGHT - 8.0;
+        let actual_available_height = available_height - self.tab_bar_height() - 8.0;
         let max_suggestions_that_fit = ((actual_available_height - PADDING * 2.0 - BORDER_WIDTH * 2.0) / (SUGGESTION_HEIGHT + SPACING)).floor() as usize;
         let num_suggestions = info.suggestions.len().min(6).min(max_suggestions_that_fit.max(1));
 
@@ -555,15 +715,13 @@ impl Renderer {
 
     /// Build command bar render data
     fn build_command_bar(&mut self, info: &CommandBarInfo, window_width: f32, window_height: f32, bar_height: f32) {
-        let padding = 8.0;
+        let padding = self.padding.max(8.0);
         let bar_y = window_height - bar_height;
 
-        // Command bar background - darker brown
-        let bar_bg = [0.14, 0.10, 0.08, 0.95]; // Semi-transparent dark brown
+        let bar_bg = self.ui.command_bg;
         self.rect_pipeline.push_rect(0.0, bar_y, window_width, bar_height, bar_bg);
 
-        // Top border - accent color
-        let border_color = [0.79, 0.64, 0.15, 0.8]; // #C9A227
+        let border_color = adjust_alpha(self.ui.command_border, 0.8);
         self.rect_pipeline.push_rect(0.0, bar_y, window_width, 1.0, border_color);
 
         // Render message and/or input
@@ -577,12 +735,11 @@ impl Renderer {
         if let Some(msg) = &info.message {
             // Show message (supports multi-line and scrolling)
             let text_color = if info.is_error {
-                [0.9, 0.3, 0.3, 1.0] // Red for errors
+                self.ui.command_error
             } else {
-                [0.7, 0.9, 0.7, 1.0] // Light green for success
+                self.ui.command_success
             };
 
-            let mut current_line_y = text_y;
             let mut current_x = text_x;
             let max_y = bar_y + bar_height - padding - input_line_height; // Leave room for input if typing
             let mut line_number = 0; // Track which line we're on (accounting for wraps)
@@ -638,16 +795,16 @@ impl Renderer {
 
             let (prompt_text, prompt_color) = match info.phase {
                 crate::command::CommandInputPhase::SelectingCommand => {
-                    ("> ", [0.88, 0.48, 0.13, 1.0]) // Orange
+                    ("> ", self.ui.prompt_selecting)
                 }
                 crate::command::CommandInputPhase::EnteringArguments => {
-                    (": ", [0.79, 0.64, 0.15, 1.0]) // Yellow
+                    (": ", self.ui.prompt_args)
                 }
                 crate::command::CommandInputPhase::BrowsingHistory => {
-                    ("⏮ ", [0.6, 0.8, 0.9, 1.0]) // Light blue
+                    ("⏮ ", self.ui.prompt_history)
                 }
             };
-            let text_color = [0.83, 0.77, 0.66, 1.0]; // Cream text
+            let text_color = self.ui.command_text;
 
             // Draw prompt
             for c in prompt_text.chars() {
@@ -665,7 +822,7 @@ impl Renderer {
 
                 // Draw cursor at current position
                 if char_index == info.cursor_pos {
-                    let cursor_color = [0.88, 0.48, 0.13, 0.8]; // Orange cursor
+                    let cursor_color = adjust_alpha(self.ui.cursor, 0.8);
                     self.rect_pipeline.push_rect(
                         text_x, input_text_y,
                         2.0, self.cell_height,
@@ -680,7 +837,7 @@ impl Renderer {
 
             // Draw cursor at end if at end of input
             if info.cursor_pos >= info.input.len() {
-                let cursor_color = [0.88, 0.48, 0.13, 0.8]; // Orange cursor
+                let cursor_color = adjust_alpha(self.ui.cursor, 0.8);
                 self.rect_pipeline.push_rect(
                     text_x, input_text_y,
                     2.0, self.cell_height,
@@ -701,7 +858,7 @@ impl Renderer {
                         "Ctrl+↑↓ Browse  ⏎ Select  Esc Cancel"
                     }
                 };
-                let hint_color = [0.5, 0.45, 0.4, 0.7]; // Dim text
+                let hint_color = self.ui.command_hint;
                 let hint_width = hint.chars().count() as f32 * self.cell_width * 0.6;
                 let mut hint_x = window_width - hint_width - padding;
 
@@ -714,12 +871,12 @@ impl Renderer {
 
         // Render autocomplete dropdown above command bar
         if !info.suggestions.is_empty() {
-            self.build_autocomplete_dropdown(info, bar_y, window_width);
+            self.build_autocomplete_dropdown(info, bar_y, window_width, self.tab_bar_height());
         }
     }
 
     /// Build autocomplete dropdown above command bar
-    fn build_autocomplete_dropdown(&mut self, info: &CommandBarInfo, command_bar_y: f32, window_width: f32) {
+    fn build_autocomplete_dropdown(&mut self, info: &CommandBarInfo, command_bar_y: f32, window_width: f32, tab_bar_height: f32) {
         const SUGGESTION_HEIGHT: f32 = 28.0; // Slightly more compact
         const PADDING: f32 = 12.0; // More padding for breathing room
         const SPACING: f32 = 1.0; // Tighter spacing between items
@@ -727,8 +884,7 @@ impl Renderer {
         const BORDER_WIDTH: f32 = 1.0;
 
         // Calculate how many suggestions can fit above the command bar
-        const TAB_BAR_HEIGHT: f32 = 40.0;
-        let available_height = command_bar_y - TAB_BAR_HEIGHT - 8.0; // 8px gap from tab bar
+        let available_height = command_bar_y - tab_bar_height - 8.0; // 8px gap from tab bar
         let max_suggestions_that_fit = ((available_height - PADDING * 2.0 - BORDER_WIDTH * 2.0) / (SUGGESTION_HEIGHT + SPACING)).floor() as usize;
         let num_suggestions = info.suggestions.len().min(6).min(max_suggestions_that_fit.max(1));
 
@@ -739,7 +895,7 @@ impl Renderer {
         let dropdown_y = command_bar_y - dropdown_height - 8.0; // 8px gap above command bar
 
         // Shadow effect - draw multiple slightly offset darker rects
-        let shadow_color = [0.0, 0.0, 0.0, 0.3];
+        let shadow_color = self.ui.dropdown_shadow;
         for i in 1..=3 {
             let offset = i as f32 * 2.0;
             self.rect_pipeline.push_rect(
@@ -752,11 +908,10 @@ impl Renderer {
         }
 
         // Main dropdown background - solid dark background
-        let dropdown_bg = [0.10, 0.08, 0.06, 0.98];
+        let dropdown_bg = self.ui.dropdown_bg;
         self.rect_pipeline.push_rect(dropdown_x, dropdown_y, dropdown_width, dropdown_height, dropdown_bg);
 
-        // Border - all sides with accent color
-        let border_color = [0.79, 0.64, 0.15, 0.6];
+        let border_color = adjust_alpha(self.ui.dropdown_border, 0.6);
         // Top border
         self.rect_pipeline.push_rect(dropdown_x, dropdown_y, dropdown_width, BORDER_WIDTH, border_color);
         // Bottom border
@@ -773,7 +928,7 @@ impl Renderer {
 
             // Selection highlight with rounded effect
             if is_selected {
-                let selection_color = [0.88, 0.48, 0.13, 0.20]; // Orange highlight, more visible
+                let selection_color = adjust_alpha(self.ui.cursor, 0.2);
                 let highlight_margin = 4.0;
                 self.rect_pipeline.push_rect(
                     dropdown_x + highlight_margin,
@@ -784,7 +939,7 @@ impl Renderer {
                 );
 
                 // Left accent bar for selected item
-                let accent_color = [0.88, 0.48, 0.13, 1.0];
+                let accent_color = self.ui.cursor;
                 let accent_width = 3.0;
                 self.rect_pipeline.push_rect(
                     dropdown_x + highlight_margin,
@@ -800,9 +955,9 @@ impl Renderer {
 
             // Category icon/prefix
             let category_color = if is_selected {
-                [0.88, 0.48, 0.13, 1.0] // Orange when selected
+                self.ui.cursor
             } else {
-                [0.79, 0.64, 0.15, 0.7] // Dim yellow
+                adjust_alpha(self.ui.prompt_args, 0.7)
             };
 
             let category_icon = match suggestion.category {
@@ -821,9 +976,9 @@ impl Renderer {
 
             // Command name
             let name_color = if is_selected {
-                [1.0, 1.0, 1.0, 1.0] // Bright white when selected
+                self.ui.foreground
             } else {
-                [0.83, 0.77, 0.66, 1.0] // Cream
+                self.ui.command_text
             };
 
             for c in suggestion.name.chars() {
@@ -834,7 +989,7 @@ impl Renderer {
             // Alias (if present)
             if let Some(alias) = suggestion.alias {
                 text_x += self.cell_width * 0.5;
-                let alias_color = [0.6, 0.55, 0.5, 0.8]; // Dim
+                let alias_color = adjust_alpha(self.ui.command_text, 0.7);
 
                 self.text_pipeline.push_char('(', text_x, text_y, alias_color);
                 text_x += self.cell_width;
@@ -853,16 +1008,16 @@ impl Renderer {
             let max_desc_x = dropdown_x + dropdown_width - PADDING - 4.0; // Leave margin on right
 
             let desc_color = if is_selected {
-                [0.85, 0.85, 0.85, 0.95]
+                adjust_alpha(self.ui.command_text, 0.95)
             } else {
-                [0.55, 0.52, 0.48, 0.85]
+                adjust_alpha(self.ui.command_text, 0.75)
             };
 
             // Add separator before description
             let separator = "—";
             for c in separator.chars() {
                 if text_x + self.cell_width < max_desc_x {
-                    self.text_pipeline.push_char(c, text_x, text_y, [0.5, 0.45, 0.4, 0.5]);
+                    self.text_pipeline.push_char(c, text_x, text_y, adjust_alpha(self.ui.command_text, 0.5));
                     text_x += self.cell_width * 0.8;
                 }
             }

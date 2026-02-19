@@ -245,7 +245,7 @@ impl TextPipeline {
         let atlas_w = atlas_w as f32;
         let atlas_h = atlas_h as f32;
 
-        let (cell_width, cell_height) = glyph_cache.cell_size();
+        let (_cell_width, cell_height) = glyph_cache.cell_size();
         let baseline = cell_height * 0.8; // Approximate baseline
 
         for queued in &self.queued {
@@ -324,7 +324,7 @@ impl TextPipeline {
     }
 
     /// Draw text
-    pub fn draw<'a>(&'a self, render_pass: &mut RenderPass<'a>, glyph_cache: &'a GlyphCache) {
+    pub fn draw<'a>(&'a self, render_pass: &mut RenderPass<'a>, _glyph_cache: &'a GlyphCache) {
         if self.indices.is_empty() {
             return;
         }
