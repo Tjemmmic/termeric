@@ -21,6 +21,10 @@ use crate::tabs::TabManager;
 use crate::theme::Theme;
 
 /// Main application state
+///
+/// IMPORTANT: Drop order matters! The renderer's wgpu Surface holds a reference
+/// to the window, so the renderer MUST be dropped before the window.
+/// We implement Drop explicitly to guarantee this ordering.
 pub struct App {
     /// Application configuration
     #[allow(dead_code)]
@@ -1552,5 +1556,18 @@ impl ApplicationHandler for App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Drop order is critical: renderer holds a wgpu Surface that references
+        // the window, so we must drop resources in the correct order:
+        // 1. Tabs (PTY processes) first
+        // 2. Renderer (GPU resources / Surface) second
+        // 3. Window last (implicit, after this Drop returns)
+        self.tabs.take();
+        self.renderer.take();
+        log::debug!("App resources cleaned up");
     }
 }
