@@ -599,6 +599,13 @@ impl Renderer {
                 self.build_settings_panel(sp, window_width, window_height);
             }
         }
+
+        // Render dropdown overlay absolutely last (on top of everything)
+        if let Some(sp) = settings_panel {
+            if sp.animation > 0.001 && sp.dropdown_open {
+                self.build_dropdown_overlay(sp, window_width, window_height);
+            }
+        }
     }
 
     /// Build tab bar render data
@@ -613,8 +620,11 @@ impl Renderer {
         let inactive_text_color = self.ui.tab_text_inactive;
 
         // Calculate tab width - minimum 80px, maximum 200px, or divide space evenly
+        // Reserve space for the gear icon on the right
+        let gear_button_width = tab_bar_height;
+        let available_tab_width = window_width - gear_button_width;
         let tab_count = tabs.len().max(1);
-        let full_tab_width = ((window_width / tab_count as f32).min(200.0)).max(80.0);
+        let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
         let tab_padding = 8.0;
         let tab_height = tab_bar_height - 4.0; // Leave some margin
 
@@ -709,6 +719,22 @@ impl Renderer {
 
         let border_color = adjust_alpha(self.ui.tab_border, 0.7);
         self.rect_pipeline.push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
+
+        // ── Gear icon button (right side of tab bar) ──
+        let gear_size = tab_bar_height;
+        let gear_x = window_width - gear_size;
+        let gear_y = 0.0;
+        // Subtle background for the gear button
+        let gear_bg = adjust_alpha(self.ui.tab_inactive, 0.5);
+        self.rect_pipeline.push_rounded_rect(
+            gear_x + 2.0, gear_y + 2.0,
+            gear_size - 4.0, tab_bar_height - 6.0,
+            gear_bg, 4.0,
+        );
+        // Render the gear icon character centered
+        let gear_char_x = gear_x + (gear_size - self.cell_width) / 2.0;
+        let gear_char_y = gear_y + (tab_bar_height - self.cell_height) / 2.0;
+        self.text_pipeline.push_char('⚙', gear_char_x, gear_char_y, self.ui.tab_text_inactive);
     }
 
     /// Calculate command bar height based on content
@@ -1101,19 +1127,26 @@ impl Renderer {
             return;
         }
 
-        // Panel dimensions
-        let panel_width = (window_width * 0.45).min(520.0).max(360.0);
+        // UI character width — capped so the settings panel stays usable
+        // with wide/large fonts. Terminal grid uses self.cell_width directly.
+        let ui_cw = self.cell_width.min(10.0);
+
+        // Panel dimensions — all derived from font metrics so layout adapts
+        // Sidebar: padding + icon(3 cells) + longest label("Scrollback"=10) + padding = ~16.5 cells
+        let padding_x = ui_cw * 1.5;
+        let sidebar_width = padding_x + ui_cw * 3.0 + ui_cw * 10.0 + padding_x;
+        // Content: label area + gap + value area + padding
+        let min_content_width = ui_cw * 30.0; // needs room for labels + values
+        let panel_width = ((sidebar_width + min_content_width).max(window_width * 0.35)).min(window_width * 0.55);
         let panel_x = window_width - panel_width * anim; // slide in from right
         let panel_y = 0.0;
         let panel_h = window_height;
 
-        // Sidebar dimensions
-        let sidebar_width = (self.cell_width * 14.0).max(120.0).min(160.0);
+        // Content area is whatever remains after sidebar
         let content_x = panel_x + sidebar_width;
         let content_width = panel_width - sidebar_width;
 
         let row_height = (self.cell_height * 2.2).max(32.0);
-        let padding_x = self.cell_width * 1.5;
         let padding_y = self.cell_height * 0.5;
 
         // ── Scrim (warm-tinted dimmed overlay on terminal behind panel) ──
@@ -1152,7 +1185,7 @@ impl Renderer {
         for (i, c) in title.chars().enumerate() {
             self.text_pipeline.push_char(
                 c,
-                title_x + i as f32 * self.cell_width,
+                title_x + i as f32 * ui_cw,
                 title_y,
                 self.ui.settings_accent,
             );
@@ -1188,19 +1221,19 @@ impl Renderer {
                 let color = if *is_active { self.ui.settings_accent } else { self.ui.settings_text_dim };
                 self.text_pipeline.push_char(
                     c,
-                    icon_x + i as f32 * self.cell_width,
+                    icon_x + i as f32 * ui_cw,
                     text_y,
                     color,
                 );
             }
 
             // Section label
-            let label_x = icon_x + self.cell_width * 3.0;
+            let label_x = icon_x + ui_cw * 3.0;
             let color = if *is_active { self.ui.settings_text } else { self.ui.settings_text_dim };
             for (i, c) in section.label().chars().enumerate() {
                 self.text_pipeline.push_char(
                     c,
-                    label_x + i as f32 * self.cell_width,
+                    label_x + i as f32 * ui_cw,
                     text_y,
                     color,
                 );
@@ -1214,10 +1247,10 @@ impl Renderer {
             let hy = hint_start_y + idx as f32 * self.cell_height * 1.6;
             let hx = panel_x + padding_x;
             for (i, c) in hint.chars().enumerate() {
-                if hx + i as f32 * self.cell_width * 0.85 < content_x - padding_x {
+                if hx + i as f32 * ui_cw * 0.85 < content_x - padding_x {
                     self.text_pipeline.push_char(
                         c,
-                        hx + i as f32 * self.cell_width * 0.85,
+                        hx + i as f32 * ui_cw * 0.85,
                         hy,
                         self.ui.settings_text_dim,
                     );
@@ -1232,7 +1265,7 @@ impl Renderer {
         for (i, c) in section_title.chars().enumerate() {
             self.text_pipeline.push_char(
                 c,
-                header_x + i as f32 * self.cell_width * 1.1,
+                header_x + i as f32 * ui_cw * 1.1,
                 header_y,
                 self.ui.settings_header,
             );
@@ -1248,9 +1281,57 @@ impl Renderer {
 
         // ── Content area: setting items ──
         let items_start_y = sep_y + padding_y + self.cell_height * 0.5;
+
+        // Dynamic value-area X: positioned after the longest label + a gap,
+        // clamped so it never exceeds 65% of content width.
+        let max_label_len = info.items.iter()
+            .map(|item| item.label.len())
+            .max()
+            .unwrap_or(0);
+        let label_end = padding_x + max_label_len as f32 * ui_cw;
+        let min_gap = ui_cw * 2.0;
+        let max_value_area = content_width * 0.65;
+        let value_area_offset = (label_end + min_gap).min(max_value_area);
+        let value_area_x = content_x + value_area_offset;
+
+        // Calculate dropdown occlusion region (if dropdown is open, items below
+        // the selected item may be hidden behind the dropdown overlay).
+        // Since all text renders on top of all rects, we must skip rendering
+        // text for occluded items to avoid text-on-text confusion.
+        // (dd_x, dd_top, dd_bottom) — X is the left edge of the dropdown
+        let dropdown_occludes: Option<(f32, f32, f32)> = if info.dropdown_open {
+            if let Some(sel_item) = info.items.get(info.selected_item) {
+                let option_count = match &sel_item.kind {
+                    crate::settings::SettingKind::Dropdown { options, .. } => options.len(),
+                    crate::settings::SettingKind::SteppedList { values, .. } => values.len(),
+                    _ => 0,
+                };
+                let visible_count = option_count.min(8);
+                let option_h = row_height * 0.85;
+                let dd_x = value_area_x;
+                let dd_top = items_start_y + info.selected_item as f32 * row_height + row_height;
+                let dd_bottom = dd_top + visible_count as f32 * option_h + 8.0;
+                Some((dd_x, dd_top, dd_bottom))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         for (idx, item) in info.items.iter().enumerate() {
             let iy = items_start_y + idx as f32 * row_height;
             let is_selected = idx == info.selected_item;
+
+            // Check if this item's text would be occluded by the dropdown
+            let is_occluded = if let Some((_dd_x, dd_top, dd_bottom)) = dropdown_occludes {
+                let item_top = iy;
+                let item_bottom = iy + row_height;
+                // Item is occluded if it overlaps the dropdown region
+                item_top < dd_bottom && item_bottom > dd_top
+            } else {
+                false
+            };
 
             // Selection highlight
             if is_selected {
@@ -1269,73 +1350,88 @@ impl Renderer {
                 );
             }
 
+            // If occluded by dropdown, still draw labels but skip value text below
+
             let text_y = iy + (row_height - self.cell_height) / 2.0;
 
-            // Label
+            // Label — clip at dropdown boundary if occluded
             let label_x = content_x + padding_x;
             let label_color = if is_selected { self.ui.settings_text } else { self.ui.settings_text_dim };
+            let label_clip_x = if is_occluded {
+                if let Some((dd_x, _, _)) = dropdown_occludes { dd_x } else { f32::MAX }
+            } else {
+                f32::MAX
+            };
             for (i, c) in item.label.chars().enumerate() {
-                self.text_pipeline.push_char(
-                    c,
-                    label_x + i as f32 * self.cell_width,
-                    text_y,
-                    label_color,
-                );
+                let cx = label_x + i as f32 * ui_cw;
+                if cx + ui_cw > label_clip_x {
+                    break; // Don't render characters that extend into dropdown
+                }
+                self.text_pipeline.push_char(c, cx, text_y, label_color);
             }
 
-            // Value (right-aligned area)
-            let value_area_x = content_x + content_width * 0.45;
-            let value_color = if is_selected { self.ui.settings_value } else { self.ui.settings_text };
+            // Value (right-aligned area) — skip if occluded by dropdown
+            if !is_occluded {
+                // value_area_x already computed above from longest label
+                let value_color = if is_selected { self.ui.settings_value } else { self.ui.settings_text };
+                let max_x = content_x + content_width - padding_x;
 
-            match &item.kind {
-                crate::settings::SettingKind::Numeric { .. } | crate::settings::SettingKind::Dropdown { .. } | crate::settings::SettingKind::SteppedList { .. } => {
-                    // Draw ◀ value ▶ controls
-                    if is_selected {
-                        // Left arrow
-                        self.text_pipeline.push_char(
-                            '◀',
-                            value_area_x,
-                            text_y,
-                            self.ui.settings_accent,
-                        );
-                    }
-
-                    let val_x = value_area_x + self.cell_width * 2.0;
-                    for (i, c) in item.value.chars().enumerate() {
-                        self.text_pipeline.push_char(
-                            c,
-                            val_x + i as f32 * self.cell_width,
-                            text_y,
-                            value_color,
-                        );
-                    }
-
-                    if is_selected {
-                        // Right arrow
-                        let arrow_x = val_x + item.value.len() as f32 * self.cell_width + self.cell_width;
-                        self.text_pipeline.push_char(
-                            '▶',
-                            arrow_x,
-                            text_y,
-                            self.ui.settings_accent,
-                        );
-                    }
-                }
-                crate::settings::SettingKind::ReadOnly => {
-                    // Just display the value
-                    let val_x = value_area_x + self.cell_width * 2.0;
-                    let max_x = content_x + content_width - padding_x;
-                    for (i, c) in item.value.chars().enumerate() {
-                        let cx = val_x + i as f32 * self.cell_width;
-                        if cx + self.cell_width > max_x {
-                            // Ellipsis
-                            self.text_pipeline.push_char('.', cx, text_y, self.ui.settings_text_dim);
-                            break;
+                match &item.kind {
+                    crate::settings::SettingKind::Numeric { .. } => {
+                        // Draw ◀ value ▶ controls for numeric
+                        if is_selected {
+                            self.text_pipeline.push_char(
+                                '◀',
+                                value_area_x,
+                                text_y,
+                                self.ui.settings_accent,
+                            );
                         }
-                        self.text_pipeline.push_char(
-                            c, cx, text_y,
-                            self.ui.settings_text_dim,
-                        );
+
+                        let val_x = value_area_x + ui_cw * 2.0;
+                        for (i, c) in item.value.chars().enumerate() {
+                            let cx = val_x + i as f32 * ui_cw;
+                            if cx + ui_cw > max_x { break; }
+                            self.text_pipeline.push_char(c, cx, text_y, value_color);
+                        }
+
+                        if is_selected {
+                            let arrow_x = val_x + item.value.len() as f32 * ui_cw + ui_cw;
+                            if arrow_x + ui_cw <= max_x {
+                                self.text_pipeline.push_char('▶', arrow_x, text_y, self.ui.settings_accent);
+                            }
+                        }
+                    }
+                    crate::settings::SettingKind::Dropdown { .. } | crate::settings::SettingKind::SteppedList { .. } => {
+                        // Draw value with ▼ chevron (click or Enter to open dropdown)
+                        let val_x = value_area_x + ui_cw * 2.0;
+                        for (i, c) in item.value.chars().enumerate() {
+                            let cx = val_x + i as f32 * ui_cw;
+                            if cx + ui_cw > max_x { break; }
+                            self.text_pipeline.push_char(c, cx, text_y, value_color);
+                        }
+
+                        // Down chevron — only if it fits
+                        let chevron_x = val_x + item.value.len() as f32 * ui_cw + ui_cw;
+                        if chevron_x + ui_cw <= max_x {
+                            let chevron_color = if is_selected { self.ui.settings_accent } else { self.ui.settings_text_dim };
+                            self.text_pipeline.push_char('▼', chevron_x, text_y, chevron_color);
+                        }
+                    }
+                    crate::settings::SettingKind::ReadOnly => {
+                        // Just display the value, truncated with '.'
+                        let val_x = value_area_x + ui_cw * 2.0;
+                        for (i, c) in item.value.chars().enumerate() {
+                            let cx = val_x + i as f32 * ui_cw;
+                            if cx + ui_cw > max_x {
+                                self.text_pipeline.push_char('.', cx, text_y, self.ui.settings_text_dim);
+                                break;
+                            }
+                            self.text_pipeline.push_char(
+                                c, cx, text_y,
+                                self.ui.settings_text_dim,
+                            );
+                        }
                     }
                 }
             }
@@ -1360,13 +1456,150 @@ impl Renderer {
             content_width - padding_x * 2.0, 1.0,
             self.ui.settings_separator,
         );
-        for (i, c) in footer_text.chars().enumerate() {
-            self.text_pipeline.push_char(
-                c,
-                footer_x + i as f32 * self.cell_width * 0.9,
-                footer_y,
-                self.ui.settings_text_dim,
-            );
+
+        // Skip footer text if occluded by dropdown
+        let footer_occluded = if let Some((_, _dd_top, dd_bottom)) = dropdown_occludes {
+            footer_y < dd_bottom
+        } else {
+            false
+        };
+        if !footer_occluded {
+            let footer_max_x = content_x + content_width - padding_x;
+            for (i, c) in footer_text.chars().enumerate() {
+                let cx = footer_x + i as f32 * ui_cw * 0.9;
+                if cx + ui_cw > footer_max_x { break; }
+                self.text_pipeline.push_char(c, cx, footer_y, self.ui.settings_text_dim);
+            }
+        }
+
+        // ── Dropdown overlay rendered separately in build_dropdown_overlay ──
+    }
+
+    /// Build dropdown overlay render data — rendered last so it appears on top of everything
+    fn build_dropdown_overlay(&mut self, info: &SettingsPanelInfo, window_width: f32, _window_height: f32) {
+        // ALL coordinates MUST match build_settings_panel exactly
+        let ui_cw = self.cell_width.min(10.0);
+        let padding_x = ui_cw * 1.5;
+        let sidebar_width = padding_x + ui_cw * 3.0 + ui_cw * 10.0 + padding_x;
+        let min_content_width = ui_cw * 30.0;
+        let panel_width = ((sidebar_width + min_content_width).max(window_width * 0.35)).min(window_width * 0.55);
+        let anim = info.animation;
+        let panel_x = window_width - panel_width * anim;
+        let panel_y = 0.0_f32;
+
+        let content_x = panel_x + sidebar_width;
+        let content_width = panel_width - sidebar_width;
+
+        let row_height = (self.cell_height * 2.2).max(32.0);
+        let padding_y = self.cell_height * 0.5;
+
+        let header_y = panel_y + self.cell_height * 1.5;
+        let sep_y = header_y + self.cell_height * 1.8;
+        let items_start_y = sep_y + padding_y + self.cell_height * 0.5;
+
+        if let Some(item) = info.items.get(info.selected_item) {
+            let (options_text, option_count): (Vec<String>, usize) = match &item.kind {
+                crate::settings::SettingKind::Dropdown { options, .. } => {
+                    (options.clone(), options.len())
+                }
+                crate::settings::SettingKind::SteppedList { values, .. } => {
+                    (values.iter().map(|v| v.to_string()).collect(), values.len())
+                }
+                _ => (vec![], 0),
+            };
+
+            if option_count > 0 {
+                // Dynamic value-area: match build_settings_panel
+                let max_label_len = info.items.iter()
+                    .map(|item| item.label.len())
+                    .max()
+                    .unwrap_or(0);
+                let padding_x = ui_cw * 1.5;
+                let label_end = padding_x + max_label_len as f32 * ui_cw;
+                let min_gap = ui_cw * 2.0;
+                let max_value_area = content_width * 0.65;
+                let value_area_offset = (label_end + min_gap).min(max_value_area);
+                let dd_value_area_x = content_x + value_area_offset;
+                let anchor_y = items_start_y + info.selected_item as f32 * row_height + row_height;
+                let dd_x = dd_value_area_x;
+                let dd_width = content_width - value_area_offset;
+                let option_h = row_height * 0.85;
+                let max_visible = 8usize;
+                let visible_count = option_count.min(max_visible);
+                let dd_height = visible_count as f32 * option_h + 8.0;
+
+                // Shadow
+                let shadow_color = [0.0, 0.0, 0.0, 0.3];
+                self.rect_pipeline.push_rounded_rect(
+                    dd_x + 2.0, anchor_y + 2.0,
+                    dd_width, dd_height,
+                    shadow_color, 6.0,
+                );
+
+                // Background
+                // Use fully opaque background so content behind doesn't bleed through
+                let dd_bg = [
+                    self.ui.settings_bg[0],
+                    self.ui.settings_bg[1],
+                    self.ui.settings_bg[2],
+                    1.0,
+                ];
+                self.rect_pipeline.push_rounded_rect(
+                    dd_x, anchor_y,
+                    dd_width, dd_height,
+                    dd_bg, 6.0,
+                );
+
+                // Border
+                let border_color = self.ui.settings_separator;
+                self.rect_pipeline.push_rounded_rect(
+                    dd_x, anchor_y,
+                    dd_width, dd_height,
+                    adjust_alpha(border_color, 0.5), 6.0,
+                );
+                // Inner background (slightly inset to simulate border)
+                self.rect_pipeline.push_rounded_rect(
+                    dd_x + 1.0, anchor_y + 1.0,
+                    dd_width - 2.0, dd_height - 2.0,
+                    dd_bg, 5.0,
+                );
+
+                // Render options
+                for (oidx, opt_text) in options_text.iter().enumerate().take(visible_count) {
+                    let oy = anchor_y + 4.0 + oidx as f32 * option_h;
+                    let is_highlighted = oidx == info.dropdown_highlight;
+
+                    if is_highlighted {
+                        self.rect_pipeline.push_rounded_rect(
+                            dd_x + 4.0, oy,
+                            dd_width - 8.0, option_h,
+                            self.ui.settings_selected, 4.0,
+                        );
+                        // Accent bar
+                        self.rect_pipeline.push_rounded_rect(
+                            dd_x + 2.0, oy,
+                            3.0, option_h,
+                            self.ui.settings_accent, 2.0,
+                        );
+                    }
+
+                    let opt_text_y = oy + (option_h - self.cell_height) / 2.0;
+                    let opt_color = if is_highlighted {
+                        self.ui.settings_value
+                    } else {
+                        self.ui.settings_text
+                    };
+
+                    for (ci, c) in opt_text.chars().enumerate() {
+                        let cx = dd_x + ui_cw * 1.5 + ci as f32 * ui_cw;
+                        if cx + ui_cw > dd_x + dd_width - 8.0 {
+                            self.text_pipeline.push_char('.', cx, opt_text_y, self.ui.settings_text_dim);
+                            break;
+                        }
+                        self.text_pipeline.push_char(c, cx, opt_text_y, opt_color);
+                    }
+                }
+            }
         }
     }
 }

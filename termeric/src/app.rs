@@ -733,6 +733,16 @@ impl App {
             SettingsAction::SetAudioBell(enabled) => {
                 self.config.bell.audio = enabled;
             }
+            SettingsAction::SetLineHeight(height) => {
+                self.config.font.line_height = height;
+                // Trigger a re-render to apply new line height
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            SettingsAction::SetBellDuration(ms) => {
+                self.config.bell.visual_duration_ms = ms;
+            }
             SettingsAction::SaveConfig => {
                 match self.save_config() {
                     Ok(path) => log::info!("Config saved to: {}", path),
@@ -1246,6 +1256,64 @@ impl App {
                 if button == MouseButton::Left {
                     self.mouse_pressed = true;
 
+                    // Check for gear icon click in tab bar (top-right corner)
+                    if let Some(renderer) = &self.renderer {
+                        let tab_bar_h = renderer.tab_bar_height();
+                        let px = position.0 as f32;
+                        let py = position.1 as f32;
+                        if py < tab_bar_h {
+                            let window_size = self.window.as_ref().map(|w| w.inner_size());
+                            if let Some(size) = window_size {
+                                let gear_size = tab_bar_h;
+                                let gear_x = size.width as f32 - gear_size;
+                                if px >= gear_x {
+                                    self.settings_panel.toggle();
+                                    if let Some(window) = &self.window {
+                                        window.request_redraw();
+                                    }
+                                    return;
+                                }
+
+                                // Tab click detection
+                                if let Some(tabs) = &self.tabs {
+                                    let available_tab_width = size.width as f32 - gear_size;
+                                    let tab_count = tabs.count().max(1);
+                                    let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
+                                    let tab_infos = tabs.tab_info();
+
+                                    let mut current_x = 0.0f32;
+                                    let mut clicked_tab_idx = None;
+                                    for (i, info) in tab_infos.iter().enumerate() {
+                                        let anim_multiplier = if info.close_progress > 0.0 {
+                                            let t = info.close_progress;
+                                            1.0 - t * t
+                                        } else {
+                                            let t = info.slide_progress;
+                                            1.0 - (1.0 - t) * (1.0 - t)
+                                        };
+                                        let tab_width = full_tab_width * anim_multiplier;
+                                        if px >= current_x && px < current_x + tab_width {
+                                            clicked_tab_idx = Some(i);
+                                            break;
+                                        }
+                                        current_x += tab_width;
+                                    }
+
+                                    if let Some(idx) = clicked_tab_idx {
+                                        let _ = tabs;
+                                        if let Some(tabs) = &mut self.tabs {
+                                            tabs.switch_to(idx);
+                                        }
+                                        if let Some(window) = &self.window {
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Intercept clicks for settings panel
                     if self.settings_panel.is_active() {
                         let window_size = self.window.as_ref().map(|w| w.inner_size());
@@ -1446,6 +1514,7 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::ArrowDown) => Some(SettingsKey::Down),
                             Key::Named(NamedKey::ArrowLeft) => Some(SettingsKey::Left),
                             Key::Named(NamedKey::ArrowRight) => Some(SettingsKey::Right),
+                            Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
                             Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
                             Key::Character(c) if self.modifiers.control_key() => {
                                 match c.as_str() {

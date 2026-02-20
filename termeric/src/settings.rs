@@ -29,6 +29,7 @@ pub enum SettingsSection {
     Cursor,
     Bell,
     Scrollback,
+    Shell,
 }
 
 impl SettingsSection {
@@ -40,6 +41,7 @@ impl SettingsSection {
             Self::Cursor => "Cursor",
             Self::Bell => "Bell",
             Self::Scrollback => "Scrollback",
+            Self::Shell => "Shell",
         }
     }
 
@@ -51,6 +53,7 @@ impl SettingsSection {
             Self::Cursor => "⌖",
             Self::Bell => "🔔",
             Self::Scrollback => "↕",
+            Self::Shell => "⏵",
         }
     }
 
@@ -58,7 +61,10 @@ impl SettingsSection {
         Self::Font,
         Self::Theme,
         Self::Window,
+        Self::Cursor,
+        Self::Bell,
         Self::Scrollback,
+        Self::Shell,
     ];
 
     pub fn index(&self) -> usize {
@@ -94,6 +100,8 @@ pub enum SettingsAction {
     SetFontSize(f32),
     /// Change font family to this value
     SetFontFamily(String),
+    /// Change font line height
+    SetLineHeight(f32),
     /// Change theme to this name
     SetTheme(String),
     /// Change window padding
@@ -114,6 +122,8 @@ pub enum SettingsAction {
     SetVisualBell(bool),
     /// Change audio bell
     SetAudioBell(bool),
+    /// Change bell flash duration
+    SetBellDuration(u64),
     /// Save current config
     SaveConfig,
     /// Reset to default config
@@ -141,6 +151,10 @@ pub struct SettingsPanel {
     animating_open: bool,
     /// The animation value at the time the direction changed (for seamless reversal)
     animation_base: f32,
+    /// Whether a dropdown overlay is currently open
+    dropdown_open: bool,
+    /// Which option is highlighted in the open dropdown
+    dropdown_highlight: usize,
 }
 
 impl SettingsPanel {
@@ -153,6 +167,8 @@ impl SettingsPanel {
             animation_start: Instant::now(),
             animating_open: false,
             animation_base: 0.0,
+            dropdown_open: false,
+            dropdown_highlight: 0,
         }
     }
 
@@ -256,6 +272,11 @@ impl SettingsPanel {
                         value: config.font.family.clone(),
                         kind: SettingKind::Dropdown { options: font_options, selected: font_selected },
                     },
+                    SettingItem {
+                        label: "Line Height",
+                        value: format!("{:.2}", config.font.line_height),
+                        kind: SettingKind::Numeric { min: 0.8, max: 2.0, step: 0.05 },
+                    },
                 ]
             },
             SettingsSection::Theme => {
@@ -331,6 +352,11 @@ impl SettingsPanel {
                         selected: if config.bell.audio { 0 } else { 1 },
                     },
                 },
+                SettingItem {
+                    label: "Flash Duration",
+                    value: format!("{}ms", config.bell.visual_duration_ms),
+                    kind: SettingKind::Numeric { min: 50.0, max: 1000.0, step: 50.0 },
+                },
             ],
             SettingsSection::Scrollback => {
                 let steps: Vec<usize> = vec![
@@ -347,11 +373,36 @@ impl SettingsPanel {
                     },
                 ]
             }
+            SettingsSection::Shell => {
+                let program = config.shell.program.clone().unwrap_or_else(|| "(default)".into());
+                let args_str = if config.shell.args.is_empty() {
+                    "(none)".into()
+                } else {
+                    config.shell.args.join(" ")
+                };
+                vec![
+                    SettingItem {
+                        label: "Program",
+                        value: program,
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
+                        label: "Args",
+                        value: args_str,
+                        kind: SettingKind::ReadOnly,
+                    },
+                ]
+            }
         }
     }
 
     /// Handle a key press. Returns a SettingsAction if a config change should be applied.
     pub fn handle_key(&mut self, key: SettingsKey, config: &Config) -> SettingsAction {
+        // If a dropdown is open, handle keys within it
+        if self.dropdown_open {
+            return self.handle_dropdown_key(key, config);
+        }
+
         match key {
             SettingsKey::Escape => {
                 self.close();
@@ -386,7 +437,21 @@ impl SettingsPanel {
                 SettingsAction::None
             }
             SettingsKey::Left => self.adjust_value(config, -1),
-            SettingsKey::Right => self.adjust_value(config, 1),
+            SettingsKey::Right | SettingsKey::Enter => {
+                // For dropdown items, open the dropdown overlay
+                let items = self.items_for_section(config);
+                if let Some(item) = items.get(self.selected_item) {
+                    match &item.kind {
+                        SettingKind::Dropdown { selected, .. } | SettingKind::SteppedList { selected, .. } => {
+                            self.dropdown_open = true;
+                            self.dropdown_highlight = *selected;
+                            return SettingsAction::None;
+                        }
+                        _ => {}
+                    }
+                }
+                self.adjust_value(config, 1)
+            }
             SettingsKey::Tab => {
                 // Cycle to next section
                 let idx = self.section.index();
@@ -396,6 +461,82 @@ impl SettingsPanel {
             }
             SettingsKey::Save => SettingsAction::SaveConfig,
             SettingsKey::Reset => SettingsAction::ResetConfig,
+        }
+    }
+
+    /// Handle keys when a dropdown overlay is open
+    fn handle_dropdown_key(&mut self, key: SettingsKey, config: &Config) -> SettingsAction {
+        let items = self.items_for_section(config);
+        let Some(item) = items.get(self.selected_item) else {
+            self.dropdown_open = false;
+            return SettingsAction::None;
+        };
+
+        let option_count = match &item.kind {
+            SettingKind::Dropdown { options, .. } => options.len(),
+            SettingKind::SteppedList { values, .. } => values.len(),
+            _ => { self.dropdown_open = false; return SettingsAction::None; }
+        };
+
+        match key {
+            SettingsKey::Escape | SettingsKey::Left => {
+                self.dropdown_open = false;
+                SettingsAction::None
+            }
+            SettingsKey::Up => {
+                if self.dropdown_highlight > 0 {
+                    self.dropdown_highlight -= 1;
+                }
+                SettingsAction::None
+            }
+            SettingsKey::Down => {
+                if self.dropdown_highlight + 1 < option_count {
+                    self.dropdown_highlight += 1;
+                }
+                SettingsAction::None
+            }
+            SettingsKey::Enter | SettingsKey::Right => {
+                self.dropdown_open = false;
+                self.select_dropdown_option(config, self.dropdown_highlight)
+            }
+            _ => SettingsAction::None,
+        }
+    }
+
+    /// Select a specific option index from the current dropdown
+    fn select_dropdown_option(&self, config: &Config, option_idx: usize) -> SettingsAction {
+        let items = self.items_for_section(config);
+        let Some(item) = items.get(self.selected_item) else {
+            return SettingsAction::None;
+        };
+
+        match &item.kind {
+            SettingKind::Dropdown { options, .. } => {
+                let Some(new_val) = options.get(option_idx) else {
+                    return SettingsAction::None;
+                };
+                let new_val = new_val.clone();
+                match (self.section, item.label) {
+                    (SettingsSection::Theme, _) => SettingsAction::SetTheme(new_val),
+                    (SettingsSection::Font, "Family") => SettingsAction::SetFontFamily(new_val),
+                    (SettingsSection::Window, "Decorations") => SettingsAction::SetDecorations(new_val == "On"),
+                    (SettingsSection::Cursor, "Style") => SettingsAction::SetCursorStyle(new_val),
+                    (SettingsSection::Cursor, "Blink") => SettingsAction::SetCursorBlink(new_val == "On"),
+                    (SettingsSection::Bell, "Visual") => SettingsAction::SetVisualBell(new_val == "On"),
+                    (SettingsSection::Bell, "Audio") => SettingsAction::SetAudioBell(new_val == "On"),
+                    _ => SettingsAction::None,
+                }
+            }
+            SettingKind::SteppedList { values, .. } => {
+                let Some(&new_val) = values.get(option_idx) else {
+                    return SettingsAction::None;
+                };
+                match (self.section, item.label) {
+                    (SettingsSection::Scrollback, "Lines") => SettingsAction::SetScrollback(new_val),
+                    _ => SettingsAction::None,
+                }
+            }
+            _ => SettingsAction::None,
         }
     }
 
@@ -414,9 +555,11 @@ impl SettingsPanel {
 
                 match (self.section, item.label) {
                     (SettingsSection::Font, "Size") => SettingsAction::SetFontSize(new_val),
+                    (SettingsSection::Font, "Line Height") => SettingsAction::SetLineHeight(new_val),
                     (SettingsSection::Window, "Padding") => SettingsAction::SetPadding(new_val as u32),
                     (SettingsSection::Window, "Opacity") => SettingsAction::SetOpacity(new_val),
                     (SettingsSection::Cursor, "Blink Rate") => SettingsAction::SetCursorBlinkRate(new_val as u32),
+                    (SettingsSection::Bell, "Flash Duration") => SettingsAction::SetBellDuration(new_val as u64),
                     _ => SettingsAction::None,
                 }
             }
@@ -509,6 +652,39 @@ impl SettingsPanel {
             return SettingsAction::None;
         }
 
+        // ── Dropdown overlay click ──
+        if self.dropdown_open {
+            let items = self.items_for_section(config);
+            if let Some(item) = items.get(self.selected_item) {
+                let option_count = match &item.kind {
+                    SettingKind::Dropdown { options, .. } => options.len(),
+                    SettingKind::SteppedList { values, .. } => values.len(),
+                    _ => 0,
+                };
+                let value_area_x = content_x + content_width * 0.45;
+                let items_start_y_calc = (cell_height * 1.5) + cell_height * 1.8 + padding_y + cell_height * 0.5;
+                let anchor_y = items_start_y_calc + self.selected_item as f32 * row_height + row_height;
+                let dd_x = value_area_x;
+                let dd_width = content_width * 0.5;
+                let option_h = row_height * 0.85;
+                let max_visible = 8usize;
+                let visible_count = option_count.min(max_visible);
+                let dd_height = visible_count as f32 * option_h + 8.0;
+
+                // Click inside dropdown?
+                if x >= dd_x && x < dd_x + dd_width && y >= anchor_y && y < anchor_y + dd_height {
+                    let clicked_idx = ((y - anchor_y - 4.0) / option_h) as usize;
+                    if clicked_idx < option_count {
+                        self.dropdown_open = false;
+                        return self.select_dropdown_option(config, clicked_idx);
+                    }
+                }
+            }
+            // Click outside dropdown closes it
+            self.dropdown_open = false;
+            return SettingsAction::None;
+        }
+
         // ── Content area click ──
         let header_y = cell_height * 1.5;
         let sep_y = header_y + cell_height * 1.8;
@@ -518,20 +694,37 @@ impl SettingsPanel {
         for (idx, _item) in items.iter().enumerate() {
             let iy = items_start_y + idx as f32 * row_height;
             if y >= iy && y < iy + row_height {
-                // Clicked on this item row
                 self.selected_item = idx;
 
-                // Check if clicked on left arrow area (◀)
+                // For dropdown/stepped items, clicking the value area opens the dropdown
                 let value_area_x = content_x + content_width * 0.45;
-                if x < value_area_x + cell_width * 1.5 && x >= value_area_x - cell_width {
-                    return self.adjust_value(config, -1);
-                }
-
-                // Check if clicked on right arrow area (▶)
-                let val_x = value_area_x + cell_width * 2.0;
-                let val_end = val_x + _item.value.len() as f32 * cell_width;
-                if x > val_end {
-                    return self.adjust_value(config, 1);
+                match &_item.kind {
+                    SettingKind::Dropdown { selected, .. } => {
+                        if x >= value_area_x {
+                            self.dropdown_open = true;
+                            self.dropdown_highlight = *selected;
+                            return SettingsAction::None;
+                        }
+                    }
+                    SettingKind::SteppedList { selected, .. } => {
+                        if x >= value_area_x {
+                            self.dropdown_open = true;
+                            self.dropdown_highlight = *selected;
+                            return SettingsAction::None;
+                        }
+                    }
+                    SettingKind::Numeric { .. } => {
+                        // Keep ◀/▶ behavior for numeric values
+                        if x < value_area_x + cell_width * 1.5 && x >= value_area_x - cell_width {
+                            return self.adjust_value(config, -1);
+                        }
+                        let val_x = value_area_x + cell_width * 2.0;
+                        let val_end = val_x + _item.value.len() as f32 * cell_width;
+                        if x > val_end {
+                            return self.adjust_value(config, 1);
+                        }
+                    }
+                    _ => {}
                 }
 
                 return SettingsAction::None;
@@ -549,6 +742,7 @@ pub enum SettingsKey {
     Down,
     Left,
     Right,
+    Enter,
     Escape,
     Tab,
     Save,
@@ -567,6 +761,10 @@ pub struct SettingsPanelInfo {
     pub items: Vec<SettingItem>,
     /// Index of the selected item
     pub selected_item: usize,
+    /// Whether a dropdown overlay is currently open
+    pub dropdown_open: bool,
+    /// Which option is highlighted in the dropdown
+    pub dropdown_highlight: usize,
 }
 
 impl SettingsPanel {
@@ -584,6 +782,8 @@ impl SettingsPanel {
             sections,
             items,
             selected_item: self.selected_item,
+            dropdown_open: self.dropdown_open,
+            dropdown_highlight: self.dropdown_highlight,
         }
     }
 }
@@ -627,19 +827,24 @@ mod tests {
         assert_eq!(panel.section, SettingsSection::Font);
         assert_eq!(panel.selected_item, 0);
 
-        // Move down within Font section
+        // Move down within Font section (Size -> Family)
         panel.handle_key(SettingsKey::Down, &config);
         assert_eq!(panel.selected_item, 1);
+
+        // Move down again within Font section (Family -> Line Height)
+        panel.handle_key(SettingsKey::Down, &config);
+        assert_eq!(panel.section, SettingsSection::Font);
+        assert_eq!(panel.selected_item, 2);
 
         // Move down again should go to Theme section
         panel.handle_key(SettingsKey::Down, &config);
         assert_eq!(panel.section, SettingsSection::Theme);
         assert_eq!(panel.selected_item, 0);
 
-        // Move up should go back to Font, last item
+        // Move up should go back to Font, last item (Line Height)
         panel.handle_key(SettingsKey::Up, &config);
         assert_eq!(panel.section, SettingsSection::Font);
-        assert_eq!(panel.selected_item, 1);
+        assert_eq!(panel.selected_item, 2);
 
         // Tab should cycle sections
         panel.handle_key(SettingsKey::Tab, &config);
@@ -678,11 +883,24 @@ mod tests {
         panel.selected_item = 0;
 
         let config = Config::default();
+        let themes = Theme::list_available();
+        let expected_next = themes.get(1).expect("at least 2 themes");
 
-        // Cycle theme forward
+        // Right opens the dropdown (does NOT cycle)
         let action = panel.handle_key(SettingsKey::Right, &config);
+        assert!(matches!(action, SettingsAction::None));
+        assert!(panel.dropdown_open);
+
+        // Down moves to next option
+        let action = panel.handle_key(SettingsKey::Down, &config);
+        assert!(matches!(action, SettingsAction::None));
+        assert_eq!(panel.dropdown_highlight, 1);
+
+        // Enter selects and closes dropdown
+        let action = panel.handle_key(SettingsKey::Enter, &config);
+        assert!(!panel.dropdown_open);
         match action {
-            SettingsAction::SetTheme(name) => assert_eq!(name, "solarized-dark"),
+            SettingsAction::SetTheme(name) => assert_eq!(name, *expected_next),
             _ => panic!("Expected SetTheme"),
         }
     }
