@@ -29,8 +29,8 @@ cosmic-text = "0.12"
 # Image loading for window icon
 image = "0.25"
 
-# Clipboard
-arboard = "3.4"
+# Clipboard (wayland-data-control needed for Wayland support)
+arboard = { version = "3.4", features = ["wayland-data-control"] }
 
 # Configuration
 serde.workspace = true
@@ -39,6 +39,9 @@ directories = "6.0"
 
 # Fuzzy matching for command palette
 sublime_fuzzy = "0.7"
+
+# Regular expressions for search
+regex = "1"
 
 # Logging
 log.workspace = true
@@ -59,6 +62,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 # Testing dependencies
+tempfile = "3"
 
 [package.metadata.deb]
 maintainer = "Termeric Contributors"
