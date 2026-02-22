@@ -9,16 +9,20 @@
 mod glyph_cache;
 mod text;
 mod rect;
+mod image;
 
 pub use glyph_cache::GlyphCache;
+
+use image::ImagePipeline;
 
 use anyhow::Result;
 use std::sync::Arc;
 use wgpu::*;
 use winit::window::Window;
-use termeric_core::{Grid, Selection, Color as TermColor};
+use termeric_core::{Grid, Selection, Color as TermColor, CellAttrs, CellFlags};
 use crate::theme::Theme;
 use crate::settings::SettingsPanelInfo;
+use crate::search::{Search, SearchBarInfo};
 
 use text::TextPipeline;
 use rect::RectPipeline;
@@ -84,6 +88,15 @@ struct UiPalette {
     settings_accent: [f32; 4],
     settings_separator: [f32; 4],
     scrim: [f32; 4],
+    // Search colors
+    search_bg: [f32; 4],
+    search_text: [f32; 4],
+    search_match: [f32; 4],
+    search_match_current: [f32; 4],
+    search_indicator: [f32; 4],
+    search_error: [f32; 4],
+    // URL/hyperlink color
+    url: [f32; 4],
 }
 
 impl UiPalette {
@@ -138,6 +151,15 @@ impl UiPalette {
             settings_separator: adjust_alpha(tab_border.to_f32_array(), 0.4),
             // Warm scrim derived from theme background
             scrim: adjust_alpha(shade(bg.to_f32_array(), 0.3), 0.30),
+            // Search colors - warm gold tones per style guide
+            search_bg: shade(bg.to_f32_array(), 0.85),
+            search_text: fg.to_f32_array(),
+            search_match: adjust_alpha(theme.primary.yellow.to_f32_array(), 0.35),
+            search_match_current: adjust_alpha(theme.primary.yellow.to_f32_array(), 0.65),
+            search_indicator: theme.primary.green.to_f32_array(),
+            search_error: theme.primary.red.to_f32_array(),
+            // URL/hyperlink color from theme
+            url: theme.ui.url.to_f32_array(),
         }
     }
 }
@@ -196,6 +218,7 @@ pub struct Renderer {
     // Rendering pipelines
     text_pipeline: TextPipeline,
     rect_pipeline: RectPipeline,
+    image_pipeline: ImagePipeline,
     // Glyph cache
     glyph_cache: GlyphCache,
     // Cell dimensions
@@ -214,7 +237,7 @@ pub struct Renderer {
 
 impl Renderer {
     /// Create a new renderer for the given window
-    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme) -> Result<Self> {
+    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme, ligatures: bool) -> Result<Self> {
         let size = window.inner_size();
 
         // Create wgpu instance
@@ -274,12 +297,13 @@ impl Renderer {
 
         // Create glyph cache
         let scaled_font_size = (font_size * scale_factor).max(1.0);
-        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family)?;
+        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family, ligatures)?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
         let text_pipeline = TextPipeline::new(&device, surface_format, &glyph_cache)?;
         let rect_pipeline = RectPipeline::new(&device, surface_format)?;
+        let image_pipeline = ImagePipeline::new(&device, surface_format)?;
 
         let padding_physical = (padding * scale_factor).round().max(0.0);
 
@@ -292,6 +316,7 @@ impl Renderer {
             size: (size.width, size.height),
             text_pipeline,
             rect_pipeline,
+            image_pipeline,
             glyph_cache,
             cell_width,
             cell_height,
@@ -315,6 +340,7 @@ impl Renderer {
             // Update uniforms
             self.text_pipeline.resize(&self.queue, width, height);
             self.rect_pipeline.resize(&self.queue, width, height);
+            self.image_pipeline.resize(&self.queue, width, height);
         }
     }
 
@@ -409,7 +435,9 @@ impl Renderer {
     /// copy_flash: 0.0 = no flash, 1.0 = full flash (for copy confirmation)
     /// focus_dim: 0.0 = fully bright (focused), higher = dimmed (unfocused)
     /// command_bar: optional command bar info when in command mode
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>) -> Result<(), SurfaceError> {
+    /// search_bar: optional search bar info when searching
+    /// search: search state for match highlighting
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -418,7 +446,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel, search_bar, search);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
@@ -459,7 +487,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -491,6 +519,16 @@ impl Renderer {
         // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
         let brightness = 1.0 - focus_dim;
 
+        // Calculate search bar height if visible
+        let search_bar_height = if search_bar.is_some() {
+            cell_height + 8.0 * 2.0 // padding * 2
+        } else {
+            0.0
+        };
+
+        // Content area starts below tab bar and search bar (if visible)
+        let content_top = tab_bar_height + search_bar_height;
+
         // Render tab bar first
         self.build_tab_bar(tabs, window_width, tab_bar_height);
 
@@ -508,13 +546,13 @@ impl Renderer {
         // Calculate maximum y position for grid content (don't overlap command bar or dropdown)
         let max_grid_y = window_height - padding - command_bar_height - dropdown_height - 8.0; // 8px gap for dropdown
 
-        // Iterate over grid cells (offset by tab bar height)
+        // Iterate over grid cells (offset by tab bar height and search bar if visible)
         for row in 0..grid.rows() {
             for col in 0..grid.cols() {
                 let Some(cell) = grid.cell_scrolled(row, col) else { continue };
 
                 let x = padding + col as f32 * cell_width;
-                let y = tab_bar_height + padding + row as f32 * cell_height;
+                let y = content_top + padding + row as f32 * cell_height;
 
                 // Skip rendering if this row would overlap with command bar
                 if y + cell_height > max_grid_y {
@@ -526,13 +564,33 @@ impl Renderer {
                     .map(|s| s.contains(row as i32 - scroll_offset_i32, col))
                     .unwrap_or(false);
 
-                // Draw background if not default or if selected
+                // Check if cell is part of a search match
+                // The row index in search is relative to the grid: negative for scrollback, 0+ for visible
+                let grid_row = row as i32 - scroll_offset_i32;
+                let is_search_match = search.is_match(grid_row, col);
+                let is_current_match = search.is_current_match(grid_row, col);
+
+                // Draw background if not default or if selected/matched
                 let bg = cell.bg;
                 if is_selected {
                     self.rect_pipeline.push_rect(
                         x, y,
                         cell_width, cell_height,
                         selection_color,
+                    );
+                } else if is_current_match {
+                    // Current search match - brighter gold
+                    self.rect_pipeline.push_rect(
+                        x, y,
+                        cell_width, cell_height,
+                        apply_brightness(self.ui.search_match_current, brightness),
+                    );
+                } else if is_search_match {
+                    // Other search matches - subtle gold
+                    self.rect_pipeline.push_rect(
+                        x, y,
+                        cell_width, cell_height,
+                        apply_brightness(self.ui.search_match, brightness),
                     );
                 } else if bg != default_bg {
                     self.rect_pipeline.push_rect(
@@ -563,6 +621,54 @@ impl Renderer {
                         );
                     }
                 }
+
+                // Draw underline if any underline style is active
+                if cell.attrs.has_underline() {
+                    // Get underline color (use custom color or fg)
+                    let underline_color = cell.underline_color.unwrap_or(cell.fg);
+                    let ul_color = apply_brightness(
+                        [
+                            underline_color.r as f32 / 255.0,
+                            underline_color.g as f32 / 255.0,
+                            underline_color.b as f32 / 255.0,
+                            1.0
+                        ],
+                        brightness
+                    );
+
+                    // Position underline at bottom of cell
+                    let underline_y = y + cell_height - 2.0;
+                    let underline_thickness = 1.0;
+
+                    if cell.attrs.contains(CellAttrs::CURLY_UNDERLINE) {
+                        // Curly/wavy underline - draw as a series of small arcs
+                        // For simplicity, we approximate with a thicker line
+                        // A proper implementation would use a shader
+                        self.draw_wavy_underline(x, underline_y, cell_width, ul_color);
+                    } else if cell.attrs.contains(CellAttrs::DOUBLE_UNDERLINE) {
+                        // Double underline - two lines
+                        self.rect_pipeline.push_rect(x, underline_y - 2.0, cell_width, underline_thickness, ul_color);
+                        self.rect_pipeline.push_rect(x, underline_y, cell_width, underline_thickness, ul_color);
+                    } else if cell.attrs.contains(CellAttrs::DOTTED_UNDERLINE) {
+                        // Dotted underline - series of small dots
+                        self.draw_dotted_underline(x, underline_y, cell_width, ul_color);
+                    } else if cell.attrs.contains(CellAttrs::DASHED_UNDERLINE) {
+                        // Dashed underline - series of dashes
+                        self.draw_dashed_underline(x, underline_y, cell_width, ul_color);
+                    } else {
+                        // Single underline (default)
+                        self.rect_pipeline.push_rect(x, underline_y, cell_width, underline_thickness, ul_color);
+                    }
+                }
+
+                // Draw hyperlink underline (only if no other underline is already drawn)
+                if cell.flags.contains(CellFlags::HYPERLINK) && !cell.attrs.has_underline() {
+                    // Use URL color from theme for hyperlinks
+                    let link_color = apply_brightness(self.ui.url, brightness);
+                    let underline_y = y + cell_height - 2.0;
+                    // Draw a dotted underline for hyperlinks
+                    self.draw_dotted_underline(x, underline_y, cell_width, link_color);
+                }
             }
         }
 
@@ -572,7 +678,7 @@ impl Renderer {
             if cursor.visible {
                 // Use animated cursor position for smooth movement
                 let x = padding + cursor_pos.0 * cell_width;
-                let y = tab_bar_height + padding + cursor_pos.1 * cell_height;
+                let y = content_top + padding + cursor_pos.1 * cell_height;
 
                 // Only draw cursor if it won't overlap with command bar
                 if y + cell_height <= max_grid_y {
@@ -588,9 +694,14 @@ impl Renderer {
             }
         }
 
-        // Render command bar last (on top of everything)
+        // Render command bar (on top of grid)
         if let Some(cmd_bar) = command_bar {
             self.build_command_bar(cmd_bar, window_width, window_height, command_bar_height);
+        }
+
+        // Render search bar (at top of grid, below tab bar)
+        if let Some(search_info) = search_bar {
+            self.build_search_bar(search_info, window_width, tab_bar_height);
         }
 
         // Render settings panel overlay (on top of everything except command bar)
@@ -1602,4 +1713,315 @@ impl Renderer {
             }
         }
     }
+
+    /// Draw a wavy/curly underline (approximated with small segments)
+    fn draw_wavy_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
+        // Approximate wavy line with a series of small rectangles at varying heights
+        let wave_period: f32 = 4.0; // Pixels per wave cycle
+        let wave_amplitude: f32 = 1.5; // Pixels of vertical displacement
+        let segment_width: f32 = 2.0;
+
+        let mut current_x = x;
+        let mut phase: f32 = 0.0;
+
+        while current_x < x + width {
+            // Sine wave approximation
+            let offset_y = (phase * std::f32::consts::TAU).sin() * wave_amplitude;
+            self.rect_pipeline.push_rect(
+                current_x,
+                y + offset_y,
+                segment_width.min(x + width - current_x),
+                1.0,
+                color,
+            );
+
+            current_x += segment_width;
+            phase += segment_width / wave_period;
+        }
+    }
+
+    /// Draw a dotted underline
+    fn draw_dotted_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
+        let dot_size: f32 = 1.5;
+        let gap: f32 = 2.0;
+        let step = dot_size + gap;
+
+        let mut current_x = x;
+        while current_x < x + width {
+            self.rect_pipeline.push_rect(current_x, y, dot_size.min(x + width - current_x), 1.0, color);
+            current_x += step;
+        }
+    }
+
+    /// Draw a dashed underline
+    fn draw_dashed_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
+        let dash_length: f32 = 4.0;
+        let gap: f32 = 2.0;
+        let step = dash_length + gap;
+
+        let mut current_x = x;
+        while current_x < x + width {
+            self.rect_pipeline.push_rect(current_x, y, dash_length.min(x + width - current_x), 1.0, color);
+            current_x += step;
+        }
+    }
+
+    /// Build search bar render data
+    /// Renders at the top of the terminal content area, below the tab bar
+    fn build_search_bar(&mut self, info: &SearchBarInfo, window_width: f32, tab_bar_height: f32) {
+        let padding = 8.0;
+        let bar_height = self.cell_height + padding * 2.0;
+        let bar_y = tab_bar_height;
+
+        // Background - warm dark tone
+        let bar_bg = self.ui.search_bg;
+        self.rect_pipeline.push_rect(0.0, bar_y, window_width, bar_height, bar_bg);
+
+        // Bottom border
+        let border_color = adjust_alpha(self.ui.command_border, 0.5);
+        self.rect_pipeline.push_rect(0.0, bar_y + bar_height - 1.0, window_width, 1.0, border_color);
+
+        let text_y = bar_y + padding;
+        let mut text_x = padding;
+
+        // Search icon/prompt
+        let prompt = "/";
+        let prompt_color = self.ui.search_indicator;
+        for c in prompt.chars() {
+            self.text_pipeline.push_char(c, text_x, text_y, prompt_color);
+            text_x += self.cell_width;
+        }
+        text_x += self.cell_width * 0.3;
+
+        // Query text
+        let text_color = self.ui.search_text;
+        let mut char_index = 0;
+        for c in info.query.chars() {
+            // Draw cursor at current position
+            if char_index == info.cursor_pos {
+                let cursor_color = adjust_alpha(self.ui.cursor, 0.8);
+                self.rect_pipeline.push_rect(
+                    text_x, text_y,
+                    2.0, self.cell_height,
+                    cursor_color,
+                );
+            }
+
+            self.text_pipeline.push_char(c, text_x, text_y, text_color);
+            text_x += self.cell_width;
+            char_index += c.len_utf8();
+        }
+
+        // Draw cursor at end if at end of query
+        if info.cursor_pos >= info.query.len() {
+            let cursor_color = adjust_alpha(self.ui.cursor, 0.8);
+            self.rect_pipeline.push_rect(
+                text_x, text_y,
+                2.0, self.cell_height,
+                cursor_color,
+            );
+        }
+        text_x += self.cell_width;
+
+        // Mode indicators on the right side
+        let mut right_x = window_width - padding;
+
+        // Navigation arrows ▲▼ (only show if there are matches)
+        if info.match_count > 0 {
+            // Down arrow ▼
+            let arrow_color = self.ui.search_indicator;
+            right_x -= self.cell_width;
+            self.text_pipeline.push_char('▼', right_x, text_y, arrow_color);
+
+            // Up arrow ▲
+            right_x -= self.cell_width;
+            self.text_pipeline.push_char('▲', right_x, text_y, arrow_color);
+
+            right_x -= self.cell_width * 0.5; // Gap before count
+        }
+
+        // Match count indicator
+        let count_text = if info.match_count > 0 {
+            format!("{}/{}", info.current_match.unwrap_or(0), info.match_count)
+        } else if !info.query.is_empty() {
+            "No matches".to_string()
+        } else {
+            String::new()
+        };
+
+        if !count_text.is_empty() {
+            let count_width = count_text.len() as f32 * self.cell_width;
+            right_x -= count_width;
+
+            let count_color = if info.match_count > 0 {
+                self.ui.search_indicator
+            } else {
+                self.ui.search_error
+            };
+
+            for c in count_text.chars() {
+                self.text_pipeline.push_char(c, right_x, text_y, count_color);
+                right_x += self.cell_width;
+            }
+            right_x -= count_width + self.cell_width; // Reset and add gap
+        }
+
+        // Regex indicator [.*] - always show, dimmed when inactive
+        {
+            let indicator = "[.*]";
+            let indicator_width = indicator.len() as f32 * self.cell_width;
+            right_x -= indicator_width + self.cell_width * 0.5;
+
+            let regex_color = if info.regex_error.is_some() {
+                self.ui.search_error
+            } else if info.use_regex {
+                self.ui.search_indicator
+            } else {
+                adjust_alpha(self.ui.search_indicator, 0.35)
+            };
+
+            for c in indicator.chars() {
+                self.text_pipeline.push_char(c, right_x, text_y, regex_color);
+                right_x += self.cell_width;
+            }
+            right_x -= indicator_width + self.cell_width;
+        }
+
+        // Case sensitivity indicator [Aa] - always show, dimmed when inactive
+        {
+            let indicator = "[Aa]";
+            let indicator_width = indicator.len() as f32 * self.cell_width;
+            right_x -= indicator_width + self.cell_width * 0.5;
+
+            // Bright when active, dimmed when inactive
+            let indicator_color = if info.case_sensitive {
+                self.ui.search_indicator
+            } else {
+                adjust_alpha(self.ui.search_indicator, 0.35)
+            };
+
+            for c in indicator.chars() {
+                self.text_pipeline.push_char(c, right_x, text_y, indicator_color);
+                right_x += self.cell_width;
+            }
+            right_x -= indicator_width + self.cell_width;
+        }
+
+        // Show regex error if any
+        if let Some(error) = &info.regex_error {
+            let error_x = text_x + self.cell_width;
+            let error_text = format!("Error: {}", error);
+            let error_color = self.ui.search_error;
+
+            let max_chars = ((window_width - error_x - padding * 2.0) / self.cell_width) as usize;
+            for (i, c) in error_text.chars().take(max_chars.saturating_sub(3)).enumerate() {
+                self.text_pipeline.push_char(c, error_x + i as f32 * self.cell_width, text_y, error_color);
+            }
+        }
+    }
+
+    /// Check what element was clicked in the search bar
+    /// Returns a SearchBarClick indicating which element (if any) was clicked
+    ///
+    /// Parameters must match the SearchBarInfo used for rendering:
+    /// - match_count: number of search matches
+    /// - current_match: current match index (1-based)
+    /// - query_is_empty: whether the search query is empty
+    pub fn search_bar_hit_test(
+        &self,
+        x: f32,
+        y: f32,
+        window_width: f32,
+        match_count: usize,
+        current_match: Option<usize>,
+        query_is_empty: bool,
+    ) -> SearchBarClick {
+        let padding = 8.0;
+        let bar_height = self.cell_height + padding * 2.0;
+        let tab_bar_height = self.tab_bar_height();
+
+        // Check if click is within search bar bounds
+        if y < tab_bar_height || y > tab_bar_height + bar_height {
+            return SearchBarClick::None;
+        }
+
+        // Calculate button positions from the right edge
+        // This MUST exactly match the rendering logic in build_search_bar
+        let mut right_x = window_width - padding;
+
+        // Navigation arrows ▲▼ (only show if there are matches)
+        if match_count > 0 {
+            // Down arrow ▼
+            right_x -= self.cell_width;
+            let down_start = right_x;
+            let down_end = right_x + self.cell_width;
+            if x >= down_start && x < down_end {
+                return SearchBarClick::NextMatch;
+            }
+
+            // Up arrow ▲
+            right_x -= self.cell_width;
+            let up_start = right_x;
+            let up_end = right_x + self.cell_width;
+            if x >= up_start && x < up_end {
+                return SearchBarClick::PrevMatch;
+            }
+
+            right_x -= self.cell_width * 0.5; // Gap before count
+        }
+
+        // Match count indicator - calculate exact width like rendering does
+        let count_text = if match_count > 0 {
+            format!("{}/{}", current_match.unwrap_or(0), match_count)
+        } else if !query_is_empty {
+            "No matches".to_string()
+        } else {
+            String::new()
+        };
+
+        if !count_text.is_empty() {
+            let count_width = count_text.len() as f32 * self.cell_width;
+            right_x -= count_width;
+            // Skip drawing the count (we're at the start of count now)
+            // After rendering, right_x is reset: right_x -= count_width + self.cell_width
+            right_x -= self.cell_width; // Gap after count
+        }
+
+        // Regex indicator [.*] - 4 chars
+        let regex_width = 4.0 * self.cell_width;
+        right_x -= regex_width + self.cell_width * 0.5;
+        let regex_start = right_x;
+        let regex_end = right_x + regex_width;
+        if x >= regex_start && x < regex_end {
+            return SearchBarClick::ToggleRegex;
+        }
+        // After drawing: right_x -= indicator_width + self.cell_width
+        right_x -= self.cell_width;
+
+        // Case sensitivity indicator [Aa] - 4 chars
+        let case_width = 4.0 * self.cell_width;
+        right_x -= case_width + self.cell_width * 0.5;
+        let case_start = right_x;
+        let case_end = right_x + case_width;
+        if x >= case_start && x < case_end {
+            return SearchBarClick::ToggleCaseSensitive;
+        }
+
+        SearchBarClick::None
+    }
+}
+
+/// Result of clicking in the search bar
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchBarClick {
+    /// No element was clicked
+    None,
+    /// Toggle case sensitivity [Aa]
+    ToggleCaseSensitive,
+    /// Toggle regex mode [.*]
+    ToggleRegex,
+    /// Previous match ▲
+    PrevMatch,
+    /// Next match ▼
+    NextMatch,
 }

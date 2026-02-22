@@ -1,13 +1,15 @@
 //! Terminal search functionality
 //!
 //! Provides incremental search through terminal history and visible content.
+//! Supports both literal and regex search modes.
 
+use regex::Regex;
 use termeric_core::{Grid, CellContent};
 
 /// A search match in the terminal
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchMatch {
-    /// Row of the match (can be negative for scrollback)
+    /// Row of the match (negative for scrollback, 0+ for visible grid)
     pub row: i32,
     /// Starting column
     pub start_col: usize,
@@ -28,9 +30,15 @@ pub struct Search {
     query: String,
     /// Whether search is case-sensitive
     case_sensitive: bool,
+    /// Whether to use regex mode
+    use_regex: bool,
+    /// Compiled regex (if in regex mode and valid)
+    compiled_regex: Option<Regex>,
+    /// Regex compilation error (if any)
+    regex_error: Option<String>,
     /// All matches found
     matches: Vec<SearchMatch>,
-    /// Index of current match (-1 if no current match)
+    /// Index of current match
     current_match: Option<usize>,
     /// Whether search is active
     active: bool,
@@ -48,6 +56,9 @@ impl Search {
         Self {
             query: String::new(),
             case_sensitive: false,
+            use_regex: false,
+            compiled_regex: None,
+            regex_error: None,
             matches: Vec::new(),
             current_match: None,
             active: false,
@@ -60,6 +71,8 @@ impl Search {
         self.query.clear();
         self.matches.clear();
         self.current_match = None;
+        self.compiled_regex = None;
+        self.regex_error = None;
     }
 
     /// Cancel the search
@@ -68,11 +81,30 @@ impl Search {
         self.query.clear();
         self.matches.clear();
         self.current_match = None;
+        self.compiled_regex = None;
+        self.regex_error = None;
+    }
+
+    /// Confirm the search (keep highlights, exit search input mode)
+    pub fn confirm(&mut self) {
+        self.active = false;
+        // Keep matches and current_match for continued highlighting
+    }
+
+    /// Clear search results (but keep active state)
+    pub fn clear_results(&mut self) {
+        self.matches.clear();
+        self.current_match = None;
     }
 
     /// Check if search is active
     pub fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// Check if we have search results to display (even when input closed)
+    pub fn has_results(&self) -> bool {
+        !self.matches.is_empty()
     }
 
     /// Get the current query
@@ -83,30 +115,51 @@ impl Search {
     /// Set the search query and update matches
     pub fn set_query(&mut self, query: &str, grid: &Grid) {
         self.query = query.to_string();
+        self.compile_regex_if_needed();
         self.update_matches(grid);
     }
 
     /// Add a character to the query
     pub fn push_char(&mut self, c: char, grid: &Grid) {
         self.query.push(c);
+        self.compile_regex_if_needed();
         self.update_matches(grid);
     }
 
     /// Remove last character from query
     pub fn pop_char(&mut self, grid: &Grid) {
         self.query.pop();
+        self.compile_regex_if_needed();
         self.update_matches(grid);
     }
 
     /// Toggle case sensitivity
     pub fn toggle_case_sensitive(&mut self, grid: &Grid) {
         self.case_sensitive = !self.case_sensitive;
+        self.compile_regex_if_needed();
         self.update_matches(grid);
     }
 
     /// Is case sensitive?
     pub fn is_case_sensitive(&self) -> bool {
         self.case_sensitive
+    }
+
+    /// Toggle regex mode
+    pub fn toggle_regex(&mut self, grid: &Grid) {
+        self.use_regex = !self.use_regex;
+        self.compile_regex_if_needed();
+        self.update_matches(grid);
+    }
+
+    /// Is regex mode enabled?
+    pub fn is_regex(&self) -> bool {
+        self.use_regex
+    }
+
+    /// Get regex error if any
+    pub fn regex_error(&self) -> Option<&str> {
+        self.regex_error.as_deref()
     }
 
     /// Get current match count
@@ -165,6 +218,32 @@ impl Search {
             .unwrap_or(false)
     }
 
+    /// Compile regex pattern if in regex mode
+    fn compile_regex_if_needed(&mut self) {
+        if !self.use_regex || self.query.is_empty() {
+            self.compiled_regex = None;
+            self.regex_error = None;
+            return;
+        }
+
+        let pattern = if self.case_sensitive {
+            self.query.clone()
+        } else {
+            format!("(?i){}", self.query)
+        };
+
+        match Regex::new(&pattern) {
+            Ok(re) => {
+                self.compiled_regex = Some(re);
+                self.regex_error = None;
+            }
+            Err(e) => {
+                self.compiled_regex = None;
+                self.regex_error = Some(e.to_string());
+            }
+        }
+    }
+
     /// Update matches based on current query
     fn update_matches(&mut self, grid: &Grid) {
         self.matches.clear();
@@ -174,19 +253,53 @@ impl Search {
             return;
         }
 
-        let query = if self.case_sensitive {
-            self.query.clone()
-        } else {
-            self.query.to_lowercase()
-        };
+        // If regex mode and we have an error, don't search
+        if self.use_regex && self.regex_error.is_some() {
+            return;
+        }
 
-        // Search visible rows
+        // Search scrollback buffer first (oldest to newest)
+        // Scrollback rows are indexed as negative: -scrollback_len to -1
+        let scrollback_len = grid.scrollback_len();
+        for i in 0..scrollback_len {
+            // Convert to negative row index: scrollback[0] is oldest, becomes row -(scrollback_len)
+            let row_index = -((scrollback_len - i) as i32);
+            if let Some(row) = grid.row_at_offset(row_index) {
+                let line = Self::extract_row_text(row, grid.cols());
+                self.find_matches_in_line(&line, row_index);
+            }
+        }
+
+        // Search visible rows (0 to rows-1)
         for row in 0..grid.rows() {
             let line = self.extract_line_text(grid, row);
-            let search_line = if self.case_sensitive {
-                line.clone()
+            self.find_matches_in_line(&line, row as i32);
+        }
+
+        // Set current match to first if we have matches
+        if !self.matches.is_empty() {
+            self.current_match = Some(0);
+        }
+    }
+
+    /// Find all matches in a line and add them to self.matches
+    fn find_matches_in_line(&mut self, line: &str, row: i32) {
+        if self.use_regex {
+            if let Some(ref re) = self.compiled_regex {
+                for mat in re.find_iter(line) {
+                    self.matches.push(SearchMatch {
+                        row,
+                        start_col: mat.start(),
+                        end_col: mat.end(),
+                    });
+                }
+            }
+        } else {
+            // Literal search
+            let (search_line, query) = if self.case_sensitive {
+                (line.to_string(), self.query.clone())
             } else {
-                line.to_lowercase()
+                (line.to_lowercase(), self.query.to_lowercase())
             };
 
             let mut search_start = 0;
@@ -195,20 +308,13 @@ impl Search {
                 let end_col = start_col + query.len();
 
                 self.matches.push(SearchMatch {
-                    row: row as i32,
+                    row,
                     start_col,
                     end_col,
                 });
 
                 search_start = end_col;
             }
-        }
-
-        // TODO: Search scrollback buffer
-
-        // Set current match to first if we have matches
-        if !self.matches.is_empty() {
-            self.current_match = Some(0);
         }
     }
 
@@ -229,6 +335,59 @@ impl Search {
         }
 
         text
+    }
+
+    /// Extract text from a Row directly
+    fn extract_row_text(row: &termeric_core::Row, cols: usize) -> String {
+        let mut text = String::with_capacity(cols);
+
+        for col in 0..cols {
+            if let Some(cell) = row.get(col) {
+                match &cell.content {
+                    CellContent::Empty => text.push(' '),
+                    CellContent::Char(c) => text.push(*c),
+                    CellContent::Grapheme(g) => text.push_str(g),
+                }
+            } else {
+                text.push(' ');
+            }
+        }
+
+        text
+    }
+}
+
+/// Information needed to render the search bar
+#[derive(Clone, Debug)]
+pub struct SearchBarInfo {
+    /// Current search query
+    pub query: String,
+    /// Whether case-sensitive mode is enabled
+    pub case_sensitive: bool,
+    /// Whether regex mode is enabled
+    pub use_regex: bool,
+    /// Current match index (1-based, None if no matches)
+    pub current_match: Option<usize>,
+    /// Total match count
+    pub match_count: usize,
+    /// Regex error message if any
+    pub regex_error: Option<String>,
+    /// Cursor position in query
+    pub cursor_pos: usize,
+}
+
+impl Search {
+    /// Build info struct for rendering
+    pub fn build_info(&self, cursor_pos: usize) -> SearchBarInfo {
+        SearchBarInfo {
+            query: self.query.clone(),
+            case_sensitive: self.case_sensitive,
+            use_regex: self.use_regex,
+            current_match: self.current_match_index(),
+            match_count: self.match_count(),
+            regex_error: self.regex_error.clone(),
+            cursor_pos,
+        }
     }
 }
 
@@ -288,5 +447,43 @@ mod tests {
 
         search.prev();
         assert_eq!(search.current_match, Some(2)); // Wraps around backwards
+    }
+
+    #[test]
+    fn test_regex_mode() {
+        let mut search = Search::new();
+        search.use_regex = true;
+        search.query = r"\d+".to_string();
+        search.compile_regex_if_needed();
+
+        assert!(search.compiled_regex.is_some());
+        assert!(search.regex_error.is_none());
+    }
+
+    #[test]
+    fn test_invalid_regex() {
+        let mut search = Search::new();
+        search.use_regex = true;
+        search.query = r"[invalid".to_string();
+        search.compile_regex_if_needed();
+
+        assert!(search.compiled_regex.is_none());
+        assert!(search.regex_error.is_some());
+    }
+
+    #[test]
+    fn test_case_insensitive_regex() {
+        let mut search = Search::new();
+        search.use_regex = true;
+        search.case_sensitive = false;
+        search.query = "test".to_string();
+        search.compile_regex_if_needed();
+
+        // Should compile with (?i) prefix
+        assert!(search.compiled_regex.is_some());
+        let re = search.compiled_regex.as_ref().unwrap();
+        assert!(re.is_match("TEST"));
+        assert!(re.is_match("Test"));
+        assert!(re.is_match("test"));
     }
 }

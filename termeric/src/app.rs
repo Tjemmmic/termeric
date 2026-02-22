@@ -16,6 +16,7 @@ use crate::command::{CommandMode, CommandResult};
 use crate::config::Config;
 use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
 use crate::renderer::{CommandBarInfo, Renderer};
+use crate::search::Search;
 use crate::settings::{SettingsPanel, SettingsAction, SettingsKey};
 use crate::tabs::TabManager;
 use crate::theme::Theme;
@@ -79,6 +80,10 @@ pub struct App {
     theme: Theme,
     /// Settings panel state
     settings_panel: SettingsPanel,
+    /// Search state
+    search: Search,
+    /// Cursor position in search input
+    search_cursor_pos: usize,
 }
 
 impl App {
@@ -119,6 +124,8 @@ impl App {
             command_mode: CommandMode::new(),
             theme,
             settings_panel: SettingsPanel::new(),
+            search: Search::new(),
+            search_cursor_pos: 0,
         })
     }
 
@@ -166,6 +173,7 @@ impl App {
             self.config.window.padding as f32,
             scale_factor,
             &self.theme,
+            self.config.font.ligatures,
         )?;
 
         // Apply initial opacity from config
@@ -341,6 +349,13 @@ impl App {
             None
         };
 
+        // Build search bar info if search is active or has results
+        let search_info = if self.search.is_active() || self.search.has_results() {
+            Some(self.search.build_info(self.search_cursor_pos))
+        } else {
+            None
+        };
+
         // Update settings panel animation
         if self.settings_panel.update_animation() {
             if let Some(window) = &self.window {
@@ -348,7 +363,7 @@ impl App {
             }
         }
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref()) {
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref(), search_info.as_ref(), &self.search) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -544,8 +559,15 @@ impl App {
                 }
             }
             Action::ToggleSearch => {
-                // TODO: Implement search UI
-                log::debug!("Toggle search requested");
+                if self.search.is_active() {
+                    self.search.cancel();
+                } else {
+                    self.search.start();
+                    self.search_cursor_pos = 0;
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
             Action::ToggleSettings => {
                 self.settings_panel.toggle();
@@ -984,6 +1006,170 @@ impl App {
         true // Input was handled by command mode
     }
 
+    /// Handle keyboard input when in search mode
+    /// Returns true if the input was handled by search mode
+    fn handle_search_mode_input(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use winit::keyboard::{Key, NamedKey};
+
+        if event.state != winit::event::ElementState::Pressed {
+            return self.search.is_active();
+        }
+
+        if !self.search.is_active() {
+            return false;
+        }
+
+        // Get the grid for updating matches
+        let grid_ref = self.tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid()));
+
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.search.cancel();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Enter) => {
+                // Confirm search and close input (but keep highlights)
+                self.search.confirm();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if self.search_cursor_pos > 0 {
+                    if let Some(grid) = grid_ref {
+                        self.search.pop_char(grid);
+                        self.search_cursor_pos = self.search_cursor_pos.saturating_sub(1);
+                    }
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                // Previous match
+                self.search.prev();
+                self.scroll_to_current_match();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                // Next match
+                self.search.next();
+                self.scroll_to_current_match();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                self.search_cursor_pos = self.search_cursor_pos.saturating_sub(1);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                self.search_cursor_pos = (self.search_cursor_pos + 1).min(self.search.query().len());
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Home) => {
+                self.search_cursor_pos = 0;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::End) => {
+                self.search_cursor_pos = self.search.query().len();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            Key::Character(c) => {
+                // Check for special key combinations
+                if self.modifiers.alt_key() {
+                    match c.as_str() {
+                        "c" | "C" => {
+                            // Toggle case sensitivity (Alt+C)
+                            if let Some(grid) = grid_ref {
+                                self.search.toggle_case_sensitive(grid);
+                            }
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return true;
+                        }
+                        "r" | "R" => {
+                            // Toggle regex mode (Alt+R)
+                            if let Some(grid) = grid_ref {
+                                self.search.toggle_regex(grid);
+                            }
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return true;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Regular character input
+                if let Some(grid) = grid_ref {
+                    for ch in c.chars() {
+                        self.search.push_char(ch, grid);
+                        self.search_cursor_pos += ch.len_utf8();
+                    }
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            _ => {}
+        }
+
+        true // Input was handled by search mode
+    }
+
+    /// Scroll the terminal view to show the current search match
+    fn scroll_to_current_match(&mut self) {
+        let Some(search_match) = self.search.current() else { return };
+        let match_row = search_match.row;
+
+        let Some(tabs) = &mut self.tabs else { return };
+        let Some(tab) = tabs.active_tab_mut() else { return };
+
+        let grid = tab.terminal.grid_mut();
+        let visible_rows = grid.rows() as i32;
+        let scrollback_len = grid.scrollback_len() as i32;
+
+        // Calculate the required scroll offset to bring the match into view
+        // match_row is negative for scrollback, 0+ for visible grid
+        if match_row < 0 {
+            // Match is in scrollback - need to scroll up
+            // Convert negative row index to scroll offset
+            let lines_back = (-match_row) as usize;
+            // Add a few lines of context
+            let target_offset = lines_back.saturating_add(visible_rows as usize / 2);
+            let clamped = target_offset.min(scrollback_len as usize);
+            grid.set_scroll_offset(clamped);
+        } else {
+            // Match is in visible area or below current view
+            let current_offset = grid.scroll_offset();
+            if current_offset > 0 {
+                // If scrolled up, check if match is visible
+                let effective_row = match_row + current_offset as i32;
+                if effective_row < 0 || effective_row >= visible_rows {
+                    // Match is not in view, adjust scroll
+                    grid.set_scroll_offset(0);
+                }
+            }
+        }
+    }
+
     /// Handle the result of executing a command
     fn handle_command_result(&mut self, result: CommandResult) {
         match result {
@@ -1314,6 +1500,65 @@ impl App {
                         }
                     }
 
+                    // Intercept clicks for search bar
+                    if self.search.is_active() || self.search.has_results() {
+                        if let Some(renderer) = &self.renderer {
+                            let window_size = self.window.as_ref().map(|w| w.inner_size());
+                            if let Some(size) = window_size {
+                                use crate::renderer::SearchBarClick;
+                                let click = renderer.search_bar_hit_test(
+                                    position.0 as f32,
+                                    position.1 as f32,
+                                    size.width as f32,
+                                    self.search.match_count(),
+                                    self.search.current_match_index(),
+                                    self.search.query().is_empty(),
+                                );
+                                let grid_ref = self.tabs
+                                    .as_ref()
+                                    .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid()));
+
+                                match click {
+                                    SearchBarClick::ToggleCaseSensitive => {
+                                        if let Some(grid) = grid_ref {
+                                            self.search.toggle_case_sensitive(grid);
+                                        }
+                                        if let Some(window) = &self.window {
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
+                                    SearchBarClick::ToggleRegex => {
+                                        if let Some(grid) = grid_ref {
+                                            self.search.toggle_regex(grid);
+                                        }
+                                        if let Some(window) = &self.window {
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
+                                    SearchBarClick::PrevMatch => {
+                                        self.search.prev();
+                                        self.scroll_to_current_match();
+                                        if let Some(window) = &self.window {
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
+                                    SearchBarClick::NextMatch => {
+                                        self.search.next();
+                                        self.scroll_to_current_match();
+                                        if let Some(window) = &self.window {
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
+                                    SearchBarClick::None => {}
+                                }
+                            }
+                        }
+                    }
+
                     // Intercept clicks for settings panel
                     if self.settings_panel.is_active() {
                         let window_size = self.window.as_ref().map(|w| w.inner_size());
@@ -1539,6 +1784,11 @@ impl ApplicationHandler for App {
 
                 // Handle command mode input first
                 if self.handle_command_mode_input(&event) {
+                    return;
+                }
+
+                // Handle search mode input
+                if self.handle_search_mode_input(&event) {
                     return;
                 }
 
