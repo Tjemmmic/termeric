@@ -11,8 +11,10 @@ pub use cursor::SavedCursor;
 pub use mode::TerminalMode;
 pub use selection::{Selection, SelectionType, Point};
 
-use crate::grid::{Grid, CellAttrs, CellContent, Color};
+use crate::grid::{Grid, CellAttrs, CellContent, CellFlags, Color, HyperlinkRegistry};
 use crate::ansi::Processor;
+use crate::graphics::{GraphicsManager, KittyCommand, ImagePlacement, ImageId, StoredImage};
+use crate::shell::ShellIntegration;
 
 /// Tab stop interval
 const TAB_INTERVAL: usize = 8;
@@ -39,6 +41,12 @@ pub struct Terminal {
     current_fg: Color,
     /// Current background color
     current_bg: Color,
+    /// Current underline color (None means use fg color)
+    current_underline_color: Option<Color>,
+    /// Current hyperlink ID (if inside a hyperlink)
+    current_hyperlink_id: Option<u32>,
+    /// Registry of all hyperlinks
+    hyperlink_registry: HyperlinkRegistry,
     /// Current selection
     selection: Option<Selection>,
     /// Scroll region top (inclusive, 0-indexed)
@@ -51,6 +59,10 @@ pub struct Terminal {
     cols: usize,
     /// Number of rows
     rows: usize,
+    /// Graphics manager for inline images
+    graphics: GraphicsManager,
+    /// Shell integration for prompt tracking
+    shell: ShellIntegration,
 }
 
 impl Terminal {
@@ -75,12 +87,17 @@ impl Terminal {
             current_attrs: CellAttrs::empty(),
             current_fg: Color::default_fg(),
             current_bg: Color::default_bg(),
+            current_underline_color: None,
+            current_hyperlink_id: None,
+            hyperlink_registry: HyperlinkRegistry::new(),
             selection: None,
             scroll_top: 0,
             scroll_bottom: rows,
             processor: Processor::new(),
             cols,
             rows,
+            graphics: GraphicsManager::new(),
+            shell: ShellIntegration::new(),
         }
     }
 
@@ -181,11 +198,21 @@ impl Terminal {
         }
 
         // Write the character
+        let underline_color = self.current_underline_color;
+        let hyperlink_id = self.current_hyperlink_id;
         if let Some(cell) = self.grid_mut().cell_mut(cursor.row, cursor.col) {
             cell.content = CellContent::Char(c);
             cell.fg = fg;
             cell.bg = bg;
+            cell.underline_color = underline_color;
             cell.attrs = attrs;
+            cell.hyperlink_id = hyperlink_id;
+            // Set hyperlink flag if this cell is part of a hyperlink
+            if hyperlink_id.is_some() {
+                cell.flags.insert(CellFlags::HYPERLINK);
+            } else {
+                cell.flags.remove(CellFlags::HYPERLINK);
+            }
         }
 
         // Move cursor forward
@@ -361,6 +388,7 @@ impl Terminal {
         self.current_attrs = CellAttrs::empty();
         self.current_fg = Color::default_fg();
         self.current_bg = Color::default_bg();
+        self.current_underline_color = None;
     }
 
     /// Add text attributes to the current set
@@ -371,6 +399,129 @@ impl Terminal {
     /// Remove text attributes from the current set
     pub fn remove_attrs(&mut self, attrs: CellAttrs) {
         self.current_attrs.remove(attrs);
+    }
+
+    /// Set underline color
+    pub fn set_underline_color(&mut self, color: Color) {
+        self.current_underline_color = Some(color);
+    }
+
+    /// Reset underline color (use fg color)
+    pub fn reset_underline_color(&mut self) {
+        self.current_underline_color = None;
+    }
+
+    /// Set underline style (clears all underline flags and sets the specified style)
+    pub fn set_underline_style(&mut self, style: u16) {
+        // Clear all underline-related flags first
+        self.current_attrs.remove(CellAttrs::ALL_UNDERLINES);
+
+        // Set the specified style
+        match style {
+            0 => {} // No underline
+            1 => self.current_attrs.insert(CellAttrs::UNDERLINE),
+            2 => self.current_attrs.insert(CellAttrs::DOUBLE_UNDERLINE),
+            3 => self.current_attrs.insert(CellAttrs::CURLY_UNDERLINE),
+            4 => self.current_attrs.insert(CellAttrs::DOTTED_UNDERLINE),
+            5 => self.current_attrs.insert(CellAttrs::DASHED_UNDERLINE),
+            _ => self.current_attrs.insert(CellAttrs::UNDERLINE), // Default to single
+        }
+    }
+
+    /// Set the current hyperlink (OSC 8)
+    ///
+    /// All characters written after this will be part of this hyperlink
+    /// until `reset_hyperlink` is called.
+    pub fn set_hyperlink(&mut self, url: String, id: Option<String>) {
+        let hyperlink_id = self.hyperlink_registry.get_or_insert(url, id);
+        self.current_hyperlink_id = Some(hyperlink_id);
+    }
+
+    /// Clear the current hyperlink
+    ///
+    /// Characters written after this will not be part of any hyperlink.
+    pub fn reset_hyperlink(&mut self) {
+        self.current_hyperlink_id = None;
+    }
+
+    /// Get the URL for a hyperlink ID
+    pub fn get_hyperlink_url(&self, id: u32) -> Option<&str> {
+        self.hyperlink_registry.get_url(id)
+    }
+
+    /// Get access to the hyperlink registry
+    pub fn hyperlink_registry(&self) -> &HyperlinkRegistry {
+        &self.hyperlink_registry
+    }
+
+    // === Graphics methods ===
+
+    /// Handle a Kitty graphics APC command
+    pub fn handle_graphics_command(&mut self, payload: &[u8]) {
+        if let Some(cmd) = KittyCommand::parse(payload) {
+            // Record cursor position for placement
+            let cursor = self.grid().cursor();
+            let mut cmd = cmd;
+            if let Some(ref mut placement) = cmd.placement {
+                // If no explicit position, use cursor position
+                if placement.col.is_none() {
+                    placement.col = Some(cursor.col as u32);
+                }
+                if placement.row.is_none() {
+                    placement.row = Some(cursor.row as u32);
+                }
+            }
+
+            if let Some(response) = self.graphics.handle_command(cmd) {
+                log::trace!("Graphics response: {:?}", response);
+                // TODO: Send response back to PTY
+            }
+        }
+    }
+
+    /// Get all image placements for rendering
+    pub fn graphics_placements(&self) -> &[ImagePlacement] {
+        self.graphics.placements()
+    }
+
+    /// Get image data for rendering
+    pub fn get_image(&self, id: ImageId) -> Option<&StoredImage> {
+        self.graphics.get_image(id)
+    }
+
+    /// Check if there are images to render
+    pub fn has_images(&self) -> bool {
+        self.graphics.has_images()
+    }
+
+    // === Shell integration methods ===
+
+    /// Handle OSC 133 shell integration sequence
+    pub fn handle_osc_133(&mut self, params: &[&[u8]]) {
+        let cursor_row = self.grid().cursor().row;
+        self.shell.handle_osc_133(params, cursor_row);
+    }
+
+    /// Get the previous prompt row from the current position
+    pub fn previous_prompt(&self) -> Option<usize> {
+        let current_row = self.grid().cursor().row as i32;
+        self.shell.previous_prompt(current_row)
+    }
+
+    /// Get the next prompt row from the current position
+    pub fn next_prompt(&self) -> Option<usize> {
+        let current_row = self.grid().cursor().row as i32;
+        self.shell.next_prompt(current_row)
+    }
+
+    /// Get shell integration state
+    pub fn shell_integration(&self) -> &ShellIntegration {
+        &self.shell
+    }
+
+    /// Check if synchronized output mode is enabled
+    pub fn is_synchronized_output(&self) -> bool {
+        self.mode.contains(TerminalMode::SYNCHRONIZED_OUTPUT)
     }
 
     /// Set a tab stop at the current column

@@ -33,9 +33,13 @@ pub mod term;
 pub mod ansi;
 pub mod pty;
 pub mod event;
+pub mod graphics;
+pub mod shell;
 
 // Re-export commonly used types
 pub use grid::{Cell, CellContent, CellAttrs, CellFlags, Color, Grid, Row, Cursor};
 pub use term::{Terminal, Selection, SelectionType, Point};
 pub use pty::Pty;
-pub use event::TerminalEvent;
+pub use event::{TerminalEvent, NotificationRequest};
+pub use graphics::{GraphicsManager, ImageId, ImagePlacement, StoredImage};
+pub use shell::{ShellIntegration, PromptMark, CommandRegion};

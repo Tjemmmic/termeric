@@ -65,6 +65,26 @@ bitflags! {
         const DOUBLE_UNDERLINE = 0b0010_0000_0000;
         /// Curly/wavy underline
         const CURLY_UNDERLINE = 0b0100_0000_0000;
+        /// Dotted underline
+        const DOTTED_UNDERLINE = 0b1000_0000_0000;
+        /// Dashed underline
+        const DASHED_UNDERLINE = 0b0001_0000_0000_0000;
+    }
+}
+
+impl CellAttrs {
+    /// All underline-related flags
+    pub const ALL_UNDERLINES: CellAttrs = CellAttrs::from_bits_truncate(
+        CellAttrs::UNDERLINE.bits()
+            | CellAttrs::DOUBLE_UNDERLINE.bits()
+            | CellAttrs::CURLY_UNDERLINE.bits()
+            | CellAttrs::DOTTED_UNDERLINE.bits()
+            | CellAttrs::DASHED_UNDERLINE.bits()
+    );
+
+    /// Check if any underline style is active
+    pub fn has_underline(&self) -> bool {
+        self.intersects(Self::ALL_UNDERLINES)
     }
 }
 
@@ -139,10 +159,14 @@ pub struct Cell {
     pub fg: Color,
     /// Background color
     pub bg: Color,
+    /// Underline color (None means use fg color)
+    pub underline_color: Option<Color>,
     /// Text attributes (bold, italic, etc.)
     pub attrs: CellAttrs,
     /// Cell flags (wide char, hyperlink, etc.)
     pub flags: CellFlags,
+    /// Hyperlink ID (index into hyperlink registry, if this cell is part of a hyperlink)
+    pub hyperlink_id: Option<u32>,
 }
 
 impl Default for Cell {
@@ -151,8 +175,10 @@ impl Default for Cell {
             content: CellContent::Empty,
             fg: Color::default_fg(),
             bg: Color::default_bg(),
+            underline_color: None,
             attrs: CellAttrs::empty(),
             flags: CellFlags::empty(),
+            hyperlink_id: None,
         }
     }
 }
@@ -188,8 +214,10 @@ impl Cell {
         self.content = CellContent::Empty;
         self.fg = Color::default_fg();
         self.bg = Color::default_bg();
+        self.underline_color = None;
         self.attrs = CellAttrs::empty();
         self.flags = CellFlags::DIRTY; // Keep dirty flag to trigger re-render
+        self.hyperlink_id = None;
     }
 
     /// Reset the cell completely (including colors)

@@ -4,10 +4,12 @@
 //! as a 2D grid of cells.
 
 mod cell;
+mod hyperlink;
 mod row;
 mod storage;
 
 pub use cell::{Cell, CellContent, CellAttrs, CellFlags, Color};
+pub use hyperlink::{Hyperlink, HyperlinkRegistry};
 pub use row::Row;
 
 use storage::GridStorage;

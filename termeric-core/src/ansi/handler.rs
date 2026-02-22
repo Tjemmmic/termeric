@@ -8,11 +8,22 @@ use super::color::{ansi_color, ansi_bright_color, parse_extended_color};
 /// Handler for VTE callbacks that updates terminal state
 pub struct Handler<'a> {
     terminal: &'a mut Terminal,
+    /// Accumulator for APC/DCS data
+    apc_data: Vec<u8>,
+    /// Whether we're in an APC sequence
+    in_apc: bool,
+    /// APC action character (for Kitty graphics, this is 'G')
+    apc_action: char,
 }
 
 impl<'a> Handler<'a> {
     pub fn new(terminal: &'a mut Terminal) -> Self {
-        Self { terminal }
+        Self {
+            terminal,
+            apc_data: Vec::new(),
+            in_apc: false,
+            apc_action: '\0',
+        }
     }
 }
 
@@ -61,8 +72,8 @@ impl Perform for Handler<'_> {
     }
 
     /// Handle a CSI sequence
-    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
-        let params: Vec<u16> = params.iter()
+    fn csi_dispatch(&mut self, raw_params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        let params: Vec<u16> = raw_params.iter()
             .flat_map(|p| p.iter().copied())
             .collect();
 
@@ -163,7 +174,8 @@ impl Perform for Handler<'_> {
 
             // SGR - Select Graphic Rendition
             'm' => {
-                self.handle_sgr(&params);
+                // Handle SGR with proper subparameter support
+                self.handle_sgr_raw(raw_params);
             }
 
             // Cursor save/restore
@@ -344,14 +356,65 @@ impl Perform for Handler<'_> {
                 log::trace!("Set color palette: {:?}", params);
             }
 
-            // Hyperlink
+            // Hyperlink (OSC 8)
+            // Format: OSC 8 ; params ; uri ST
+            // params may contain id=value pairs separated by colons
+            // Empty uri ends the hyperlink
             8 => {
-                log::trace!("Hyperlink: {:?}", params);
+                log::trace!("Hyperlink OSC 8: {:?}", params);
+                self.handle_osc_hyperlink(params);
             }
 
-            // Clipboard
+            // Clipboard (OSC 52)
+            // Format: OSC 52 ; <selection> ; <data> ST
+            // selection: c = clipboard, p = primary, etc.
+            // data: base64 encoded content, or ? to query
             52 => {
                 log::trace!("Clipboard operation: {:?}", params);
+                // OSC 52 clipboard handling is done at the app level,
+                // since it requires platform clipboard access
+            }
+
+            // Desktop notification (OSC 9) - iTerm2 style
+            // Format: OSC 9 ; message ST
+            9 => {
+                if params.len() > 1 {
+                    if let Ok(message) = std::str::from_utf8(params[1]) {
+                        log::info!("Desktop notification: {}", message);
+                        // TODO: Emit TerminalEvent::Notification
+                    }
+                }
+            }
+
+            // Shell integration (OSC 133)
+            // Used for prompt detection, command tracking
+            133 => {
+                // params[0] is "133", the rest are the actual parameters
+                if params.len() > 1 {
+                    self.terminal.handle_osc_133(&params[1..]);
+                }
+            }
+
+            // Desktop notification (OSC 777) - rxvt-unicode style
+            // Format: OSC 777 ; notify ; title ; body ST
+            777 => {
+                if params.len() >= 2 {
+                    let subcommand = std::str::from_utf8(params[1]).unwrap_or("");
+                    if subcommand == "notify" {
+                        let title = if params.len() > 2 {
+                            std::str::from_utf8(params[2]).ok()
+                        } else {
+                            None
+                        };
+                        let body = if params.len() > 3 {
+                            std::str::from_utf8(params[3]).unwrap_or("")
+                        } else {
+                            ""
+                        };
+                        log::info!("Desktop notification: {:?} - {}", title, body);
+                        // TODO: Emit TerminalEvent::Notification
+                    }
+                }
             }
 
             _ => {
@@ -360,21 +423,192 @@ impl Perform for Handler<'_> {
         }
     }
 
-    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, _action: char) {
-        // DCS hook - start of device control string
+    fn hook(&mut self, _params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        // DCS/APC hook - start of device control string or application program command
+        // For Kitty graphics: APC (ESC _) followed by 'G'
+        // VTE uses intermediates to identify the sequence type
+        // APC starts with ESC _ which VTE represents with intermediates containing '_'
+        if action == 'G' {
+            // Kitty graphics command
+            self.in_apc = true;
+            self.apc_action = 'G';
+            self.apc_data.clear();
+            log::trace!("Starting Kitty graphics APC sequence");
+        } else {
+            log::trace!("DCS hook: intermediates={:?}, action='{}'", intermediates, action);
+        }
     }
 
-    fn put(&mut self, _byte: u8) {
-        // DCS data
+    fn put(&mut self, byte: u8) {
+        // DCS/APC data
+        if self.in_apc {
+            self.apc_data.push(byte);
+        }
     }
 
     fn unhook(&mut self) {
-        // DCS unhook - end of device control string
+        // DCS/APC unhook - end of device control string or application program command
+        if self.in_apc {
+            log::trace!("Kitty graphics APC sequence received, {} bytes", self.apc_data.len());
+            // Process the accumulated data
+            let data = std::mem::take(&mut self.apc_data);
+            self.terminal.handle_graphics_command(&data);
+            self.in_apc = false;
+            self.apc_action = '\0';
+        }
     }
 }
 
 impl Handler<'_> {
-    /// Handle SGR (Select Graphic Rendition) parameters
+    /// Handle SGR with raw VTE Params (preserves colon-separated subparameters)
+    fn handle_sgr_raw(&mut self, params: &Params) {
+        // Check for empty params (reset all)
+        let mut has_params = false;
+        for _ in params.iter() {
+            has_params = true;
+            break;
+        }
+        if !has_params {
+            self.terminal.reset_attrs();
+            return;
+        }
+
+        // Process each semicolon-separated parameter group
+        for subparams in params.iter() {
+            // Each subparams is a colon-separated group (e.g., [4, 3] for "4:3")
+            let values: Vec<u16> = subparams.iter().copied().collect();
+
+            if values.is_empty() {
+                continue;
+            }
+
+            let primary = values[0];
+
+            match primary {
+                // Reset
+                0 => self.terminal.reset_attrs(),
+
+                // Basic attributes
+                1 => self.add_attr(CellAttrs::BOLD),
+                2 => self.add_attr(CellAttrs::DIM),
+                3 => self.add_attr(CellAttrs::ITALIC),
+
+                // Underline with optional style subparameter
+                4 => {
+                    if values.len() > 1 {
+                        // Has subparameter: 4:0 (none), 4:1 (single), 4:2 (double), 4:3 (curly), etc.
+                        self.terminal.set_underline_style(values[1]);
+                    } else {
+                        // Plain "4" means single underline
+                        self.terminal.set_underline_style(1);
+                    }
+                }
+
+                5 => self.add_attr(CellAttrs::BLINK),
+                7 => self.add_attr(CellAttrs::INVERSE),
+                8 => self.add_attr(CellAttrs::HIDDEN),
+                9 => self.add_attr(CellAttrs::STRIKE),
+
+                // Double underline (alternate code)
+                21 => self.terminal.set_underline_style(2),
+
+                // Reset attributes
+                22 => self.remove_attr(CellAttrs::BOLD | CellAttrs::DIM),
+                23 => self.remove_attr(CellAttrs::ITALIC),
+                24 => {
+                    // Reset all underline styles
+                    self.remove_attr(CellAttrs::ALL_UNDERLINES);
+                }
+                25 => self.remove_attr(CellAttrs::BLINK),
+                27 => self.remove_attr(CellAttrs::INVERSE),
+                28 => self.remove_attr(CellAttrs::HIDDEN),
+                29 => self.remove_attr(CellAttrs::STRIKE),
+
+                // Foreground colors (30-37)
+                30..=37 => self.terminal.set_fg(ansi_color(primary - 30)),
+
+                // Extended foreground color (38:2:R:G:B or 38:5:N)
+                38 => {
+                    if let Some(color) = self.parse_extended_color_from_subparams(&values[1..]) {
+                        self.terminal.set_fg(color);
+                    }
+                }
+
+                // Default foreground
+                39 => self.terminal.set_fg(Color::default_fg()),
+
+                // Background colors (40-47)
+                40..=47 => self.terminal.set_bg(ansi_color(primary - 40)),
+
+                // Extended background color (48:2:R:G:B or 48:5:N)
+                48 => {
+                    if let Some(color) = self.parse_extended_color_from_subparams(&values[1..]) {
+                        self.terminal.set_bg(color);
+                    }
+                }
+
+                // Default background
+                49 => self.terminal.set_bg(Color::default_bg()),
+
+                // Extended underline color (58:2:R:G:B or 58:5:N)
+                58 => {
+                    if let Some(color) = self.parse_extended_color_from_subparams(&values[1..]) {
+                        self.terminal.set_underline_color(color);
+                    }
+                }
+
+                // Reset underline color
+                59 => self.terminal.reset_underline_color(),
+
+                // Bright foreground colors (90-97)
+                90..=97 => self.terminal.set_fg(ansi_bright_color(primary - 90)),
+
+                // Bright background colors (100-107)
+                100..=107 => self.terminal.set_bg(ansi_bright_color(primary - 100)),
+
+                _ => {
+                    log::trace!("Unknown SGR parameter: {}", primary);
+                }
+            }
+        }
+    }
+
+    /// Parse extended color from colon-separated subparameters
+    /// Handles formats like: 2:R:G:B (RGB) or 5:N (256-color)
+    fn parse_extended_color_from_subparams(&self, subparams: &[u16]) -> Option<Color> {
+        if subparams.is_empty() {
+            return None;
+        }
+
+        match subparams[0] {
+            2 => {
+                // RGB color: 2:R:G:B (may have additional empty : separators)
+                // Some terminals send 2::R:G:B (with colorspace placeholder)
+                let rgb: Vec<u16> = subparams[1..].iter()
+                    .copied()
+                    .filter(|&v| v <= 255) // Filter valid color values
+                    .take(3)
+                    .collect();
+
+                if rgb.len() >= 3 {
+                    Some(Color::rgb(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8))
+                } else {
+                    None
+                }
+            }
+            5 => {
+                // 256-color palette: 5:N
+                if subparams.len() > 1 {
+                    Some(super::color::color_256(subparams[1] as u8))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Handle SGR (Select Graphic Rendition) parameters (legacy flat array version)
     fn handle_sgr(&mut self, params: &[u16]) {
         if params.is_empty() {
             self.terminal.reset_attrs();
@@ -523,6 +757,12 @@ impl Handler<'_> {
                         // Bracketed paste mode
                         self.terminal.set_mode(TerminalMode::BRACKETED_PASTE, enable);
                     }
+                    2026 => {
+                        // Synchronized output mode
+                        // When enabled, terminal should buffer output until disabled
+                        self.terminal.set_mode(TerminalMode::SYNCHRONIZED_OUTPUT, enable);
+                        log::trace!("Synchronized output mode: {}", enable);
+                    }
                     _ => {
                         log::trace!("Unknown private mode {}: {}", mode, enable);
                     }
@@ -552,5 +792,47 @@ impl Handler<'_> {
 
     fn remove_attr(&mut self, attr: CellAttrs) {
         self.terminal.remove_attrs(attr);
+    }
+
+    /// Handle OSC 8 hyperlink
+    ///
+    /// Format: OSC 8 ; params ; uri ST
+    /// - params may contain id=value pairs separated by colons
+    /// - Empty uri ends the hyperlink
+    fn handle_osc_hyperlink(&mut self, params: &[&[u8]]) {
+        // OSC 8 should have at least 2 parameters after the command:
+        // params[0] is "8" (command), params[1] is params, params[2] is URI
+        // But the params slice we receive has the command already stripped
+        // So params[0] is params (may be empty), params[1] is URI
+
+        if params.len() < 2 {
+            log::trace!("OSC 8: Invalid format, need at least 2 params");
+            return;
+        }
+
+        let params_str = std::str::from_utf8(params[0]).unwrap_or("");
+        let uri_str = std::str::from_utf8(params[1]).unwrap_or("");
+
+        // If URI is empty, end the hyperlink
+        if uri_str.is_empty() {
+            log::trace!("OSC 8: End hyperlink");
+            self.terminal.reset_hyperlink();
+            return;
+        }
+
+        // Parse the id parameter from params string
+        // Format: key=value:key=value:...
+        let mut link_id: Option<String> = None;
+        if !params_str.is_empty() {
+            for param in params_str.split(':') {
+                if let Some(value) = param.strip_prefix("id=") {
+                    link_id = Some(value.to_string());
+                    break;
+                }
+            }
+        }
+
+        log::trace!("OSC 8: Set hyperlink url={} id={:?}", uri_str, link_id);
+        self.terminal.set_hyperlink(uri_str.to_string(), link_id);
     }
 }

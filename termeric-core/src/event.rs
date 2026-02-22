@@ -23,8 +23,20 @@ pub enum TerminalEvent {
     /// The cursor visibility changed
     CursorVisibilityChanged(bool),
 
+    /// Desktop notification request (OSC 9, OSC 777)
+    Notification(NotificationRequest),
+
     /// The terminal exited
     Exit,
+}
+
+/// Desktop notification request
+#[derive(Debug, Clone)]
+pub struct NotificationRequest {
+    /// Notification title
+    pub title: Option<String>,
+    /// Notification body/message
+    pub body: String,
 }
 
 /// Clipboard request type

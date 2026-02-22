@@ -73,6 +73,9 @@ bitflags! {
 
         /// Linefeed/Newline mode - LF also does CR
         const LINEFEED_NEWLINE = 0b0010_0000_0000_0000_0000;
+
+        /// Synchronized output mode (Mode 2026) - buffer output until disabled
+        const SYNCHRONIZED_OUTPUT = 0b0100_0000_0000_0000_0000;
     }
 }
 
