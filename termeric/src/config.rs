@@ -102,6 +102,8 @@ pub struct FontConfig {
     pub line_height: f32,
     /// Fallback font families
     pub fallback: Vec<String>,
+    /// Enable font ligatures (for fonts like Fira Code, JetBrains Mono)
+    pub ligatures: bool,
 }
 
 impl Default for FontConfig {
@@ -111,6 +113,7 @@ impl Default for FontConfig {
             size: 14.0,
             line_height: 1.2,
             fallback: vec![],
+            ligatures: true,
         }
     }
 }

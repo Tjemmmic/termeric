@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::*;
 use wgpu::util::DeviceExt;
 
-use super::glyph_cache::GlyphCache;
+use super::glyph_cache::{GlyphCache, LigatureRun};
 
 /// Vertex for text rendering
 #[repr(C)]
@@ -234,6 +234,78 @@ impl TextPipeline {
     /// Queue a character for rendering
     pub fn push_char(&mut self, c: char, x: f32, y: f32, color: [f32; 4]) {
         self.queued.push(QueuedChar { c, x, y, color });
+    }
+
+    /// Push a shaped ligature run directly (bypassing the queue)
+    ///
+    /// This method renders a pre-shaped ligature run with proper glyph positioning.
+    /// It adds vertices directly to the build buffers.
+    pub fn push_ligature_run(
+        &mut self,
+        run: &LigatureRun,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+        cell_height: f32,
+        atlas_w: f32,
+        atlas_h: f32,
+    ) {
+        let baseline = cell_height * 0.8;
+
+        for shaped in &run.glyphs {
+            let entry = &shaped.entry;
+
+            // Skip empty glyphs
+            if entry.width == 0 || entry.height == 0 {
+                continue;
+            }
+
+            // Calculate screen position (x is at start of run, shaped.x_offset is within run)
+            let gx0 = x + shaped.x_offset + entry.bearing_x as f32;
+            let gy0 = y + baseline - entry.bearing_y as f32;
+            let gx1 = gx0 + entry.width as f32;
+            let gy1 = gy0 + entry.height as f32;
+
+            // Calculate texture coordinates
+            let u0 = entry.x as f32 / atlas_w;
+            let v0 = entry.y as f32 / atlas_h;
+            let u1 = (entry.x + entry.width) as f32 / atlas_w;
+            let v1 = (entry.y + entry.height) as f32 / atlas_h;
+
+            let base_idx = self.vertices.len() as u32;
+
+            // Push quad vertices
+            self.vertices.push(TextVertex {
+                position: [gx0, gy0],
+                tex_coords: [u0, v0],
+                color,
+            });
+            self.vertices.push(TextVertex {
+                position: [gx1, gy0],
+                tex_coords: [u1, v0],
+                color,
+            });
+            self.vertices.push(TextVertex {
+                position: [gx1, gy1],
+                tex_coords: [u1, v1],
+                color,
+            });
+            self.vertices.push(TextVertex {
+                position: [gx0, gy1],
+                tex_coords: [u0, v1],
+                color,
+            });
+
+            // Push indices for two triangles
+            self.indices.extend_from_slice(&[
+                base_idx,
+                base_idx + 1,
+                base_idx + 2,
+                base_idx,
+                base_idx + 2,
+                base_idx + 3,
+            ]);
+        }
     }
 
     /// Upload vertex data to GPU
