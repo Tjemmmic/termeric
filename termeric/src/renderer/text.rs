@@ -51,6 +51,7 @@ struct TextUniforms {
 }
 
 /// Queued character for rendering
+#[derive(Clone)]
 struct QueuedChar {
     c: char,
     x: f32,
@@ -236,21 +237,227 @@ impl TextPipeline {
         self.queued.push(QueuedChar { c, x, y, color });
     }
 
-    /// Push a shaped ligature run directly (bypassing the queue)
+    /// Upload vertex data to GPU
+    pub fn upload(&mut self, device: &Device, queue: &Queue, glyph_cache: &mut GlyphCache) {
+        self.vertices.clear();
+        self.indices.clear();
+
+        let (atlas_w, atlas_h) = glyph_cache.atlas_size();
+        let atlas_w = atlas_w as f32;
+        let atlas_h = atlas_h as f32;
+
+        let (_cell_width, cell_height) = glyph_cache.cell_size();
+        let baseline = cell_height * 0.8; // Approximate baseline
+
+        // Always use standard per-character rendering for proper monospace grid alignment.
+        // Ligatures are handled separately by detecting specific patterns inline.
+        self.upload_standard(queue, glyph_cache, atlas_w, atlas_h, baseline);
+
+        // Create/update vertex buffer
+        if !self.vertices.is_empty() {
+            let vertex_data = bytemuck::cast_slice(&self.vertices);
+            let index_data = bytemuck::cast_slice(&self.indices);
+
+            self.vertex_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Text Vertex Buffer"),
+                contents: vertex_data,
+                usage: BufferUsages::VERTEX,
+            }));
+
+            self.index_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Text Index Buffer"),
+                contents: index_data,
+                usage: BufferUsages::INDEX,
+            }));
+        }
+    }
+
+    /// Standard per-character upload (no ligatures)
+    fn upload_standard(&mut self, queue: &Queue, glyph_cache: &mut GlyphCache, atlas_w: f32, atlas_h: f32, baseline: f32) {
+        for queued in &self.queued {
+            let Some(entry) = glyph_cache.get_or_insert(queued.c, queue) else { continue };
+
+            if entry.width == 0 || entry.height == 0 {
+                continue;
+            }
+
+            // Position glyph using font bearing (standard approach)
+            let x0 = queued.x + entry.bearing_x as f32;
+            let y0 = queued.y + baseline - entry.bearing_y as f32;
+            let x1 = x0 + entry.width as f32;
+            let y1 = y0 + entry.height as f32;
+
+            let u0 = entry.x as f32 / atlas_w;
+            let v0 = entry.y as f32 / atlas_h;
+            let u1 = (entry.x + entry.width) as f32 / atlas_w;
+            let v1 = (entry.y + entry.height) as f32 / atlas_h;
+
+            let base_idx = self.vertices.len() as u32;
+
+            self.vertices.push(TextVertex { position: [x0, y0], tex_coords: [u0, v0], color: queued.color });
+            self.vertices.push(TextVertex { position: [x1, y0], tex_coords: [u1, v0], color: queued.color });
+            self.vertices.push(TextVertex { position: [x1, y1], tex_coords: [u1, v1], color: queued.color });
+            self.vertices.push(TextVertex { position: [x0, y1], tex_coords: [u0, v1], color: queued.color });
+
+            self.indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2, base_idx, base_idx + 2, base_idx + 3]);
+        }
+    }
+
+    /// Upload with ligature shaping for potential ligature sequences
     ///
-    /// This method renders a pre-shaped ligature run with proper glyph positioning.
-    /// It adds vertices directly to the build buffers.
-    pub fn push_ligature_run(
+    /// This method scans for common ligature-forming character sequences and only
+    /// shapes those specific runs. Regular text is rendered using standard
+    /// per-character rendering to maintain proper monospace grid alignment.
+    fn upload_with_ligatures(&mut self, queue: &Queue, glyph_cache: &mut GlyphCache, atlas_w: f32, atlas_h: f32, cell_width: f32, baseline: f32) {
+        // Sort queued chars by y then x to ensure proper run detection
+        let mut sorted: Vec<_> = self.queued.iter().cloned().collect();
+        sorted.sort_by(|a, b| {
+            let y_cmp = a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal);
+            if y_cmp != std::cmp::Ordering::Equal {
+                return y_cmp;
+            }
+            a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Group into runs of consecutive characters with same y and color.
+        // Each run tracks the original queued characters so we can preserve their positions.
+        // Run format: (start_x, y, color, chars_with_positions)
+        let mut runs: Vec<(f32, f32, [f32; 4], Vec<(char, f32)>)> = Vec::new();
+
+        for queued in &sorted {
+            let can_extend = if let Some((_, run_y, run_color, run_chars)) = runs.last_mut() {
+                // Check if this char continues the current run
+                // Infer spacing from last character's position
+                let last_x = run_chars.last().map(|(_, x)| *x).unwrap_or(0.0);
+                let spacing = queued.x - last_x;
+
+                // Consider consecutive if spacing is reasonable (close to cell_width)
+                let same_row = (queued.y - *run_y).abs() < 0.1;
+                let consecutive = spacing > cell_width * 0.5 && spacing < cell_width * 1.5;
+                let same_color = queued.color == *run_color;
+
+                if same_row && consecutive && same_color {
+                    run_chars.push((queued.c, queued.x));
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !can_extend {
+                // Start new run
+                runs.push((queued.x, queued.y, queued.color, vec![(queued.c, queued.x)]));
+            }
+        }
+
+        // Process each run
+        for (start_x, y, color, chars) in runs {
+            let char_count = chars.len();
+
+            // Only try ligature shaping for runs of 2+ chars that might form ligatures
+            // Check if this run contains potential ligature-forming characters
+            let text: String = chars.iter().map(|(c, _)| *c).collect();
+            let may_have_ligatures = char_count >= 2 && Self::may_form_ligature(&text);
+
+            if may_have_ligatures {
+                if let Some(run) = glyph_cache.shape_run(&text, queue) {
+                    // Use shaped rendering for potential ligature runs
+                    // This handles both true ligatures (fewer glyphs) and contextual
+                    // alternates like FiraCode arrows (same glyph count, different shapes)
+                    if !run.glyphs.is_empty() {
+                        self.push_shaped_run(&run, start_x, y, color, baseline, atlas_w, atlas_h, cell_width, char_count);
+                        continue;
+                    }
+                }
+            }
+
+            // Standard per-character rendering at original grid positions
+            // This preserves exact monospace alignment for regular text
+            for (c, char_x) in chars {
+                if let Some(entry) = glyph_cache.get_or_insert(c, queue) {
+                    if entry.width > 0 && entry.height > 0 {
+                        let x0 = char_x + entry.bearing_x as f32;
+                        let y0 = y + baseline - entry.bearing_y as f32;
+                        let x1 = x0 + entry.width as f32;
+                        let y1 = y0 + entry.height as f32;
+
+                        let u0 = entry.x as f32 / atlas_w;
+                        let v0 = entry.y as f32 / atlas_h;
+                        let u1 = (entry.x + entry.width) as f32 / atlas_w;
+                        let v1 = (entry.y + entry.height) as f32 / atlas_h;
+
+                        let base_idx = self.vertices.len() as u32;
+                        self.vertices.push(TextVertex { position: [x0, y0], tex_coords: [u0, v0], color });
+                        self.vertices.push(TextVertex { position: [x1, y0], tex_coords: [u1, v0], color });
+                        self.vertices.push(TextVertex { position: [x1, y1], tex_coords: [u1, v1], color });
+                        self.vertices.push(TextVertex { position: [x0, y1], tex_coords: [u0, v1], color });
+                        self.indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2, base_idx, base_idx + 2, base_idx + 3]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check if a text run might contain ligature-forming character sequences
+    ///
+    /// This checks for common programming ligatures like arrows, comparisons,
+    /// and other sequences that fonts like FiraCode, JetBrains Mono support.
+    fn may_form_ligature(text: &str) -> bool {
+        // Common ligature patterns in programming fonts
+        const LIGATURE_PATTERNS: &[&str] = &[
+            // Arrows
+            "->", "=>", "<-", "-->", "<--", "==>", "<==",
+            "->-", "->>", "<<-", ">>=", "=<<",
+            // Comparisons
+            "==", "!=", "<=", ">=", "===", "!==", "=/=",
+            "<>", "<<", ">>", "<<<", ">>>",
+            // Logic
+            "&&", "||", "!!", "??", "?.", "?:",
+            // Math/operators
+            "++", "--", "**", "//", "/*", "*/", "///",
+            ":::", "::", "..", "...", "..<",
+            // Haskell/functional
+            "<$>", "<*>", "<|>", "|>", "<|", ">>=", "=<<",
+            // Other
+            "www", "fi", "fl", "ff", "ffi", "ffl",
+            "__", "##", "###",
+        ];
+
+        for pattern in LIGATURE_PATTERNS {
+            if text.contains(pattern) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Push a shaped run using cosmic-text's glyph positions, scaled to terminal grid
+    ///
+    /// This renders glyphs at positions scaled from cosmic-text's shaping to fit
+    /// within our terminal grid cells. This ensures proper spacing regardless of
+    /// font metrics.
+    fn push_shaped_run(
         &mut self,
         run: &LigatureRun,
-        x: f32,
+        start_x: f32,
         y: f32,
         color: [f32; 4],
-        cell_height: f32,
+        baseline: f32,
         atlas_w: f32,
         atlas_h: f32,
+        cell_width: f32,
+        char_count: usize,
     ) {
-        let baseline = cell_height * 0.8;
+        // Calculate scale factor to fit shaped glyphs into terminal grid
+        // cosmic-text may use different advance widths than our cell_width
+        let total_grid_width = char_count as f32 * cell_width;
+        let scale = if run.total_width > 0.0 {
+            total_grid_width / run.total_width
+        } else {
+            1.0
+        };
 
         for shaped in &run.glyphs {
             let entry = &shaped.entry;
@@ -260,8 +467,9 @@ impl TextPipeline {
                 continue;
             }
 
-            // Calculate screen position (x is at start of run, shaped.x_offset is within run)
-            let gx0 = x + shaped.x_offset + entry.bearing_x as f32;
+            // Scale cosmic-text's x_offset to fit our terminal grid
+            let scaled_x_offset = shaped.x_offset * scale;
+            let gx0 = start_x + scaled_x_offset + entry.bearing_x as f32;
             let gy0 = y + baseline - entry.bearing_y as f32;
             let gx1 = gx0 + entry.width as f32;
             let gy1 = gy0 + entry.height as f32;
@@ -305,93 +513,6 @@ impl TextPipeline {
                 base_idx + 2,
                 base_idx + 3,
             ]);
-        }
-    }
-
-    /// Upload vertex data to GPU
-    pub fn upload(&mut self, device: &Device, queue: &Queue, glyph_cache: &mut GlyphCache) {
-        self.vertices.clear();
-        self.indices.clear();
-
-        let (atlas_w, atlas_h) = glyph_cache.atlas_size();
-        let atlas_w = atlas_w as f32;
-        let atlas_h = atlas_h as f32;
-
-        let (_cell_width, cell_height) = glyph_cache.cell_size();
-        let baseline = cell_height * 0.8; // Approximate baseline
-
-        for queued in &self.queued {
-            // Get glyph from cache
-            let Some(entry) = glyph_cache.get_or_insert(queued.c, queue) else { continue };
-
-            // Skip empty glyphs
-            if entry.width == 0 || entry.height == 0 {
-                continue;
-            }
-
-            // Calculate screen position
-            let x0 = queued.x + entry.bearing_x as f32;
-            let y0 = queued.y + baseline - entry.bearing_y as f32;
-            let x1 = x0 + entry.width as f32;
-            let y1 = y0 + entry.height as f32;
-
-            // Calculate texture coordinates
-            let u0 = entry.x as f32 / atlas_w;
-            let v0 = entry.y as f32 / atlas_h;
-            let u1 = (entry.x + entry.width) as f32 / atlas_w;
-            let v1 = (entry.y + entry.height) as f32 / atlas_h;
-
-            let base_idx = self.vertices.len() as u32;
-
-            // Push quad vertices
-            self.vertices.push(TextVertex {
-                position: [x0, y0],
-                tex_coords: [u0, v0],
-                color: queued.color,
-            });
-            self.vertices.push(TextVertex {
-                position: [x1, y0],
-                tex_coords: [u1, v0],
-                color: queued.color,
-            });
-            self.vertices.push(TextVertex {
-                position: [x1, y1],
-                tex_coords: [u1, v1],
-                color: queued.color,
-            });
-            self.vertices.push(TextVertex {
-                position: [x0, y1],
-                tex_coords: [u0, v1],
-                color: queued.color,
-            });
-
-            // Push indices for two triangles
-            self.indices.extend_from_slice(&[
-                base_idx,
-                base_idx + 1,
-                base_idx + 2,
-                base_idx,
-                base_idx + 2,
-                base_idx + 3,
-            ]);
-        }
-
-        // Create/update vertex buffer
-        if !self.vertices.is_empty() {
-            let vertex_data = bytemuck::cast_slice(&self.vertices);
-            let index_data = bytemuck::cast_slice(&self.indices);
-
-            self.vertex_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Text Vertex Buffer"),
-                contents: vertex_data,
-                usage: BufferUsages::VERTEX,
-            }));
-
-            self.index_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Text Index Buffer"),
-                contents: index_data,
-                usage: BufferUsages::INDEX,
-            }));
         }
     }
 

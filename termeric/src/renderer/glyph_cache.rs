@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache,
+    Attrs, Buffer, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, SwashCache,
 };
 use std::collections::HashMap;
 use wgpu::*;
@@ -113,8 +113,10 @@ pub struct GlyphCache {
     cell_height: f32,
     /// Font size
     font_size: f32,
-    /// Font family name
+    /// Font family name (as requested by user)
     font_family: String,
+    /// Whether to use system monospace fallback (when requested font not found/not monospace)
+    use_monospace_fallback: bool,
     /// Whether ligatures are enabled
     ligatures_enabled: bool,
 }
@@ -129,8 +131,8 @@ impl GlyphCache {
         let line_height = font_size * 1.2;
         let metrics = Metrics::new(font_size, line_height);
 
-        // Measure a character to get cell dimensions
-        let (cell_width, cell_height) = measure_cell(&mut font_system, &metrics, font_family);
+        // Measure a character to get cell dimensions and check if font was found
+        let (cell_width, cell_height, use_monospace_fallback) = measure_cell(&mut font_system, &metrics, font_family);
 
         // Create atlas texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -198,6 +200,7 @@ impl GlyphCache {
             cell_height,
             font_size,
             font_family: font_family.to_string(),
+            use_monospace_fallback,
             ligatures_enabled: ligatures,
         })
     }
@@ -261,13 +264,23 @@ impl GlyphCache {
     /// Rasterize a character
     fn rasterize_char(&mut self, c: char) -> Option<RasterizedGlyph> {
         // Create a buffer with just this character
+        // Use Shaping::Basic to match measure_cell() - this ensures consistent font selection
         let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
-        let family = family_for(&self.font_family);
+
+        // Use monospace fallback if the requested font wasn't found or isn't monospace
+        let family = if self.use_monospace_fallback {
+            Family::Monospace
+        } else {
+            family_for(&self.font_family)
+        };
+
+        let attrs = Attrs::new().family(family);
         buffer.set_text(
             &mut self.font_system,
             &c.to_string(),
-            Attrs::new().family(family),
-            Shaping::Advanced,
+            &attrs,
+            Shaping::Basic,
+            None, // No alignment needed for single chars
         );
 
         // Get the first glyph
@@ -376,6 +389,41 @@ impl GlyphCache {
         }
     }
 
+    /// Get all installed monospace font families
+    ///
+    /// Returns a sorted list of unique monospace font family names available on the system.
+    /// Filters out emoji fonts and duplicates.
+    pub fn get_monospace_fonts(&self) -> Vec<String> {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        let mut fonts: Vec<String> = self.font_system
+            .db()
+            .faces()
+            .filter(|face| {
+                // Must be monospace
+                if !face.monospaced {
+                    return false;
+                }
+                // Filter out emoji and symbol fonts
+                let name = face.families.first().map(|(n, _)| n.as_str()).unwrap_or("");
+                !name.contains("Emoji") && !name.contains("Symbol") && !name.contains("Icons")
+            })
+            .filter_map(|face| {
+                face.families.first().map(|(name, _)| name.clone())
+            })
+            .filter(|name| seen.insert(name.clone())) // Deduplicate
+            .collect();
+
+        fonts.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+        // Always include "monospace" as the first option (system default)
+        let mut result = vec!["monospace".to_string()];
+        result.extend(fonts.into_iter().filter(|f| f.to_lowercase() != "monospace"));
+
+        result
+    }
+
     /// Shape a text run with ligatures
     ///
     /// Returns a LigatureRun with all shaped glyphs and their positions.
@@ -406,12 +454,30 @@ impl GlyphCache {
 
         {
             let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
-            let family = family_for(&self.font_family);
+
+            // Use monospace fallback if the requested font wasn't found
+            let family = if self.use_monospace_fallback {
+                Family::Monospace
+            } else {
+                family_for(&self.font_family)
+            };
+
+            // Enable ligature-related OpenType features
+            let mut features = FontFeatures::new();
+            // Standard ligatures (fi, fl, etc.)
+            features.enable(FeatureTag::STANDARD_LIGATURES);
+            // Contextual alternates (used by FiraCode for arrow ligatures like ->)
+            features.enable(FeatureTag::CONTEXTUAL_ALTERNATES);
+            // Discretionary ligatures (optional, some fonts use this)
+            features.enable(FeatureTag::DISCRETIONARY_LIGATURES);
+
+            let attrs = Attrs::new().family(family).font_features(features);
             buffer.set_text(
                 &mut self.font_system,
                 text,
-                Attrs::new().family(family),
+                &attrs,
                 Shaping::Advanced,
+                None,
             );
 
             for run in buffer.layout_runs() {
@@ -506,9 +572,10 @@ impl GlyphCache {
         self.metrics = Metrics::new(font_size, line_height);
 
         // Remeasure cell dimensions
-        let (cell_width, cell_height) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        let (cell_width, cell_height, use_fallback) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
         self.cell_width = cell_width;
         self.cell_height = cell_height;
+        self.use_monospace_fallback = use_fallback;
 
         // Clear the atlas and caches
         self.entries.clear();
@@ -550,9 +617,10 @@ impl GlyphCache {
 
         self.font_family = font_family;
 
-        let (cell_width, cell_height) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        let (cell_width, cell_height, use_fallback) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
         self.cell_width = cell_width;
         self.cell_height = cell_height;
+        self.use_monospace_fallback = use_fallback;
 
         self.entries.clear();
         self.ligature_cache.clear();
@@ -594,29 +662,122 @@ struct RasterizedGlyph {
     data: Vec<u8>,
 }
 
-/// Measure cell dimensions using a sample character
-fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &str) -> (f32, f32) {
-    let mut buffer = Buffer::new(font_system, *metrics);
+/// Measure cell dimensions for monospace grid
+///
+/// For terminal rendering, we need a consistent cell width. We measure the
+/// advance width of a single character with basic shaping. Using 'M' as it's
+/// typically representative of monospace font width.
+///
+/// Returns (cell_width, cell_height, use_monospace_fallback)
+fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &str) -> (f32, f32, bool) {
     let family = family_for(font_family);
+    let attrs = Attrs::new().family(family);
+
+    // Measure a single 'M' character to get the natural width
+    let mut buffer = Buffer::new(font_system, *metrics);
     buffer.set_text(
         font_system,
         "M",
-        Attrs::new().family(family),
-        Shaping::Advanced,
+        &attrs,
+        Shaping::Basic,
+        None,
     );
 
-    // Get width from first glyph
-    let mut width = metrics.font_size * 0.6; // Default fallback
+    let mut measured_width: f32 = 0.0;
+    let mut font_id: Option<cosmic_text::fontdb::ID> = None;
     for run in buffer.layout_runs() {
         for glyph in run.glyphs.iter() {
-            width = glyph.w;
+            measured_width = glyph.w;
+            font_id = Some(glyph.font_id);
             break;
         }
+        break;
     }
 
-    let width = width.round().max(1.0);
+    // Try to get the actual font name and check if it's monospace
+    let (actual_font_name, is_monospace) = font_id.map(|id| {
+        let name = font_system.db().face(id).map(|face| {
+            face.families.first().map(|(name, _)| name.clone()).unwrap_or_else(|| "unknown".to_string())
+        }).unwrap_or_else(|| "unknown".to_string());
+        let is_mono = font_system.is_monospace(id);
+        (name, is_mono)
+    }).unwrap_or_else(|| ("none".to_string(), false));
+
+    // Check if the requested font was found by comparing names
+    let requested_lower = font_family.to_lowercase();
+    let actual_lower = actual_font_name.to_lowercase();
+
+    // Font matches if:
+    // 1. User requested generic "monospace" - always matches
+    // 2. Actual font name contains or is contained in requested name
+    let is_generic_request = matches!(requested_lower.as_str(), "monospace" | "mono" | "default");
+    let name_matches = actual_lower.contains(&requested_lower) ||
+                       requested_lower.contains(&actual_lower);
+    let font_was_found = is_generic_request || name_matches;
+
+    // Only use fallback if font wasn't found AND got a non-monospace fallback
+    // If the font WAS found (name matches), trust it even if is_monospace reports false
+    let use_fallback = !font_was_found && !is_monospace;
+
+    // Standard monospace fonts have width/height ratio around 0.5-0.6
+    // If measured width is too large (> 0.75 * font_size), use heuristic for cell spacing
+    let expected_max = metrics.font_size * 0.75;
+    let width = if measured_width > 0.0 && measured_width <= expected_max {
+        // Width looks reasonable, use it
+        measured_width.round().max(1.0)
+    } else if use_fallback {
+        // Font not found and got proportional fallback - measure system monospace
+        let mut mono_buffer = Buffer::new(font_system, *metrics);
+        mono_buffer.set_text(
+            font_system,
+            "M",
+            &Attrs::new().family(Family::Monospace),
+            Shaping::Basic,
+            None,
+        );
+
+        let mut mono_width: f32 = 0.0;
+        for run in mono_buffer.layout_runs() {
+            for glyph in run.glyphs.iter() {
+                mono_width = glyph.w;
+                break;
+            }
+            break;
+        }
+
+        log::warn!(
+            "Font '{}' not found (got '{}'), using system monospace for rendering",
+            font_family, actual_font_name
+        );
+
+        if mono_width > 0.0 {
+            mono_width.round().max(1.0)
+        } else {
+            (metrics.font_size * 0.6).round().max(1.0)
+        }
+    } else {
+        // Font was found but width seems off - still use measured width, just log it
+        log::debug!(
+            "Font '{}' measured width {:.2} exceeds expected max {:.2}, but using it anyway",
+            font_family, measured_width, expected_max
+        );
+        measured_width.round().max(1.0)
+    };
+
     let height = metrics.line_height.round().max(1.0);
-    (width, height)
+
+    log::info!(
+        "Cell size for '{}' (actual='{}', found={}, fallback={}): {}x{} (measured_w={:.2})",
+        font_family,
+        actual_font_name,
+        font_was_found,
+        use_fallback,
+        width,
+        height,
+        measured_width
+    );
+
+    (width, height, use_fallback)
 }
 
 fn family_for(font_family: &str) -> Family<'_> {

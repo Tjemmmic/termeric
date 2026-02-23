@@ -32,6 +32,8 @@ pub struct Search {
     case_sensitive: bool,
     /// Whether to use regex mode
     use_regex: bool,
+    /// Whether filter mode is enabled (show only matching lines)
+    filter_mode: bool,
     /// Compiled regex (if in regex mode and valid)
     compiled_regex: Option<Regex>,
     /// Regex compilation error (if any)
@@ -42,6 +44,8 @@ pub struct Search {
     current_match: Option<usize>,
     /// Whether search is active
     active: bool,
+    /// Rows that contain matches (for filter mode) - sorted and deduplicated
+    matching_rows: Vec<i32>,
 }
 
 impl Default for Search {
@@ -57,11 +61,13 @@ impl Search {
             query: String::new(),
             case_sensitive: false,
             use_regex: false,
+            filter_mode: false,
             compiled_regex: None,
             regex_error: None,
             matches: Vec::new(),
             current_match: None,
             active: false,
+            matching_rows: Vec::new(),
         }
     }
 
@@ -70,16 +76,20 @@ impl Search {
         self.active = true;
         self.query.clear();
         self.matches.clear();
+        self.matching_rows.clear();
         self.current_match = None;
         self.compiled_regex = None;
         self.regex_error = None;
+        // Keep filter_mode state - user might want to continue filtering
     }
 
     /// Cancel the search
     pub fn cancel(&mut self) {
         self.active = false;
+        self.filter_mode = false; // Disable filter when canceling
         self.query.clear();
         self.matches.clear();
+        self.matching_rows.clear();
         self.current_match = None;
         self.compiled_regex = None;
         self.regex_error = None;
@@ -88,13 +98,35 @@ impl Search {
     /// Confirm the search (keep highlights, exit search input mode)
     pub fn confirm(&mut self) {
         self.active = false;
-        // Keep matches and current_match for continued highlighting
+        // Keep matches, current_match, and filter_mode for continued highlighting/filtering
     }
 
     /// Clear search results (but keep active state)
     pub fn clear_results(&mut self) {
         self.matches.clear();
+        self.matching_rows.clear();
         self.current_match = None;
+    }
+
+    /// Toggle filter mode (show only matching lines)
+    pub fn toggle_filter(&mut self) {
+        self.filter_mode = !self.filter_mode;
+    }
+
+    /// Is filter mode enabled?
+    pub fn is_filter_mode(&self) -> bool {
+        self.filter_mode
+    }
+
+    /// Get the rows that contain matches (for filter mode)
+    /// Returns sorted, deduplicated list of row indices
+    pub fn matching_rows(&self) -> &[i32] {
+        &self.matching_rows
+    }
+
+    /// Get the number of matching lines (distinct rows with matches)
+    pub fn matching_line_count(&self) -> usize {
+        self.matching_rows.len()
     }
 
     /// Check if search is active
@@ -247,6 +279,7 @@ impl Search {
     /// Update matches based on current query
     fn update_matches(&mut self, grid: &Grid) {
         self.matches.clear();
+        self.matching_rows.clear();
         self.current_match = None;
 
         if self.query.is_empty() {
@@ -280,6 +313,20 @@ impl Search {
         if !self.matches.is_empty() {
             self.current_match = Some(0);
         }
+
+        // Build the matching_rows list (sorted, deduplicated)
+        self.rebuild_matching_rows();
+    }
+
+    /// Rebuild the matching_rows list from current matches
+    fn rebuild_matching_rows(&mut self) {
+        self.matching_rows.clear();
+        for m in &self.matches {
+            if self.matching_rows.last() != Some(&m.row) {
+                self.matching_rows.push(m.row);
+            }
+        }
+        // Matches are already in row order from search, so matching_rows is sorted
     }
 
     /// Find all matches in a line and add them to self.matches
@@ -366,10 +413,14 @@ pub struct SearchBarInfo {
     pub case_sensitive: bool,
     /// Whether regex mode is enabled
     pub use_regex: bool,
+    /// Whether filter mode is enabled (show only matching lines)
+    pub filter_mode: bool,
     /// Current match index (1-based, None if no matches)
     pub current_match: Option<usize>,
     /// Total match count
     pub match_count: usize,
+    /// Number of lines containing matches (for filter mode display)
+    pub matching_line_count: usize,
     /// Regex error message if any
     pub regex_error: Option<String>,
     /// Cursor position in query
@@ -383,8 +434,10 @@ impl Search {
             query: self.query.clone(),
             case_sensitive: self.case_sensitive,
             use_regex: self.use_regex,
+            filter_mode: self.filter_mode,
             current_match: self.current_match_index(),
             match_count: self.match_count(),
+            matching_line_count: self.matching_line_count(),
             regex_error: self.regex_error.clone(),
             cursor_pos,
         }

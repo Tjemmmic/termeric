@@ -21,7 +21,7 @@ use wgpu::*;
 use winit::window::Window;
 use termeric_core::{Grid, Selection, Color as TermColor, CellAttrs, CellFlags};
 use crate::theme::Theme;
-use crate::settings::SettingsPanelInfo;
+use crate::settings::{SettingsPanelInfo, SettingsPanelLayout};
 use crate::search::{Search, SearchBarInfo};
 
 use text::TextPipeline;
@@ -29,6 +29,21 @@ use rect::RectPipeline;
 
 use crate::tabs::TabInfo;
 use crate::command::CommandDef;
+use crate::panes::{PaneRect, Divider};
+
+/// Render information for a single pane in a multi-pane layout
+pub struct PaneRenderInfo<'a> {
+    /// The grid to render
+    pub grid: &'a Grid,
+    /// Selection in this pane (if any)
+    pub selection: Option<&'a Selection>,
+    /// Pane layout rectangle (in pixels)
+    pub rect: PaneRect,
+    /// Whether this pane is focused
+    pub is_focused: bool,
+    /// Cursor position for this pane (relative to pane)
+    pub cursor_pos: (f32, f32),
+}
 
 /// Command bar display information
 #[derive(Debug, Clone)]
@@ -393,6 +408,11 @@ impl Renderer {
         self.cell_height = cell_height;
     }
 
+    /// Get all installed monospace font families
+    pub fn get_monospace_fonts(&self) -> Vec<String> {
+        self.glyph_cache.get_monospace_fonts()
+    }
+
     /// Get current padding
     pub fn padding(&self) -> f32 {
         self.padding
@@ -425,6 +445,35 @@ impl Renderer {
         self.opacity = opacity.clamp(0.1, 1.0);
     }
 
+    /// Add dividers between panes to the render data
+    /// This should be called during build_render_data when panes are present
+    pub fn add_pane_dividers(&mut self, dividers: &[Divider], tab_bar_height: f32) {
+        let divider_color = self.ui.tab_border;
+        let divider_thickness = 2.0;
+
+        for divider in dividers {
+            if divider.vertical {
+                // Vertical divider (between left/right panes)
+                self.rect_pipeline.push_rect(
+                    divider.position - divider_thickness / 2.0,
+                    tab_bar_height + divider.start,
+                    divider_thickness,
+                    divider.end - divider.start,
+                    divider_color,
+                );
+            } else {
+                // Horizontal divider (between top/bottom panes)
+                self.rect_pipeline.push_rect(
+                    divider.start,
+                    tab_bar_height + divider.position - divider_thickness / 2.0,
+                    divider.end - divider.start,
+                    divider_thickness,
+                    divider_color,
+                );
+            }
+        }
+    }
+
     fn command_bar_base_height(&self) -> f32 {
         (self.cell_height + 16.0).round().max(28.0)
     }
@@ -437,7 +486,8 @@ impl Renderer {
     /// command_bar: optional command bar info when in command mode
     /// search_bar: optional search bar info when searching
     /// search: search state for match highlighting
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search) -> Result<(), SurfaceError> {
+    /// images: optional list of image placements and their data for Kitty graphics
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -448,9 +498,13 @@ impl Renderer {
         // Build render data from grid and tabs
         self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel, search_bar, search);
 
+        // Build image render data if any
+        self.build_image_data(images);
+
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
         self.text_pipeline.upload(&self.device, &self.queue, &mut self.glyph_cache);
+        self.image_pipeline.upload(&self.device, &self.queue);
 
         {
             let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -476,6 +530,9 @@ impl Renderer {
             // Draw rectangles (backgrounds, cursor, tab bar)
             self.rect_pipeline.draw(&mut render_pass);
 
+            // Draw images (Kitty graphics)
+            self.image_pipeline.draw(&mut render_pass);
+
             // Draw text (terminal content and tab labels)
             self.text_pipeline.draw(&mut render_pass, &self.glyph_cache);
         }
@@ -484,6 +541,37 @@ impl Renderer {
         output.present();
 
         Ok(())
+    }
+
+    /// Build image render data from placements
+    fn build_image_data(&mut self, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>) {
+        self.image_pipeline.clear();
+
+        let Some(images) = images else { return };
+
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+        let padding = self.padding;
+        let tab_bar_height = self.tab_bar_height();
+
+        for (placement, image) in images {
+            // Ensure image is uploaded to GPU
+            self.image_pipeline.upload_image(&self.device, &self.queue, image);
+
+            // Calculate position
+            let x = padding + (placement.col as f32) * cell_width + placement.x_offset as f32;
+            let y = tab_bar_height + padding + (placement.row as f32) * cell_height + placement.y_offset as f32;
+
+            // Calculate size (use placement size or image natural size)
+            let width = placement.width
+                .map(|w| w as f32 * cell_width)
+                .unwrap_or(image.width as f32);
+            let height = placement.height
+                .map(|h| h as f32 * cell_height)
+                .unwrap_or(image.height as f32);
+
+            self.image_pipeline.push_image(image.id, x, y, width, height);
+        }
     }
 
     /// Build render data from the grid and tabs
@@ -546,27 +634,87 @@ impl Renderer {
         // Calculate maximum y position for grid content (don't overlap command bar or dropdown)
         let max_grid_y = window_height - padding - command_bar_height - dropdown_height - 8.0; // 8px gap for dropdown
 
+        // Calculate settings panel occlusion area (to prevent grid text from rendering over it)
+        let settings_panel_left = if let Some(sp) = settings_panel {
+            if sp.animation > 0.001 {
+                // Calculate panel position - must match build_settings_panel
+                let ui_cw = cell_width;
+                let sp_padding_x = ui_cw * 1.5;
+                let sidebar_width = sp_padding_x + ui_cw * 3.0 + ui_cw * 10.0 + sp_padding_x;
+                let min_content_width = ui_cw * 30.0;
+                let panel_width = ((sidebar_width + min_content_width).max(window_width * 0.35)).min(window_width * 0.55);
+                let panel_x = window_width - panel_width * sp.animation;
+                Some(panel_x)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Determine which rows to render based on filter mode
+        let filter_mode = search.is_filter_mode() && !search.matching_rows().is_empty();
+        let matching_rows = search.matching_rows();
+
         // Iterate over grid cells (offset by tab bar height and search bar if visible)
-        for row in 0..grid.rows() {
+        // In filter mode, only show rows that contain matches
+        // rows_to_render: Vec of (visual_row_index, grid_row_offset)
+        // grid_row_offset: 0+ for visible grid, negative for scrollback
+        let rows_to_render: Vec<(usize, i32)> = if filter_mode {
+            // In filter mode, render only matching rows (both visible and scrollback)
+            // Each matching row is rendered at a visual position starting from 0
+            matching_rows.iter()
+                .enumerate()
+                .map(|(visual_row, &grid_row)| (visual_row, grid_row))
+                .collect()
+        } else {
+            // Normal mode: render all visible rows
+            (0..grid.rows()).map(|row| (row, row as i32 - scroll_offset_i32)).collect()
+        };
+
+        for (visual_row, grid_row) in rows_to_render {
+            // Get the row data - use row_at_offset which handles both visible and scrollback
+            let row_data = if filter_mode {
+                // In filter mode, use row_at_offset to access any row (visible or scrollback)
+                grid.row_at_offset(grid_row)
+            } else {
+                // In normal mode, use cell_scrolled access pattern
+                // For this we need to handle row-by-row below
+                None
+            };
+
             for col in 0..grid.cols() {
-                let Some(cell) = grid.cell_scrolled(row, col) else { continue };
+                // Get cell based on mode
+                let cell = if filter_mode {
+                    // Access cell from the row_data we fetched
+                    row_data.and_then(|r| r.get(col))
+                } else {
+                    grid.cell_scrolled(visual_row, col)
+                };
+                let Some(cell) = cell else { continue };
 
                 let x = padding + col as f32 * cell_width;
-                let y = content_top + padding + row as f32 * cell_height;
+                let y = content_top + padding + visual_row as f32 * cell_height;
 
                 // Skip rendering if this row would overlap with command bar
                 if y + cell_height > max_grid_y {
                     break;
                 }
 
-                // Check if cell is selected
+                // Skip rendering if cell is under the settings panel
+                if let Some(panel_left) = settings_panel_left {
+                    if x + cell_width > panel_left {
+                        continue;
+                    }
+                }
+
+                // Check if cell is selected (use grid_row for selection check)
                 let is_selected = selection
-                    .map(|s| s.contains(row as i32 - scroll_offset_i32, col))
+                    .map(|s| s.contains(grid_row, col))
                     .unwrap_or(false);
 
                 // Check if cell is part of a search match
                 // The row index in search is relative to the grid: negative for scrollback, 0+ for visible
-                let grid_row = row as i32 - scroll_offset_i32;
                 let is_search_match = search.is_match(grid_row, col);
                 let is_current_match = search.is_current_match(grid_row, col);
 
@@ -672,16 +820,17 @@ impl Renderer {
             }
         }
 
-        // Draw cursor (only when not scrolled back into history)
-        if cursor_opacity > 0.0 && scroll_offset == 0 {
+        // Draw cursor (only when not scrolled back into history and not in filter mode)
+        if cursor_opacity > 0.0 && scroll_offset == 0 && !filter_mode {
             let cursor = grid.cursor();
             if cursor.visible {
                 // Use animated cursor position for smooth movement
                 let x = padding + cursor_pos.0 * cell_width;
                 let y = content_top + padding + cursor_pos.1 * cell_height;
 
-                // Only draw cursor if it won't overlap with command bar
-                if y + cell_height <= max_grid_y {
+                // Only draw cursor if it won't overlap with command bar or settings panel
+                let cursor_under_panel = settings_panel_left.map(|pl| x + cell_width > pl).unwrap_or(false);
+                if y + cell_height <= max_grid_y && !cursor_under_panel {
                     // Bright orange cursor (turmeric core) with animated opacity and focus dimming
                     let cursor_color = apply_brightness(self.ui.cursor, brightness);
                     self.rect_pipeline.push_rounded_rect(
@@ -1238,9 +1387,9 @@ impl Renderer {
             return;
         }
 
-        // UI character width — capped so the settings panel stays usable
-        // with wide/large fonts. Terminal grid uses self.cell_width directly.
-        let ui_cw = self.cell_width.min(10.0);
+        // UI character width — use actual cell width from font metrics.
+        // This ensures proper character spacing regardless of font.
+        let ui_cw = self.cell_width;
 
         // Panel dimensions — all derived from font metrics so layout adapts
         // Sidebar: padding + icon(3 cells) + longest label("Scrollback"=10) + padding = ~16.5 cells
@@ -1412,17 +1561,36 @@ impl Renderer {
         // (dd_x, dd_top, dd_bottom) — X is the left edge of the dropdown
         let dropdown_occludes: Option<(f32, f32, f32)> = if info.dropdown_open {
             if let Some(sel_item) = info.items.get(info.selected_item) {
-                let option_count = match &sel_item.kind {
-                    crate::settings::SettingKind::Dropdown { options, .. } => options.len(),
-                    crate::settings::SettingKind::SteppedList { values, .. } => values.len(),
-                    _ => 0,
+                let (options_text, option_count) = match &sel_item.kind {
+                    crate::settings::SettingKind::Dropdown { options, .. } => (options.clone(), options.len()),
+                    crate::settings::SettingKind::SteppedList { values, .. } => {
+                        (values.iter().map(|v| v.to_string()).collect::<Vec<_>>(), values.len())
+                    }
+                    _ => (vec![], 0),
                 };
-                let visible_count = option_count.min(8);
-                let option_h = row_height * 0.85;
-                let dd_x = value_area_x;
-                let dd_top = items_start_y + info.selected_item as f32 * row_height + row_height;
-                let dd_bottom = dd_top + visible_count as f32 * option_h + 8.0;
-                Some((dd_x, dd_top, dd_bottom))
+                if option_count > 0 {
+                    // Match the exact dropdown position calculation from build_dropdown_overlay
+                    let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
+                    let min_dd_width = (max_option_len as f32 + 4.0) * ui_cw;
+                    let remaining_space = content_width - value_area_offset;
+                    let dd_width = min_dd_width.max(remaining_space).min(content_width - ui_cw * 2.0);
+
+                    // Shift dropdown left if it would exceed panel bounds
+                    let dd_value_area_x = content_x + value_area_offset;
+                    let dd_x = if dd_value_area_x + dd_width > panel_x + panel_width - ui_cw {
+                        (panel_x + panel_width - dd_width - ui_cw).max(content_x + ui_cw)
+                    } else {
+                        dd_value_area_x
+                    };
+
+                    let visible_count = option_count.min(8);
+                    let option_h = row_height * 0.85;
+                    let dd_top = items_start_y + info.selected_item as f32 * row_height + row_height;
+                    let dd_bottom = dd_top + visible_count as f32 * option_h + 8.0;
+                    Some((dd_x, dd_top, dd_bottom))
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -1589,7 +1757,7 @@ impl Renderer {
     /// Build dropdown overlay render data — rendered last so it appears on top of everything
     fn build_dropdown_overlay(&mut self, info: &SettingsPanelInfo, window_width: f32, _window_height: f32) {
         // ALL coordinates MUST match build_settings_panel exactly
-        let ui_cw = self.cell_width.min(10.0);
+        let ui_cw = self.cell_width;
         let padding_x = ui_cw * 1.5;
         let sidebar_width = padding_x + ui_cw * 3.0 + ui_cw * 10.0 + padding_x;
         let min_content_width = ui_cw * 30.0;
@@ -1632,8 +1800,27 @@ impl Renderer {
                 let value_area_offset = (label_end + min_gap).min(max_value_area);
                 let dd_value_area_x = content_x + value_area_offset;
                 let anchor_y = items_start_y + info.selected_item as f32 * row_height + row_height;
-                let dd_x = dd_value_area_x;
-                let dd_width = content_width - value_area_offset;
+
+                // Calculate dropdown width based on longest option text
+                let max_option_len = options_text.iter()
+                    .map(|s| s.len())
+                    .max()
+                    .unwrap_or(10);
+                // Minimum width: longest option + padding on both sides
+                let min_dd_width = (max_option_len as f32 + 4.0) * ui_cw;
+                // Maximum width: remaining space to right edge
+                let remaining_space = content_width - value_area_offset;
+                // Use larger of minimum needed or remaining space, but cap at content width
+                let dd_width = min_dd_width.max(remaining_space).min(content_width - ui_cw * 2.0);
+
+                // Shift dropdown left if it would exceed panel bounds
+                let dd_x = if dd_value_area_x + dd_width > panel_x + panel_width - ui_cw {
+                    // Shift left to fit within panel
+                    (panel_x + panel_width - dd_width - ui_cw).max(content_x + ui_cw)
+                } else {
+                    dd_value_area_x
+                };
+
                 let option_h = row_height * 0.85;
                 let max_visible = 8usize;
                 let visible_count = option_count.min(max_visible);
@@ -1717,21 +1904,23 @@ impl Renderer {
     /// Draw a wavy/curly underline (approximated with small segments)
     fn draw_wavy_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
         // Approximate wavy line with a series of small rectangles at varying heights
-        let wave_period: f32 = 4.0; // Pixels per wave cycle
-        let wave_amplitude: f32 = 1.5; // Pixels of vertical displacement
-        let segment_width: f32 = 2.0;
+        // Using a visible wave pattern similar to LSP error underlines
+        let wave_period: f32 = 6.0; // Pixels per wave cycle (wider = more visible waves)
+        let wave_amplitude: f32 = 2.0; // Pixels of vertical displacement
+        let segment_width: f32 = 1.5; // Smaller segments = smoother curve
+        let thickness: f32 = 1.5; // Slightly thicker for visibility
 
         let mut current_x = x;
         let mut phase: f32 = 0.0;
 
         while current_x < x + width {
-            // Sine wave approximation
+            // Sine wave approximation - center the wave vertically
             let offset_y = (phase * std::f32::consts::TAU).sin() * wave_amplitude;
             self.rect_pipeline.push_rect(
                 current_x,
-                y + offset_y,
+                y + offset_y - wave_amplitude, // Offset so wave is centered around y
                 segment_width.min(x + width - current_x),
-                1.0,
+                thickness,
                 color,
             );
 
@@ -1907,6 +2096,31 @@ impl Renderer {
             right_x -= indicator_width + self.cell_width;
         }
 
+        // Filter mode indicator [⊜] - always show, dimmed when inactive
+        // Shows line count when active
+        {
+            let indicator = if info.filter_mode {
+                format!("[⊜{}]", info.matching_line_count)
+            } else {
+                "[⊜]".to_string()
+            };
+            let indicator_width = indicator.chars().count() as f32 * self.cell_width;
+            right_x -= indicator_width + self.cell_width * 0.5;
+
+            // Bright when active, dimmed when inactive
+            let indicator_color = if info.filter_mode {
+                self.ui.search_indicator
+            } else {
+                adjust_alpha(self.ui.search_indicator, 0.35)
+            };
+
+            for c in indicator.chars() {
+                self.text_pipeline.push_char(c, right_x, text_y, indicator_color);
+                right_x += self.cell_width;
+            }
+            let _ = right_x; // Silence unused warning
+        }
+
         // Show regex error if any
         if let Some(error) = &info.regex_error {
             let error_x = text_x + self.cell_width;
@@ -1927,6 +2141,8 @@ impl Renderer {
     /// - match_count: number of search matches
     /// - current_match: current match index (1-based)
     /// - query_is_empty: whether the search query is empty
+    /// - filter_mode: whether filter mode is active
+    /// - matching_line_count: number of lines with matches (for filter button width)
     pub fn search_bar_hit_test(
         &self,
         x: f32,
@@ -1935,6 +2151,8 @@ impl Renderer {
         match_count: usize,
         current_match: Option<usize>,
         query_is_empty: bool,
+        filter_mode: bool,
+        matching_line_count: usize,
     ) -> SearchBarClick {
         let padding = 8.0;
         let bar_height = self.cell_height + padding * 2.0;
@@ -2006,6 +2224,21 @@ impl Renderer {
         if x >= case_start && x < case_end {
             return SearchBarClick::ToggleCaseSensitive;
         }
+        right_x -= self.cell_width;
+
+        // Filter mode indicator [⊜] or [⊜N] - variable width
+        let filter_indicator = if filter_mode {
+            format!("[⊜{}]", matching_line_count)
+        } else {
+            "[⊜]".to_string()
+        };
+        let filter_width = filter_indicator.chars().count() as f32 * self.cell_width;
+        right_x -= filter_width + self.cell_width * 0.5;
+        let filter_start = right_x;
+        let filter_end = right_x + filter_width;
+        if x >= filter_start && x < filter_end {
+            return SearchBarClick::ToggleFilter;
+        }
 
         SearchBarClick::None
     }
@@ -2020,6 +2253,8 @@ pub enum SearchBarClick {
     ToggleCaseSensitive,
     /// Toggle regex mode [.*]
     ToggleRegex,
+    /// Toggle filter mode [⊜]
+    ToggleFilter,
     /// Previous match ▲
     PrevMatch,
     /// Next match ▼
