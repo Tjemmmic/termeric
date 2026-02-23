@@ -3,22 +3,163 @@ use std::time::Instant;
 use crate::config::Config;
 use crate::theme::Theme;
 
+/// Layout geometry for the settings panel.
+/// This struct ensures consistent layout between rendering and hit testing.
+#[derive(Debug, Clone, Copy)]
+pub struct SettingsPanelLayout {
+    /// Panel x position (left edge)
+    pub panel_x: f32,
+    /// Total panel width
+    pub panel_width: f32,
+    /// Sidebar width (section list)
+    pub sidebar_width: f32,
+    /// Content area x position
+    pub content_x: f32,
+    /// Content area width
+    pub content_width: f32,
+    /// Height of each row/item
+    pub row_height: f32,
+    /// Horizontal padding
+    pub padding_x: f32,
+    /// Vertical padding
+    pub padding_y: f32,
+    /// Y position of the title/header
+    pub header_y: f32,
+    /// Y position of the separator line below header
+    pub separator_y: f32,
+    /// Y position where items start
+    pub items_start_y: f32,
+    /// Y position where sidebar sections start
+    pub sections_start_y: f32,
+    /// X position where value controls start (for dropdowns, numeric values)
+    pub value_area_x: f32,
+    /// Cell width used for calculations
+    pub cell_width: f32,
+    /// Cell height used for calculations
+    pub cell_height: f32,
+}
 
-/// Common monospace font families
-pub const MONOSPACE_FONTS: &[&str] = &[
-    "monospace",
-    "JetBrains Mono",
-    "Fira Code",
-    "Cascadia Code",
-    "Source Code Pro",
-    "Hack",
-    "Inconsolata",
-    "IBM Plex Mono",
-    "Ubuntu Mono",
-    "Roboto Mono",
-    "Victor Mono",
-    "Iosevka",
-];
+impl SettingsPanelLayout {
+    /// Calculate layout for the settings panel.
+    ///
+    /// This is the single source of truth for all layout calculations.
+    /// Both the renderer and click handler must use this.
+    pub fn calculate(
+        window_width: f32,
+        _window_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+        animation: f32,
+    ) -> Self {
+        // UI character width — use actual cell width from font metrics
+        let ui_cw = cell_width;
+
+        // Padding derived from cell size
+        let padding_x = ui_cw * 1.5;
+        let padding_y = cell_height * 0.5;
+
+        // Sidebar: padding + icon(3 cells) + longest label("Scrollback"=10) + padding
+        let sidebar_width = padding_x + ui_cw * 3.0 + ui_cw * 10.0 + padding_x;
+
+        // Content needs room for labels + values
+        let min_content_width = ui_cw * 30.0;
+
+        // Panel width: at least sidebar + content, between 35% and 55% of window
+        let panel_width = ((sidebar_width + min_content_width).max(window_width * 0.35)).min(window_width * 0.55);
+
+        // Panel slides in from right edge
+        let panel_x = window_width - panel_width * animation;
+
+        // Content area is whatever remains after sidebar
+        let content_x = panel_x + sidebar_width;
+        let content_width = panel_width - sidebar_width;
+
+        // Row height derived from cell height
+        let row_height = (cell_height * 2.2).max(32.0);
+
+        // Vertical positions
+        let header_y = cell_height * 1.5;
+        let separator_y = header_y + cell_height * 1.8;
+        let items_start_y = separator_y + padding_y + cell_height * 0.5;
+        let sections_start_y = header_y + cell_height * 2.5;
+
+        // Value area X is calculated dynamically in handle_click based on actual label lengths
+        // Set a placeholder here; the actual value is computed per-item
+        let value_area_x = content_x + content_width * 0.45;
+
+        Self {
+            panel_x,
+            panel_width,
+            sidebar_width,
+            content_x,
+            content_width,
+            row_height,
+            padding_x,
+            padding_y,
+            header_y,
+            separator_y,
+            items_start_y,
+            sections_start_y,
+            value_area_x,
+            cell_width,
+            cell_height,
+        }
+    }
+
+    /// Get the Y position for a specific item index
+    pub fn item_y(&self, index: usize) -> f32 {
+        self.items_start_y + index as f32 * self.row_height
+    }
+
+    /// Get the Y position for a specific sidebar section index
+    pub fn section_y(&self, index: usize) -> f32 {
+        self.sections_start_y + index as f32 * self.row_height
+    }
+
+    /// Check if a point is within the panel bounds
+    pub fn is_in_panel(&self, x: f32, _y: f32) -> bool {
+        x >= self.panel_x
+    }
+
+    /// Check if a point is in the sidebar
+    pub fn is_in_sidebar(&self, x: f32, _y: f32) -> bool {
+        x >= self.panel_x && x < self.content_x
+    }
+
+    /// Check if a point is in the content area
+    pub fn is_in_content(&self, x: f32, _y: f32) -> bool {
+        x >= self.content_x
+    }
+
+    /// Find which item index a y coordinate falls into, if any
+    pub fn item_at_y(&self, y: f32, item_count: usize) -> Option<usize> {
+        if y < self.items_start_y {
+            return None;
+        }
+        let idx = ((y - self.items_start_y) / self.row_height) as usize;
+        if idx < item_count {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    /// Find which section index a y coordinate falls into, if any
+    pub fn section_at_y(&self, y: f32, section_count: usize) -> Option<usize> {
+        if y < self.sections_start_y {
+            return None;
+        }
+        let idx = ((y - self.sections_start_y) / self.row_height) as usize;
+        if idx < section_count {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+}
+
+/// Default fallback font (always available)
+const DEFAULT_FONT: &str = "monospace";
 
 /// Sections in the settings panel
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +296,8 @@ pub struct SettingsPanel {
     dropdown_open: bool,
     /// Which option is highlighted in the open dropdown
     dropdown_highlight: usize,
+    /// Available monospace fonts (discovered from system)
+    available_fonts: Vec<String>,
 }
 
 impl SettingsPanel {
@@ -169,7 +312,17 @@ impl SettingsPanel {
             animation_base: 0.0,
             dropdown_open: false,
             dropdown_highlight: 0,
+            available_fonts: vec![DEFAULT_FONT.to_string()],
         }
+    }
+
+    /// Set the list of available monospace fonts (discovered from system)
+    pub fn set_available_fonts(&mut self, fonts: Vec<String>) {
+        self.available_fonts = if fonts.is_empty() {
+            vec![DEFAULT_FONT.to_string()]
+        } else {
+            fonts
+        };
     }
 
     /// Toggle the panel open/closed
@@ -259,7 +412,7 @@ impl SettingsPanel {
     pub fn items_for_section(&self, config: &Config) -> Vec<SettingItem> {
         match self.section {
             SettingsSection::Font => {
-                let font_options: Vec<String> = MONOSPACE_FONTS.iter().map(|s| s.to_string()).collect();
+                let font_options = self.available_fonts.clone();
                 let font_selected = font_options.iter().position(|n| n == &config.font.family).unwrap_or(0);
                 vec![
                     SettingItem {
@@ -606,7 +759,7 @@ impl SettingsPanel {
     }
 
     /// Handle a mouse click at the given window coordinates.
-    /// Layout parameters must match the renderer's settings panel layout.
+    /// Uses SettingsPanelLayout to ensure consistent hit testing with rendering.
     pub fn handle_click(
         &mut self,
         x: f32,
@@ -621,32 +774,27 @@ impl SettingsPanel {
             return SettingsAction::None;
         }
 
-        let anim = self.animation_progress();
-        let panel_width = (window_width * 0.45).min(520.0).max(360.0);
-        let panel_x = window_width - panel_width * anim;
-        let sidebar_width = (cell_width * 14.0).max(120.0).min(160.0);
-        let content_x = panel_x + sidebar_width;
-        let content_width = panel_width - sidebar_width;
-        let row_height = (cell_height * 2.2).max(32.0);
-        let padding_x = cell_width * 1.5;
-        let padding_y = cell_height * 0.5;
+        // Use the centralized layout calculation
+        let layout = SettingsPanelLayout::calculate(
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            self.animation_progress(),
+        );
 
         // Click outside panel = close
-        if x < panel_x {
+        if !layout.is_in_panel(x, y) {
             self.close();
             return SettingsAction::None;
         }
 
         // ── Sidebar section click ──
-        let title_y = cell_height * 1.5;
-        let section_start_y = title_y + cell_height * 2.5;
-        if x >= panel_x && x < content_x {
-            for (idx, section) in SettingsSection::ALL.iter().enumerate() {
-                let sy = section_start_y + idx as f32 * row_height;
-                if y >= sy && y < sy + row_height {
+        if layout.is_in_sidebar(x, y) {
+            if let Some(idx) = layout.section_at_y(y, SettingsSection::ALL.len()) {
+                if let Some(section) = SettingsSection::ALL.get(idx) {
                     self.section = *section;
                     self.selected_item = 0;
-                    return SettingsAction::None;
                 }
             }
             return SettingsAction::None;
@@ -656,27 +804,51 @@ impl SettingsPanel {
         if self.dropdown_open {
             let items = self.items_for_section(config);
             if let Some(item) = items.get(self.selected_item) {
-                let option_count = match &item.kind {
-                    SettingKind::Dropdown { options, .. } => options.len(),
-                    SettingKind::SteppedList { values, .. } => values.len(),
-                    _ => 0,
+                let (options_text, option_count) = match &item.kind {
+                    SettingKind::Dropdown { options, .. } => (options.clone(), options.len()),
+                    SettingKind::SteppedList { values, .. } => {
+                        (values.iter().map(|v| v.to_string()).collect::<Vec<_>>(), values.len())
+                    }
+                    _ => (vec![], 0),
                 };
-                let value_area_x = content_x + content_width * 0.45;
-                let items_start_y_calc = (cell_height * 1.5) + cell_height * 1.8 + padding_y + cell_height * 0.5;
-                let anchor_y = items_start_y_calc + self.selected_item as f32 * row_height + row_height;
-                let dd_x = value_area_x;
-                let dd_width = content_width * 0.5;
-                let option_h = row_height * 0.85;
-                let max_visible = 8usize;
-                let visible_count = option_count.min(max_visible);
-                let dd_height = visible_count as f32 * option_h + 8.0;
 
-                // Click inside dropdown?
-                if x >= dd_x && x < dd_x + dd_width && y >= anchor_y && y < anchor_y + dd_height {
-                    let clicked_idx = ((y - anchor_y - 4.0) / option_h) as usize;
-                    if clicked_idx < option_count {
-                        self.dropdown_open = false;
-                        return self.select_dropdown_option(config, clicked_idx);
+                if option_count > 0 {
+                    // Calculate value_area_x the same way as the renderer:
+                    // Based on actual label lengths, not a fixed percentage
+                    let max_label_len = items.iter().map(|i| i.label.len()).max().unwrap_or(0);
+                    let label_end = layout.padding_x + max_label_len as f32 * layout.cell_width;
+                    let min_gap = layout.cell_width * 2.0;
+                    let max_value_area = layout.content_width * 0.65;
+                    let value_area_offset = (label_end + min_gap).min(max_value_area);
+                    let actual_value_area_x = layout.content_x + value_area_offset;
+
+                    // Match the exact dropdown position calculation from renderer
+                    let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
+                    let min_dd_width = (max_option_len as f32 + 4.0) * layout.cell_width;
+                    let remaining_space = layout.content_width - value_area_offset;
+                    let dd_width = min_dd_width.max(remaining_space).min(layout.content_width - layout.cell_width * 2.0);
+
+                    // Shift dropdown left if it would exceed panel bounds
+                    let dd_x = if actual_value_area_x + dd_width > layout.panel_x + layout.panel_width - layout.cell_width {
+                        (layout.panel_x + layout.panel_width - dd_width - layout.cell_width).max(layout.content_x + layout.cell_width)
+                    } else {
+                        actual_value_area_x
+                    };
+
+                    // Dropdown appears below the selected item
+                    let anchor_y = layout.item_y(self.selected_item) + layout.row_height;
+                    let option_h = layout.row_height * 0.85;
+                    let max_visible = 8usize;
+                    let visible_count = option_count.min(max_visible);
+                    let dd_height = visible_count as f32 * option_h + 8.0;
+
+                    // Click inside dropdown?
+                    if x >= dd_x && x < dd_x + dd_width && y >= anchor_y && y < anchor_y + dd_height {
+                        let clicked_idx = ((y - anchor_y - 4.0) / option_h) as usize;
+                        if clicked_idx < option_count {
+                            self.dropdown_open = false;
+                            return self.select_dropdown_option(config, clicked_idx);
+                        }
                     }
                 }
             }
@@ -686,48 +858,52 @@ impl SettingsPanel {
         }
 
         // ── Content area click ──
-        let header_y = cell_height * 1.5;
-        let sep_y = header_y + cell_height * 1.8;
-        let items_start_y = sep_y + padding_y + cell_height * 0.5;
         let items = self.items_for_section(config);
 
-        for (idx, _item) in items.iter().enumerate() {
-            let iy = items_start_y + idx as f32 * row_height;
-            if y >= iy && y < iy + row_height {
-                self.selected_item = idx;
+        // Calculate value_area_x the same way as the renderer
+        let max_label_len = items.iter().map(|i| i.label.len()).max().unwrap_or(0);
+        let label_end = layout.padding_x + max_label_len as f32 * layout.cell_width;
+        let min_gap = layout.cell_width * 2.0;
+        let max_value_area = layout.content_width * 0.65;
+        let value_area_offset = (label_end + min_gap).min(max_value_area);
+        let actual_value_area_x = layout.content_x + value_area_offset;
 
+        if let Some(idx) = layout.item_at_y(y, items.len()) {
+            self.selected_item = idx;
+
+            if let Some(item) = items.get(idx) {
                 // For dropdown/stepped items, clicking the value area opens the dropdown
-                let value_area_x = content_x + content_width * 0.45;
-                match &_item.kind {
+                match &item.kind {
                     SettingKind::Dropdown { selected, .. } => {
-                        if x >= value_area_x {
+                        if x >= actual_value_area_x {
                             self.dropdown_open = true;
                             self.dropdown_highlight = *selected;
                             return SettingsAction::None;
                         }
                     }
                     SettingKind::SteppedList { selected, .. } => {
-                        if x >= value_area_x {
+                        if x >= actual_value_area_x {
                             self.dropdown_open = true;
                             self.dropdown_highlight = *selected;
                             return SettingsAction::None;
                         }
                     }
                     SettingKind::Numeric { .. } => {
-                        // Keep ◀/▶ behavior for numeric values
-                        if x < value_area_x + cell_width * 1.5 && x >= value_area_x - cell_width {
+                        // ◀ button area (left of value)
+                        let left_arrow_x = actual_value_area_x;
+                        if x >= left_arrow_x && x < left_arrow_x + layout.cell_width * 2.0 {
                             return self.adjust_value(config, -1);
                         }
-                        let val_x = value_area_x + cell_width * 2.0;
-                        let val_end = val_x + _item.value.len() as f32 * cell_width;
-                        if x > val_end {
+                        // ▶ button area (right of value)
+                        let val_x = actual_value_area_x + layout.cell_width * 2.0;
+                        let val_end = val_x + item.value.len() as f32 * layout.cell_width;
+                        let right_arrow_x = val_end + layout.cell_width;
+                        if x >= right_arrow_x {
                             return self.adjust_value(config, 1);
                         }
                     }
                     _ => {}
                 }
-
-                return SettingsAction::None;
             }
         }
 

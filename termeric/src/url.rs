@@ -165,28 +165,71 @@ impl UrlDetector {
 
     /// Open a URL using the system default handler
     pub fn open_url(url: &str) -> std::io::Result<()> {
+        // Handle file:// URLs specially - extract the path portion
+        let effective_url = if url.starts_with("file://") {
+            Self::normalize_file_url(url)
+        } else {
+            url.to_string()
+        };
+
         #[cfg(target_os = "linux")]
         {
             std::process::Command::new("xdg-open")
-                .arg(url)
+                .arg(&effective_url)
                 .spawn()?;
         }
 
         #[cfg(target_os = "macos")]
         {
             std::process::Command::new("open")
-                .arg(url)
+                .arg(&effective_url)
                 .spawn()?;
         }
 
         #[cfg(target_os = "windows")]
         {
             std::process::Command::new("cmd")
-                .args(["/C", "start", "", url])
+                .args(["/C", "start", "", &effective_url])
                 .spawn()?;
         }
 
         Ok(())
+    }
+
+    /// Normalize a file:// URL to extract the local path
+    ///
+    /// Handles URLs like:
+    /// - file:///path/to/file -> /path/to/file
+    /// - file://localhost/path/to/file -> /path/to/file
+    /// - file://hostname/path/to/file -> /path/to/file (for local files)
+    fn normalize_file_url(url: &str) -> String {
+        let without_scheme = url.strip_prefix("file://").unwrap_or(url);
+
+        // Check if it starts with a path (three slashes total: file:///path)
+        if without_scheme.starts_with('/') {
+            // Already a proper local path: file:///path/to/file
+            return without_scheme.to_string();
+        }
+
+        // Has a hostname: file://hostname/path/to/file
+        // Find the first slash after the hostname
+        if let Some(slash_pos) = without_scheme.find('/') {
+            let hostname = &without_scheme[..slash_pos];
+            let path = &without_scheme[slash_pos..];
+
+            // If hostname is "localhost" or the current machine name, just use the path
+            // For any hostname, we assume it's a local file reference and use the path
+            // This matches typical shell behavior (like ls --hyperlink output)
+            log::debug!(
+                "Normalized file URL: hostname='{}', path='{}'",
+                hostname,
+                path
+            );
+            path.to_string()
+        } else {
+            // No path portion - malformed URL, return as-is
+            format!("file://{}", without_scheme)
+        }
     }
 }
 
@@ -300,5 +343,26 @@ mod tests {
 
         assert_eq!(urls.len(), 1);
         assert_eq!(urls[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn test_normalize_file_url_with_hostname() {
+        // file://hostname/path -> /path
+        let result = UrlDetector::normalize_file_url("file://Emrakul/home/zilawon/Downloads");
+        assert_eq!(result, "/home/zilawon/Downloads");
+    }
+
+    #[test]
+    fn test_normalize_file_url_with_localhost() {
+        // file://localhost/path -> /path
+        let result = UrlDetector::normalize_file_url("file://localhost/home/user/file.txt");
+        assert_eq!(result, "/home/user/file.txt");
+    }
+
+    #[test]
+    fn test_normalize_file_url_triple_slash() {
+        // file:///path -> /path (already correct format)
+        let result = UrlDetector::normalize_file_url("file:///home/user/file.txt");
+        assert_eq!(result, "/home/user/file.txt");
     }
 }
