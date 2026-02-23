@@ -3,6 +3,7 @@
 use vte::{Params, Perform};
 use crate::grid::{CellAttrs, Color};
 use crate::term::{Terminal, TerminalMode};
+use crate::event::{TerminalEvent, NotificationRequest};
 use super::color::{ansi_color, ansi_bright_color, parse_extended_color};
 
 /// Handler for VTE callbacks that updates terminal state
@@ -40,6 +41,7 @@ impl Perform for Handler<'_> {
             0x07 => {
                 // BEL - bell
                 log::debug!("Bell");
+                self.terminal.push_event(TerminalEvent::Bell);
             }
             0x08 => {
                 // BS - backspace
@@ -362,7 +364,10 @@ impl Perform for Handler<'_> {
             // Empty uri ends the hyperlink
             8 => {
                 log::trace!("Hyperlink OSC 8: {:?}", params);
-                self.handle_osc_hyperlink(params);
+                // Strip the command "8" from params before passing
+                if params.len() > 1 {
+                    self.handle_osc_hyperlink(&params[1..]);
+                }
             }
 
             // Clipboard (OSC 52)
@@ -381,7 +386,10 @@ impl Perform for Handler<'_> {
                 if params.len() > 1 {
                     if let Ok(message) = std::str::from_utf8(params[1]) {
                         log::info!("Desktop notification: {}", message);
-                        // TODO: Emit TerminalEvent::Notification
+                        self.terminal.push_event(TerminalEvent::Notification(NotificationRequest {
+                            title: None,
+                            body: message.to_string(),
+                        }));
                     }
                 }
             }
@@ -402,17 +410,20 @@ impl Perform for Handler<'_> {
                     let subcommand = std::str::from_utf8(params[1]).unwrap_or("");
                     if subcommand == "notify" {
                         let title = if params.len() > 2 {
-                            std::str::from_utf8(params[2]).ok()
+                            std::str::from_utf8(params[2]).ok().map(String::from)
                         } else {
                             None
                         };
                         let body = if params.len() > 3 {
-                            std::str::from_utf8(params[3]).unwrap_or("")
+                            std::str::from_utf8(params[3]).unwrap_or("").to_string()
                         } else {
-                            ""
+                            String::new()
                         };
                         log::info!("Desktop notification: {:?} - {}", title, body);
-                        // TODO: Emit TerminalEvent::Notification
+                        self.terminal.push_event(TerminalEvent::Notification(NotificationRequest {
+                            title,
+                            body,
+                        }));
                     }
                 }
             }

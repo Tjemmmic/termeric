@@ -44,6 +44,24 @@ impl Pty {
         program: Option<&str>,
         args: &[String],
     ) -> Result<Self, PtyError> {
+        Self::new_with_env(cols, rows, program, args, &[])
+    }
+
+    /// Create a new PTY with optional program, args, and environment variables
+    ///
+    /// # Arguments
+    /// * `cols` - Number of columns
+    /// * `rows` - Number of rows
+    /// * `program` - Optional program to run (defaults to user's shell)
+    /// * `args` - Arguments for the program
+    /// * `env` - Additional environment variables as (key, value) pairs
+    pub fn new_with_env(
+        cols: u16,
+        rows: u16,
+        program: Option<&str>,
+        args: &[String],
+        env: &[(String, String)],
+    ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {
@@ -65,6 +83,19 @@ impl Pty {
         // Set terminal environment variables
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+
+        // Set additional environment variables (e.g., PWD for session restore)
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+
+        // If PWD is set, also set the working directory
+        if let Some((_, pwd)) = env.iter().find(|(k, _)| k == "PWD") {
+            let path = std::path::Path::new(pwd);
+            if path.is_dir() {
+                cmd.cwd(path);
+            }
+        }
 
         // Spawn the shell on the slave side
         let child = pair.slave.spawn_command(cmd)?;

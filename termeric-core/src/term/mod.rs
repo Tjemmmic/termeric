@@ -15,6 +15,7 @@ use crate::grid::{Grid, CellAttrs, CellContent, CellFlags, Color, HyperlinkRegis
 use crate::ansi::Processor;
 use crate::graphics::{GraphicsManager, KittyCommand, ImagePlacement, ImageId, StoredImage};
 use crate::shell::ShellIntegration;
+use crate::event::TerminalEvent;
 
 /// Tab stop interval
 const TAB_INTERVAL: usize = 8;
@@ -63,6 +64,8 @@ pub struct Terminal {
     graphics: GraphicsManager,
     /// Shell integration for prompt tracking
     shell: ShellIntegration,
+    /// Pending events to be handled by the application
+    pending_events: Vec<TerminalEvent>,
 }
 
 impl Terminal {
@@ -98,6 +101,7 @@ impl Terminal {
             rows,
             graphics: GraphicsManager::new(),
             shell: ShellIntegration::new(),
+            pending_events: Vec::new(),
         }
     }
 
@@ -142,6 +146,16 @@ impl Terminal {
     /// Get the number of rows
     pub fn rows(&self) -> usize {
         self.rows
+    }
+
+    /// Push a terminal event to be handled by the application
+    pub fn push_event(&mut self, event: TerminalEvent) {
+        self.pending_events.push(event);
+    }
+
+    /// Drain all pending events
+    pub fn drain_events(&mut self) -> Vec<TerminalEvent> {
+        std::mem::take(&mut self.pending_events)
     }
 
     /// Process input bytes from PTY
