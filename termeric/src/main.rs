@@ -6,6 +6,7 @@ mod app;
 mod bell;
 mod command;
 mod config;
+mod container;
 mod harvest;
 mod input;
 mod keybindings;

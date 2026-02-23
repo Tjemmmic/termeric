@@ -107,6 +107,51 @@ pub enum KeyAction {
     NextPrompt,
 }
 
+impl KeyAction {
+    /// Convert a KeyAction to an internal Action if possible.
+    /// Returns None for actions that need special handling (SendText, RunCommand, etc.)
+    pub fn to_action(&self) -> Option<crate::input::Action> {
+        use crate::input::Action;
+
+        match self {
+            KeyAction::Copy => Some(Action::Copy),
+            KeyAction::Paste => Some(Action::Paste),
+            KeyAction::NewTab => Some(Action::NewTab),
+            KeyAction::CloseTab => Some(Action::CloseTab),
+            KeyAction::NextTab => Some(Action::NextTab),
+            KeyAction::PrevTab => Some(Action::PrevTab),
+            KeyAction::SwitchToTab { index } => Some(Action::SwitchToTab(*index)),
+            KeyAction::ToggleFullscreen => None, // Not yet implemented
+            KeyAction::ToggleSearch => Some(Action::ToggleSearch),
+            KeyAction::ScrollUp { lines } => Some(Action::ScrollUp(*lines)),
+            KeyAction::ScrollDown { lines } => Some(Action::ScrollDown(*lines)),
+            KeyAction::ScrollToTop => Some(Action::ScrollToTop),
+            KeyAction::ScrollToBottom => Some(Action::ScrollToBottom),
+            KeyAction::ClearScrollback => None, // Not yet implemented
+            KeyAction::ResetTerminal => None, // Not yet implemented
+            KeyAction::PreviousPrompt => Some(Action::PreviousPrompt),
+            KeyAction::NextPrompt => Some(Action::NextPrompt),
+            // These require special handling in App
+            KeyAction::SendText { .. } => None,
+            KeyAction::RunCommand { .. } => None,
+            KeyAction::CommandPalette => None,
+            KeyAction::OpenSettings => Some(Action::ToggleSettings),
+            KeyAction::SplitVertical => None, // Will be handled when split panes implemented
+            KeyAction::SplitHorizontal => None,
+            KeyAction::NavigatePane { .. } => None,
+            KeyAction::ClosePane => None,
+        }
+    }
+
+    /// Check if this action sends text directly to the PTY
+    pub fn send_text(&self) -> Option<&str> {
+        match self {
+            KeyAction::SendText { text } => Some(text),
+            _ => None,
+        }
+    }
+}
+
 /// Keybinding manager
 #[derive(Debug, Default)]
 pub struct KeyBindingManager {

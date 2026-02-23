@@ -121,6 +121,10 @@ pub enum Action {
     ToggleSearch,
     /// Toggle settings panel
     ToggleSettings,
+    /// Navigate to previous prompt (shell integration)
+    PreviousPrompt,
+    /// Navigate to next prompt (shell integration)
+    NextPrompt,
     /// No action (pass through to PTY)
     None,
 }
@@ -181,6 +185,9 @@ pub fn check_keybinding(event: &KeyEvent, modifiers: ModifiersState) -> Option<A
                 // Tab navigation
                 NamedKey::Tab if ctrl && shift => Some(Action::PrevTab),
                 NamedKey::Tab if ctrl => Some(Action::NextTab),
+                // Shell integration prompt navigation
+                NamedKey::ArrowUp if ctrl && shift => Some(Action::PreviousPrompt),
+                NamedKey::ArrowDown if ctrl && shift => Some(Action::NextPrompt),
                 // Selection
                 NamedKey::Escape => Some(Action::ClearSelection),
                 _ => None,

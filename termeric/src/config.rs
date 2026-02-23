@@ -4,6 +4,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::keybindings::KeyBinding;
+
 /// Application configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -22,6 +24,15 @@ pub struct Config {
     pub cursor: CursorConfig,
     /// Bell configuration
     pub bell: BellConfigFile,
+    /// Custom keybindings
+    #[serde(default)]
+    pub keybindings: Vec<KeyBinding>,
+    /// Session save/restore configuration
+    #[serde(default)]
+    pub session: SessionConfig,
+    /// Harvest mode configuration
+    #[serde(default)]
+    pub harvest: HarvestConfig,
 }
 
 impl Default for Config {
@@ -34,6 +45,9 @@ impl Default for Config {
             window: WindowConfig::default(),
             cursor: CursorConfig::default(),
             bell: BellConfigFile::default(),
+            keybindings: Vec::new(),
+            session: SessionConfig::default(),
+            harvest: HarvestConfig::default(),
         }
     }
 }
@@ -248,6 +262,50 @@ impl Default for BellConfigFile {
             visual: true,
             audio: false,
             visual_duration_ms: 100,
+        }
+    }
+}
+
+/// Session save/restore configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SessionConfig {
+    /// Enable session save/restore
+    pub enabled: bool,
+    /// Automatically restore session on startup
+    pub auto_restore: bool,
+    /// Automatically save session on exit
+    pub auto_save: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_restore: true,
+            auto_save: true,
+        }
+    }
+}
+
+/// Harvest mode configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HarvestConfig {
+    /// Enable harvest mode (command visualization)
+    pub enabled: bool,
+    /// Show growth indicators for running commands
+    pub show_indicators: bool,
+    /// Maximum number of commands to keep in history
+    pub max_history: usize,
+}
+
+impl Default for HarvestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Opt-in by default
+            show_indicators: true,
+            max_history: 100,
         }
     }
 }

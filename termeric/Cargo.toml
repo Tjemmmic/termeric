@@ -23,8 +23,8 @@ wgpu = "24"
 pollster = "0.4"
 bytemuck = { version = "1.21", features = ["derive"] }
 
-# Text rendering
-cosmic-text = "0.12"
+# Text rendering (0.18+ for FontFeatures support)
+cosmic-text = "0.18"
 
 # Image loading for window icon
 image = "0.25"

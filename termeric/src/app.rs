@@ -12,11 +12,17 @@ use winit::{
     window::{Icon, Window, WindowId},
 };
 
+use termeric_core::TerminalEvent;
+
+use crate::bell::Notifications;
 use crate::command::{CommandMode, CommandResult};
 use crate::config::Config;
+use crate::harvest::HarvestMode;
 use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
+use crate::keybindings::{KeyAction, KeyBindingManager};
 use crate::renderer::{CommandBarInfo, Renderer};
 use crate::search::Search;
+use crate::session::{restore_session, save_session};
 use crate::settings::{SettingsPanel, SettingsAction, SettingsKey};
 use crate::tabs::TabManager;
 use crate::theme::Theme;
@@ -84,6 +90,12 @@ pub struct App {
     search: Search,
     /// Cursor position in search input
     search_cursor_pos: usize,
+    /// Notification manager for desktop notifications
+    notifications: Notifications,
+    /// Custom keybinding manager
+    keybinding_manager: KeyBindingManager,
+    /// Harvest mode (command visualization)
+    harvest: Option<HarvestMode>,
 }
 
 impl App {
@@ -95,6 +107,17 @@ impl App {
 
         // Initialize clipboard (may fail on some systems)
         let clipboard = arboard::Clipboard::new().ok();
+
+        // Initialize keybinding manager with custom bindings from config
+        let mut keybinding_manager = KeyBindingManager::new();
+        keybinding_manager.load(config.keybindings.clone());
+
+        // Initialize harvest mode if enabled
+        let harvest = if config.harvest.enabled {
+            Some(HarvestMode::new())
+        } else {
+            None
+        };
 
         Ok(Self {
             config,
@@ -126,6 +149,9 @@ impl App {
             settings_panel: SettingsPanel::new(),
             search: Search::new(),
             search_cursor_pos: 0,
+            notifications: Notifications::new(),
+            keybinding_manager,
+            harvest,
         })
     }
 
@@ -179,6 +205,11 @@ impl App {
         // Apply initial opacity from config
         renderer.set_opacity(self.config.window.opacity);
 
+        // Discover available monospace fonts and update settings panel
+        let fonts = renderer.get_monospace_fonts();
+        log::info!("Discovered {} monospace fonts", fonts.len());
+        self.settings_panel.set_available_fonts(fonts);
+
         // Calculate grid size from renderer's cell size
         let size = window.inner_size();
         let (cols, rows) = renderer.calculate_grid_size(size.width, size.height);
@@ -193,7 +224,7 @@ impl App {
         Ok(())
     }
 
-    /// Initialize the tab manager with the first tab
+    /// Initialize the tab manager with the first tab or restore from session
     fn init_tabs(&mut self) -> Result<()> {
         let mut tabs = TabManager::new(
             self.cols,
@@ -201,25 +232,115 @@ impl App {
             self.config.shell.clone(),
             self.config.scrollback.lines,
         );
-        tabs.new_tab()?;
+
+        // Try to restore session if enabled
+        let mut restored = false;
+        if self.config.session.enabled && self.config.session.auto_restore {
+            match restore_session() {
+                Ok(Some(session)) => {
+                    log::info!("Found saved session with {} tabs", session.tabs.len());
+                    if let Err(e) = tabs.restore_from_session(&session) {
+                        log::error!("Failed to restore session: {}", e);
+                    } else {
+                        restored = true;
+                        log::info!("Session restored successfully");
+                    }
+                }
+                Ok(None) => {
+                    log::debug!("No saved session found");
+                }
+                Err(e) => {
+                    log::warn!("Failed to load session: {}", e);
+                }
+            }
+        }
+
+        // If we didn't restore, create a fresh tab
+        if !restored {
+            tabs.new_tab()?;
+        }
 
         self.tabs = Some(tabs);
 
-        log::info!("Tab manager initialized with first tab: {}x{}", self.cols, self.rows);
+        log::info!("Tab manager initialized: {}x{}", self.cols, self.rows);
 
         Ok(())
     }
 
+    /// Save the current session to disk
+    fn save_current_session(&self) {
+        if !self.config.session.enabled || !self.config.session.auto_save {
+            return;
+        }
+
+        let Some(tabs) = &self.tabs else { return };
+
+        let session = tabs.to_session();
+
+        if let Err(e) = save_session(&session) {
+            log::error!("Failed to save session: {}", e);
+        } else {
+            log::info!("Session saved");
+        }
+    }
+
     /// Process PTY events for all tabs
     fn process_pty_events(&mut self) {
-        let Some(tabs) = &mut self.tabs else { return };
+        // Process events and collect results
+        let (events, should_exit) = {
+            let Some(tabs) = &mut self.tabs else { return };
+            let (_, events) = tabs.process_all_events();
+            let should_exit = tabs.cleanup_closed() && tabs.is_empty();
+            (events, should_exit)
+        };
 
-        tabs.process_all_events();
+        // Handle terminal events (notifications, bells, etc.)
+        for event in events {
+            self.handle_terminal_event(event);
+        }
 
         // Check if all tabs are closed
-        if tabs.cleanup_closed() && tabs.is_empty() {
+        if should_exit {
             log::info!("All tabs closed, exiting");
             self.should_exit = true;
+        }
+    }
+
+    /// Handle a terminal event
+    fn handle_terminal_event(&mut self, event: TerminalEvent) {
+        match event {
+            TerminalEvent::Bell => {
+                // TODO: Visual bell flash, audio bell
+                log::debug!("Bell event received");
+            }
+            TerminalEvent::Notification(req) => {
+                let title = req.title.as_deref().unwrap_or("Terminal");
+                self.notifications.notify(title, &req.body);
+            }
+            TerminalEvent::TitleChanged(_title) => {
+                // Title is handled via shell cwd detection
+            }
+            TerminalEvent::ClipboardRequest(_) => {
+                // TODO: Handle clipboard read request
+            }
+            TerminalEvent::ClipboardWrite(text) => {
+                if let Some(clipboard) = &mut self.clipboard {
+                    if let Err(e) = clipboard.set_text(&text) {
+                        log::error!("Failed to set clipboard: {}", e);
+                    }
+                }
+            }
+            TerminalEvent::HyperlinkActivated(url) => {
+                if let Err(e) = crate::url::UrlDetector::open_url(&url) {
+                    log::error!("Failed to open URL: {}", e);
+                }
+            }
+            TerminalEvent::CursorVisibilityChanged(_) => {
+                // Cursor visibility is handled in render
+            }
+            TerminalEvent::Exit => {
+                // Individual tab exit is handled by Tab::process_events
+            }
         }
     }
 
@@ -282,6 +403,20 @@ impl App {
 
     /// Render the terminal
     fn render(&mut self) {
+        // Skip rendering if synchronized output mode is active (Mode 2026)
+        // This prevents partial frames during batch terminal updates
+        if let Some(tabs) = &self.tabs {
+            if let Some(tab) = tabs.active_tab() {
+                if tab.terminal.is_synchronized_output() {
+                    // Request a redraw for when sync mode ends
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+            }
+        }
+
         // Update command mode (for message timeout)
         self.command_mode.update();
 
@@ -363,7 +498,14 @@ impl App {
             }
         }
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref(), search_info.as_ref(), &self.search) {
+        // Collect image placements for rendering
+        let image_data: Vec<_> = terminal.graphics_placements()
+            .iter()
+            .filter_map(|p| terminal.get_image(p.image_id).map(|img| (p, img)))
+            .collect();
+        let images = if image_data.is_empty() { None } else { Some(image_data.as_slice()) };
+
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref(), search_info.as_ref(), &self.search, images) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -479,6 +621,46 @@ impl App {
         (self.cursor_display_col, self.cursor_display_row)
     }
 
+    /// Handle a custom keybinding action
+    /// Returns true if the action was handled
+    fn handle_key_action(&mut self, key_action: KeyAction) -> bool {
+        // Try to convert to internal Action first
+        if let Some(action) = key_action.to_action() {
+            self.handle_action(action);
+            return true;
+        }
+
+        // Handle special actions that don't map to Action
+        match key_action {
+            KeyAction::SendText { text } => {
+                self.write_to_pty(text.as_bytes());
+                true
+            }
+            KeyAction::CommandPalette => {
+                self.command_mode.activate();
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                true
+            }
+            KeyAction::RunCommand { command } => {
+                // TODO: Implement running command in new pane when split panes are ready
+                log::info!("Run command requested: {}", command);
+                false
+            }
+            // Split pane actions - will be handled when implemented
+            KeyAction::SplitVertical
+            | KeyAction::SplitHorizontal
+            | KeyAction::NavigatePane { .. }
+            | KeyAction::ClosePane => {
+                log::debug!("Split pane action not yet implemented");
+                false
+            }
+            // These should have been handled by to_action()
+            _ => false,
+        }
+    }
+
     /// Handle an action triggered by a keybinding
     fn handle_action(&mut self, action: Action) {
         match action {
@@ -573,6 +755,36 @@ impl App {
                 self.settings_panel.toggle();
                 if let Some(window) = &self.window {
                     window.request_redraw();
+                }
+            }
+            Action::PreviousPrompt => {
+                if let Some(terminal) = self.active_terminal_mut() {
+                    if let Some(row) = terminal.previous_prompt() {
+                        // Scroll to make the prompt visible
+                        let cursor_row = terminal.grid().cursor().row;
+                        // Calculate how much to scroll
+                        if row < cursor_row {
+                            let diff = cursor_row - row;
+                            let current_offset = terminal.grid().scroll_offset();
+                            terminal.grid_mut().set_scroll_offset(current_offset + diff);
+                        }
+                        log::debug!("Navigate to previous prompt at row {}", row);
+                    }
+                }
+            }
+            Action::NextPrompt => {
+                if let Some(terminal) = self.active_terminal_mut() {
+                    if let Some(row) = terminal.next_prompt() {
+                        // Scroll to make the prompt visible
+                        let cursor_row = terminal.grid().cursor().row;
+                        // Calculate how much to scroll
+                        let current_offset = terminal.grid().scroll_offset();
+                        if row > cursor_row && current_offset > 0 {
+                            let diff = row - cursor_row;
+                            terminal.grid_mut().set_scroll_offset(current_offset.saturating_sub(diff));
+                        }
+                        log::debug!("Navigate to next prompt at row {}", row);
+                    }
                 }
             }
             Action::None => {}
@@ -1041,8 +1253,15 @@ impl App {
             Key::Named(NamedKey::Backspace) => {
                 if self.search_cursor_pos > 0 {
                     if let Some(grid) = grid_ref {
-                        self.search.pop_char(grid);
-                        self.search_cursor_pos = self.search_cursor_pos.saturating_sub(1);
+                        // Find the previous character boundary
+                        let query = self.search.query();
+                        if let Some((prev_pos, _)) = query[..self.search_cursor_pos]
+                            .char_indices()
+                            .next_back()
+                        {
+                            self.search.pop_char(grid);
+                            self.search_cursor_pos = prev_pos;
+                        }
                     }
                 }
                 if let Some(window) = &self.window {
@@ -1066,13 +1285,28 @@ impl App {
                 }
             }
             Key::Named(NamedKey::ArrowLeft) => {
-                self.search_cursor_pos = self.search_cursor_pos.saturating_sub(1);
+                // Move to previous character boundary
+                let query = self.search.query();
+                if self.search_cursor_pos > 0 {
+                    if let Some((prev_pos, _)) = query[..self.search_cursor_pos]
+                        .char_indices()
+                        .next_back()
+                    {
+                        self.search_cursor_pos = prev_pos;
+                    }
+                }
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
             Key::Named(NamedKey::ArrowRight) => {
-                self.search_cursor_pos = (self.search_cursor_pos + 1).min(self.search.query().len());
+                // Move to next character boundary
+                let query = self.search.query();
+                if self.search_cursor_pos < query.len() {
+                    if let Some((_, ch)) = query[self.search_cursor_pos..].char_indices().next() {
+                        self.search_cursor_pos += ch.len_utf8();
+                    }
+                }
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -1108,6 +1342,14 @@ impl App {
                             if let Some(grid) = grid_ref {
                                 self.search.toggle_regex(grid);
                             }
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return true;
+                        }
+                        "f" | "F" => {
+                            // Toggle filter mode (Alt+F)
+                            self.search.toggle_filter();
                             if let Some(window) = &self.window {
                                 window.request_redraw();
                             }
@@ -1422,6 +1664,13 @@ impl App {
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
         let padding = renderer.padding();
+        // Account for search bar height if visible
+        let search_bar_height = if self.search.is_active() || self.search.has_results() {
+            cell_height + 8.0 * 2.0 // Same calculation as renderer
+        } else {
+            0.0
+        };
+        let content_top = tab_bar_height + search_bar_height;
         let scroll_offset = self.tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
@@ -1432,7 +1681,7 @@ impl App {
             position.1,
             cell_width,
             cell_height,
-            tab_bar_height,
+            content_top, // Use content_top instead of just tab_bar_height
             padding,
             scroll_offset,
         );
@@ -1441,6 +1690,34 @@ impl App {
             ElementState::Pressed => {
                 if button == MouseButton::Left {
                     self.mouse_pressed = true;
+
+                    // Ctrl+Click to open hyperlinks
+                    if self.modifiers.control_key() {
+                        // Check if there's a hyperlink at this position
+                        if let Some(tabs) = &self.tabs {
+                            if let Some(tab) = tabs.active_tab() {
+                                let grid = tab.terminal.grid();
+                                // grid_pos.row is already scroll-adjusted
+                                let row = grid_pos.row;
+                                let col = grid_pos.col;
+
+                                // For visible grid, row should be non-negative
+                                if row >= 0 {
+                                    if let Some(cell) = grid.cell(row as usize, col) {
+                                        if let Some(hyperlink_id) = cell.hyperlink_id {
+                                            if let Some(url) = tab.terminal.get_hyperlink_url(hyperlink_id) {
+                                                log::info!("Opening hyperlink: {}", url);
+                                                if let Err(e) = crate::url::UrlDetector::open_url(url) {
+                                                    log::error!("Failed to open URL: {}", e);
+                                                }
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Check for gear icon click in tab bar (top-right corner)
                     if let Some(renderer) = &self.renderer {
@@ -1513,6 +1790,8 @@ impl App {
                                     self.search.match_count(),
                                     self.search.current_match_index(),
                                     self.search.query().is_empty(),
+                                    self.search.is_filter_mode(),
+                                    self.search.matching_line_count(),
                                 );
                                 let grid_ref = self.tabs
                                     .as_ref()
@@ -1532,6 +1811,13 @@ impl App {
                                         if let Some(grid) = grid_ref {
                                             self.search.toggle_regex(grid);
                                         }
+                                        if let Some(window) = &self.window {
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
+                                    SearchBarClick::ToggleFilter => {
+                                        self.search.toggle_filter();
                                         if let Some(window) = &self.window {
                                             window.request_redraw();
                                         }
@@ -1609,6 +1895,13 @@ impl App {
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
         let padding = renderer.padding();
+        // Account for search bar height if visible
+        let search_bar_height = if self.search.is_active() || self.search.has_results() {
+            cell_height + 8.0 * 2.0 // Same calculation as renderer
+        } else {
+            0.0
+        };
+        let content_top = tab_bar_height + search_bar_height;
         let scroll_offset = self.tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
@@ -1619,7 +1912,7 @@ impl App {
             position.1,
             cell_width,
             cell_height,
-            tab_bar_height,
+            content_top,
             padding,
             scroll_offset,
         );
@@ -1810,7 +2103,16 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // Check for keybindings
+                // Check custom keybindings first (highest priority after modal UI)
+                if event.state == winit::event::ElementState::Pressed {
+                    if let Some(key_action) = self.keybinding_manager.check(&event.logical_key, self.modifiers) {
+                        if self.handle_key_action(key_action.clone()) {
+                            return;
+                        }
+                    }
+                }
+
+                // Check for default keybindings
                 if let Some(action) = check_keybinding(&event, self.modifiers) {
                     self.handle_action(action);
                     return;
@@ -1880,6 +2182,9 @@ impl ApplicationHandler for App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // Save session before cleanup
+        self.save_current_session();
+
         // Drop order is critical: renderer holds a wgpu Surface that references
         // the window, so we must drop resources in the correct order:
         // 1. Tabs (PTY processes) first

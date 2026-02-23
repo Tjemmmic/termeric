@@ -2,12 +2,15 @@
 //!
 //! Provides support for tabbed terminal sessions within a single window.
 
+use std::io;
 use std::path::Path;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
-use termeric_core::{Pty, Terminal};
+use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
+use crate::container::TerminalContainer;
+use crate::session::{Session, SavedTab, SavedPane, PanePosition};
 
 /// Duration of tab slide-in animation in seconds
 const TAB_SLIDE_DURATION: f32 = 0.15;
@@ -100,8 +103,8 @@ impl Tab {
         })
     }
 
-    /// Process any pending PTY events
-    pub fn process_events(&mut self) -> bool {
+    /// Process any pending PTY events, returns (had_output, terminal_events)
+    pub fn process_events(&mut self) -> (bool, Vec<TerminalEvent>) {
         let mut had_output = false;
 
         while let Ok(event) = self.pty_rx.try_recv() {
@@ -126,7 +129,9 @@ impl Tab {
             self.update_title();
         }
 
-        had_output
+        // Drain any terminal events that were emitted during processing
+        let events = self.terminal.drain_events();
+        (had_output, events)
     }
 
     /// Write data to the PTY
@@ -147,6 +152,82 @@ impl Tab {
             if let Some(cwd) = get_process_cwd(pid) {
                 self.title = dir_name_from_path(&cwd);
             }
+        }
+    }
+
+    /// Create a new tab with an optional working directory (for session restore)
+    pub fn new_with_cwd(
+        id: usize,
+        cols: usize,
+        rows: usize,
+        shell: &ShellConfig,
+        scrollback_lines: usize,
+        working_dir: Option<&str>,
+        title: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        let mut terminal = Terminal::new(cols, rows);
+        terminal.grid_mut().set_scrollback_limit(scrollback_lines);
+
+        // Build environment variables for session restore
+        let env: Vec<(String, String)> = working_dir
+            .map(|pwd| vec![("PWD".to_string(), pwd.to_string())])
+            .unwrap_or_default();
+
+        let pty = Pty::new_with_env(
+            cols as u16,
+            rows as u16,
+            shell.program.as_deref(),
+            &shell.args,
+            &env,
+        )?;
+        let (handle, reader) = pty.take_reader();
+        let rx = spawn_reader_thread(reader);
+
+        // Use provided title or derive from working directory
+        let tab_title = title
+            .map(|t| t.to_string())
+            .or_else(|| working_dir.map(|cwd| dir_name_from_path(cwd)))
+            .or_else(|| {
+                handle.child_id()
+                    .and_then(get_process_cwd)
+                    .map(|cwd| dir_name_from_path(&cwd))
+            })
+            .unwrap_or_else(|| format!("Tab {}", id + 1));
+
+        Ok(Self {
+            id,
+            title: tab_title,
+            terminal,
+            pty: handle,
+            pty_rx: rx,
+            has_activity: false,
+            closed: false,
+            created_at: Instant::now(),
+            closing_at: None,
+        })
+    }
+
+    /// Get the current working directory of this tab's shell process
+    pub fn working_directory(&self) -> Option<String> {
+        self.pty.child_id().and_then(get_process_cwd)
+    }
+
+    /// Convert this tab to a SavedTab for session persistence
+    pub fn to_saved_tab(&self) -> SavedTab {
+        let working_dir = self.working_directory();
+        SavedTab {
+            title: self.title.clone(),
+            working_directory: working_dir.clone(),
+            panes: vec![SavedPane {
+                working_directory: working_dir,
+                position: PanePosition {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+            }],
+            focused_pane: 0,
         }
     }
 
@@ -182,6 +263,34 @@ impl Tab {
     /// Check if close animation is complete and tab should be removed
     pub fn is_close_complete(&self) -> bool {
         self.close_progress() >= 1.0
+    }
+}
+
+/// Implement TerminalContainer for Tab (single terminal per tab)
+impl TerminalContainer for Tab {
+    fn focused_terminal(&self) -> Option<&Terminal> {
+        Some(&self.terminal)
+    }
+
+    fn focused_terminal_mut(&mut self) -> Option<&mut Terminal> {
+        Some(&mut self.terminal)
+    }
+
+    fn write_input(&mut self, data: &[u8]) -> io::Result<()> {
+        self.write(data)
+    }
+
+    fn process_events(&mut self) -> (bool, Vec<TerminalEvent>) {
+        // Call the existing process_events method
+        Tab::process_events(self)
+    }
+
+    fn resize(&mut self, cols: usize, rows: usize) -> anyhow::Result<()> {
+        Tab::resize(self, cols, rows)
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed
     }
 }
 
@@ -336,19 +445,21 @@ impl TabManager {
         self.tabs.is_empty()
     }
 
-    /// Process events for all tabs, return true if any tab had output
-    pub fn process_all_events(&mut self) -> bool {
+    /// Process events for all tabs, return (any_output, all_terminal_events)
+    pub fn process_all_events(&mut self) -> (bool, Vec<TerminalEvent>) {
         let mut any_output = false;
+        let mut all_events = Vec::new();
 
         for (i, tab) in self.tabs.iter_mut().enumerate() {
-            let had_output = tab.process_events();
+            let (had_output, events) = tab.process_events();
             if had_output && i != self.active {
                 tab.has_activity = true;
             }
             any_output = any_output || had_output;
+            all_events.extend(events);
         }
 
-        any_output
+        (any_output, all_events)
     }
 
     /// Resize all tabs
@@ -414,6 +525,70 @@ impl TabManager {
         self.scrollback_lines = limit;
         for tab in &mut self.tabs {
             tab.terminal.grid_mut().set_scrollback_limit(limit);
+        }
+    }
+
+    /// Create a tab from saved session data
+    pub fn new_tab_from_saved(&mut self, saved_tab: &SavedTab) -> anyhow::Result<usize> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let tab = Tab::new_with_cwd(
+            id,
+            self.cols,
+            self.rows,
+            &self.shell,
+            self.scrollback_lines,
+            saved_tab.working_directory.as_deref(),
+            Some(&saved_tab.title),
+        )?;
+        self.tabs.push(tab);
+
+        log::info!("Restored tab {} from session", id);
+        Ok(id)
+    }
+
+    /// Restore tabs from a saved session
+    pub fn restore_from_session(&mut self, session: &Session) -> anyhow::Result<()> {
+        // Clear any existing tabs (shouldn't be any at restore time)
+        self.tabs.clear();
+        self.active = 0;
+
+        if session.tabs.is_empty() {
+            // No tabs in session, create a fresh one
+            self.new_tab()?;
+            return Ok(());
+        }
+
+        // Restore each tab from the session
+        for saved_tab in &session.tabs {
+            if let Err(e) = self.new_tab_from_saved(saved_tab) {
+                log::error!("Failed to restore tab: {}", e);
+            }
+        }
+
+        // If all tabs failed to restore, create a fresh one
+        if self.tabs.is_empty() {
+            self.new_tab()?;
+        }
+
+        // Restore active tab index
+        if session.active_tab < self.tabs.len() {
+            self.active = session.active_tab;
+        }
+
+        log::info!("Restored {} tabs from session", self.tabs.len());
+        Ok(())
+    }
+
+    /// Convert current state to a Session for saving
+    pub fn to_session(&self) -> Session {
+        Session {
+            version: Session::CURRENT_VERSION,
+            tabs: self.tabs.iter().map(|tab| tab.to_saved_tab()).collect(),
+            active_tab: self.active,
+            window_size: None, // Will be set by App
+            window_position: None, // Will be set by App
         }
     }
 }
