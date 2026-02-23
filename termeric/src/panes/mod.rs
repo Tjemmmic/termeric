@@ -10,10 +10,12 @@ pub use tree::{PaneTree, PaneId, SplitDirection, PaneNode};
 pub use layout::{PaneLayout, PaneRect};
 
 use std::collections::HashMap;
+use std::io;
 use std::sync::mpsc::Receiver;
-use termeric_core::{Pty, Terminal};
+use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
+use crate::container::{TerminalContainer, SplitContainer};
 
 /// A single pane containing a terminal
 pub struct Pane {
@@ -391,6 +393,92 @@ impl PaneManager {
     /// Check if all panes are closed
     pub fn all_closed(&self) -> bool {
         self.panes.is_empty() || self.panes.values().all(|p| p.closed)
+    }
+}
+
+/// Implement TerminalContainer for PaneManager
+impl TerminalContainer for PaneManager {
+    fn focused_terminal(&self) -> Option<&Terminal> {
+        self.focused_pane().map(|p| &p.terminal)
+    }
+
+    fn focused_terminal_mut(&mut self) -> Option<&mut Terminal> {
+        self.focused_pane_mut().map(|p| &mut p.terminal)
+    }
+
+    fn write_input(&mut self, data: &[u8]) -> io::Result<()> {
+        if let Some(pane) = self.focused_pane_mut() {
+            pane.write(data)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn process_events(&mut self) -> (bool, Vec<TerminalEvent>) {
+        let mut any_output = false;
+        let mut all_events = Vec::new();
+
+        for pane in self.panes.values_mut() {
+            let had_output = pane.process_events();
+            any_output = any_output || had_output;
+            all_events.extend(pane.terminal.drain_events());
+        }
+
+        (any_output, all_events)
+    }
+
+    fn resize(&mut self, _cols: usize, _rows: usize) -> anyhow::Result<()> {
+        // PaneManager handles resize differently - via resize() method with pixel dimensions
+        // This is called with cols/rows but PaneManager needs pixel dimensions
+        // Recalculate all pane sizes based on current total dimensions
+        self.recalculate_sizes();
+        Ok(())
+    }
+
+    fn is_closed(&self) -> bool {
+        self.all_closed()
+    }
+}
+
+/// Implement SplitContainer for PaneManager
+impl SplitContainer for PaneManager {
+    fn split(&mut self, direction: SplitDirection) -> anyhow::Result<PaneId> {
+        PaneManager::split(self, direction)
+    }
+
+    fn close_focused_pane(&mut self) -> bool {
+        self.close_focused()
+    }
+
+    fn navigate(&mut self, direction: SplitDirection) {
+        PaneManager::navigate(self, direction)
+    }
+
+    fn pane_count(&self) -> usize {
+        PaneManager::pane_count(self)
+    }
+
+    fn pane_layout(&self) -> HashMap<PaneId, PaneRect> {
+        self.calculate_layout()
+    }
+
+    fn dividers(&self) -> Vec<Divider> {
+        self.get_dividers()
+    }
+
+    fn focused_pane_id(&self) -> PaneId {
+        self.focused_id()
+    }
+
+    fn iter_panes(&self) -> Vec<(&Terminal, PaneRect, bool)> {
+        let layout = self.calculate_layout();
+        self.panes.values()
+            .filter_map(|pane| {
+                layout.get(&pane.id).map(|&rect| {
+                    (&pane.terminal, rect, pane.id == self.focused)
+                })
+            })
+            .collect()
     }
 }
 
