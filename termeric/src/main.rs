@@ -15,6 +15,8 @@ mod renderer;
 mod search;
 mod session;
 mod settings;
+mod splash;
+mod state;
 mod tabs;
 mod theme;
 mod url;

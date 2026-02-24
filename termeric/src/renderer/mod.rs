@@ -1474,21 +1474,9 @@ impl Renderer {
                 );
             }
 
-            // Section icon
-            let icon_x = panel_x + padding_x;
-            let text_y = sy + (row_height - self.cell_height) / 2.0;
-            for (i, c) in section.icon().chars().enumerate() {
-                let color = if *is_active { self.ui.settings_accent } else { self.ui.settings_text_dim };
-                self.text_pipeline.push_char(
-                    c,
-                    icon_x + i as f32 * ui_cw,
-                    text_y,
-                    color,
-                );
-            }
-
             // Section label
-            let label_x = icon_x + ui_cw * 3.0;
+            let label_x = panel_x + padding_x;
+            let text_y = sy + (row_height - self.cell_height) / 2.0;
             let color = if *is_active { self.ui.settings_text } else { self.ui.settings_text_dim };
             for (i, c) in section.label().chars().enumerate() {
                 self.text_pipeline.push_char(

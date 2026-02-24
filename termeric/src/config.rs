@@ -33,6 +33,9 @@ pub struct Config {
     /// Harvest mode configuration
     #[serde(default)]
     pub harvest: HarvestConfig,
+    /// Splash screen configuration
+    #[serde(default)]
+    pub splash: SplashConfig,
 }
 
 impl Default for Config {
@@ -48,6 +51,7 @@ impl Default for Config {
             keybindings: Vec::new(),
             session: SessionConfig::default(),
             harvest: HarvestConfig::default(),
+            splash: SplashConfig::default(),
         }
     }
 }
@@ -306,6 +310,55 @@ impl Default for HarvestConfig {
             enabled: false, // Opt-in by default
             show_indicators: true,
             max_history: 100,
+        }
+    }
+}
+
+/// When to show the splash screen
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SplashMode {
+    /// Never show splash screen
+    Never,
+    /// Only on first launch ever
+    FirstBoot,
+    /// Each new window/session (but not restored sessions)
+    NewWindow,
+    /// Every new tab
+    NewTab,
+}
+
+impl Default for SplashMode {
+    fn default() -> Self {
+        Self::FirstBoot
+    }
+}
+
+impl SplashMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Never => "Never",
+            Self::FirstBoot => "First Boot",
+            Self::NewWindow => "New Window",
+            Self::NewTab => "New Tab",
+        }
+    }
+
+    pub const ALL: &[SplashMode] = &[Self::Never, Self::FirstBoot, Self::NewWindow, Self::NewTab];
+}
+
+/// Splash screen configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SplashConfig {
+    /// When to show the splash screen
+    pub mode: SplashMode,
+}
+
+impl Default for SplashConfig {
+    fn default() -> Self {
+        Self {
+            mode: SplashMode::FirstBoot,
         }
     }
 }

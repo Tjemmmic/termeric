@@ -16,7 +16,7 @@ use termeric_core::TerminalEvent;
 
 use crate::bell::Notifications;
 use crate::command::{CommandMode, CommandResult};
-use crate::config::Config;
+use crate::config::{Config, SplashMode};
 use crate::harvest::HarvestMode;
 use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
 use crate::keybindings::{KeyAction, KeyBindingManager};
@@ -24,6 +24,8 @@ use crate::renderer::{CommandBarInfo, Renderer};
 use crate::search::Search;
 use crate::session::{restore_session, save_session};
 use crate::settings::{SettingsPanel, SettingsAction, SettingsKey};
+use crate::splash::show_splash;
+use crate::state::AppState;
 use crate::tabs::TabManager;
 use crate::theme::Theme;
 
@@ -96,6 +98,8 @@ pub struct App {
     keybinding_manager: KeyBindingManager,
     /// Harvest mode (command visualization)
     harvest: Option<HarvestMode>,
+    /// Application runtime state (for first boot tracking, etc.)
+    app_state: AppState,
 }
 
 impl App {
@@ -152,6 +156,7 @@ impl App {
             notifications: Notifications::new(),
             keybinding_manager,
             harvest,
+            app_state: AppState::load(),
         })
     }
 
@@ -262,9 +267,52 @@ impl App {
 
         self.tabs = Some(tabs);
 
+        // Show splash screen based on configuration
+        // Don't show splash for restored sessions
+        if !restored {
+            self.maybe_show_splash(false);
+        }
+
         log::info!("Tab manager initialized: {}x{}", self.cols, self.rows);
 
         Ok(())
+    }
+
+    /// Check splash mode and show splash if appropriate
+    ///
+    /// `is_new_tab` indicates whether this is a new tab (for NewTab mode)
+    fn maybe_show_splash(&mut self, is_new_tab: bool) {
+        let should_show = match self.config.splash.mode {
+            SplashMode::Never => false,
+            SplashMode::FirstBoot => {
+                // Only show if first boot hasn't been completed
+                !self.app_state.first_boot_complete
+            }
+            SplashMode::NewWindow => {
+                // Show for new windows (not tabs)
+                !is_new_tab
+            }
+            SplashMode::NewTab => {
+                // Show for every new tab (and new windows)
+                true
+            }
+        };
+
+        if should_show {
+            if let Some(tabs) = &mut self.tabs {
+                if let Some(tab) = tabs.active_tab_mut() {
+                    show_splash(&mut tab.terminal);
+                    log::debug!("Splash screen displayed");
+                }
+            }
+
+            // Mark first boot as complete if this was a FirstBoot splash
+            if self.config.splash.mode == SplashMode::FirstBoot && !self.app_state.first_boot_complete {
+                if let Err(e) = self.app_state.mark_first_boot_complete() {
+                    log::warn!("Failed to save first boot state: {}", e);
+                }
+            }
+        }
     }
 
     /// Save the current session to disk
@@ -711,7 +759,11 @@ impl App {
             Action::NewTab => {
                 if let Some(tabs) = &mut self.tabs {
                     match tabs.new_tab() {
-                        Ok(id) => log::info!("Created new tab {}", id),
+                        Ok(id) => {
+                            log::info!("Created new tab {}", id);
+                            // Show splash for NewTab mode
+                            self.maybe_show_splash(true);
+                        }
                         Err(e) => log::error!("Failed to create new tab: {}", e),
                     }
                 }
@@ -976,6 +1028,12 @@ impl App {
             }
             SettingsAction::SetBellDuration(ms) => {
                 self.config.bell.visual_duration_ms = ms;
+            }
+            SettingsAction::SetSplashMode(mode) => {
+                self.config.splash.mode = mode;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
             SettingsAction::SaveConfig => {
                 match self.save_config() {

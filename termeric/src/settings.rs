@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::config::Config;
+use crate::config::{Config, SplashMode};
 use crate::theme::Theme;
 
 /// Layout geometry for the settings panel.
@@ -58,8 +58,8 @@ impl SettingsPanelLayout {
         let padding_x = ui_cw * 1.5;
         let padding_y = cell_height * 0.5;
 
-        // Sidebar: padding + icon(3 cells) + longest label("Scrollback"=10) + padding
-        let sidebar_width = padding_x + ui_cw * 3.0 + ui_cw * 10.0 + padding_x;
+        // Sidebar: padding + longest label("Scrollback"=10) + padding
+        let sidebar_width = padding_x + ui_cw * 10.0 + padding_x;
 
         // Content needs room for labels + values
         let min_content_width = ui_cw * 30.0;
@@ -170,6 +170,7 @@ pub enum SettingsSection {
     Cursor,
     Bell,
     Scrollback,
+    Startup,
     Shell,
 }
 
@@ -182,19 +183,8 @@ impl SettingsSection {
             Self::Cursor => "Cursor",
             Self::Bell => "Bell",
             Self::Scrollback => "Scrollback",
+            Self::Startup => "Startup",
             Self::Shell => "Shell",
-        }
-    }
-
-    pub fn icon(&self) -> &'static str {
-        match self {
-            Self::Font => "Aa",
-            Self::Theme => "◈",
-            Self::Window => "□",
-            Self::Cursor => "⌖",
-            Self::Bell => "🔔",
-            Self::Scrollback => "↕",
-            Self::Shell => "⏵",
         }
     }
 
@@ -205,6 +195,7 @@ impl SettingsSection {
         Self::Cursor,
         Self::Bell,
         Self::Scrollback,
+        Self::Startup,
         Self::Shell,
     ];
 
@@ -265,6 +256,8 @@ pub enum SettingsAction {
     SetAudioBell(bool),
     /// Change bell flash duration
     SetBellDuration(u64),
+    /// Change splash screen mode
+    SetSplashMode(SplashMode),
     /// Save current config
     SaveConfig,
     /// Reset to default config
@@ -526,6 +519,17 @@ impl SettingsPanel {
                     },
                 ]
             }
+            SettingsSection::Startup => {
+                let splash_options: Vec<String> = SplashMode::ALL.iter().map(|m| m.label().to_string()).collect();
+                let splash_selected = SplashMode::ALL.iter().position(|m| *m == config.splash.mode).unwrap_or(0);
+                vec![
+                    SettingItem {
+                        label: "Splash",
+                        value: config.splash.mode.label().to_string(),
+                        kind: SettingKind::Dropdown { options: splash_options, selected: splash_selected },
+                    },
+                ]
+            }
             SettingsSection::Shell => {
                 let program = config.shell.program.clone().unwrap_or_else(|| "(default)".into());
                 let args_str = if config.shell.args.is_empty() {
@@ -677,6 +681,11 @@ impl SettingsPanel {
                     (SettingsSection::Cursor, "Blink") => SettingsAction::SetCursorBlink(new_val == "On"),
                     (SettingsSection::Bell, "Visual") => SettingsAction::SetVisualBell(new_val == "On"),
                     (SettingsSection::Bell, "Audio") => SettingsAction::SetAudioBell(new_val == "On"),
+                    (SettingsSection::Startup, "Splash") => {
+                        // Convert index to SplashMode
+                        let mode = SplashMode::ALL.get(option_idx).copied().unwrap_or(SplashMode::FirstBoot);
+                        SettingsAction::SetSplashMode(mode)
+                    }
                     _ => SettingsAction::None,
                 }
             }
@@ -735,6 +744,10 @@ impl SettingsPanel {
                     (SettingsSection::Cursor, "Blink") => SettingsAction::SetCursorBlink(new_val == "On"),
                     (SettingsSection::Bell, "Visual") => SettingsAction::SetVisualBell(new_val == "On"),
                     (SettingsSection::Bell, "Audio") => SettingsAction::SetAudioBell(new_val == "On"),
+                    (SettingsSection::Startup, "Splash") => {
+                        let mode = SplashMode::ALL.get(new_idx).copied().unwrap_or(SplashMode::FirstBoot);
+                        SettingsAction::SetSplashMode(mode)
+                    }
                     _ => SettingsAction::None,
                 }
             }
