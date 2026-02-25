@@ -15,7 +15,7 @@ use std::sync::mpsc::Receiver;
 use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
-use crate::container::{TerminalContainer, SplitContainer};
+use crate::terminal::container::{TerminalContainer, SplitContainer};
 
 /// A single pane containing a terminal
 pub struct Pane {

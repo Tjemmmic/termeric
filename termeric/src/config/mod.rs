@@ -1,10 +1,12 @@
 //! Configuration management
 
+pub mod theme;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::keybindings::KeyBinding;
+use crate::input::keybindings::KeyBinding;
 
 /// Application configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]

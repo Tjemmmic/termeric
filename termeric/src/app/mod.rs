@@ -1,5 +1,8 @@
 //! Application state and event handling
 
+mod event_loop;
+pub mod state;
+
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,19 +17,19 @@ use winit::{
 
 use termeric_core::TerminalEvent;
 
-use crate::bell::Notifications;
-use crate::command::{CommandMode, CommandResult};
+use crate::notifications::Notifications;
+use crate::ui::command_palette::{CommandMode, CommandResult};
 use crate::config::{Config, SplashMode};
 use crate::harvest::HarvestMode;
 use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
-use crate::keybindings::{KeyAction, KeyBindingManager};
+use crate::input::keybindings::{KeyAction, KeyBindingManager};
 use crate::renderer::{CommandBarInfo, Renderer};
-use crate::search::Search;
-use crate::settings::{SettingsPanel, SettingsAction, SettingsKey};
-use crate::splash::show_splash;
-use crate::state::AppState;
+use crate::terminal::search::Search;
+use crate::ui::settings::{SettingsPanel, SettingsAction, SettingsKey};
+use crate::terminal::splash::show_splash;
+use self::state::AppState;
 use crate::tabs::TabManager;
-use crate::theme::Theme;
+use crate::config::theme::Theme;
 
 /// Main application state
 ///
@@ -106,7 +109,7 @@ pub struct App {
     /// Cached list of session names for the dropdown
     session_dropdown_items: Vec<(String, String)>,
     /// Session management panel
-    session_panel: crate::session_panel::SessionPanel,
+    session_panel: crate::session::panel::SessionPanel,
 }
 
 impl App {
@@ -167,7 +170,7 @@ impl App {
             app_state: AppState::load(),
             session_dropdown_open: false,
             session_dropdown_items: Vec::new(),
-            session_panel: crate::session_panel::SessionPanel::new(),
+            session_panel: crate::session::panel::SessionPanel::new(),
         })
     }
 
@@ -177,7 +180,7 @@ impl App {
     /// so it works on all platforms without requiring external files.
     fn load_icon() -> Option<Icon> {
         // Icon is embedded in the binary at compile time
-        let icon_bytes = include_bytes!("../../assets/icons/termeric.png");
+        let icon_bytes = include_bytes!("../../../assets/icons/termeric.png");
 
         match image::load_from_memory(icon_bytes) {
             Ok(img) => {
@@ -363,7 +366,7 @@ impl App {
                 }
             }
             TerminalEvent::HyperlinkActivated(url) => {
-                if let Err(e) = crate::url::UrlDetector::open_url(&url) {
+                if let Err(e) = crate::terminal::url::UrlDetector::open_url(&url) {
                     log::error!("Failed to open URL: {}", e);
                 }
             }
@@ -502,7 +505,7 @@ impl App {
                 is_error: msg.is_error,
                 suggestions: Vec::new(),
                 selected_suggestion: 0,
-                phase: crate::command::CommandInputPhase::SelectingCommand,
+                phase: crate::ui::command_palette::CommandInputPhase::SelectingCommand,
                 message_scroll_offset: self.command_mode.message_scroll_offset(),
             })
         } else {
@@ -1631,7 +1634,7 @@ impl App {
                 let registry = self.command_mode.registry();
 
                 // Group commands by category
-                let mut categories: std::collections::HashMap<&str, Vec<&crate::command::CommandDef>> = std::collections::HashMap::new();
+                let mut categories: std::collections::HashMap<&str, Vec<&crate::ui::command_palette::CommandDef>> = std::collections::HashMap::new();
                 for cmd in registry.all() {
                     categories.entry(cmd.category).or_insert_with(Vec::new).push(cmd);
                 }
@@ -1794,7 +1797,7 @@ impl App {
                                         if let Some(hyperlink_id) = cell.hyperlink_id {
                                             if let Some(url) = tab.terminal.get_hyperlink_url(hyperlink_id) {
                                                 log::info!("Opening hyperlink: {}", url);
-                                                if let Err(e) = crate::url::UrlDetector::open_url(url) {
+                                                if let Err(e) = crate::terminal::url::UrlDetector::open_url(url) {
                                                     log::error!("Failed to open URL: {}", e);
                                                 }
                                                 return;
@@ -1815,7 +1818,7 @@ impl App {
                         if self.session_panel.is_open() {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
-                                use crate::session_panel::SessionPanelAction;
+                                use crate::session::panel::SessionPanelAction;
                                 let action = renderer.session_panel_hit_test(
                                     px, py,
                                     self.session_panel.sessions(),
@@ -2209,238 +2212,3 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
-        }
-
-        // Create window
-        let mut window_attrs = Window::default_attributes()
-            .with_title("Termeric")
-            .with_inner_size(LogicalSize::new(
-                self.config.window.width,
-                self.config.window.height,
-            ));
-
-        // Load and set window icon if available
-        if let Some(icon) = Self::load_icon() {
-            window_attrs = window_attrs.with_window_icon(Some(icon));
-        }
-
-        match event_loop.create_window(window_attrs) {
-            Ok(window) => {
-                log::info!("Window created");
-                let window = Arc::new(window);
-
-                // Initialize renderer
-                if let Err(e) = self.init_renderer(window.clone()) {
-                    log::error!("Failed to initialize renderer: {}", e);
-                    event_loop.exit();
-                    return;
-                }
-
-                // Initialize tabs with first tab
-                if let Err(e) = self.init_tabs() {
-                    log::error!("Failed to initialize tabs: {}", e);
-                    event_loop.exit();
-                    return;
-                }
-
-                // Initial render
-                self.render();
-            }
-            Err(e) => {
-                log::error!("Failed to create window: {}", e);
-                event_loop.exit();
-            }
-        }
-    }
-
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        match event {
-            WindowEvent::CloseRequested => {
-                log::info!("Close requested");
-                event_loop.exit();
-            }
-
-            WindowEvent::Resized(size) => {
-                self.handle_resize(size.width, size.height);
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let size = self.window.as_ref().map(|window| window.inner_size());
-                if let Some(size) = size {
-                    self.handle_scale_factor_change(scale_factor, size);
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
-            }
-
-            WindowEvent::KeyboardInput { event, .. } => {
-                // Handle settings panel input first (highest priority when open)
-                if self.settings_panel.is_active() {
-                    if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        let settings_key = match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => Some(SettingsKey::Escape),
-                            Key::Named(NamedKey::ArrowUp) => Some(SettingsKey::Up),
-                            Key::Named(NamedKey::ArrowDown) => Some(SettingsKey::Down),
-                            Key::Named(NamedKey::ArrowLeft) => Some(SettingsKey::Left),
-                            Key::Named(NamedKey::ArrowRight) => Some(SettingsKey::Right),
-                            Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
-                            Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
-                            Key::Character(c) if self.modifiers.control_key() => {
-                                match c.as_str() {
-                                    "s" | "S" => Some(SettingsKey::Save),
-                                    "r" | "R" => Some(SettingsKey::Reset),
-                                    _ => None,
-                                }
-                            }
-                            _ => None,
-                        };
-
-                        if let Some(key) = settings_key {
-                            let action = self.settings_panel.handle_key(key, &self.config);
-                            self.apply_settings_action(action);
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                // Handle command mode input first
-                if self.handle_command_mode_input(&event) {
-                    return;
-                }
-
-                // Handle search mode input
-                if self.handle_search_mode_input(&event) {
-                    return;
-                }
-
-                // Check for Ctrl+Shift+P to enter command mode
-                if event.state == winit::event::ElementState::Pressed {
-                    use winit::keyboard::Key;
-
-                    // Ctrl+Shift+P activates command palette
-                    if self.modifiers.control_key() && self.modifiers.shift_key() {
-                        if let Key::Character(c) = &event.logical_key {
-                            if c.eq_ignore_ascii_case("p") {
-                                self.command_mode.activate();
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                                return;
-                            }
-                        }
-                    }
-                }
-
-                // Check custom keybindings first (highest priority after modal UI)
-                if event.state == winit::event::ElementState::Pressed {
-                    if let Some(key_action) = self.keybinding_manager.check(&event.logical_key, self.modifiers) {
-                        if self.handle_key_action(key_action.clone()) {
-                            return;
-                        }
-                    }
-                }
-
-                // Check for default keybindings
-                if let Some(action) = check_keybinding(&event, self.modifiers) {
-                    self.handle_action(action);
-                    return;
-                }
-
-                // Convert key event to terminal input
-                if let Some(data) = key_to_bytes_with_modifiers(&event, self.modifiers) {
-                    self.write_to_pty(&data);
-                }
-            }
-
-            WindowEvent::MouseInput { state, button, .. } => {
-                // Use tracked cursor position
-                if let Some(pos) = self.last_cursor_pos {
-                    self.handle_mouse_input(button, state, pos);
-                }
-            }
-
-            WindowEvent::CursorMoved { position, .. } => {
-                self.last_cursor_pos = Some((position.x, position.y));
-                self.handle_mouse_move((position.x, position.y));
-            }
-
-            WindowEvent::MouseWheel { delta, .. } => {
-                let scroll_speed = self.config.scrollback.scroll_speed;
-                let y_delta = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64 * scroll_speed,
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 10.0,
-                };
-                self.handle_scroll(y_delta);
-            }
-
-            WindowEvent::Focused(focused) => {
-                if self.window_focused != focused {
-                    self.window_focused = focused;
-                    self.focus_change_time = Instant::now();
-                    log::debug!("Window focus changed: {}", focused);
-                }
-            }
-
-            WindowEvent::RedrawRequested => {
-                // Process any pending PTY events
-                self.process_pty_events();
-
-                if self.should_exit {
-                    event_loop.exit();
-                    return;
-                }
-
-                // Render
-                self.render();
-            }
-
-            _ => {}
-        }
-    }
-
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // Process PTY events before waiting
-        self.process_pty_events();
-
-        // Request redraw if we have new content
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
-    }
-}
-
-impl Drop for App {
-    fn drop(&mut self) {
-        // Save session before cleanup
-        self.save_current_session();
-
-        // Drop order is critical: renderer holds a wgpu Surface that references
-        // the window, so we must drop resources in the correct order:
-        // 1. Tabs (PTY processes) first
-        // 2. Renderer (GPU resources / Surface) second
-        // 3. Window last (implicit, after this Drop returns)
-        self.tabs.take();
-        self.renderer.take();
-        log::debug!("App resources cleaned up");
-    }
-}

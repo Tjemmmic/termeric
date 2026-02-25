@@ -20,15 +20,15 @@ use std::sync::Arc;
 use wgpu::*;
 use winit::window::Window;
 use termeric_core::{Grid, Selection, Color as TermColor, CellAttrs, CellFlags};
-use crate::theme::Theme;
-use crate::settings::{SettingsPanelInfo, SettingsPanelLayout};
-use crate::search::{Search, SearchBarInfo};
+use crate::config::theme::Theme;
+use crate::ui::settings::{SettingsPanelInfo, SettingsPanelLayout};
+use crate::terminal::search::{Search, SearchBarInfo};
 
 use text::TextPipeline;
 use rect::RectPipeline;
 
 use crate::tabs::TabInfo;
-use crate::command::CommandDef;
+use crate::ui::command_palette::CommandDef;
 use crate::panes::{PaneRect, Divider};
 
 /// Render information for a single pane in a multi-pane layout
@@ -61,7 +61,7 @@ pub struct CommandBarInfo {
     /// Index of selected suggestion
     pub selected_suggestion: usize,
     /// Current input phase
-    pub phase: crate::command::CommandInputPhase,
+    pub phase: crate::ui::command_palette::CommandInputPhase,
     /// Scroll offset for message display (in lines)
     pub message_scroll_offset: usize,
 }
@@ -492,7 +492,7 @@ impl Renderer {
     /// search_bar: optional search bar info when searching
     /// search: search state for match highlighting
     /// images: optional list of image placements and their data for Kitty graphics
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session_panel::SessionPanelInfo>) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -580,7 +580,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session_panel::SessionPanelInfo>) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -1263,13 +1263,13 @@ impl Renderer {
             text_x = padding; // Reset x position
 
             let (prompt_text, prompt_color) = match info.phase {
-                crate::command::CommandInputPhase::SelectingCommand => {
+                crate::ui::command_palette::CommandInputPhase::SelectingCommand => {
                     ("> ", self.ui.prompt_selecting)
                 }
-                crate::command::CommandInputPhase::EnteringArguments => {
+                crate::ui::command_palette::CommandInputPhase::EnteringArguments => {
                     (": ", self.ui.prompt_args)
                 }
-                crate::command::CommandInputPhase::BrowsingHistory => {
+                crate::ui::command_palette::CommandInputPhase::BrowsingHistory => {
                     ("⏮ ", self.ui.prompt_history)
                 }
             };
@@ -1317,13 +1317,13 @@ impl Renderer {
             // Phase-aware hint text on the right (only when not showing message)
             if info.message.is_none() {
                 let hint = match info.phase {
-                    crate::command::CommandInputPhase::SelectingCommand => {
+                    crate::ui::command_palette::CommandInputPhase::SelectingCommand => {
                         "↑↓ Navigate  ⭾ Complete  Ctrl+↑↓ History  Esc Cancel"
                     }
-                    crate::command::CommandInputPhase::EnteringArguments => {
+                    crate::ui::command_palette::CommandInputPhase::EnteringArguments => {
                         "↑↓ Navigate  ⭾ Complete  ⏎ Execute  Esc Cancel"
                     }
-                    crate::command::CommandInputPhase::BrowsingHistory => {
+                    crate::ui::command_palette::CommandInputPhase::BrowsingHistory => {
                         "Ctrl+↑↓ Browse  ⏎ Select  Esc Cancel"
                     }
                 };
@@ -1684,8 +1684,8 @@ impl Renderer {
         let dropdown_occludes: Option<(f32, f32, f32)> = if info.dropdown_open {
             if let Some(sel_item) = info.items.get(info.selected_item) {
                 let (options_text, option_count) = match &sel_item.kind {
-                    crate::settings::SettingKind::Dropdown { options, .. } => (options.clone(), options.len()),
-                    crate::settings::SettingKind::SteppedList { values, .. } => {
+                    crate::ui::settings::SettingKind::Dropdown { options, .. } => (options.clone(), options.len()),
+                    crate::ui::settings::SettingKind::SteppedList { values, .. } => {
                         (values.iter().map(|v| v.to_string()).collect::<Vec<_>>(), values.len())
                     }
                     _ => (vec![], 0),
@@ -1778,7 +1778,7 @@ impl Renderer {
                 let max_x = content_x + content_width - padding_x;
 
                 match &item.kind {
-                    crate::settings::SettingKind::Numeric { .. } => {
+                    crate::ui::settings::SettingKind::Numeric { .. } => {
                         // Draw ◀ value ▶ controls for numeric
                         if is_selected {
                             self.text_pipeline.push_char(
@@ -1803,7 +1803,7 @@ impl Renderer {
                             }
                         }
                     }
-                    crate::settings::SettingKind::Dropdown { .. } | crate::settings::SettingKind::SteppedList { .. } => {
+                    crate::ui::settings::SettingKind::Dropdown { .. } | crate::ui::settings::SettingKind::SteppedList { .. } => {
                         // Draw value with ▼ chevron (click or Enter to open dropdown)
                         let val_x = value_area_x + ui_cw * 2.0;
                         for (i, c) in item.value.chars().enumerate() {
@@ -1819,7 +1819,7 @@ impl Renderer {
                             self.text_pipeline.push_char('▼', chevron_x, text_y, chevron_color);
                         }
                     }
-                    crate::settings::SettingKind::ReadOnly => {
+                    crate::ui::settings::SettingKind::ReadOnly => {
                         // Just display the value, truncated with '.'
                         let val_x = value_area_x + ui_cw * 2.0;
                         for (i, c) in item.value.chars().enumerate() {
@@ -1900,10 +1900,10 @@ impl Renderer {
 
         if let Some(item) = info.items.get(info.selected_item) {
             let (options_text, option_count): (Vec<String>, usize) = match &item.kind {
-                crate::settings::SettingKind::Dropdown { options, .. } => {
+                crate::ui::settings::SettingKind::Dropdown { options, .. } => {
                     (options.clone(), options.len())
                 }
-                crate::settings::SettingKind::SteppedList { values, .. } => {
+                crate::ui::settings::SettingKind::SteppedList { values, .. } => {
                     (values.iter().map(|v| v.to_string()).collect(), values.len())
                 }
                 _ => (vec![], 0),
@@ -2672,7 +2672,7 @@ impl Renderer {
     }
 
     /// Build session management panel render data
-    fn build_session_management_panel(&mut self, info: &crate::session_panel::SessionPanelInfo, window_width: f32, window_height: f32) {
+    fn build_session_management_panel(&mut self, info: &crate::session::panel::SessionPanelInfo, window_width: f32, window_height: f32) {
         let anim = info.animation;
         if anim <= 0.0 {
             return;
@@ -2855,12 +2855,12 @@ impl Renderer {
         &self,
         x: f32,
         y: f32,
-        sessions: &[crate::session_panel::SessionEntry],
+        sessions: &[crate::session::panel::SessionEntry],
         window_width: f32,
         window_height: f32,
         animation: f32,
-    ) -> crate::session_panel::SessionPanelAction {
-        use crate::session_panel::SessionPanelAction;
+    ) -> crate::session::panel::SessionPanelAction {
+        use crate::session::panel::SessionPanelAction;
 
         let ui_cw = self.cell_width;
         let cell_height = self.cell_height;

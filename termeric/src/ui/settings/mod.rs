@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use crate::config::{Config, SplashMode};
-use crate::theme::Theme;
+use crate::config::theme::Theme;
 
 /// Layout geometry for the settings panel.
 /// This struct ensures consistent layout between rendering and hit testing.

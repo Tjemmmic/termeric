@@ -5,7 +5,7 @@
 use termeric_core::Terminal;
 
 /// Embedded ASCII art (compiled into binary)
-const SPLASH_ASCII: &str = include_str!("../../assets/termeric-ascii.txt");
+const SPLASH_ASCII: &str = include_str!("../../../assets/termeric-ascii.txt");
 
 /// Display the splash screen in the terminal
 ///

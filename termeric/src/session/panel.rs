@@ -139,10 +139,10 @@ impl SessionPanel {
 
     /// Refresh the session list from disk
     pub fn refresh_sessions(&mut self) {
-        let names = crate::session::list_sessions();
+        let names = super::list_sessions();
         self.sessions = names.iter().map(|name| {
             // Try to load the session title from the session file
-            let display_name = crate::session::session_file_path(name)
+            let display_name = super::session_file_path(name)
                 .and_then(|path| std::fs::read_to_string(&path).ok())
                 .and_then(|content| {
                     // Parse session title from TOML
@@ -157,7 +157,7 @@ impl SessionPanel {
                 .unwrap_or_else(|| name.clone());
 
             // Try to read last modified time
-            let last_modified = match crate::session::session_file_path(name) {
+            let last_modified = match super::session_file_path(name) {
                 Some(path) if path.exists() => {
                     std::fs::metadata(&path)
                         .ok()

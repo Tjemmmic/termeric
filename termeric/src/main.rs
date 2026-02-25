@@ -3,25 +3,16 @@
 //! This is the main entry point for the Termeric terminal emulator.
 
 mod app;
-mod bell;
-mod command;
 mod config;
-mod container;
 mod harvest;
 mod input;
-mod keybindings;
+mod notifications;
 mod panes;
 mod renderer;
-mod search;
 mod session;
-mod session_panel;
-mod settings;
-mod splash;
-mod state;
 mod tabs;
-mod theme;
-mod url;
-mod window;
+mod terminal;
+mod ui;
 
 use anyhow::Result;
 use winit::event_loop::EventLoop;
