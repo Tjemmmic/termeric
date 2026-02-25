@@ -500,7 +500,7 @@ impl Renderer {
             label: Some("Render Encoder"),
         });
 
-        // Build render data from grid and tabs
+        // Build render data from grid and tabs (inserts layer boundaries)
         self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel, search_bar, search, session_dropdown, session_panel);
 
         // Build image render data if any
@@ -532,14 +532,23 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Draw rectangles (backgrounds, cursor, tab bar)
-            self.rect_pipeline.draw(&mut render_pass);
+            // Draw layers interleaved: for each layer, draw its rects then its text.
+            // This ensures overlay backgrounds (higher layers) fully occlude content
+            // from lower layers, fixing the bleed-through issue.
+            let layer_count = self.rect_pipeline.layer_count().max(self.text_pipeline.layer_count());
 
-            // Draw images (Kitty graphics)
-            self.image_pipeline.draw(&mut render_pass);
+            for layer in 0..layer_count {
+                // Draw rectangles for this layer (backgrounds, panels, etc.)
+                self.rect_pipeline.draw_layer(&mut render_pass, layer);
 
-            // Draw text (terminal content and tab labels)
-            self.text_pipeline.draw(&mut render_pass, &self.glyph_cache);
+                // Draw images only on the base layer (layer 0) — images are terminal content
+                if layer == 0 {
+                    self.image_pipeline.draw(&mut render_pass);
+                }
+
+                // Draw text for this layer
+                self.text_pipeline.draw_layer(&mut render_pass, &self.glyph_cache, layer);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -622,6 +631,7 @@ impl Renderer {
         // Content area starts below tab bar and search bar (if visible)
         let content_top = tab_bar_height + search_bar_height;
 
+        // ── LAYER 0: Base content (tab bar, grid, cursor, scrollbar) ──
         // Render tab bar first
         self.build_tab_bar(tabs, window_width, tab_bar_height);
 
@@ -638,24 +648,6 @@ impl Renderer {
 
         // Calculate maximum y position for grid content (don't overlap command bar or dropdown)
         let max_grid_y = window_height - padding - command_bar_height - dropdown_height - 8.0; // 8px gap for dropdown
-
-        // Calculate settings panel occlusion area (to prevent grid text from rendering over it)
-        let settings_panel_left = if let Some(sp) = settings_panel {
-            if sp.animation > 0.001 {
-                // Calculate panel position - must match build_settings_panel
-                let ui_cw = cell_width;
-                let sp_padding_x = ui_cw * 1.5;
-                let sidebar_width = sp_padding_x + ui_cw * 3.0 + ui_cw * 10.0 + sp_padding_x;
-                let min_content_width = ui_cw * 30.0;
-                let panel_width = ((sidebar_width + min_content_width).max(window_width * 0.35)).min(window_width * 0.55);
-                let panel_x = window_width - panel_width * sp.animation;
-                Some(panel_x)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
 
         // Determine which rows to render based on filter mode
         let filter_mode = search.is_filter_mode() && !search.matching_rows().is_empty();
@@ -704,13 +696,6 @@ impl Renderer {
                 // Skip rendering if this row would overlap with command bar
                 if y + cell_height > max_grid_y {
                     break;
-                }
-
-                // Skip rendering if cell is under the settings panel
-                if let Some(panel_left) = settings_panel_left {
-                    if x + cell_width > panel_left {
-                        continue;
-                    }
                 }
 
                 // Check if cell is selected (use grid_row for selection check)
@@ -833,9 +818,8 @@ impl Renderer {
                 let x = padding + cursor_pos.0 * cell_width;
                 let y = content_top + padding + cursor_pos.1 * cell_height;
 
-                // Only draw cursor if it won't overlap with command bar or settings panel
-                let cursor_under_panel = settings_panel_left.map(|pl| x + cell_width > pl).unwrap_or(false);
-                if y + cell_height <= max_grid_y && !cursor_under_panel {
+                // Only draw cursor if it won't overlap with command bar
+                if y + cell_height <= max_grid_y {
                     // Bright orange cursor (turmeric core) with animated opacity and focus dimming
                     let cursor_color = apply_brightness(self.ui.cursor, brightness);
                     self.rect_pipeline.push_rounded_rect(
@@ -900,36 +884,48 @@ impl Renderer {
             }
         }
 
-        // Render command bar (on top of grid)
-        if let Some(cmd_bar) = command_bar {
-            self.build_command_bar(cmd_bar, window_width, window_height, command_bar_height);
-        }
-
-        // Render search bar (at top of grid, below tab bar)
+        // ── LAYER 1: Search bar (overlays grid content) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
         if let Some(search_info) = search_bar {
             self.build_search_bar(search_info, window_width, tab_bar_height);
         }
 
-        // Render settings panel overlay (on top of everything except command bar)
+        // ── LAYER 2: Command bar + autocomplete dropdown (overlays grid and search) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(cmd_bar) = command_bar {
+            self.build_command_bar(cmd_bar, window_width, window_height, command_bar_height);
+        }
+
+        // ── LAYER 3: Settings panel + settings dropdown (overlays everything below) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
         if let Some(sp) = settings_panel {
             if sp.animation > 0.001 {
                 self.build_settings_panel(sp, window_width, window_height);
             }
         }
 
-        // Render dropdown overlay absolutely last (on top of everything)
+        // ── LAYER 4: Settings dropdown overlay (on top of settings panel) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
         if let Some(sp) = settings_panel {
             if sp.animation > 0.001 && sp.dropdown_open {
                 self.build_dropdown_overlay(sp, window_width, window_height);
             }
         }
 
-        // Render session dropdown overlay (on top of everything)
+        // ── LAYER 5: Session dropdown (on top of everything) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
         if let Some(sd) = session_dropdown {
             self.build_session_dropdown(sd, window_width);
         }
 
-        // Render session management panel (on top of everything)
+        // ── LAYER 6: Session management panel (topmost overlay) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
         if let Some(sp) = session_panel {
             if sp.animation > 0.001 {
                 self.build_session_management_panel(sp, window_width, window_height);

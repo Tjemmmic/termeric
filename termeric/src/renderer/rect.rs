@@ -76,6 +76,8 @@ pub struct RectPipeline {
     // Built vertices and indices
     vertices: Vec<RectVertex>,
     indices: Vec<u32>,
+    // Layer boundaries — each entry is the index count at the start of that layer
+    layer_boundaries: Vec<u32>,
     // Screen size
     screen_size: [f32; 2],
 }
@@ -175,6 +177,7 @@ impl RectPipeline {
             index_buffer: None,
             vertices: Vec::new(),
             indices: Vec::new(),
+            layer_boundaries: Vec::new(),
             screen_size: [800.0, 600.0],
         })
     }
@@ -193,6 +196,18 @@ impl RectPipeline {
     pub fn clear(&mut self) {
         self.vertices.clear();
         self.indices.clear();
+        self.layer_boundaries.clear();
+    }
+
+    /// Mark a layer boundary at the current index position.
+    /// All rects pushed after this call belong to the new layer.
+    pub fn mark_layer(&mut self) {
+        self.layer_boundaries.push(self.indices.len() as u32);
+    }
+
+    /// Number of layers recorded (boundaries + 1 for the implicit first layer)
+    pub fn layer_count(&self) -> usize {
+        self.layer_boundaries.len() + 1
     }
 
     /// Push a sharp rectangle (no rounding)
@@ -258,7 +273,7 @@ impl RectPipeline {
         }));
     }
 
-    /// Draw rectangles
+    /// Draw ALL rectangles (legacy single-pass method, kept for compatibility)
     pub fn draw<'a>(&'a self, render_pass: &mut RenderPass<'a>) {
         if self.indices.is_empty() {
             return;
@@ -272,5 +287,41 @@ impl RectPipeline {
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+    }
+
+    /// Draw only the rectangles belonging to a specific layer.
+    /// Layer 0 is everything before the first mark_layer() call.
+    pub fn draw_layer<'a>(&'a self, render_pass: &mut RenderPass<'a>, layer: usize) {
+        if self.indices.is_empty() {
+            return;
+        }
+
+        let Some(vertex_buffer) = &self.vertex_buffer else { return };
+        let Some(index_buffer) = &self.index_buffer else { return };
+
+        // Determine index range for this layer
+        let start = if layer == 0 {
+            0u32
+        } else if layer <= self.layer_boundaries.len() {
+            self.layer_boundaries[layer - 1]
+        } else {
+            return; // layer out of range
+        };
+
+        let end = if layer < self.layer_boundaries.len() {
+            self.layer_boundaries[layer]
+        } else {
+            self.indices.len() as u32
+        };
+
+        if start >= end {
+            return; // empty layer
+        }
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
+        render_pass.draw_indexed(start..end, 0, 0..1);
     }
 }

@@ -72,6 +72,10 @@ pub struct TextPipeline {
     // Built vertices
     vertices: Vec<TextVertex>,
     indices: Vec<u32>,
+    // Layer boundaries — each entry is the queued-char count at the start of that layer
+    layer_boundaries: Vec<usize>,
+    // Index-space layer boundaries — populated during upload(), maps to actual index ranges
+    index_layer_boundaries: Vec<u32>,
     // Screen size
     screen_size: [f32; 2],
 }
@@ -211,6 +215,8 @@ impl TextPipeline {
             queued: Vec::new(),
             vertices: Vec::new(),
             indices: Vec::new(),
+            layer_boundaries: Vec::new(),
+            index_layer_boundaries: Vec::new(),
             screen_size: [800.0, 600.0],
         })
     }
@@ -230,6 +236,19 @@ impl TextPipeline {
         self.queued.clear();
         self.vertices.clear();
         self.indices.clear();
+        self.layer_boundaries.clear();
+        self.index_layer_boundaries.clear();
+    }
+
+    /// Mark a layer boundary at the current queued-char position.
+    /// All text pushed after this call belongs to the new layer.
+    pub fn mark_layer(&mut self) {
+        self.layer_boundaries.push(self.queued.len());
+    }
+
+    /// Number of layers recorded (boundaries + 1 for the implicit first layer)
+    pub fn layer_count(&self) -> usize {
+        self.layer_boundaries.len() + 1
     }
 
     /// Queue a character for rendering
@@ -274,7 +293,19 @@ impl TextPipeline {
 
     /// Standard per-character upload (no ligatures)
     fn upload_standard(&mut self, queue: &Queue, glyph_cache: &mut GlyphCache, atlas_w: f32, atlas_h: f32, baseline: f32) {
-        for queued in &self.queued {
+        // Build index-space layer boundaries as we iterate through queued chars
+        self.index_layer_boundaries.clear();
+        let mut next_boundary_idx = 0usize;
+
+        for (i, queued) in self.queued.iter().enumerate() {
+            // Check if we've crossed a layer boundary
+            while next_boundary_idx < self.layer_boundaries.len()
+                && i == self.layer_boundaries[next_boundary_idx]
+            {
+                self.index_layer_boundaries.push(self.indices.len() as u32);
+                next_boundary_idx += 1;
+            }
+
             let Some(entry) = glyph_cache.get_or_insert(queued.c, queue) else { continue };
 
             if entry.width == 0 || entry.height == 0 {
@@ -300,6 +331,12 @@ impl TextPipeline {
             self.vertices.push(TextVertex { position: [x0, y1], tex_coords: [u0, v1], color: queued.color });
 
             self.indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2, base_idx, base_idx + 2, base_idx + 3]);
+        }
+
+        // Flush any remaining layer boundaries (layers with no chars, or at the end)
+        while next_boundary_idx < self.layer_boundaries.len() {
+            self.index_layer_boundaries.push(self.indices.len() as u32);
+            next_boundary_idx += 1;
         }
     }
 
@@ -516,7 +553,7 @@ impl TextPipeline {
         }
     }
 
-    /// Draw text
+    /// Draw ALL text (legacy single-pass method, kept for compatibility)
     pub fn draw<'a>(&'a self, render_pass: &mut RenderPass<'a>, _glyph_cache: &'a GlyphCache) {
         if self.indices.is_empty() {
             return;
@@ -531,5 +568,52 @@ impl TextPipeline {
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+    }
+
+    /// Draw only the text belonging to a specific layer.
+    /// Layer 0 is everything before the first mark_layer() call.
+    ///
+    /// Because text vertices are built from queued chars during upload(),
+    /// and each queued char produces exactly 4 vertices / 6 indices,
+    /// we can map layer boundaries (in queued-char space) to index ranges.
+    pub fn draw_layer<'a>(&'a self, render_pass: &mut RenderPass<'a>, _glyph_cache: &'a GlyphCache, layer: usize) {
+        if self.indices.is_empty() {
+            return;
+        }
+
+        let Some(vertex_buffer) = &self.vertex_buffer else { return };
+        let Some(index_buffer) = &self.index_buffer else { return };
+        let Some(bind_group) = &self.bind_group else { return };
+
+        // Each queued char produces at most 6 indices (one quad),
+        // but some chars may produce 0 indices (whitespace, missing glyphs).
+        // Since we can't map queued-char boundaries perfectly to index ranges
+        // without tracking per-char index output, we store the index count
+        // at each layer boundary during upload.
+        // For simplicity and correctness, we use the _index_layer_boundaries
+        // that are populated during upload().
+        let start = if layer == 0 {
+            0u32
+        } else if layer <= self.index_layer_boundaries.len() {
+            self.index_layer_boundaries[layer - 1]
+        } else {
+            return;
+        };
+
+        let end = if layer < self.index_layer_boundaries.len() {
+            self.index_layer_boundaries[layer]
+        } else {
+            self.indices.len() as u32
+        };
+
+        if start >= end {
+            return;
+        }
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
+        render_pass.draw_indexed(start..end, 0, 0..1);
     }
 }
