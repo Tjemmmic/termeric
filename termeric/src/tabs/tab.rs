@@ -42,7 +42,7 @@ pub struct Tab {
     /// Session ID this tab belongs to (None = fresh unsaved tab)
     pub session_id: Option<String>,
     /// Last known foreground command (e.g. "cargo"), preserved after command finishes
-    last_command: Option<String>,
+    pub(crate) last_command: Option<String>,
 }
 
 impl Tab {
@@ -231,6 +231,9 @@ impl Tab {
             self.session_id = Some(s.id.clone());
             s
         };
+
+        // Preserve last_command in the session metadata
+        session.last_command = self.last_command.clone();
 
         let session_id = session.id.clone();
 

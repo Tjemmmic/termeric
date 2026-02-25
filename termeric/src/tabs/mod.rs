@@ -280,6 +280,9 @@ impl TabManager {
         // Link this tab to its session
         tab.session_id = Some(session.id.clone());
 
+        // Restore last_command so the session title is preserved across open/close cycles
+        tab.last_command = session.last_command.clone();
+
         // Replay scrollback
         if let Some(ref scrollback_file) = session.scrollback_file {
             let lines = crate::session::restore::load_scrollback_text(
@@ -287,6 +290,10 @@ impl TabManager {
                 scrollback_file,
             );
             if !lines.is_empty() {
+                // Join lines with \r\n and add a trailing \r\n so the shell's
+                // new prompt appears on a fresh line below the scrollback.
+                // This is safe because export_scrollback_text() only includes
+                // scrollback lines, not the visible area (which has the prompt).
                 let text = lines.join("\r\n") + "\r\n";
                 tab.terminal.process(text.as_bytes());
                 log::info!("Replayed {} scrollback lines into restored tab", lines.len());

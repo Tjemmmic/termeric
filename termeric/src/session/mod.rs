@@ -32,6 +32,9 @@ pub struct Session {
     /// Relative path to scrollback text file (within session directory)
     #[serde(default)]
     pub scrollback_file: Option<String>,
+    /// Last foreground command that was running (e.g., "cargo", "vim")
+    #[serde(default)]
+    pub last_command: Option<String>,
     /// When this session was first created (ISO 8601)
     pub created_at: String,
     /// When this session was last updated (ISO 8601)
@@ -52,6 +55,7 @@ impl Session {
             title,
             working_directory,
             scrollback_file: None,
+            last_command: None,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -66,6 +70,7 @@ impl Session {
             title,
             working_directory,
             scrollback_file: None,
+            last_command: None,
             created_at: now.clone(),
             updated_at: now,
         }
