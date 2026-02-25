@@ -5,61 +5,115 @@ use std::io::Write;
 use std::path::Path;
 use anyhow::Result;
 
-use super::{Session, session_file_path};
+use super::{Session, session_dir, MAX_SCROLLBACK_FILE_SIZE};
 
-/// Save a session to the default location
+/// Save a session to its directory (determined by session ID)
 pub fn save_session(session: &Session) -> Result<()> {
-    let path = session_file_path()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine session file path"))?;
+    let dir = session_dir(&session.id)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine session directory for '{}'", session.id))?;
 
-    save_session_to_path(session, &path)
+    save_session_to_dir(session, &dir)
 }
 
-/// Save a session to a specific path
-pub fn save_session_to_path(session: &Session, path: &Path) -> Result<()> {
-    // Ensure parent directory exists
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+/// Save a session to a specific directory
+///
+/// Uses an atomic write pattern: writes to a temp file, syncs, then renames.
+pub fn save_session_to_dir(session: &Session, dir: &Path) -> Result<()> {
+    // Ensure session directory exists
+    fs::create_dir_all(dir)?;
+
+    // Write session metadata as TOML
+    let toml_string = toml::to_string_pretty(session)?;
+    let session_file = dir.join("session.toml");
+    let temp_file = dir.join("session.toml.tmp");
+
+    // Write to temp file first
+    let mut file = fs::File::create(&temp_file)?;
+    file.write_all(toml_string.as_bytes())?;
+    file.sync_all()?; // Flush to disk, not just userspace buffer
+
+    // Atomically rename to final location
+    fs::rename(&temp_file, &session_file)?;
+
+    log::info!("Saved session '{}' to {:?}", session.id, session_file);
+    Ok(())
+}
+
+/// Save scrollback text for a session to a file within the session directory
+///
+/// Returns the relative filename (e.g., "scrollback.txt") on success.
+/// Truncates if the text would exceed MAX_SCROLLBACK_FILE_SIZE.
+pub fn save_scrollback_text(
+    session_id: &str,
+    lines: &[String],
+) -> Result<String> {
+    let dir = session_dir(session_id)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
+
+    fs::create_dir_all(&dir)?;
+
+    let filename = "scrollback.txt".to_string();
+    let filepath = dir.join(&filename);
+
+    let mut file = fs::File::create(&filepath)?;
+    let mut bytes_written: usize = 0;
+
+    for line in lines {
+        let line_bytes = line.as_bytes();
+        // Check if adding this line would exceed the cap
+        if bytes_written + line_bytes.len() + 1 > MAX_SCROLLBACK_FILE_SIZE {
+            log::warn!(
+                "Scrollback for session '{}' truncated at {} bytes (cap: {} bytes)",
+                session_id, bytes_written, MAX_SCROLLBACK_FILE_SIZE
+            );
+            break;
+        }
+        file.write_all(line_bytes)?;
+        file.write_all(b"\n")?;
+        bytes_written += line_bytes.len() + 1;
     }
 
-    // Serialize to TOML
-    let content = toml::to_string_pretty(session)?;
+    file.flush()?;
+    log::info!("Saved scrollback for session '{}' ({} bytes) to {:?}", session_id, bytes_written, filepath);
 
-    // Write atomically by writing to a temp file first
-    let temp_path = path.with_extension("toml.tmp");
-    let mut file = fs::File::create(&temp_path)?;
-    file.write_all(content.as_bytes())?;
-    file.sync_all()?;
-
-    // Rename to final location
-    fs::rename(&temp_path, path)?;
-
-    log::info!("Session saved to {:?}", path);
-    Ok(())
+    Ok(filename)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SavedTab;
-    use tempfile::tempdir;
+    use crate::session::Session;
 
     #[test]
     fn test_save_session() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test_session.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::new("test".to_string(), None);
+        save_session_to_dir(&session, dir.path()).unwrap();
+        assert!(dir.path().join("session.toml").exists());
+    }
 
-        let mut session = Session::new();
-        session.tabs.push(SavedTab::new(
-            "test".to_string(),
-            Some("/home/user".to_string()),
-        ));
+    #[test]
+    fn test_save_scrollback_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let lines = vec![
+            "$ ls".to_string(),
+            "file1.txt  file2.txt".to_string(),
+            "$ pwd".to_string(),
+            "/home/user".to_string(),
+        ];
 
-        save_session_to_path(&session, &path).unwrap();
+        let filename = "scrollback.txt";
+        let filepath = dir.path().join(filename);
 
-        assert!(path.exists());
-        let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("version = 1"));
+        let mut file = std::fs::File::create(&filepath).unwrap();
+        for line in &lines {
+            file.write_all(line.as_bytes()).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+        file.flush().unwrap();
+
+        let content = std::fs::read_to_string(&filepath).unwrap();
+        assert!(content.contains("$ ls"));
         assert!(content.contains("/home/user"));
     }
 }

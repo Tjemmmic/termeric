@@ -10,7 +10,7 @@ use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
 use crate::container::TerminalContainer;
-use crate::session::{Session, SavedTab, SavedPane, PanePosition};
+use crate::session::Session;
 
 /// Duration of tab slide-in animation in seconds
 const TAB_SLIDE_DURATION: f32 = 0.15;
@@ -68,6 +68,8 @@ pub struct Tab {
     pub created_at: Instant,
     /// When this tab started closing (for shrink animation), None if not closing
     pub closing_at: Option<Instant>,
+    /// Session ID this tab belongs to (None = fresh unsaved tab)
+    pub session_id: Option<String>,
 }
 
 impl Tab {
@@ -100,6 +102,7 @@ impl Tab {
             closed: false,
             created_at: Instant::now(),
             closing_at: None,
+            session_id: None,
         })
     }
 
@@ -204,6 +207,7 @@ impl Tab {
             closed: false,
             created_at: Instant::now(),
             closing_at: None,
+            session_id: None,
         })
     }
 
@@ -212,22 +216,54 @@ impl Tab {
         self.pty.child_id().and_then(get_process_cwd)
     }
 
-    /// Convert this tab to a SavedTab for session persistence
-    pub fn to_saved_tab(&self) -> SavedTab {
+    /// Check if this tab has meaningful content worth saving
+    pub fn has_content(&self) -> bool {
+        let lines = self.terminal.grid().export_scrollback_text();
+        !lines.is_empty()
+    }
+
+    /// Save this tab as a session
+    ///
+    /// If the tab already has a session_id, updates that session.
+    /// Otherwise, creates a new session with a generated ID.
+    /// Returns the session ID on success.
+    pub fn save_as_session(&mut self, save_scrollback: bool) -> Option<String> {
         let working_dir = self.working_directory();
-        SavedTab {
-            title: self.title.clone(),
-            working_directory: working_dir.clone(),
-            panes: vec![SavedPane {
-                working_directory: working_dir,
-                position: PanePosition {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
-            }],
-            focused_pane: 0,
+
+        let mut session = if let Some(ref id) = self.session_id {
+            // Update existing session
+            Session::with_id(id.clone(), self.title.clone(), working_dir)
+        } else {
+            // Create new session
+            let s = Session::new(self.title.clone(), working_dir);
+            self.session_id = Some(s.id.clone());
+            s
+        };
+
+        let session_id = session.id.clone();
+
+        // Save scrollback
+        if save_scrollback {
+            let lines = self.terminal.grid().export_scrollback_text();
+            if !lines.is_empty() {
+                match crate::session::save::save_scrollback_text(&session_id, &lines) {
+                    Ok(filename) => {
+                        session.scrollback_file = Some(filename);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to save scrollback for session '{}': {}", session_id, e);
+                    }
+                }
+            }
+        }
+
+        // Save session metadata
+        match crate::session::save::save_session(&session) {
+            Ok(()) => Some(session_id),
+            Err(e) => {
+                log::error!("Failed to save session '{}': {}", session_id, e);
+                None
+            }
         }
     }
 
@@ -474,13 +510,27 @@ impl TabManager {
         }
     }
 
-    /// Remove closed tabs and tabs with completed close animations
-    /// Returns true if any tabs were removed
-    pub fn cleanup_closed(&mut self) -> bool {
+    /// Remove closed tabs and tabs with completed close animations.
+    /// Before removing, saves each non-empty tab as a session.
+    /// Returns true if any tabs were removed.
+    pub fn cleanup_closed(&mut self, save_scrollback: bool) -> bool {
         let initial_count = self.tabs.len();
-        // Remove tabs that are either:
-        // - Marked as closed (shell exited)
-        // - Have completed their close animation
+
+        // Save sessions for tabs about to be removed
+        for tab in self.tabs.iter_mut() {
+            if tab.closed || tab.is_close_complete() {
+                if tab.has_content() {
+                    match tab.save_as_session(save_scrollback) {
+                        Some(id) => log::info!("Auto-saved closing tab {} as session '{}'", tab.id, id),
+                        None => log::error!("Failed to auto-save closing tab {}", tab.id),
+                    }
+                } else {
+                    log::debug!("Skipping empty closing tab {} (no content)", tab.id);
+                }
+            }
+        }
+
+        // Now remove them
         self.tabs.retain(|tab| !tab.closed && !tab.is_close_complete());
 
         if self.tabs.len() != initial_count {
@@ -528,70 +578,67 @@ impl TabManager {
         }
     }
 
-    /// Create a tab from saved session data
-    pub fn new_tab_from_saved(&mut self, saved_tab: &SavedTab) -> anyhow::Result<usize> {
+    /// Create a tab from a saved session (single-tab) and add it
+    ///
+    /// The new tab inherits the session's ID so subsequent saves update
+    /// the same session entry.
+    pub fn new_tab_from_session(&mut self, session: &Session) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
 
-        let tab = Tab::new_with_cwd(
+        let mut tab = Tab::new_with_cwd(
             id,
             self.cols,
             self.rows,
             &self.shell,
             self.scrollback_lines,
-            saved_tab.working_directory.as_deref(),
-            Some(&saved_tab.title),
+            session.working_directory.as_deref(),
+            Some(&session.title),
         )?;
-        self.tabs.push(tab);
 
-        log::info!("Restored tab {} from session", id);
-        Ok(id)
-    }
+        // Link this tab to its session
+        tab.session_id = Some(session.id.clone());
 
-    /// Restore tabs from a saved session
-    pub fn restore_from_session(&mut self, session: &Session) -> anyhow::Result<()> {
-        // Clear any existing tabs (shouldn't be any at restore time)
-        self.tabs.clear();
-        self.active = 0;
-
-        if session.tabs.is_empty() {
-            // No tabs in session, create a fresh one
-            self.new_tab()?;
-            return Ok(());
-        }
-
-        // Restore each tab from the session
-        for saved_tab in &session.tabs {
-            if let Err(e) = self.new_tab_from_saved(saved_tab) {
-                log::error!("Failed to restore tab: {}", e);
+        // Replay scrollback
+        if let Some(ref scrollback_file) = session.scrollback_file {
+            let lines = crate::session::restore::load_scrollback_text(
+                &session.id,
+                scrollback_file,
+            );
+            if !lines.is_empty() {
+                let text = lines.join("\r\n") + "\r\n";
+                tab.terminal.process(text.as_bytes());
+                log::info!("Replayed {} scrollback lines into restored tab", lines.len());
             }
         }
 
-        // If all tabs failed to restore, create a fresh one
-        if self.tabs.is_empty() {
-            self.new_tab()?;
-        }
+        self.tabs.push(tab);
+        // Switch to the newly restored tab
+        self.active = self.tabs.len() - 1;
 
-        // Restore active tab index
-        if session.active_tab < self.tabs.len() {
-            self.active = session.active_tab;
-        }
-
-        log::info!("Restored {} tabs from session", self.tabs.len());
-        Ok(())
+        log::info!("Restored tab {} from session '{}'", id, session.id);
+        Ok(id)
     }
 
-    /// Convert current state to a Session for saving
-    pub fn to_session(&self) -> Session {
-        Session {
-            version: Session::CURRENT_VERSION,
-            tabs: self.tabs.iter().map(|tab| tab.to_saved_tab()).collect(),
-            active_tab: self.active,
-            window_size: None, // Will be set by App
-            window_position: None, // Will be set by App
+    /// Save all non-empty tabs as individual sessions
+    ///
+    /// Each tab with content gets its own session entry.
+    /// Empty tabs are skipped.
+    pub fn save_all_sessions(&mut self, save_scrollback: bool) {
+        for tab in self.tabs.iter_mut() {
+            if !tab.has_content() {
+                log::debug!("Skipping empty tab {} (no content)", tab.id);
+                continue;
+            }
+
+            match tab.save_as_session(save_scrollback) {
+                Some(id) => log::info!("Saved tab {} as session '{}'", tab.id, id),
+                None => log::error!("Failed to save tab {}", tab.id),
+            }
         }
     }
 }
+
 
 /// Tab information for display
 #[derive(Debug, Clone)]

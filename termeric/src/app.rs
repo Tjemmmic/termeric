@@ -22,7 +22,6 @@ use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modif
 use crate::keybindings::{KeyAction, KeyBindingManager};
 use crate::renderer::{CommandBarInfo, Renderer};
 use crate::search::Search;
-use crate::session::{restore_session, save_session};
 use crate::settings::{SettingsPanel, SettingsAction, SettingsKey};
 use crate::splash::show_splash;
 use crate::state::AppState;
@@ -100,6 +99,12 @@ pub struct App {
     harvest: Option<HarvestMode>,
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
+    /// Whether the session dropdown is currently open
+    session_dropdown_open: bool,
+    /// Cached list of session names for the dropdown
+    session_dropdown_items: Vec<String>,
+    /// Session management panel
+    session_panel: crate::session_panel::SessionPanel,
 }
 
 impl App {
@@ -157,6 +162,9 @@ impl App {
             keybinding_manager,
             harvest,
             app_state: AppState::load(),
+            session_dropdown_open: false,
+            session_dropdown_items: Vec::new(),
+            session_panel: crate::session_panel::SessionPanel::new(),
         })
     }
 
@@ -238,40 +246,13 @@ impl App {
             self.config.scrollback.lines,
         );
 
-        // Try to restore session if enabled
-        let mut restored = false;
-        if self.config.session.enabled && self.config.session.auto_restore {
-            match restore_session() {
-                Ok(Some(session)) => {
-                    log::info!("Found saved session with {} tabs", session.tabs.len());
-                    if let Err(e) = tabs.restore_from_session(&session) {
-                        log::error!("Failed to restore session: {}", e);
-                    } else {
-                        restored = true;
-                        log::info!("Session restored successfully");
-                    }
-                }
-                Ok(None) => {
-                    log::debug!("No saved session found");
-                }
-                Err(e) => {
-                    log::warn!("Failed to load session: {}", e);
-                }
-            }
-        }
-
-        // If we didn't restore, create a fresh tab
-        if !restored {
-            tabs.new_tab()?;
-        }
+        // Always start with a fresh tab (sessions are per-tab, loaded on demand)
+        tabs.new_tab()?;
 
         self.tabs = Some(tabs);
 
         // Show splash screen based on configuration
-        // Don't show splash for restored sessions
-        if !restored {
-            self.maybe_show_splash(false);
-        }
+        self.maybe_show_splash(false);
 
         log::info!("Tab manager initialized: {}x{}", self.cols, self.rows);
 
@@ -315,21 +296,21 @@ impl App {
         }
     }
 
-    /// Save the current session to disk
-    fn save_current_session(&self) {
+    /// Save the current session to disk (auto-save path, respects config)
+    fn save_current_session(&mut self) {
         if !self.config.session.enabled || !self.config.session.auto_save {
             return;
         }
 
-        let Some(tabs) = &self.tabs else { return };
+        self.force_save_session();
+    }
 
-        let session = tabs.to_session();
-
-        if let Err(e) = save_session(&session) {
-            log::error!("Failed to save session: {}", e);
-        } else {
-            log::info!("Session saved");
-        }
+    /// Unconditionally save the current session (explicit user action)
+    fn force_save_session(&mut self) {
+        let Some(tabs) = &mut self.tabs else { return };
+        let save_scrollback = self.config.session.save_scrollback;
+        tabs.save_all_sessions(save_scrollback);
+        log::info!("Sessions saved");
     }
 
     /// Process PTY events for all tabs
@@ -338,7 +319,7 @@ impl App {
         let (events, should_exit) = {
             let Some(tabs) = &mut self.tabs else { return };
             let (_, events) = tabs.process_all_events();
-            let should_exit = tabs.cleanup_closed() && tabs.is_empty();
+            let should_exit = tabs.cleanup_closed(self.config.session.save_scrollback) && tabs.is_empty();
             (events, should_exit)
         };
 
@@ -546,6 +527,13 @@ impl App {
             }
         }
 
+        // Update session panel animation
+        if self.session_panel.needs_redraw() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
         // Collect image placements for rendering
         let image_data: Vec<_> = terminal.graphics_placements()
             .iter()
@@ -553,7 +541,23 @@ impl App {
             .collect();
         let images = if image_data.is_empty() { None } else { Some(image_data.as_slice()) };
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref(), search_info.as_ref(), &self.search, images) {
+        // Build session dropdown info if dropdown is open
+        let session_dropdown_info = if self.session_dropdown_open {
+            Some(crate::renderer::SessionDropdownInfo {
+                sessions: self.session_dropdown_items.clone(),
+            })
+        } else {
+            None
+        };
+        // Build session panel info if panel is open or animating
+        self.session_panel.update();
+        let session_panel_info = if !self.session_panel.is_closed() {
+            Some(self.session_panel.build_info())
+        } else {
+            None
+        };
+
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -1053,6 +1057,15 @@ impl App {
                     tabs.set_scrollback_limit(self.config.scrollback.lines);
                 }
             }
+            SettingsAction::SetSessionAutoSave(enabled) => {
+                self.config.session.auto_save = enabled;
+            }
+            SettingsAction::SetSessionAutoRestore(enabled) => {
+                self.config.session.auto_restore = enabled;
+            }
+            SettingsAction::SetSessionSaveScrollback(enabled) => {
+                self.config.session.save_scrollback = enabled;
+            }
             SettingsAction::None => {}
         }
     }
@@ -1275,6 +1288,7 @@ impl App {
 
         true // Input was handled by command mode
     }
+
 
     /// Handle keyboard input when in search mode
     /// Returns true if the input was handled by search mode
@@ -1777,59 +1791,156 @@ impl App {
                         }
                     }
 
-                    // Check for gear icon click in tab bar (top-right corner)
+                    // Check for tab bar clicks (tabs, close buttons, + button, gear)
                     if let Some(renderer) = &self.renderer {
-                        let tab_bar_h = renderer.tab_bar_height();
                         let px = position.0 as f32;
                         let py = position.1 as f32;
-                        if py < tab_bar_h {
+
+                        // If session management panel is open, intercept all clicks
+                        if self.session_panel.is_open() {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
-                                let gear_size = tab_bar_h;
-                                let gear_x = size.width as f32 - gear_size;
-                                if px >= gear_x {
-                                    self.settings_panel.toggle();
+                                use crate::session_panel::SessionPanelAction;
+                                let action = renderer.session_panel_hit_test(
+                                    px, py,
+                                    self.session_panel.sessions(),
+                                    size.width as f32,
+                                    size.height as f32,
+                                    self.session_panel.build_info().animation,
+                                );
+                                match action {
+                                    SessionPanelAction::Load(name) => {
+                                        use crate::session::restore::restore_named_session;
+                                        match restore_named_session(&name) {
+                                            Ok(Some(session)) => {
+                                                if let Some(tabs) = &mut self.tabs {
+                                                    match tabs.new_tab_from_session(&session) {
+                                                        Ok(_) => log::info!("Loaded session '{}' from panel", name),
+                                                        Err(e) => log::error!("Failed to restore session: {}", e),
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => log::warn!("Session '{}' not found", name),
+                                            Err(e) => log::error!("Failed to load session: {}", e),
+                                        }
+                                        self.session_panel.close();
+                                    }
+                                    SessionPanelAction::Delete(name) => {
+                                        if let Err(e) = crate::session::delete_session(&name) {
+                                            log::error!("Failed to delete session '{}': {}", name, e);
+                                        } else {
+                                            log::info!("Deleted session '{}'", name);
+                                        }
+                                        // Refresh the list
+                                        self.session_panel.refresh_sessions();
+                                    }
+                                    SessionPanelAction::Close => {
+                                        self.session_panel.close();
+                                    }
+                                    SessionPanelAction::None => {}
+                                }
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                return;
+                            }
+                        }
+
+                        // If session dropdown is open, intercept clicks anywhere
+                        // (dropdown extends below tab bar)
+                        if self.session_dropdown_open {
+                            let window_size = self.window.as_ref().map(|w| w.inner_size());
+                            if let Some(size) = window_size {
+                                use crate::renderer::SessionDropdownClick;
+                                let click = renderer.session_dropdown_hit_test(
+                                    px, py, &self.session_dropdown_items, size.width as f32,
+                                );
+                                match click {
+                                    SessionDropdownClick::LoadSession(name) => {
+                                        use crate::session::restore::restore_named_session;
+                                        match restore_named_session(&name) {
+                                            Ok(Some(session)) => {
+                                                if let Some(tabs) = &mut self.tabs {
+                                                    match tabs.new_tab_from_session(&session) {
+                                                        Ok(_) => log::info!("Loaded session '{}'", name),
+                                                        Err(e) => log::error!("Failed to restore session: {}", e),
+                                                    }
+                                                }
+                                            }
+                                            Ok(None) => log::warn!("Session '{}' not found", name),
+                                            Err(e) => log::error!("Failed to load session: {}", e),
+                                        }
+                                        self.session_dropdown_open = false;
+                                    }
+
+                                    SessionDropdownClick::ManageSessions => {
+                                        self.session_dropdown_open = false;
+                                        self.session_panel.open();
+                                    }
+                                    SessionDropdownClick::Dismiss => {
+                                        self.session_dropdown_open = false;
+                                    }
+                                    SessionDropdownClick::None => {}
+                                }
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                return;
+                            }
+                        }
+
+                        if py < renderer.tab_bar_height() {
+                            let window_size = self.window.as_ref().map(|w| w.inner_size());
+                            if let Some(size) = window_size {
+                                use crate::renderer::TabBarClick;
+                                let tab_infos = self.tabs.as_ref()
+                                    .map(|t| t.tab_info())
+                                    .unwrap_or_default();
+                                let click = renderer.tab_bar_hit_test(
+                                    px, py, &tab_infos, size.width as f32,
+                                );
+                                match click {
+                                    TabBarClick::Gear => {
+                                        self.settings_panel.toggle();
+                                    }
+                                    TabBarClick::NewTab => {
+                                        if let Some(tabs) = &mut self.tabs {
+                                            match tabs.new_tab() {
+                                                Ok(id) => {
+                                                    log::info!("Created new tab {} via mouse", id);
+                                                    self.maybe_show_splash(true);
+                                                }
+                                                Err(e) => log::error!("Failed to create new tab: {}", e),
+                                            }
+                                        }
+                                    }
+                                    TabBarClick::CloseTab(idx) => {
+                                        if let Some(tabs) = &mut self.tabs {
+                                            tabs.close_tab(idx);
+                                            if tabs.is_empty() {
+                                                log::info!("Last tab closed, exiting");
+                                                self.should_exit = true;
+                                            }
+                                        }
+                                    }
+                                    TabBarClick::Tab(idx) => {
+                                        if let Some(tabs) = &mut self.tabs {
+                                            tabs.switch_to(idx);
+                                        }
+                                    }
+                                    TabBarClick::SessionDropdown => {
+                                        self.session_dropdown_open = !self.session_dropdown_open;
+                                        if self.session_dropdown_open {
+                                            self.session_dropdown_items = crate::session::list_sessions();
+                                        }
+                                    }
+                                    TabBarClick::None => {}
+                                }
+                                if click != TabBarClick::None {
                                     if let Some(window) = &self.window {
                                         window.request_redraw();
                                     }
                                     return;
-                                }
-
-                                // Tab click detection
-                                if let Some(tabs) = &self.tabs {
-                                    let available_tab_width = size.width as f32 - gear_size;
-                                    let tab_count = tabs.count().max(1);
-                                    let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
-                                    let tab_infos = tabs.tab_info();
-
-                                    let mut current_x = 0.0f32;
-                                    let mut clicked_tab_idx = None;
-                                    for (i, info) in tab_infos.iter().enumerate() {
-                                        let anim_multiplier = if info.close_progress > 0.0 {
-                                            let t = info.close_progress;
-                                            1.0 - t * t
-                                        } else {
-                                            let t = info.slide_progress;
-                                            1.0 - (1.0 - t) * (1.0 - t)
-                                        };
-                                        let tab_width = full_tab_width * anim_multiplier;
-                                        if px >= current_x && px < current_x + tab_width {
-                                            clicked_tab_idx = Some(i);
-                                            break;
-                                        }
-                                        current_x += tab_width;
-                                    }
-
-                                    if let Some(idx) = clicked_tab_idx {
-                                        let _ = tabs;
-                                        if let Some(tabs) = &mut self.tabs {
-                                            tabs.switch_to(idx);
-                                        }
-                                        if let Some(window) = &self.window {
-                                            window.request_redraw();
-                                        }
-                                        return;
-                                    }
                                 }
                             }
                         }

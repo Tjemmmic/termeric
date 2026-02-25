@@ -1,80 +1,72 @@
 //! Session save/restore functionality
 //!
-//! Allows saving and restoring terminal sessions including:
-//! - Tab state (working directories, titles)
-//! - Pane layout within tabs
-//! - Window position and size
+//! Each session represents a single terminal tab's state:
+//! - Working directory
+//! - Scrollback history (as a text file)
+//! - Title and metadata
+//!
+//! Sessions are identified by a timestamp-based ID (e.g., "2026-02-24_21h59m43").
+//! Each tab independently tracks its own session identity.
 
-mod save;
-mod restore;
+pub mod save;
+pub mod restore;
 
 pub use save::save_session;
 pub use restore::restore_session;
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
-/// A saved terminal session
+/// A saved terminal session (single tab)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     /// Version for compatibility checking
     pub version: u32,
-    /// Saved tabs
-    pub tabs: Vec<SavedTab>,
-    /// Index of the active tab
-    pub active_tab: usize,
-    /// Window dimensions (width, height)
-    pub window_size: Option<(u32, u32)>,
-    /// Window position (x, y), if known
-    pub window_position: Option<(i32, i32)>,
-}
-
-/// A saved tab
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SavedTab {
+    /// Session ID (timestamp-based, e.g., "2026-02-24_21h59m43")
+    pub id: String,
     /// Tab title
     pub title: String,
     /// Working directory when saved
     pub working_directory: Option<String>,
-    /// Pane layout (for split panes)
-    pub panes: Vec<SavedPane>,
-    /// Index of the focused pane within this tab
-    pub focused_pane: usize,
-}
-
-/// A saved pane within a tab
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SavedPane {
-    /// Working directory
-    pub working_directory: Option<String>,
-    /// Pane position in layout
-    pub position: PanePosition,
-}
-
-/// Position of a pane in the layout
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PanePosition {
-    /// Relative x position (0.0 - 1.0)
-    pub x: f32,
-    /// Relative y position (0.0 - 1.0)
-    pub y: f32,
-    /// Relative width (0.0 - 1.0)
-    pub width: f32,
-    /// Relative height (0.0 - 1.0)
-    pub height: f32,
+    /// Relative path to scrollback text file (within session directory)
+    #[serde(default)]
+    pub scrollback_file: Option<String>,
+    /// When this session was first created (ISO 8601)
+    pub created_at: String,
+    /// When this session was last updated (ISO 8601)
+    pub updated_at: String,
 }
 
 impl Session {
     /// Current session format version
-    pub const CURRENT_VERSION: u32 = 1;
+    pub const CURRENT_VERSION: u32 = 3;
 
-    /// Create a new empty session
-    pub fn new() -> Self {
+    /// Create a new session with a generated ID
+    pub fn new(title: String, working_directory: Option<String>) -> Self {
+        let now = now_iso8601();
+        let id = generate_session_id();
         Self {
             version: Self::CURRENT_VERSION,
-            tabs: Vec::new(),
-            active_tab: 0,
-            window_size: None,
-            window_position: None,
+            id,
+            title,
+            working_directory,
+            scrollback_file: None,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    /// Create a session with a specific ID (for updating existing sessions)
+    pub fn with_id(id: String, title: String, working_directory: Option<String>) -> Self {
+        let now = now_iso8601();
+        Self {
+            version: Self::CURRENT_VERSION,
+            id,
+            title,
+            working_directory,
+            scrollback_file: None,
+            created_at: now.clone(),
+            updated_at: now,
         }
     }
 
@@ -84,34 +76,168 @@ impl Session {
     }
 }
 
-impl Default for Session {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// Generate a timestamp-based session ID
+///
+/// Format: "2026-02-24_21h59m43"
+pub fn generate_session_id() -> String {
+    use std::time::SystemTime;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
 
-impl SavedTab {
-    /// Create a new saved tab with just a working directory
-    pub fn new(title: String, working_directory: Option<String>) -> Self {
-        Self {
-            title,
-            working_directory: working_directory.clone(),
-            panes: vec![SavedPane {
-                working_directory,
-                position: PanePosition {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1.0,
-                    height: 1.0,
-                },
-            }],
-            focused_pane: 0,
+    // Convert to broken-down time manually (UTC)
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // Days since epoch to Y-M-D (simplified leap year calculation)
+    let mut year = 1970i64;
+    let mut remaining_days = days as i64;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
         }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let month_days = if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 0;
+    for (i, &d) in month_days.iter().enumerate() {
+        if remaining_days < d {
+            month = i + 1;
+            break;
+        }
+        remaining_days -= d;
+    }
+    let day = remaining_days + 1;
+
+    format!(
+        "{:04}-{:02}-{:02}_{:02}h{:02}m{:02}",
+        year, month, day, hours, minutes, seconds
+    )
+}
+
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Get current time as ISO 8601 string
+fn now_iso8601() -> String {
+    use std::time::SystemTime;
+    let duration = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    // Reuse the ID generator logic for the timestamp
+    let id = generate_session_id();
+    // Convert to ISO format: "2026-02-24T21:59:43Z"
+    let parts: Vec<&str> = id.splitn(2, '_').collect();
+    if parts.len() == 2 {
+        let time_part = parts[1]
+            .replace('h', ":")
+            .replace('m', ":");
+        format!("{}T{}Z", parts[0], time_part)
+    } else {
+        format!("{}Z", duration.as_secs())
     }
 }
 
-/// Get the session file path
-pub fn session_file_path() -> Option<std::path::PathBuf> {
+/// Get the base sessions directory
+///
+/// Returns `~/.local/share/termeric/sessions/`
+pub fn sessions_base_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("com", "termeric", "termeric")
-        .map(|dirs| dirs.data_dir().join("session.toml"))
+        .map(|dirs| dirs.data_dir().join("sessions"))
 }
+
+/// Sanitize a session name to prevent path traversal attacks.
+///
+/// Returns `None` if the name is invalid (contains `/`, `\`, `..`,
+/// is empty, or starts with `.`).
+pub fn sanitize_session_name(name: &str) -> Option<&str> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.starts_with('.')
+    {
+        log::warn!("Rejected invalid session name: {:?}", name);
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Get the directory for a specific session
+///
+/// Named session → `sessions/<name>/`
+///
+/// Returns `None` if the name fails sanitization.
+pub fn session_dir(name: &str) -> Option<PathBuf> {
+    sanitize_session_name(name)?;
+    sessions_base_dir().map(|base| base.join(name))
+}
+
+/// Get the session.toml path for a named session
+pub fn session_file_path(name: &str) -> Option<PathBuf> {
+    session_dir(name).map(|dir| dir.join("session.toml"))
+}
+
+/// List all available saved sessions
+///
+/// Returns a list of session names sorted newest-first (reverse alphabetical
+/// on timestamp-based IDs).
+pub fn list_sessions() -> Vec<String> {
+    let Some(base) = sessions_base_dir() else {
+        return Vec::new();
+    };
+
+    let Ok(entries) = std::fs::read_dir(&base) else {
+        return Vec::new();
+    };
+
+    let mut sessions: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter(|e| e.path().join("session.toml").exists())
+        .filter_map(|e| e.file_name().into_string().ok())
+        // Skip legacy "default" session
+        .filter(|name| name != "default")
+        .collect();
+
+    // Sort newest first (reverse alphabetical works for our timestamp format)
+    sessions.sort_by(|a, b| b.cmp(a));
+
+    sessions
+}
+
+/// Delete a saved session by name
+///
+/// Returns an error if the name fails sanitization.
+pub fn delete_session(name: &str) -> anyhow::Result<()> {
+    // Sanitize before doing anything with the filesystem
+    let _ = sanitize_session_name(name)
+        .ok_or_else(|| anyhow::anyhow!("Invalid session name: {:?}", name))?;
+
+    let dir = session_dir(name)
+        .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
+
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)?;
+        log::info!("Deleted session '{}' at {:?}", name, dir);
+    }
+
+    Ok(())
+}
+
+/// Maximum scrollback file size (5 MB)
+pub const MAX_SCROLLBACK_FILE_SIZE: usize = 5 * 1024 * 1024;
