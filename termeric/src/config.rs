@@ -142,12 +142,15 @@ impl Default for FontConfig {
 pub struct ScrollbackConfig {
     /// Maximum number of lines to keep
     pub lines: usize,
+    /// Scroll speed multiplier (lines per scroll event)
+    pub scroll_speed: f64,
 }
 
 impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self {
             lines: 10_000,
+            scroll_speed: 6.0,
         }
     }
 }

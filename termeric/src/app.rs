@@ -73,6 +73,8 @@ pub struct App {
     last_cursor_pos: Option<(f64, f64)>,
     /// Whether mouse is currently pressed (for selection)
     mouse_pressed: bool,
+    /// Whether we're dragging the scrollbar
+    scrollbar_dragging: bool,
     /// Default font size (for reset)
     default_font_size: f32,
     /// When copy flash started (for animation), None if not flashing
@@ -102,7 +104,7 @@ pub struct App {
     /// Whether the session dropdown is currently open
     session_dropdown_open: bool,
     /// Cached list of session names for the dropdown
-    session_dropdown_items: Vec<String>,
+    session_dropdown_items: Vec<(String, String)>,
     /// Session management panel
     session_panel: crate::session_panel::SessionPanel,
 }
@@ -149,6 +151,7 @@ impl App {
             clipboard,
             last_cursor_pos: None,
             mouse_pressed: false,
+            scrollbar_dragging: false,
             default_font_size,
             copy_flash_start: None,
             window_focused: true,
@@ -996,6 +999,9 @@ impl App {
                     tabs.set_scrollback_limit(lines);
                 }
             }
+            SettingsAction::SetScrollSpeed(speed) => {
+                self.config.scrollback.scroll_speed = speed;
+            }
             SettingsAction::SetDecorations(enabled) => {
                 self.config.window.decorations = enabled;
                 if let Some(window) = &self.window {
@@ -1761,6 +1767,15 @@ impl App {
         match state {
             ElementState::Pressed => {
                 if button == MouseButton::Left {
+                    // Check if click is on the scrollbar
+                    if self.is_click_on_scrollbar(position.0, position.1) {
+                        self.scrollbar_dragging = true;
+                        self.scroll_to_scrollbar_position(position.1);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
                     self.mouse_pressed = true;
 
                     // Ctrl+Click to open hyperlinks
@@ -1931,7 +1946,7 @@ impl App {
                                     TabBarClick::SessionDropdown => {
                                         self.session_dropdown_open = !self.session_dropdown_open;
                                         if self.session_dropdown_open {
-                                            self.session_dropdown_items = crate::session::list_sessions();
+                                            self.session_dropdown_items = crate::session::list_sessions_with_titles();
                                         }
                                     }
                                     TabBarClick::None => {}
@@ -2044,6 +2059,7 @@ impl App {
             ElementState::Released => {
                 if button == MouseButton::Left {
                     self.mouse_pressed = false;
+                    self.scrollbar_dragging = false;
                 }
                 // Finalize selection on release
                 let _ = self.mouse_state.handle_release(button);
@@ -2086,6 +2102,15 @@ impl App {
             scroll_offset,
         );
 
+        // Handle scrollbar dragging
+        if self.scrollbar_dragging {
+            self.scroll_to_scrollbar_position(position.1);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
         // Only update selection when mouse is pressed (dragging)
         if self.mouse_pressed {
             if let Some(selection) = self.mouse_state.handle_move(grid_pos) {
@@ -2112,7 +2137,7 @@ impl App {
         }
 
         if let Some(terminal) = self.active_terminal_mut() {
-            let lines = (delta.abs() / 3.0).max(1.0) as usize;
+            let lines = delta.abs().max(1.0) as usize;
             let offset = terminal.grid().scroll_offset();
 
             let new_offset = if delta > 0.0 {
@@ -2125,6 +2150,60 @@ impl App {
 
             if let Some(window) = &self.window {
                 window.request_redraw();
+            }
+        }
+    }
+
+    /// Check if a click position is within the scrollbar area
+    fn is_click_on_scrollbar(&self, x: f64, y: f64) -> bool {
+        let Some(renderer) = &self.renderer else { return false };
+        let (window_width, _) = renderer.window_size();
+
+        // Scrollbar is 6px wide + 2px margin from right edge, with an expanded hit area
+        let scrollbar_hit_width = 16.0_f32;
+        let scrollbar_x = window_width as f32 - scrollbar_hit_width;
+
+        // Check if there's actually scrollback content
+        let has_scrollback = self.tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab())
+            .map(|tab| tab.terminal.grid().scrollback_len() > 0)
+            .unwrap_or(false);
+
+        has_scrollback && x as f32 >= scrollbar_x
+    }
+
+    /// Map a vertical mouse position to a scroll offset and apply it
+    fn scroll_to_scrollbar_position(&mut self, y: f64) {
+        let Some(renderer) = &self.renderer else { return };
+        let tab_bar_height = renderer.tab_bar_height();
+        let padding = renderer.padding();
+        let (_, window_height) = renderer.window_size();
+
+        let search_bar_height = if self.search.is_active() || self.search.has_results() {
+            let (_, cell_height) = renderer.cell_size();
+            cell_height + 8.0 * 2.0
+        } else {
+            0.0
+        };
+        let content_top = tab_bar_height + search_bar_height;
+        let scrollbar_top = content_top + padding;
+        let scrollbar_bottom = window_height as f32 - padding;
+        let scrollbar_height = scrollbar_bottom - scrollbar_top;
+
+        if scrollbar_height <= 0.0 { return; }
+
+        // Fraction from top (0.0=top, 1.0=bottom)
+        let fraction = ((y as f32 - scrollbar_top) / scrollbar_height).clamp(0.0, 1.0);
+
+        // Invert: top of scrollbar = max scroll, bottom = 0 scroll
+        let scroll_fraction = 1.0 - fraction;
+
+        if let Some(tabs) = &mut self.tabs {
+            if let Some(tab) = tabs.active_tab_mut() {
+                let max_offset = tab.terminal.grid().scrollback_len();
+                let new_offset = (scroll_fraction * max_offset as f32) as usize;
+                tab.terminal.grid_mut().set_scroll_offset(new_offset);
             }
         }
     }
@@ -2306,8 +2385,9 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
+                let scroll_speed = self.config.scrollback.scroll_speed;
                 let y_delta = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64 * 3.0,
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64 * scroll_speed,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 10.0,
                 };
                 self.handle_scroll(y_delta);

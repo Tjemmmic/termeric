@@ -247,6 +247,8 @@ pub enum SettingsAction {
     SetDecorations(bool),
     /// Change scrollback lines
     SetScrollback(usize),
+    /// Change scroll speed
+    SetScrollSpeed(f64),
     /// Change cursor style
     SetCursorStyle(String),
     /// Change cursor blink
@@ -531,11 +533,20 @@ impl SettingsPanel {
                 ];
                 let selected = steps.iter().position(|&v| v >= config.scrollback.lines)
                     .unwrap_or(steps.len() - 1);
+
+                let speed_steps: Vec<usize> = vec![1, 2, 3, 4, 6, 8, 10, 15, 20];
+                let speed_selected = speed_steps.iter().position(|&v| v >= config.scrollback.scroll_speed as usize)
+                    .unwrap_or(speed_steps.len() - 1);
                 vec![
                     SettingItem {
                         label: "Lines",
                         value: format!("{}", config.scrollback.lines),
                         kind: SettingKind::SteppedList { values: steps, selected },
+                    },
+                    SettingItem {
+                        label: "Scroll Speed",
+                        value: format!("{}", config.scrollback.scroll_speed as usize),
+                        kind: SettingKind::SteppedList { values: speed_steps, selected: speed_selected },
                     },
                 ]
             }
@@ -747,6 +758,7 @@ impl SettingsPanel {
                 };
                 match (self.section, item.label) {
                     (SettingsSection::Scrollback, "Lines") => SettingsAction::SetScrollback(new_val),
+                    (SettingsSection::Scrollback, "Scroll Speed") => SettingsAction::SetScrollSpeed(new_val as f64),
                     _ => SettingsAction::None,
                 }
             }
@@ -819,6 +831,7 @@ impl SettingsPanel {
 
                 match (self.section, item.label) {
                     (SettingsSection::Scrollback, "Lines") => SettingsAction::SetScrollback(new_val),
+                    (SettingsSection::Scrollback, "Scroll Speed") => SettingsAction::SetScrollSpeed(new_val as f64),
                     _ => SettingsAction::None,
                 }
             }
