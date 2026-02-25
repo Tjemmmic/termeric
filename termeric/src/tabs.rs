@@ -48,6 +48,46 @@ fn dir_name_from_path(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Abbreviate a full path by replacing $HOME prefix with ~
+fn abbreviate_path(path: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        if let Some(home_str) = home.to_str() {
+            if path == home_str {
+                return "~".to_string();
+            }
+            if let Some(rest) = path.strip_prefix(home_str) {
+                return format!("~{}", rest);
+            }
+        }
+    }
+    path.to_string()
+}
+
+/// Get the name of the foreground process running in the shell
+#[cfg(target_os = "linux")]
+fn get_foreground_process(shell_pid: u32) -> Option<String> {
+    // Read child processes from /proc/<pid>/task/<pid>/children
+    let children_path = format!("/proc/{}/task/{}/children", shell_pid, shell_pid);
+    let children = std::fs::read_to_string(&children_path).ok()?;
+    let child_pid: u32 = children.split_whitespace().last()?.parse().ok()?;
+
+    // Read the comm (command name) of the child process
+    let comm_path = format!("/proc/{}/comm", child_pid);
+    let comm = std::fs::read_to_string(&comm_path).ok()?;
+    let name = comm.trim().to_string();
+
+    // Don't return shell names as foreground processes
+    if name.is_empty() || ["bash", "zsh", "sh", "fish"].contains(&name.as_str()) {
+        return None;
+    }
+    Some(name)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_foreground_process(_shell_pid: u32) -> Option<String> {
+    None
+}
+
 /// A single terminal tab
 pub struct Tab {
     /// Unique tab ID
@@ -70,6 +110,8 @@ pub struct Tab {
     pub closing_at: Option<Instant>,
     /// Session ID this tab belongs to (None = fresh unsaved tab)
     pub session_id: Option<String>,
+    /// Last known foreground command (e.g. "cargo"), preserved after command finishes
+    last_command: Option<String>,
 }
 
 impl Tab {
@@ -103,6 +145,7 @@ impl Tab {
             created_at: Instant::now(),
             closing_at: None,
             session_id: None,
+            last_command: None,
         })
     }
 
@@ -154,6 +197,11 @@ impl Tab {
         if let Some(pid) = self.pty.child_id() {
             if let Some(cwd) = get_process_cwd(pid) {
                 self.title = dir_name_from_path(&cwd);
+
+                // Track the last foreground command (preserved after it exits)
+                if let Some(cmd) = get_foreground_process(pid) {
+                    self.last_command = Some(cmd);
+                }
             }
         }
     }
@@ -208,6 +256,7 @@ impl Tab {
             created_at: Instant::now(),
             closing_at: None,
             session_id: None,
+            last_command: None,
         })
     }
 
@@ -217,9 +266,12 @@ impl Tab {
     }
 
     /// Check if this tab has meaningful content worth saving
+    ///
+    /// Returns true only if there are scrollback lines (content that scrolled
+    /// off the visible area), indicating the user actually ran commands.
+    /// This avoids false positives from splash screen art or an empty prompt.
     pub fn has_content(&self) -> bool {
-        let lines = self.terminal.grid().export_scrollback_text();
-        !lines.is_empty()
+        self.terminal.grid().scrollback_len() > 0
     }
 
     /// Save this tab as a session
@@ -230,12 +282,21 @@ impl Tab {
     pub fn save_as_session(&mut self, save_scrollback: bool) -> Option<String> {
         let working_dir = self.working_directory();
 
+        // Build session title: "~/path | last_command" or "~/path"
+        let path = working_dir.as_deref()
+            .map(abbreviate_path)
+            .unwrap_or_else(|| self.title.clone());
+        let session_title = match &self.last_command {
+            Some(cmd) => format!("{} | {}", path, cmd),
+            None => path,
+        };
+
         let mut session = if let Some(ref id) = self.session_id {
             // Update existing session
-            Session::with_id(id.clone(), self.title.clone(), working_dir)
+            Session::with_id(id.clone(), session_title, working_dir)
         } else {
             // Create new session
-            let s = Session::new(self.title.clone(), working_dir);
+            let s = Session::new(session_title, working_dir);
             self.session_id = Some(s.id.clone());
             s
         };
