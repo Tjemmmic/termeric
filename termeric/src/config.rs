@@ -280,6 +280,8 @@ pub struct SessionConfig {
     pub auto_restore: bool,
     /// Automatically save session on exit
     pub auto_save: bool,
+    /// Save scrollback content with sessions
+    pub save_scrollback: bool,
 }
 
 impl Default for SessionConfig {
@@ -288,6 +290,7 @@ impl Default for SessionConfig {
             enabled: true,
             auto_restore: true,
             auto_save: true,
+            save_scrollback: true,
         }
     }
 }

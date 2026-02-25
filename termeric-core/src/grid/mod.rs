@@ -260,6 +260,29 @@ impl Grid {
             })
         })
     }
+
+    /// Export scrollback + visible rows as text lines for session persistence
+    ///
+    /// Returns all scrollback lines followed by visible lines, with trailing
+    /// empty lines removed. Each line is the text content of the row.
+    pub fn export_scrollback_text(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self.storage.iter_scrollback()
+            .chain(self.storage.iter_visible())
+            .map(|row| row.to_string())
+            .collect();
+
+        // Trim trailing empty lines
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+
+        lines
+    }
+
+    /// Iterate over scrollback rows (oldest first) for persistence
+    pub fn scrollback_rows(&self) -> impl Iterator<Item = &Row> {
+        self.storage.iter_scrollback()
+    }
 }
 
 #[cfg(test)]

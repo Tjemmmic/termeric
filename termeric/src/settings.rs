@@ -172,6 +172,7 @@ pub enum SettingsSection {
     Scrollback,
     Startup,
     Shell,
+    Sessions,
 }
 
 impl SettingsSection {
@@ -185,6 +186,7 @@ impl SettingsSection {
             Self::Scrollback => "Scrollback",
             Self::Startup => "Startup",
             Self::Shell => "Shell",
+            Self::Sessions => "Sessions",
         }
     }
 
@@ -197,6 +199,7 @@ impl SettingsSection {
         Self::Scrollback,
         Self::Startup,
         Self::Shell,
+        Self::Sessions,
     ];
 
     pub fn index(&self) -> usize {
@@ -258,6 +261,12 @@ pub enum SettingsAction {
     SetBellDuration(u64),
     /// Change splash screen mode
     SetSplashMode(SplashMode),
+    /// Toggle session auto-save
+    SetSessionAutoSave(bool),
+    /// Toggle session auto-restore
+    SetSessionAutoRestore(bool),
+    /// Toggle session save scrollback
+    SetSessionSaveScrollback(bool),
     /// Save current config
     SaveConfig,
     /// Reset to default config
@@ -334,6 +343,17 @@ impl SettingsPanel {
         self.animating_open = true;
         self.animation_start = Instant::now();
         self.section = SettingsSection::Font;
+        self.selected_item = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Open the panel directly to a specific section
+    pub fn open_to_section(&mut self, section: SettingsSection) {
+        self.animation_base = self.raw_animation();
+        self.open = true;
+        self.animating_open = true;
+        self.animation_start = Instant::now();
+        self.section = section;
         self.selected_item = 0;
         self.scroll_offset = 0;
     }
@@ -550,6 +570,35 @@ impl SettingsPanel {
                     },
                 ]
             }
+            SettingsSection::Sessions => {
+                let on_off = vec!["On".into(), "Off".into()];
+                vec![
+                    SettingItem {
+                        label: "Auto Save",
+                        value: if config.session.auto_save { "On".into() } else { "Off".into() },
+                        kind: SettingKind::Dropdown {
+                            options: on_off.clone(),
+                            selected: if config.session.auto_save { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "Auto Restore",
+                        value: if config.session.auto_restore { "On".into() } else { "Off".into() },
+                        kind: SettingKind::Dropdown {
+                            options: on_off.clone(),
+                            selected: if config.session.auto_restore { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "Save Scrollback",
+                        value: if config.session.save_scrollback { "On".into() } else { "Off".into() },
+                        kind: SettingKind::Dropdown {
+                            options: on_off,
+                            selected: if config.session.save_scrollback { 0 } else { 1 },
+                        },
+                    },
+                ]
+            }
         }
     }
 
@@ -686,6 +735,9 @@ impl SettingsPanel {
                         let mode = SplashMode::ALL.get(option_idx).copied().unwrap_or(SplashMode::FirstBoot);
                         SettingsAction::SetSplashMode(mode)
                     }
+                    (SettingsSection::Sessions, "Auto Save") => SettingsAction::SetSessionAutoSave(new_val == "On"),
+                    (SettingsSection::Sessions, "Auto Restore") => SettingsAction::SetSessionAutoRestore(new_val == "On"),
+                    (SettingsSection::Sessions, "Save Scrollback") => SettingsAction::SetSessionSaveScrollback(new_val == "On"),
                     _ => SettingsAction::None,
                 }
             }
@@ -748,6 +800,9 @@ impl SettingsPanel {
                         let mode = SplashMode::ALL.get(new_idx).copied().unwrap_or(SplashMode::FirstBoot);
                         SettingsAction::SetSplashMode(mode)
                     }
+                    (SettingsSection::Sessions, "Auto Save") => SettingsAction::SetSessionAutoSave(new_val == "On"),
+                    (SettingsSection::Sessions, "Auto Restore") => SettingsAction::SetSessionAutoRestore(new_val == "On"),
+                    (SettingsSection::Sessions, "Save Scrollback") => SettingsAction::SetSessionSaveScrollback(new_val == "On"),
                     _ => SettingsAction::None,
                 }
             }

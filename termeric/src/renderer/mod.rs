@@ -487,7 +487,7 @@ impl Renderer {
     /// search_bar: optional search bar info when searching
     /// search: search state for match highlighting
     /// images: optional list of image placements and their data for Kitty graphics
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session_panel::SessionPanelInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -496,7 +496,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel, search_bar, search);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel, search_bar, search, session_dropdown, session_panel);
 
         // Build image render data if any
         self.build_image_data(images);
@@ -575,7 +575,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session_panel::SessionPanelInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -866,6 +866,18 @@ impl Renderer {
                 self.build_dropdown_overlay(sp, window_width, window_height);
             }
         }
+
+        // Render session dropdown overlay (on top of everything)
+        if let Some(sd) = session_dropdown {
+            self.build_session_dropdown(sd, window_width);
+        }
+
+        // Render session management panel (on top of everything)
+        if let Some(sp) = session_panel {
+            if sp.animation > 0.001 {
+                self.build_session_management_panel(sp, window_width, window_height);
+            }
+        }
     }
 
     /// Build tab bar render data
@@ -880,13 +892,19 @@ impl Renderer {
         let inactive_text_color = self.ui.tab_text_inactive;
 
         // Calculate tab width - minimum 80px, maximum 200px, or divide space evenly
-        // Reserve space for the gear icon on the right
+        // Reserve space for the + button, session dropdown, and gear icon on the right
         let gear_button_width = tab_bar_height;
-        let available_tab_width = window_width - gear_button_width;
+        let session_button_width = tab_bar_height;
+        let add_button_width = tab_bar_height;
+        let available_tab_width = window_width - gear_button_width - session_button_width - add_button_width;
         let tab_count = tabs.len().max(1);
         let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
         let tab_padding = 8.0;
         let tab_height = tab_bar_height - 4.0; // Leave some margin
+        let show_close_buttons = true;
+        // Reserve space for close button inside tab
+        let close_btn_size = self.cell_height;
+        let close_btn_margin = 4.0;
 
         // Track cumulative x position (accounting for animated widths)
         let mut current_x = 0.0;
@@ -949,6 +967,12 @@ impl Renderer {
                     ];
 
                     // Render tab title (truncate if needed)
+                    // Reserve space for close button when visible
+                    let right_reserve = if show_close_buttons {
+                        close_btn_size + close_btn_margin * 2.0
+                    } else {
+                        tab_padding
+                    };
                     let title = if tab.title.len() > 15 {
                         format!("{}...", &tab.title[..12])
                     } else {
@@ -963,13 +987,38 @@ impl Renderer {
                     let mut text_x = x + tab_padding;
 
                     for c in label.chars() {
-                        if text_x + self.cell_width > x + tab_width - tab_padding {
-                            break; // Don't overflow tab
+                        if text_x + self.cell_width > x + tab_width - right_reserve {
+                            break; // Don't overflow into close button area
                         }
                         if !c.is_whitespace() {
                             self.text_pipeline.push_char(c, text_x, text_y, text_color);
                         }
                         text_x += self.cell_width * 0.85;
+                    }
+
+                    // ── Close (×) button ──
+                    if show_close_buttons {
+                        let close_x = x + tab_width - close_btn_size - close_btn_margin - 2.0;
+                        let close_y = y + (tab_height - close_btn_size) / 2.0;
+
+                        // Subtle rounded background for close button
+                        let close_bg = adjust_alpha(inactive_tab_bg, 0.4 * text_alpha);
+                        self.rect_pipeline.push_rounded_rect(
+                            close_x, close_y,
+                            close_btn_size, close_btn_size,
+                            close_bg, 3.0,
+                        );
+
+                        // × character centered in the button
+                        let close_char_x = close_x + (close_btn_size - self.cell_width) / 2.0;
+                        let close_char_y = close_y + (close_btn_size - self.cell_height) / 2.0;
+                        let close_text_color = [
+                            text_color[0],
+                            text_color[1],
+                            text_color[2],
+                            text_color[3] * 0.7,
+                        ];
+                        self.text_pipeline.push_char('×', close_char_x, close_char_y, close_text_color);
                     }
                 }
             }
@@ -979,6 +1028,34 @@ impl Renderer {
 
         let border_color = adjust_alpha(self.ui.tab_border, 0.7);
         self.rect_pipeline.push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
+
+        // ── Add (+) tab button ──
+        let add_size = tab_bar_height;
+        let add_x = window_width - gear_button_width - session_button_width - add_size;
+        let add_y = 0.0;
+        let add_bg = adjust_alpha(self.ui.tab_inactive, 0.35);
+        self.rect_pipeline.push_rounded_rect(
+            add_x + 2.0, add_y + 2.0,
+            add_size - 4.0, tab_bar_height - 6.0,
+            add_bg, 4.0,
+        );
+        let add_char_x = add_x + (add_size - self.cell_width) / 2.0;
+        let add_char_y = add_y + (tab_bar_height - self.cell_height) / 2.0;
+        self.text_pipeline.push_char('+', add_char_x, add_char_y, self.ui.tab_text_inactive);
+
+        // ── Session dropdown (▾) button ──
+        let session_size = tab_bar_height;
+        let session_x = window_width - gear_button_width - session_size;
+        let session_y = 0.0;
+        let session_bg = adjust_alpha(self.ui.tab_inactive, 0.35);
+        self.rect_pipeline.push_rounded_rect(
+            session_x + 2.0, session_y + 2.0,
+            session_size - 4.0, tab_bar_height - 6.0,
+            session_bg, 4.0,
+        );
+        let session_char_x = session_x + (session_size - self.cell_width) / 2.0;
+        let session_char_y = session_y + (tab_bar_height - self.cell_height) / 2.0;
+        self.text_pipeline.push_char('▾', session_char_x, session_char_y, self.ui.tab_text_inactive);
 
         // ── Gear icon button (right side of tab bar) ──
         let gear_size = tab_bar_height;
@@ -2230,6 +2307,104 @@ impl Renderer {
 
         SearchBarClick::None
     }
+    /// Hit-test the tab bar to determine what was clicked
+    ///
+    /// The layout logic here MUST exactly mirror `build_tab_bar`.
+    pub fn tab_bar_hit_test(
+        &self,
+        x: f32,
+        y: f32,
+        tabs: &[TabInfo],
+        window_width: f32,
+    ) -> TabBarClick {
+        let tab_bar_height = self.tab_bar_height();
+
+        // Only handle clicks within the tab bar vertical bounds
+        if y >= tab_bar_height {
+            return TabBarClick::None;
+        }
+
+        let gear_button_width = tab_bar_height;
+        let session_button_width = tab_bar_height;
+        let add_button_width = tab_bar_height;
+
+        // ── Gear icon (rightmost) ──
+        let gear_x = window_width - gear_button_width;
+        if x >= gear_x {
+            return TabBarClick::Gear;
+        }
+
+        // ── Session dropdown (▾) button (left of gear) ──
+        let session_x = window_width - gear_button_width - session_button_width;
+        if x >= session_x {
+            return TabBarClick::SessionDropdown;
+        }
+
+        // ── Add (+) button (left of session) ──
+        let add_x = window_width - gear_button_width - session_button_width - add_button_width;
+        if x >= add_x {
+            return TabBarClick::NewTab;
+        }
+
+        // ── Individual tabs ──
+        let available_tab_width = window_width - gear_button_width - session_button_width - add_button_width;
+        let tab_count = tabs.len().max(1);
+        let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
+        let tab_height = tab_bar_height - 4.0;
+        let show_close_buttons = true;
+        let close_btn_size = self.cell_height;
+        let close_btn_margin = 4.0;
+
+        let mut current_x = 0.0f32;
+
+        for (i, tab) in tabs.iter().enumerate() {
+            let anim_multiplier = if tab.close_progress > 0.0 {
+                let t = tab.close_progress;
+                1.0 - t * t
+            } else {
+                let t = tab.slide_progress;
+                1.0 - (1.0 - t) * (1.0 - t)
+            };
+            let tab_width = full_tab_width * anim_multiplier;
+
+            if x >= current_x && x < current_x + tab_width {
+                // Click is within this tab — check if it hit the close button
+                if show_close_buttons && tab_width > 2.0 && anim_multiplier > 0.3 {
+                    let tab_y = 2.0;
+                    let close_x = current_x + tab_width - close_btn_size - close_btn_margin - 2.0;
+                    let close_y = tab_y + (tab_height - close_btn_size) / 2.0;
+
+                    if x >= close_x && x <= close_x + close_btn_size
+                        && y >= close_y && y <= close_y + close_btn_size
+                    {
+                        return TabBarClick::CloseTab(i);
+                    }
+                }
+                return TabBarClick::Tab(i);
+            }
+
+            current_x += tab_width;
+        }
+
+        TabBarClick::None
+    }
+}
+
+/// Result of clicking in the tab bar
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabBarClick {
+    /// Clicked on tab body at given index
+    Tab(usize),
+    /// Clicked close (×) button on tab at given index
+    CloseTab(usize),
+    /// Clicked the + (new tab) button
+    NewTab,
+    /// Clicked the session dropdown (▾) button
+    SessionDropdown,
+    /// Clicked the gear icon
+    Gear,
+    /// No element was clicked
+    None,
 }
 
 /// Result of clicking in the search bar
@@ -2247,4 +2422,453 @@ pub enum SearchBarClick {
     PrevMatch,
     /// Next match ▼
     NextMatch,
+}
+
+/// Info for rendering the session dropdown
+#[derive(Debug, Clone)]
+pub struct SessionDropdownInfo {
+    /// List of session names to display
+    pub sessions: Vec<String>,
+}
+
+/// Result of clicking in the session dropdown
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionDropdownClick {
+    /// Clicked on a session by name
+    LoadSession(String),
+    /// Clicked "Manage Sessions…"
+    ManageSessions,
+    /// Clicked outside the dropdown
+    Dismiss,
+    /// No click in dropdown area
+    None,
+}
+
+const SESSION_DROPDOWN_MAX_ITEMS: usize = 5;
+
+impl Renderer {
+    /// Build session dropdown render data
+    fn build_session_dropdown(&mut self, info: &SessionDropdownInfo, window_width: f32) {
+        let tab_bar_height = self.tab_bar_height();
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+
+        // Position dropdown below the ▾ button (left of gear)
+        let gear_button_width = tab_bar_height;
+        let session_button_width = tab_bar_height;
+        let dropdown_anchor_x = window_width - gear_button_width - session_button_width;
+
+        // Dropdown dimensions
+        let row_height = (cell_height * 2.0).max(28.0);
+        let padding_x = cell_width * 1.5;
+        let dropdown_width = (cell_width * 22.0).max(200.0);
+        let dropdown_x = (dropdown_anchor_x + session_button_width - dropdown_width).max(0.0);
+        let dropdown_y = tab_bar_height;
+
+        // Items: at least 1 row (placeholder if empty) + "Manage Sessions…"
+        let session_count = info.sessions.len().min(SESSION_DROPDOWN_MAX_ITEMS);
+        let display_rows = session_count.max(1); // at least 1 row for placeholder
+        let extra_items = 1; // Manage Sessions
+        let total_items = display_rows + extra_items;
+        let dropdown_height = total_items as f32 * row_height + 4.0; // 4px padding
+
+        // Background
+        let bg_color = self.ui.settings_bg;
+        self.rect_pipeline.push_rounded_rect(
+            dropdown_x, dropdown_y,
+            dropdown_width, dropdown_height,
+            bg_color, 8.0,
+        );
+
+        // Border
+        let border_color = self.ui.settings_separator;
+        self.rect_pipeline.push_rounded_rect(
+            dropdown_x - 1.0, dropdown_y - 1.0,
+            dropdown_width + 2.0, dropdown_height + 2.0,
+            border_color, 8.0,
+        );
+        // Re-draw bg on top of border to create border effect
+        self.rect_pipeline.push_rounded_rect(
+            dropdown_x, dropdown_y,
+            dropdown_width, dropdown_height,
+            bg_color, 8.0,
+        );
+
+        let text_color = self.ui.settings_text;
+        let dim_text_color = self.ui.settings_text_dim;
+        let accent_color = self.ui.settings_accent;
+
+        // Render session items (or placeholder if none)
+        if info.sessions.is_empty() {
+            let item_y = dropdown_y + 2.0;
+            let text_y = item_y + (row_height - cell_height) / 2.0;
+            let mut text_x = dropdown_x + padding_x;
+            for c in "No saved sessions".chars() {
+                if text_x + cell_width > dropdown_x + dropdown_width - padding_x {
+                    break;
+                }
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, text_x, text_y, dim_text_color);
+                }
+                text_x += cell_width * 0.85;
+            }
+        }
+
+        for (i, session_name) in info.sessions.iter().take(SESSION_DROPDOWN_MAX_ITEMS).enumerate() {
+            let item_y = dropdown_y + 2.0 + i as f32 * row_height;
+            let text_y = item_y + (row_height - cell_height) / 2.0;
+            let mut text_x = dropdown_x + padding_x;
+
+            // Session icon
+            self.text_pipeline.push_char('◆', text_x - cell_width * 0.3, text_y, accent_color);
+            text_x += cell_width;
+
+            // Session name: show "Current Session" for "default", truncate safely
+            let label = if session_name == "default" {
+                "Current Session".to_string()
+            } else {
+                session_name.clone()
+            };
+            let display_name: String = if label.chars().count() > 18 {
+                let truncated: String = label.chars().take(17).collect();
+                format!("{}…", truncated)
+            } else {
+                label
+            };
+            for c in display_name.chars() {
+                if text_x + cell_width > dropdown_x + dropdown_width - padding_x {
+                    break;
+                }
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, text_x, text_y, text_color);
+                }
+                text_x += cell_width * 0.85;
+            }
+        }
+
+        // Separator before action items
+        let display_rows = session_count.max(1); // match build logic
+        let sep_y = dropdown_y + 2.0 + display_rows as f32 * row_height;
+        self.rect_pipeline.push_rect(
+            dropdown_x + padding_x, sep_y,
+            dropdown_width - padding_x * 2.0, 1.0,
+            self.ui.settings_separator,
+        );
+
+        // "Manage Sessions…" item
+        let manage_y = sep_y + 1.0;
+        let manage_text_y = manage_y + (row_height - cell_height) / 2.0;
+        let mut manage_x = dropdown_x + padding_x;
+        for c in "Manage Sessions…".chars() {
+            if !c.is_whitespace() {
+                self.text_pipeline.push_char(c, manage_x, manage_text_y, dim_text_color);
+            }
+            manage_x += cell_width * 0.85;
+        }
+    }
+
+    /// Hit-test the session dropdown to determine what was clicked
+    pub fn session_dropdown_hit_test(
+        &self,
+        x: f32,
+        y: f32,
+        sessions: &[String],
+        window_width: f32,
+    ) -> SessionDropdownClick {
+        let tab_bar_height = self.tab_bar_height();
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+
+        let gear_button_width = tab_bar_height;
+        let session_button_width = tab_bar_height;
+        let dropdown_anchor_x = window_width - gear_button_width - session_button_width;
+
+        let row_height = (cell_height * 2.0).max(28.0);
+        let dropdown_width = (cell_width * 22.0).max(200.0);
+        let dropdown_x = (dropdown_anchor_x + session_button_width - dropdown_width).max(0.0);
+        let dropdown_y = tab_bar_height;
+
+        let session_count = sessions.len().min(SESSION_DROPDOWN_MAX_ITEMS);
+        let display_rows = session_count.max(1); // match build logic
+        let extra_items = 1;
+        let total_items = display_rows + extra_items;
+        let dropdown_height = total_items as f32 * row_height + 4.0;
+
+        // Check if click is within dropdown bounds
+        if x < dropdown_x || x > dropdown_x + dropdown_width
+            || y < dropdown_y || y > dropdown_y + dropdown_height
+        {
+            return SessionDropdownClick::Dismiss;
+        }
+
+        // Determine which row was clicked
+        let relative_y = y - dropdown_y - 2.0;
+        let row = (relative_y / row_height) as usize;
+
+        if row < display_rows {
+            // Clicked on a session row (or placeholder if empty)
+            if let Some(name) = sessions.get(row) {
+                return SessionDropdownClick::LoadSession(name.clone());
+            }
+            // Placeholder row — do nothing
+            return SessionDropdownClick::None;
+        } else if row == display_rows {
+            return SessionDropdownClick::ManageSessions;
+        }
+
+        SessionDropdownClick::None
+    }
+
+    /// Build session management panel render data
+    fn build_session_management_panel(&mut self, info: &crate::session_panel::SessionPanelInfo, window_width: f32, window_height: f32) {
+        let anim = info.animation;
+        if anim <= 0.0 {
+            return;
+        }
+
+        let ui_cw = self.cell_width;
+        let cell_height = self.cell_height;
+
+        // Panel dimensions
+        let panel_width = (ui_cw * 35.0).max(320.0).min(window_width * 0.45);
+        let panel_x = window_width - panel_width * anim;
+        let panel_h = window_height;
+        let row_height = (cell_height * 3.5).max(52.0);
+        let padding_x = ui_cw * 1.5;
+        let padding_y = cell_height * 0.5;
+
+        // ── Scrim ──
+        let scrim = self.ui.scrim;
+        self.rect_pipeline.push_rect(
+            0.0, 0.0,
+            panel_x, window_height,
+            [scrim[0], scrim[1], scrim[2], scrim[3] * anim],
+        );
+
+        // ── Panel background ──
+        self.rect_pipeline.push_rect(
+            panel_x, 0.0,
+            panel_width, panel_h,
+            self.ui.settings_bg,
+        );
+
+        // ── Left border ──
+        self.rect_pipeline.push_rect(
+            panel_x, 0.0,
+            2.0, panel_h,
+            self.ui.settings_accent,
+        );
+
+        // ── Title ──
+        let title = "Sessions";
+        let title_y = cell_height * 1.5;
+        let title_x = panel_x + padding_x;
+        for (i, c) in title.chars().enumerate() {
+            self.text_pipeline.push_char(
+                c,
+                title_x + i as f32 * ui_cw,
+                title_y,
+                self.ui.settings_accent,
+            );
+        }
+
+        // ── Close button (×) ──
+        let close_x = panel_x + panel_width - padding_x - ui_cw;
+        self.text_pipeline.push_char(
+            '×',
+            close_x,
+            title_y,
+            self.ui.settings_text,
+        );
+
+        // ── Separator under title ──
+        let sep_y = title_y + cell_height * 2.0;
+        self.rect_pipeline.push_rect(
+            panel_x + padding_x, sep_y,
+            panel_width - padding_x * 2.0, 1.0,
+            self.ui.settings_separator,
+        );
+
+        // ── Session list ──
+        let list_start_y = sep_y + padding_y + 4.0;
+        let text_color = self.ui.settings_text;
+        let dim_color = self.ui.settings_text_dim;
+        let accent_color = self.ui.settings_accent;
+        let btn_color = self.ui.settings_separator;
+
+        if info.sessions.is_empty() {
+            // Show "No saved sessions" placeholder
+            let placeholder = "No saved sessions";
+            let ph_y = list_start_y + row_height * 0.5;
+            let mut px = panel_x + padding_x;
+            for c in placeholder.chars() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, px, ph_y, dim_color);
+                }
+                px += ui_cw * 0.85;
+            }
+        }
+
+        for (i, session) in info.sessions.iter().enumerate() {
+            let item_y = list_start_y + i as f32 * row_height;
+
+            // Session icon
+            let icon_y = item_y + padding_y;
+            self.text_pipeline.push_char('◆', panel_x + padding_x, icon_y, accent_color);
+
+            // Session display name
+            let name_x = panel_x + padding_x + ui_cw * 2.0;
+            let name: String = if session.display_name.chars().count() > 22 {
+                let truncated: String = session.display_name.chars().take(21).collect();
+                format!("{}…", truncated)
+            } else {
+                session.display_name.clone()
+            };
+            for (j, c) in name.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(
+                        c,
+                        name_x + j as f32 * ui_cw * 0.85,
+                        icon_y,
+                        text_color,
+                    );
+                }
+            }
+
+            // Metadata line: "N tabs · Xm ago"
+            let meta = format!("{} tab{} · {}", session.tab_count,
+                if session.tab_count == 1 { "" } else { "s" },
+                session.last_modified);
+            let meta_y = icon_y + cell_height * 1.3;
+            let mut mx = name_x;
+            for c in meta.chars() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, mx, meta_y, dim_color);
+                }
+                mx += ui_cw * 0.8;
+            }
+
+            // ── Action buttons: [Load] [Delete] ──
+            let btn_height = cell_height * 1.5;
+            let btn_y = icon_y + cell_height * 0.1;
+
+            // Delete button (right-aligned)
+            let delete_text = "Delete";
+            let delete_w = ui_cw * (delete_text.len() as f32 + 2.0);
+            let delete_x = panel_x + panel_width - padding_x - delete_w;
+            self.rect_pipeline.push_rect(
+                delete_x, btn_y,
+                delete_w, btn_height,
+                [0.6, 0.2, 0.2, 0.5],
+            );
+            for (j, c) in delete_text.chars().enumerate() {
+                self.text_pipeline.push_char(
+                    c,
+                    delete_x + ui_cw * 1.0 + j as f32 * ui_cw * 0.85,
+                    btn_y + (btn_height - cell_height) * 0.5,
+                    text_color,
+                );
+            }
+
+            // Load button (left of delete)
+            let load_text = "Load";
+            let load_w = ui_cw * (load_text.len() as f32 + 2.0);
+            let load_x = delete_x - load_w - ui_cw * 0.5;
+            self.rect_pipeline.push_rect(
+                load_x, btn_y,
+                load_w, btn_height,
+                btn_color,
+            );
+            for (j, c) in load_text.chars().enumerate() {
+                self.text_pipeline.push_char(
+                    c,
+                    load_x + ui_cw * 1.0 + j as f32 * ui_cw * 0.85,
+                    btn_y + (btn_height - cell_height) * 0.5,
+                    text_color,
+                );
+            }
+
+            // Row separator
+            let row_sep_y = item_y + row_height - 1.0;
+            self.rect_pipeline.push_rect(
+                panel_x + padding_x, row_sep_y,
+                panel_width - padding_x * 2.0, 1.0,
+                self.ui.settings_separator,
+            );
+        }
+    }
+
+    /// Hit-test the session management panel
+    pub fn session_panel_hit_test(
+        &self,
+        x: f32,
+        y: f32,
+        sessions: &[crate::session_panel::SessionEntry],
+        window_width: f32,
+        window_height: f32,
+        animation: f32,
+    ) -> crate::session_panel::SessionPanelAction {
+        use crate::session_panel::SessionPanelAction;
+
+        let ui_cw = self.cell_width;
+        let cell_height = self.cell_height;
+
+        let panel_width = (ui_cw * 35.0).max(320.0).min(window_width * 0.45);
+        let panel_x = window_width - panel_width * animation;
+        let padding_x = ui_cw * 1.5;
+        let padding_y = cell_height * 0.5;
+        let row_height = (cell_height * 3.5).max(52.0);
+
+        // Click outside panel → close
+        if x < panel_x {
+            return SessionPanelAction::Close;
+        }
+
+        // Close button (× in top-right)
+        let title_y = cell_height * 1.5;
+        let close_x = panel_x + panel_width - padding_x - ui_cw;
+        if x >= close_x && x <= close_x + ui_cw * 1.5
+            && y >= title_y && y <= title_y + cell_height * 1.5
+        {
+            return SessionPanelAction::Close;
+        }
+
+        // Session list area
+        let sep_y = title_y + cell_height * 2.0;
+        let list_start_y = sep_y + padding_y + 4.0;
+
+        for (i, session) in sessions.iter().enumerate() {
+            let item_y = list_start_y + i as f32 * row_height;
+            if y < item_y || y > item_y + row_height {
+                continue;
+            }
+
+            let btn_height = cell_height * 1.5;
+            let btn_y = item_y + padding_y + cell_height * 0.1;
+
+            // Check if click is in the button row area
+            if y >= btn_y && y <= btn_y + btn_height {
+                // Delete button
+                let delete_text = "Delete";
+                let delete_w = ui_cw * (delete_text.len() as f32 + 2.0);
+                let delete_x = panel_x + panel_width - padding_x - delete_w;
+                if x >= delete_x && x <= delete_x + delete_w {
+                    return SessionPanelAction::Delete(session.id.clone());
+                }
+
+                // Load button
+                let load_text = "Load";
+                let load_w = ui_cw * (load_text.len() as f32 + 2.0);
+                let load_x = delete_x - load_w - ui_cw * 0.5;
+                if x >= load_x && x <= load_x + load_w {
+                    return SessionPanelAction::Load(session.id.clone());
+                }
+            }
+
+            // Clicking anywhere else on the session row → load it
+            return SessionPanelAction::Load(session.id.clone());
+        }
+
+        SessionPanelAction::None
+    }
 }

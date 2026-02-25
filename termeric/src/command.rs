@@ -87,6 +87,7 @@ pub enum Command {
     Version,
     /// Show about/credits information
     About,
+
     /// Unknown command
     Unknown(String),
 }
@@ -178,6 +179,7 @@ impl Command {
             "list-keybindings" | "listkeybindings" | "keybindings" | "keys" | "shortcuts" => Command::ListKeybindings,
             "version" | "v" | "ver" => Command::Version,
             "about" | "credits" | "info" => Command::About,
+
             "" => Command::Unknown("empty command".to_string()),
             other => Command::Unknown(format!("unknown command: {}", other)),
         })
@@ -203,6 +205,7 @@ impl Command {
             Command::ListKeybindings => CommandResult::ListKeybindings,
             Command::Version => CommandResult::ShowVersion,
             Command::About => CommandResult::ShowAbout,
+
             Command::Unknown(msg) => CommandResult::Error(msg),
         }
     }
@@ -248,6 +251,7 @@ impl Command {
                  padding <0-100>    - Set content padding (p)\n\n\
                  TERMINAL:\n\
                  scrollback <lines> - Set scrollback lines 100-1M (sb)\n\n\
+
                  CONFIG:\n\
                  show-config        - Show current settings (show)\n\
                  reset-config       - Reset to defaults (reset)\n\
@@ -259,7 +263,7 @@ impl Command {
                  list-themes        - List available themes (themes)\n\
                  list-commands      - List all commands (commands, list)\n\
                  list-keybindings   - Show keyboard shortcuts (keys)\n\
-                 version            - Show version info (v)\n\
+                 version            - Show version information (v)\n\
                  about              - Show about/credits (info)\n\n\
                  Press Escape to cancel.".to_string()
             }
@@ -418,6 +422,7 @@ impl CommandRegistry {
                     description: "Show about/credits",
                     usage: "about",
                 },
+
             ],
         }
     }

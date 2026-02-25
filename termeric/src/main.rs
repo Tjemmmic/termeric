@@ -14,6 +14,7 @@ mod panes;
 mod renderer;
 mod search;
 mod session;
+mod session_panel;
 mod settings;
 mod splash;
 mod state;

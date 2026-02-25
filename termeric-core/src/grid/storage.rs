@@ -212,6 +212,11 @@ impl GridStorage {
         }
     }
 
+    /// Iterate over all scrollback rows (oldest first)
+    pub fn iter_scrollback(&self) -> impl Iterator<Item = &Row> {
+        self.scrollback.iter()
+    }
+
     /// Iterate over all visible rows
     pub fn iter_visible(&self) -> impl Iterator<Item = &Row> {
         self.rows.iter()
