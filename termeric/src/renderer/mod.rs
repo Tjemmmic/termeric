@@ -418,6 +418,11 @@ impl Renderer {
         self.padding
     }
 
+    /// Get current window size in physical pixels
+    pub fn window_size(&self) -> (u32, u32) {
+        self.size
+    }
+
     /// Change padding
     pub fn set_padding(&mut self, padding: f32) {
         self.padding_logical = padding.max(0.0);
@@ -840,6 +845,58 @@ impl Renderer {
                         2.0,
                     );
                 }
+            }
+        }
+
+        // Draw scrollbar (only when there is scrollback content)
+        let scrollback_len = grid.scrollback_len();
+        if scrollback_len > 0 {
+            let visible_rows = grid.rows();
+            let total_rows = scrollback_len + visible_rows;
+
+            // Scrollbar geometry
+            let scrollbar_width = 6.0_f32;
+            let scrollbar_margin = 2.0_f32;
+            let scrollbar_x = window_width - scrollbar_width - scrollbar_margin;
+            let scrollbar_top = content_top + padding;
+            let scrollbar_bottom = window_height - padding - command_bar_height;
+            let scrollbar_height = scrollbar_bottom - scrollbar_top;
+
+            if scrollbar_height > 20.0 {
+                // Draw track (subtle background)
+                let track_color = [1.0_f32, 1.0, 1.0, 0.05];
+                self.rect_pipeline.push_rounded_rect(
+                    scrollbar_x, scrollbar_top,
+                    scrollbar_width, scrollbar_height,
+                    track_color,
+                    3.0,
+                );
+
+                // Calculate thumb size and position
+                let thumb_ratio = (visible_rows as f32) / (total_rows as f32);
+                let thumb_height = (scrollbar_height * thumb_ratio).max(20.0).min(scrollbar_height);
+
+                // scroll_offset=0 means at bottom (current), max means scrolled to top
+                let max_offset = scrollback_len;
+                let scroll_fraction = if max_offset > 0 {
+                    scroll_offset as f32 / max_offset as f32
+                } else {
+                    0.0
+                };
+
+                // When scroll_offset is 0 (at bottom), thumb should be at the bottom
+                // When scroll_offset is max (at top), thumb should be at the top
+                let thumb_travel = scrollbar_height - thumb_height;
+                let thumb_y = scrollbar_top + thumb_travel * (1.0 - scroll_fraction);
+
+                // Draw thumb
+                let thumb_color = [1.0_f32, 1.0, 1.0, 0.25];
+                self.rect_pipeline.push_rounded_rect(
+                    scrollbar_x, thumb_y,
+                    scrollbar_width, thumb_height,
+                    thumb_color,
+                    3.0,
+                );
             }
         }
 
@@ -2427,8 +2484,8 @@ pub enum SearchBarClick {
 /// Info for rendering the session dropdown
 #[derive(Debug, Clone)]
 pub struct SessionDropdownInfo {
-    /// List of session names to display
-    pub sessions: Vec<String>,
+    /// List of sessions as (id, display_title) pairs
+    pub sessions: Vec<(String, String)>,
 }
 
 /// Result of clicking in the session dropdown
@@ -2514,7 +2571,7 @@ impl Renderer {
             }
         }
 
-        for (i, session_name) in info.sessions.iter().take(SESSION_DROPDOWN_MAX_ITEMS).enumerate() {
+        for (i, (_, display_title)) in info.sessions.iter().take(SESSION_DROPDOWN_MAX_ITEMS).enumerate() {
             let item_y = dropdown_y + 2.0 + i as f32 * row_height;
             let text_y = item_y + (row_height - cell_height) / 2.0;
             let mut text_x = dropdown_x + padding_x;
@@ -2523,17 +2580,12 @@ impl Renderer {
             self.text_pipeline.push_char('◆', text_x - cell_width * 0.3, text_y, accent_color);
             text_x += cell_width;
 
-            // Session name: show "Current Session" for "default", truncate safely
-            let label = if session_name == "default" {
-                "Current Session".to_string()
-            } else {
-                session_name.clone()
-            };
-            let display_name: String = if label.chars().count() > 18 {
-                let truncated: String = label.chars().take(17).collect();
+            // Display session title, truncate if needed
+            let display_name: String = if display_title.chars().count() > 18 {
+                let truncated: String = display_title.chars().take(17).collect();
                 format!("{}…", truncated)
             } else {
-                label
+                display_title.clone()
             };
             for c in display_name.chars() {
                 if text_x + cell_width > dropdown_x + dropdown_width - padding_x {
@@ -2572,7 +2624,7 @@ impl Renderer {
         &self,
         x: f32,
         y: f32,
-        sessions: &[String],
+        sessions: &[(String, String)],
         window_width: f32,
     ) -> SessionDropdownClick {
         let tab_bar_height = self.tab_bar_height();
@@ -2607,8 +2659,8 @@ impl Renderer {
 
         if row < display_rows {
             // Clicked on a session row (or placeholder if empty)
-            if let Some(name) = sessions.get(row) {
-                return SessionDropdownClick::LoadSession(name.clone());
+            if let Some((session_id, _)) = sessions.get(row) {
+                return SessionDropdownClick::LoadSession(session_id.clone());
             }
             // Placeholder row — do nothing
             return SessionDropdownClick::None;
