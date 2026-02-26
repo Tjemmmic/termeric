@@ -1695,6 +1695,20 @@ impl Renderer {
                     self.ui.settings_selected,
                     4.0,
                 );
+            } else if info.hovered_section == Some(idx) {
+                // Subtle hover highlight for non-active sections
+                let hover_color = [
+                    self.ui.settings_selected[0],
+                    self.ui.settings_selected[1],
+                    self.ui.settings_selected[2],
+                    self.ui.settings_selected[3] * 0.4,
+                ];
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x + 3.0, sy,
+                    sidebar_width - 3.0, row_height,
+                    hover_color,
+                    4.0,
+                );
             }
 
             // Section label
@@ -1823,7 +1837,7 @@ impl Renderer {
                 false
             };
 
-            // Selection highlight
+            // Selection highlight (keyboard-selected)
             if is_selected {
                 self.rect_pipeline.push_rounded_rect(
                     content_x + padding_x * 0.5, iy,
@@ -1837,6 +1851,20 @@ impl Renderer {
                     3.0, row_height,
                     self.ui.settings_accent,
                     2.0,
+                );
+            } else if info.hovered_item == Some(idx) {
+                // Subtle hover highlight for non-selected items
+                let hover_color = [
+                    self.ui.settings_selected[0],
+                    self.ui.settings_selected[1],
+                    self.ui.settings_selected[2],
+                    self.ui.settings_selected[3] * 0.4,
+                ];
+                self.rect_pipeline.push_rounded_rect(
+                    content_x + padding_x * 0.5, iy,
+                    content_width - padding_x, row_height,
+                    hover_color,
+                    4.0,
                 );
             }
 
@@ -2089,6 +2117,19 @@ impl Renderer {
                             dd_x + 2.0, oy,
                             3.0, option_h,
                             self.ui.settings_accent, 2.0,
+                        );
+                    } else if info.dropdown_hovered == Some(oidx) {
+                        // Subtle hover highlight for non-highlighted options
+                        let hover_color = [
+                            self.ui.settings_selected[0],
+                            self.ui.settings_selected[1],
+                            self.ui.settings_selected[2],
+                            self.ui.settings_selected[3] * 0.4,
+                        ];
+                        self.rect_pipeline.push_rounded_rect(
+                            dd_x + 4.0, oy,
+                            dd_width - 8.0, option_h,
+                            hover_color, 4.0,
                         );
                     }
 
@@ -2590,6 +2631,8 @@ pub enum SearchBarClick {
 pub struct SessionDropdownInfo {
     /// List of sessions as (id, display_title) pairs
     pub sessions: Vec<(String, String)>,
+    /// Mouse-hovered row index (None if not hovering; index = session rows then "Manage Sessions")
+    pub hovered_index: Option<usize>,
 }
 
 /// Result of clicking in the session dropdown
@@ -2677,6 +2720,23 @@ impl Renderer {
 
         for (i, (_, display_title)) in info.sessions.iter().take(SESSION_DROPDOWN_MAX_ITEMS).enumerate() {
             let item_y = dropdown_y + 2.0 + i as f32 * row_height;
+
+            // Hover highlight
+            if info.hovered_index == Some(i) {
+                let hover_color = [
+                    self.ui.settings_selected[0],
+                    self.ui.settings_selected[1],
+                    self.ui.settings_selected[2],
+                    self.ui.settings_selected[3] * 0.4,
+                ];
+                self.rect_pipeline.push_rounded_rect(
+                    dropdown_x + 4.0, item_y,
+                    dropdown_width - 8.0, row_height,
+                    hover_color,
+                    4.0,
+                );
+            }
+
             let text_y = item_y + (row_height - cell_height) / 2.0;
             let mut text_x = dropdown_x + padding_x;
 
@@ -2713,6 +2773,24 @@ impl Renderer {
 
         // "Manage Sessions…" item
         let manage_y = sep_y + 1.0;
+
+        // Hover highlight for "Manage Sessions…"
+        let manage_row_idx = display_rows;
+        if info.hovered_index == Some(manage_row_idx) {
+            let hover_color = [
+                self.ui.settings_selected[0],
+                self.ui.settings_selected[1],
+                self.ui.settings_selected[2],
+                self.ui.settings_selected[3] * 0.4,
+            ];
+            self.rect_pipeline.push_rounded_rect(
+                dropdown_x + 4.0, manage_y,
+                dropdown_width - 8.0, row_height,
+                hover_color,
+                4.0,
+            );
+        }
+
         let manage_text_y = manage_y + (row_height - cell_height) / 2.0;
         let mut manage_x = dropdown_x + padding_x;
         for c in "Manage Sessions…".chars() {
@@ -2867,6 +2945,22 @@ impl Renderer {
 
         for (i, session) in info.sessions.iter().enumerate() {
             let item_y = list_start_y + i as f32 * row_height;
+
+            // Hover highlight for session rows
+            if info.hovered_index == Some(i) {
+                let hover_color = [
+                    self.ui.settings_selected[0],
+                    self.ui.settings_selected[1],
+                    self.ui.settings_selected[2],
+                    self.ui.settings_selected[3] * 0.4,
+                ];
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x + padding_x * 0.5, item_y,
+                    panel_width - padding_x, row_height,
+                    hover_color,
+                    4.0,
+                );
+            }
 
             // Session icon
             let icon_y = item_y + padding_y;

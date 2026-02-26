@@ -108,6 +108,8 @@ pub struct App {
     session_dropdown_open: bool,
     /// Cached list of session names for the dropdown
     session_dropdown_items: Vec<(String, String)>,
+    /// Mouse-hovered row in the session dropdown
+    session_dropdown_hovered: Option<usize>,
     /// Session management panel
     session_panel: crate::session::panel::SessionPanel,
     /// Which tab bar element is currently hovered (for icon animations)
@@ -174,6 +176,7 @@ impl App {
             app_state: AppState::load(),
             session_dropdown_open: false,
             session_dropdown_items: Vec::new(),
+            session_dropdown_hovered: None,
             session_panel: crate::session::panel::SessionPanel::new(),
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
@@ -564,6 +567,7 @@ impl App {
         let session_dropdown_info = if self.session_dropdown_open {
             Some(crate::renderer::SessionDropdownInfo {
                 sessions: self.session_dropdown_items.clone(),
+                hovered_index: self.session_dropdown_hovered,
             })
         } else {
             None
@@ -2160,11 +2164,187 @@ impl App {
             return;
         }
 
-        // Don't update selection when an overlay panel is open
-        if self.session_panel.is_open()
-            || self.settings_panel.is_active()
-            || self.session_dropdown_open
-        {
+        // Don't update selection when an overlay panel is open,
+        // but DO track hover state for visual highlights.
+        if self.settings_panel.is_active() {
+            let px = position.0 as f32;
+            let py = position.1 as f32;
+            if let Some(renderer) = &self.renderer {
+                let (cell_width, cell_height) = renderer.cell_size();
+                let window_size = self.window.as_ref().map(|w| w.inner_size());
+                if let Some(size) = window_size {
+                    use crate::ui::settings::SettingsPanelLayout;
+                    let layout = SettingsPanelLayout::calculate(
+                        size.width as f32,
+                        size.height as f32,
+                        cell_width,
+                        cell_height,
+                        self.settings_panel.animation_progress(),
+                    );
+                    let items = self.settings_panel.items_for_section(&self.config);
+                    let is_dropdown = self.settings_panel.is_dropdown_open();
+                    // When dropdown is open, suppress background content hover
+                    let hovered_item = if !is_dropdown && layout.is_in_content(px, py) {
+                        layout.item_at_y(py, items.len())
+                    } else {
+                        None
+                    };
+                    let section_count = crate::ui::settings::SettingsSection::ALL.len();
+                    let hovered_section = if layout.is_in_sidebar(px, py) {
+                        layout.section_at_y(py, section_count)
+                    } else {
+                        None
+                    };
+                    self.settings_panel.set_hover(hovered_item, hovered_section);
+
+                    // Also detect hover within open dropdown overlay
+                    if self.settings_panel.is_dropdown_open() {
+                        let items = self.settings_panel.items_for_section(&self.config);
+                        let selected_item = self.settings_panel.selected_item_index();
+                        if let Some(item) = items.get(selected_item) {
+                            let (options_text, option_count): (Vec<String>, usize) = match &item.kind {
+                                crate::ui::settings::SettingKind::Dropdown { options, .. } => {
+                                    (options.clone(), options.len())
+                                }
+                                crate::ui::settings::SettingKind::SteppedList { values, .. } => {
+                                    (values.iter().map(|v| v.to_string()).collect(), values.len())
+                                }
+                                _ => (vec![], 0),
+                            };
+                            if option_count > 0 {
+                                let max_label_len = items.iter().map(|i| i.label.len()).max().unwrap_or(0);
+                                let label_end = layout.padding_x + max_label_len as f32 * cell_width;
+                                let min_gap = cell_width * 2.0;
+                                let max_value_area = layout.content_width * 0.65;
+                                let value_area_offset = (label_end + min_gap).min(max_value_area);
+                                let dd_value_area_x = layout.content_x + value_area_offset;
+                                let anchor_y = layout.items_start_y + selected_item as f32 * layout.row_height + layout.row_height;
+
+                                let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
+                                let min_dd_width = (max_option_len as f32 + 4.0) * cell_width;
+                                let remaining_space = layout.content_width - value_area_offset;
+                                let dd_width = min_dd_width.max(remaining_space).min(layout.content_width - cell_width * 2.0);
+
+                                let dd_x = if dd_value_area_x + dd_width > layout.panel_x + layout.panel_width - cell_width {
+                                    (layout.panel_x + layout.panel_width - dd_width - cell_width).max(layout.content_x + cell_width)
+                                } else {
+                                    dd_value_area_x
+                                };
+
+                                let option_h = layout.row_height * 0.85;
+                                let max_visible = 8usize;
+                                let visible_count = option_count.min(max_visible);
+                                let dd_height = visible_count as f32 * option_h + 8.0;
+
+                                let dd_hovered = if px >= dd_x && px <= dd_x + dd_width
+                                    && py >= anchor_y && py <= anchor_y + dd_height
+                                {
+                                    let relative_y = py - anchor_y - 4.0;
+                                    if relative_y >= 0.0 {
+                                        let idx = (relative_y / option_h) as usize;
+                                        if idx < visible_count { Some(idx) } else { None }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+                                self.settings_panel.set_dropdown_hover(dd_hovered);
+                            } else {
+                                self.settings_panel.set_dropdown_hover(None);
+                            }
+                        } else {
+                            self.settings_panel.set_dropdown_hover(None);
+                        }
+                    } else {
+                        self.settings_panel.set_dropdown_hover(None);
+                    }
+                }
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
+        if self.session_panel.is_open() {
+            let px = position.0 as f32;
+            let py = position.1 as f32;
+            if let Some(renderer) = &self.renderer {
+                let (ui_cw, cell_height) = renderer.cell_size();
+                let window_size = self.window.as_ref().map(|w| w.inner_size());
+                if let Some(size) = window_size {
+                    let window_width = size.width as f32;
+                    let anim = self.session_panel.animation_progress();
+                    let panel_width = (ui_cw * 35.0).max(320.0).min(window_width * 0.45);
+                    let panel_x = window_width - panel_width * anim;
+                    let padding_y = cell_height * 0.5;
+                    let row_height = (cell_height * 3.5).max(52.0);
+                    let title_y = cell_height * 1.5;
+                    let sep_y = title_y + cell_height * 2.0;
+                    let list_start_y = sep_y + padding_y + 4.0;
+
+                    let hovered = if px >= panel_x {
+                        let sessions = self.session_panel.sessions();
+                        let mut found = None;
+                        for i in 0..sessions.len() {
+                            let item_y = list_start_y + i as f32 * row_height;
+                            if py >= item_y && py < item_y + row_height {
+                                found = Some(i);
+                                break;
+                            }
+                        }
+                        found
+                    } else {
+                        None
+                    };
+                    self.session_panel.set_hover(hovered);
+                }
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
+        if self.session_dropdown_open {
+            let px = position.0 as f32;
+            let py = position.1 as f32;
+            if let Some(renderer) = &self.renderer {
+                let window_size = self.window.as_ref().map(|w| w.inner_size());
+                if let Some(size) = window_size {
+                    let (cell_width, cell_height) = renderer.cell_size();
+                    let tab_bar_height = renderer.tab_bar_height();
+                    let window_width = size.width as f32;
+
+                    let gear_button_width = tab_bar_height;
+                    let session_button_width = tab_bar_height;
+                    let dropdown_anchor_x = window_width - gear_button_width - session_button_width;
+
+                    let row_height = (cell_height * 2.0).max(28.0);
+                    let dropdown_width = (cell_width * 22.0).max(200.0);
+                    let dropdown_x = (dropdown_anchor_x + session_button_width - dropdown_width).max(0.0);
+                    let dropdown_y = tab_bar_height;
+
+                    let session_count = self.session_dropdown_items.len().min(5);
+                    let display_rows = session_count.max(1);
+                    let total_items = display_rows + 1; // + "Manage Sessions"
+                    let dropdown_height = total_items as f32 * row_height + 4.0;
+
+                    self.session_dropdown_hovered = if px >= dropdown_x && px <= dropdown_x + dropdown_width
+                        && py >= dropdown_y && py <= dropdown_y + dropdown_height
+                    {
+                        let relative_y = py - dropdown_y - 2.0;
+                        let row = (relative_y / row_height) as usize;
+                        if row < total_items { Some(row) } else { None }
+                    } else {
+                        None
+                    };
+                }
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
             return;
         }
 

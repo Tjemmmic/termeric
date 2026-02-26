@@ -190,7 +190,7 @@ impl SettingsSection {
         }
     }
 
-    const ALL: &[SettingsSection] = &[
+    pub const ALL: &[SettingsSection] = &[
         Self::Font,
         Self::Theme,
         Self::Window,
@@ -302,6 +302,12 @@ pub struct SettingsPanel {
     dropdown_highlight: usize,
     /// Available monospace fonts (discovered from system)
     available_fonts: Vec<String>,
+    /// Mouse-hovered content item index (None if not hovering any item)
+    hovered_item: Option<usize>,
+    /// Mouse-hovered sidebar section index (None if not hovering any section)
+    hovered_section: Option<usize>,
+    /// Mouse-hovered dropdown option index (None if not hovering any dropdown option)
+    dropdown_hovered: Option<usize>,
 }
 
 impl SettingsPanel {
@@ -317,6 +323,9 @@ impl SettingsPanel {
             dropdown_open: false,
             dropdown_highlight: 0,
             available_fonts: vec![DEFAULT_FONT.to_string()],
+            hovered_item: None,
+            hovered_section: None,
+            dropdown_hovered: None,
         }
     }
 
@@ -420,6 +429,16 @@ impl SettingsPanel {
 
     /// Get the currently selected item index
     pub fn selected_item(&self) -> usize {
+        self.selected_item
+    }
+
+    /// Whether the dropdown overlay is currently open
+    pub fn is_dropdown_open(&self) -> bool {
+        self.dropdown_open
+    }
+
+    /// Alias for selected_item used by hover detection
+    pub fn selected_item_index(&self) -> usize {
         self.selected_item
     }
 
@@ -671,6 +690,7 @@ impl SettingsPanel {
             }
             SettingsKey::Tab => {
                 // Cycle to next section
+                self.dropdown_open = false;
                 let idx = self.section.index();
                 self.section = SettingsSection::ALL[(idx + 1) % SettingsSection::ALL.len()];
                 self.selected_item = 0;
@@ -872,6 +892,7 @@ impl SettingsPanel {
 
         // ── Sidebar section click ──
         if layout.is_in_sidebar(x, y) {
+            self.dropdown_open = false;
             if let Some(idx) = layout.section_at_y(y, SettingsSection::ALL.len()) {
                 if let Some(section) = SettingsSection::ALL.get(idx) {
                     self.section = *section;
@@ -1022,6 +1043,12 @@ pub struct SettingsPanelInfo {
     pub dropdown_open: bool,
     /// Which option is highlighted in the dropdown
     pub dropdown_highlight: usize,
+    /// Mouse-hovered content item index
+    pub hovered_item: Option<usize>,
+    /// Mouse-hovered sidebar section index
+    pub hovered_section: Option<usize>,
+    /// Mouse-hovered dropdown option index
+    pub dropdown_hovered: Option<usize>,
 }
 
 impl SettingsPanel {
@@ -1041,7 +1068,21 @@ impl SettingsPanel {
             selected_item: self.selected_item,
             dropdown_open: self.dropdown_open,
             dropdown_highlight: self.dropdown_highlight,
+            hovered_item: self.hovered_item,
+            hovered_section: self.hovered_section,
+            dropdown_hovered: self.dropdown_hovered,
         }
+    }
+
+    /// Update hover state from mouse position
+    pub fn set_hover(&mut self, item: Option<usize>, section: Option<usize>) {
+        self.hovered_item = item;
+        self.hovered_section = section;
+    }
+
+    /// Update dropdown hover state from mouse position
+    pub fn set_dropdown_hover(&mut self, index: Option<usize>) {
+        self.dropdown_hovered = index;
     }
 }
 

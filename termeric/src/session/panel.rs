@@ -42,6 +42,8 @@ pub struct SessionPanelInfo {
     pub sessions: Vec<SessionEntry>,
     /// Index of the highlighted/hovered session
     pub selected_index: usize,
+    /// Mouse-hovered session index (None if not hovering any session)
+    pub hovered_index: Option<usize>,
 }
 
 /// Session management panel state
@@ -58,6 +60,8 @@ pub struct SessionPanel {
     selected_index: usize,
     /// Cached session entries
     sessions: Vec<SessionEntry>,
+    /// Mouse-hovered session index
+    hovered_index: Option<usize>,
 }
 
 impl SessionPanel {
@@ -69,6 +73,7 @@ impl SessionPanel {
             animation_base: 0.0,
             selected_index: 0,
             sessions: Vec::new(),
+            hovered_index: None,
         }
     }
 
@@ -195,7 +200,13 @@ impl SessionPanel {
             animation: self.animation_progress(),
             sessions: self.sessions.clone(),
             selected_index: self.selected_index,
+            hovered_index: self.hovered_index,
         }
+    }
+
+    /// Update hover state from mouse position
+    pub fn set_hover(&mut self, index: Option<usize>) {
+        self.hovered_index = index;
     }
 
     /// Get the sessions list
