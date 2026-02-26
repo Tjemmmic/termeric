@@ -8,7 +8,7 @@ mod hyperlink;
 mod row;
 mod storage;
 
-pub use cell::{Cell, CellContent, CellAttrs, CellFlags, Color};
+pub use cell::{Cell, CellContent, CellAttrs, CellFlags, Color, ColorSpec};
 pub use hyperlink::{Hyperlink, HyperlinkRegistry};
 pub use row::Row;
 
@@ -261,19 +261,36 @@ impl Grid {
         })
     }
 
-    /// Export scrollback + visible rows as text lines for session persistence
+    /// Export scrollback + visible rows as text with ANSI color sequences for session persistence
     ///
-    /// Returns all scrollback lines followed by visible lines, with trailing
-    /// empty lines removed. Each line is the text content of the row.
+    /// Returns all scrollback lines followed by visible lines, with ANSI escape
+    /// sequences to preserve colors and attributes. Trailing empty lines and
+    /// prompt-like lines are trimmed to avoid double prompts on restore.
     pub fn export_scrollback_text(&self) -> Vec<String> {
         let mut lines: Vec<String> = self.storage.iter_scrollback()
             .chain(self.storage.iter_visible())
-            .map(|row| row.to_string())
+            .map(|row| row.to_ansi_string())
             .collect();
 
         // Trim trailing empty lines
         while lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
+        }
+
+        // Trim trailing prompt-like or logout/exit lines to avoid duplication on restore.
+        // Strip ANSI escapes before checking so we match the visible text content.
+        while let Some(last) = lines.last() {
+            let plain = strip_ansi_escapes(last);
+            let trimmed = plain.trim();
+            if trimmed.is_empty() {
+                lines.pop();
+            } else if trimmed == "logout" || trimmed == "exit" {
+                lines.pop();
+            } else if is_bare_prompt(trimmed) {
+                lines.pop();
+            } else {
+                break;
+            }
         }
 
         lines
@@ -283,6 +300,53 @@ impl Grid {
     pub fn scrollback_rows(&self) -> impl Iterator<Item = &Row> {
         self.storage.iter_scrollback()
     }
+}
+
+/// Strip ANSI escape sequences from a string, returning plain text.
+fn strip_ansi_escapes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip ESC [ ... m sequences
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                // Consume until we hit a letter (the final byte of the sequence)
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Check if a trimmed plain-text line looks like a bare shell prompt.
+///
+/// Matches common patterns like `$`, `[~]$`, `user@host:~$`, `#`, `%`, `>`
+/// but NOT lines that contain actual command output after the prompt character.
+fn is_bare_prompt(trimmed: &str) -> bool {
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Must end with a common prompt character
+    let ends_with_prompt = trimmed.ends_with('$')
+        || trimmed.ends_with('#')
+        || trimmed.ends_with('%')
+        || trimmed.ends_with('>');
+
+    if !ends_with_prompt {
+        return false;
+    }
+
+    // Prompts are short — if the line is very long, it's likely command output
+    // Allow generous length for prompts like "user@hostname:/very/long/path $"
+    trimmed.len() <= 120
 }
 
 #[cfg(test)]

@@ -1,10 +1,10 @@
 //! VTE escape sequence handler
 
 use vte::{Params, Perform};
-use crate::grid::{CellAttrs, Color};
+use crate::grid::{CellAttrs, Color, ColorSpec};
 use crate::term::{Terminal, TerminalMode};
 use crate::event::{TerminalEvent, NotificationRequest};
-use super::color::{ansi_color, ansi_bright_color, parse_extended_color};
+use super::color::{ansi_color, ansi_bright_color, parse_extended_color, parse_extended_color_with_spec};
 
 /// Handler for VTE callbacks that updates terminal state
 pub struct Handler<'a> {
@@ -536,30 +536,30 @@ impl Handler<'_> {
                 29 => self.remove_attr(CellAttrs::STRIKE),
 
                 // Foreground colors (30-37)
-                30..=37 => self.terminal.set_fg(ansi_color(primary - 30)),
+                30..=37 => self.terminal.set_fg(ansi_color(primary - 30), ColorSpec::Indexed((primary - 30) as u8)),
 
                 // Extended foreground color (38:2:R:G:B or 38:5:N)
                 38 => {
-                    if let Some(color) = self.parse_extended_color_from_subparams(&values[1..]) {
-                        self.terminal.set_fg(color);
+                    if let Some((color, spec)) = self.parse_extended_color_spec_from_subparams(&values[1..]) {
+                        self.terminal.set_fg(color, spec);
                     }
                 }
 
                 // Default foreground
-                39 => self.terminal.set_fg(Color::default_fg()),
+                39 => self.terminal.set_fg(Color::default_fg(), ColorSpec::Default),
 
                 // Background colors (40-47)
-                40..=47 => self.terminal.set_bg(ansi_color(primary - 40)),
+                40..=47 => self.terminal.set_bg(ansi_color(primary - 40), ColorSpec::Indexed((primary - 40) as u8)),
 
                 // Extended background color (48:2:R:G:B or 48:5:N)
                 48 => {
-                    if let Some(color) = self.parse_extended_color_from_subparams(&values[1..]) {
-                        self.terminal.set_bg(color);
+                    if let Some((color, spec)) = self.parse_extended_color_spec_from_subparams(&values[1..]) {
+                        self.terminal.set_bg(color, spec);
                     }
                 }
 
                 // Default background
-                49 => self.terminal.set_bg(Color::default_bg()),
+                49 => self.terminal.set_bg(Color::default_bg(), ColorSpec::Default),
 
                 // Extended underline color (58:2:R:G:B or 58:5:N)
                 58 => {
@@ -572,10 +572,10 @@ impl Handler<'_> {
                 59 => self.terminal.reset_underline_color(),
 
                 // Bright foreground colors (90-97)
-                90..=97 => self.terminal.set_fg(ansi_bright_color(primary - 90)),
+                90..=97 => self.terminal.set_fg(ansi_bright_color(primary - 90), ColorSpec::Indexed((primary - 90 + 8) as u8)),
 
                 // Bright background colors (100-107)
-                100..=107 => self.terminal.set_bg(ansi_bright_color(primary - 100)),
+                100..=107 => self.terminal.set_bg(ansi_bright_color(primary - 100), ColorSpec::Indexed((primary - 100 + 8) as u8)),
 
                 _ => {
                     log::trace!("Unknown SGR parameter: {}", primary);
@@ -587,6 +587,11 @@ impl Handler<'_> {
     /// Parse extended color from colon-separated subparameters
     /// Handles formats like: 2:R:G:B (RGB) or 5:N (256-color)
     fn parse_extended_color_from_subparams(&self, subparams: &[u16]) -> Option<Color> {
+        self.parse_extended_color_spec_from_subparams(subparams).map(|(c, _)| c)
+    }
+
+    /// Parse extended color with its spec from colon-separated subparameters
+    fn parse_extended_color_spec_from_subparams(&self, subparams: &[u16]) -> Option<(Color, ColorSpec)> {
         if subparams.is_empty() {
             return None;
         }
@@ -602,7 +607,8 @@ impl Handler<'_> {
                     .collect();
 
                 if rgb.len() >= 3 {
-                    Some(Color::rgb(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8))
+                    let color = Color::rgb(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8);
+                    Some((color, ColorSpec::TrueColor(color)))
                 } else {
                     None
                 }
@@ -610,7 +616,8 @@ impl Handler<'_> {
             5 => {
                 // 256-color palette: 5:N
                 if subparams.len() > 1 {
-                    Some(super::color::color_256(subparams[1] as u8))
+                    let idx = subparams[1] as u8;
+                    Some((super::color::color_256(idx), ColorSpec::Indexed(idx)))
                 } else {
                     None
                 }
@@ -656,46 +663,46 @@ impl Handler<'_> {
 
                 // Normal foreground colors (30-37)
                 30..=37 => {
-                    self.terminal.set_fg(ansi_color(param - 30));
+                    self.terminal.set_fg(ansi_color(param - 30), ColorSpec::Indexed((param - 30) as u8));
                 }
 
                 // Extended foreground color
                 38 => {
-                    if let Some(color) = parse_extended_color(&mut iter) {
-                        self.terminal.set_fg(color);
+                    if let Some((color, spec)) = parse_extended_color_with_spec(&mut iter) {
+                        self.terminal.set_fg(color, spec);
                     }
                 }
 
                 // Default foreground
                 39 => {
-                    self.terminal.set_fg(Color::default_fg());
+                    self.terminal.set_fg(Color::default_fg(), ColorSpec::Default);
                 }
 
                 // Normal background colors (40-47)
                 40..=47 => {
-                    self.terminal.set_bg(ansi_color(param - 40));
+                    self.terminal.set_bg(ansi_color(param - 40), ColorSpec::Indexed((param - 40) as u8));
                 }
 
                 // Extended background color
                 48 => {
-                    if let Some(color) = parse_extended_color(&mut iter) {
-                        self.terminal.set_bg(color);
+                    if let Some((color, spec)) = parse_extended_color_with_spec(&mut iter) {
+                        self.terminal.set_bg(color, spec);
                     }
                 }
 
                 // Default background
                 49 => {
-                    self.terminal.set_bg(Color::default_bg());
+                    self.terminal.set_bg(Color::default_bg(), ColorSpec::Default);
                 }
 
                 // Bright foreground colors (90-97)
                 90..=97 => {
-                    self.terminal.set_fg(ansi_bright_color(param - 90));
+                    self.terminal.set_fg(ansi_bright_color(param - 90), ColorSpec::Indexed((param - 90 + 8) as u8));
                 }
 
                 // Bright background colors (100-107)
                 100..=107 => {
-                    self.terminal.set_bg(ansi_bright_color(param - 100));
+                    self.terminal.set_bg(ansi_bright_color(param - 100), ColorSpec::Indexed((param - 100 + 8) as u8));
                 }
 
                 _ => {

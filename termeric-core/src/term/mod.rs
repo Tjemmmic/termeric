@@ -11,7 +11,7 @@ pub use cursor::SavedCursor;
 pub use mode::TerminalMode;
 pub use selection::{Selection, SelectionType, Point};
 
-use crate::grid::{Grid, CellAttrs, CellContent, CellFlags, Color, HyperlinkRegistry};
+use crate::grid::{Grid, CellAttrs, CellContent, CellFlags, Color, ColorSpec, HyperlinkRegistry};
 use crate::ansi::Processor;
 use crate::graphics::{GraphicsManager, KittyCommand, ImagePlacement, ImageId, StoredImage};
 use crate::shell::ShellIntegration;
@@ -38,10 +38,14 @@ pub struct Terminal {
     alt_saved_cursor: Option<SavedCursor>,
     /// Current text attributes for new characters
     current_attrs: CellAttrs,
-    /// Current foreground color
+    /// Current foreground color (resolved RGB)
     current_fg: Color,
-    /// Current background color
+    /// Current background color (resolved RGB)
     current_bg: Color,
+    /// How the current foreground was specified (indexed, true color, or default)
+    current_fg_spec: ColorSpec,
+    /// How the current background was specified (indexed, true color, or default)
+    current_bg_spec: ColorSpec,
     /// Current underline color (None means use fg color)
     current_underline_color: Option<Color>,
     /// Current hyperlink ID (if inside a hyperlink)
@@ -90,6 +94,8 @@ impl Terminal {
             current_attrs: CellAttrs::empty(),
             current_fg: Color::default_fg(),
             current_bg: Color::default_bg(),
+            current_fg_spec: ColorSpec::Default,
+            current_bg_spec: ColorSpec::Default,
             current_underline_color: None,
             current_hyperlink_id: None,
             hyperlink_registry: HyperlinkRegistry::new(),
@@ -203,6 +209,8 @@ impl Terminal {
         let cursor = self.grid().cursor();
         let fg = self.current_fg;
         let bg = self.current_bg;
+        let fg_spec = self.current_fg_spec;
+        let bg_spec = self.current_bg_spec;
         let attrs = self.current_attrs;
 
         if self.mode.contains(TerminalMode::INSERT) {
@@ -218,6 +226,8 @@ impl Terminal {
             cell.content = CellContent::Char(c);
             cell.fg = fg;
             cell.bg = bg;
+            cell.fg_spec = fg_spec;
+            cell.bg_spec = bg_spec;
             cell.underline_color = underline_color;
             cell.attrs = attrs;
             cell.hyperlink_id = hyperlink_id;
@@ -387,14 +397,16 @@ impl Terminal {
         self.current_attrs = attrs;
     }
 
-    /// Set foreground color
-    pub fn set_fg(&mut self, color: Color) {
+    /// Set foreground color with its original specification
+    pub fn set_fg(&mut self, color: Color, spec: ColorSpec) {
         self.current_fg = color;
+        self.current_fg_spec = spec;
     }
 
-    /// Set background color
-    pub fn set_bg(&mut self, color: Color) {
+    /// Set background color with its original specification
+    pub fn set_bg(&mut self, color: Color, spec: ColorSpec) {
         self.current_bg = color;
+        self.current_bg_spec = spec;
     }
 
     /// Reset all attributes to default
@@ -402,6 +414,8 @@ impl Terminal {
         self.current_attrs = CellAttrs::empty();
         self.current_fg = Color::default_fg();
         self.current_bg = Color::default_bg();
+        self.current_fg_spec = ColorSpec::Default;
+        self.current_bg_spec = ColorSpec::Default;
         self.current_underline_color = None;
     }
 
@@ -639,6 +653,8 @@ impl Terminal {
             attrs: self.current_attrs,
             fg: self.current_fg,
             bg: self.current_bg,
+            fg_spec: self.current_fg_spec,
+            bg_spec: self.current_bg_spec,
         };
 
         if self.alt_screen_active {
@@ -661,6 +677,8 @@ impl Terminal {
             self.current_attrs = saved.attrs;
             self.current_fg = saved.fg;
             self.current_bg = saved.bg;
+            self.current_fg_spec = saved.fg_spec;
+            self.current_bg_spec = saved.bg_spec;
         }
     }
 

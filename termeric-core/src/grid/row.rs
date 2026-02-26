@@ -147,6 +147,142 @@ impl Row {
         // Trim trailing whitespace
         s.trim_end().to_string()
     }
+
+    /// Get the string content with ANSI escape sequences for colors and attributes.
+    ///
+    /// Emits SGR sequences using the original color specification (indexed, true color,
+    /// or default) so that replaying through a terminal re-resolves indexed colors
+    /// through the current theme. This allows session restore to adapt to theme changes.
+    pub fn to_ansi_string(&self) -> String {
+        use super::cell::{Color, ColorSpec, CellAttrs, CellContent};
+
+        let default_fg = Color::default_fg();
+        let default_bg = Color::default_bg();
+
+        let mut s = String::new();
+        let mut cur_fg_spec = ColorSpec::Default;
+        let mut cur_bg_spec = ColorSpec::Default;
+        let mut cur_attrs = CellAttrs::empty();
+        let mut has_style = false;
+
+        // Find the last cell that has meaningful content: either non-empty text
+        // OR non-default styling (colors/attributes).
+        let last_meaningful = self.cells.iter().rposition(|c| {
+            !c.content.is_empty()
+                || c.fg != default_fg
+                || c.bg != default_bg
+                || c.attrs != CellAttrs::empty()
+        }).unwrap_or(0);
+
+        for (i, cell) in self.cells.iter().enumerate() {
+            if i > last_meaningful {
+                break;
+            }
+
+            let need_fg = cell.fg_spec != cur_fg_spec;
+            let need_bg = cell.bg_spec != cur_bg_spec;
+            let need_attrs = cell.attrs != cur_attrs;
+
+            if need_fg || need_bg || need_attrs {
+                let mut params: Vec<String> = Vec::new();
+
+                if need_attrs {
+                    // Reset and re-apply everything
+                    params.push("0".to_string());
+                    cur_fg_spec = ColorSpec::Default;
+                    cur_bg_spec = ColorSpec::Default;
+                    cur_attrs = CellAttrs::empty();
+
+                    if cell.attrs.contains(CellAttrs::BOLD) {
+                        params.push("1".to_string());
+                    }
+                    if cell.attrs.contains(CellAttrs::DIM) {
+                        params.push("2".to_string());
+                    }
+                    if cell.attrs.contains(CellAttrs::ITALIC) {
+                        params.push("3".to_string());
+                    }
+                    if cell.attrs.contains(CellAttrs::UNDERLINE) {
+                        params.push("4".to_string());
+                    }
+                    if cell.attrs.contains(CellAttrs::INVERSE) {
+                        params.push("7".to_string());
+                    }
+                    if cell.attrs.contains(CellAttrs::STRIKE) {
+                        params.push("9".to_string());
+                    }
+
+                    // After reset, re-emit colors if non-default
+                    Self::push_fg_spec(&mut params, &cell.fg_spec);
+                    Self::push_bg_spec(&mut params, &cell.bg_spec);
+                } else {
+                    if need_fg {
+                        Self::push_fg_spec(&mut params, &cell.fg_spec);
+                    }
+                    if need_bg {
+                        Self::push_bg_spec(&mut params, &cell.bg_spec);
+                    }
+                }
+
+                if !params.is_empty() {
+                    s.push_str(&format!("\x1b[{}m", params.join(";")));
+                    has_style = true;
+                }
+
+                cur_fg_spec = cell.fg_spec;
+                cur_bg_spec = cell.bg_spec;
+                cur_attrs = cell.attrs;
+            }
+
+            match &cell.content {
+                CellContent::Empty => s.push(' '),
+                CellContent::Char(c) => s.push(*c),
+                CellContent::Grapheme(g) => s.push_str(g),
+            }
+        }
+
+        if has_style {
+            s.push_str("\x1b[0m");
+        }
+
+        s
+    }
+
+    /// Push SGR parameters for a foreground ColorSpec
+    fn push_fg_spec(params: &mut Vec<String>, spec: &super::cell::ColorSpec) {
+        use super::cell::ColorSpec;
+        match spec {
+            ColorSpec::Default => params.push("39".to_string()),
+            ColorSpec::Indexed(n) => {
+                match n {
+                    0..=7 => params.push(format!("{}", 30 + n)),
+                    8..=15 => params.push(format!("{}", 90 + n - 8)),
+                    _ => params.push(format!("38;5;{}", n)),
+                }
+            }
+            ColorSpec::TrueColor(c) => {
+                params.push(format!("38;2;{};{};{}", c.r, c.g, c.b));
+            }
+        }
+    }
+
+    /// Push SGR parameters for a background ColorSpec
+    fn push_bg_spec(params: &mut Vec<String>, spec: &super::cell::ColorSpec) {
+        use super::cell::ColorSpec;
+        match spec {
+            ColorSpec::Default => params.push("49".to_string()),
+            ColorSpec::Indexed(n) => {
+                match n {
+                    0..=7 => params.push(format!("{}", 40 + n)),
+                    8..=15 => params.push(format!("{}", 100 + n - 8)),
+                    _ => params.push(format!("48;5;{}", n)),
+                }
+            }
+            ColorSpec::TrueColor(c) => {
+                params.push(format!("48;2;{};{};{}", c.r, c.g, c.b));
+            }
+        }
+    }
 }
 
 impl std::ops::Index<usize> for Row {

@@ -150,15 +150,39 @@ impl CellContent {
     }
 }
 
+/// How a color was originally specified by the program.
+///
+/// Preserving this allows session restore to re-resolve indexed colors
+/// through the current theme, so sessions adapt to theme changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorSpec {
+    /// Terminal default color (fg or bg)
+    Default,
+    /// ANSI palette color (0-7 normal, 8-15 bright, 16-255 extended)
+    Indexed(u8),
+    /// Explicit 24-bit RGB color
+    TrueColor(Color),
+}
+
+impl Default for ColorSpec {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
 /// A single cell in the terminal grid
 #[derive(Clone, Debug)]
 pub struct Cell {
     /// The character(s) displayed in this cell
     pub content: CellContent,
-    /// Foreground color
+    /// Foreground color (resolved RGB for rendering)
     pub fg: Color,
-    /// Background color
+    /// Background color (resolved RGB for rendering)
     pub bg: Color,
+    /// How the foreground color was originally specified
+    pub fg_spec: ColorSpec,
+    /// How the background color was originally specified
+    pub bg_spec: ColorSpec,
     /// Underline color (None means use fg color)
     pub underline_color: Option<Color>,
     /// Text attributes (bold, italic, etc.)
@@ -175,6 +199,8 @@ impl Default for Cell {
             content: CellContent::Empty,
             fg: Color::default_fg(),
             bg: Color::default_bg(),
+            fg_spec: ColorSpec::Default,
+            bg_spec: ColorSpec::Default,
             underline_color: None,
             attrs: CellAttrs::empty(),
             flags: CellFlags::empty(),
@@ -214,6 +240,8 @@ impl Cell {
         self.content = CellContent::Empty;
         self.fg = Color::default_fg();
         self.bg = Color::default_bg();
+        self.fg_spec = ColorSpec::Default;
+        self.bg_spec = ColorSpec::Default;
         self.underline_color = None;
         self.attrs = CellAttrs::empty();
         self.flags = CellFlags::DIRTY; // Keep dirty flag to trigger re-render

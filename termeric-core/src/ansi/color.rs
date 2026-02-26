@@ -1,6 +1,6 @@
 //! Color conversion utilities for ANSI escape sequences
 
-use crate::grid::Color;
+use crate::grid::{Color, ColorSpec};
 
 /// ANSI color index (0-15)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,18 +119,29 @@ pub fn parse_extended_color<'a, I>(iter: &mut I) -> Option<Color>
 where
     I: Iterator<Item = &'a u16>,
 {
+    parse_extended_color_with_spec(iter).map(|(c, _)| c)
+}
+
+/// Parse an extended color with its specification from SGR parameters
+///
+/// Returns both the resolved RGB color and how it was specified.
+pub fn parse_extended_color_with_spec<'a, I>(iter: &mut I) -> Option<(Color, ColorSpec)>
+where
+    I: Iterator<Item = &'a u16>,
+{
     match iter.next()? {
         5 => {
             // 256-color mode: `38;5;N` or `48;5;N`
             let idx = *iter.next()? as u8;
-            Some(color_256(idx))
+            Some((color_256(idx), ColorSpec::Indexed(idx)))
         }
         2 => {
             // True color mode: `38;2;R;G;B` or `48;2;R;G;B`
             let r = *iter.next()? as u8;
             let g = *iter.next()? as u8;
             let b = *iter.next()? as u8;
-            Some(Color::rgb(r, g, b))
+            let color = Color::rgb(r, g, b);
+            Some((color, ColorSpec::TrueColor(color)))
         }
         _ => None,
     }
