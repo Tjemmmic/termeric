@@ -210,6 +210,45 @@ impl RectPipeline {
         self.layer_boundaries.len() + 1
     }
 
+    /// Push a line segment from (x1,y1) to (x2,y2) with the given thickness.
+    /// This uses the line segment SDF in the shader for perfect anti-aliasing at any angle.
+    pub fn push_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: [f32; 4]) {
+        let base_idx = self.vertices.len() as u32;
+        let half_t = thickness / 2.0;
+        let pad = half_t + 1.0; // Extra pixel for anti-aliasing
+
+        // Axis-aligned bounding box of the line with padding
+        let min_x = x1.min(x2) - pad;
+        let min_y = y1.min(y2) - pad;
+        let max_x = x1.max(x2) + pad;
+        let max_y = y1.max(y2) + pad;
+
+        // Encode line endpoints in rect_center (start) and rect_half_size (end)
+        // Negative corner_radius signals the shader to use line SDF
+        let make_vert = |pos: [f32; 2]| RectVertex {
+            position: pos,
+            color,
+            rect_center: [x1, y1],
+            rect_half_size: [x2, y2],
+            corner_radius: -half_t,
+            _pad: 0.0,
+        };
+
+        self.vertices.push(make_vert([min_x, min_y]));
+        self.vertices.push(make_vert([max_x, min_y]));
+        self.vertices.push(make_vert([max_x, max_y]));
+        self.vertices.push(make_vert([min_x, max_y]));
+
+        self.indices.extend_from_slice(&[
+            base_idx,
+            base_idx + 1,
+            base_idx + 2,
+            base_idx,
+            base_idx + 2,
+            base_idx + 3,
+        ]);
+    }
+
     /// Push a sharp rectangle (no rounding)
     pub fn push_rect(&mut self, x: f32, y: f32, width: f32, height: f32, color: [f32; 4]) {
         self.push_rounded_rect(x, y, width, height, color, 0.0);

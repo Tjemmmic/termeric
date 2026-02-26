@@ -248,6 +248,9 @@ pub struct Renderer {
     ui: UiPalette,
     // Window opacity (0.0 - 1.0)
     opacity: f32,
+    // Tab bar hover state for icon animations
+    tab_bar_hover: Option<TabBarClick>,
+    tab_bar_hover_progress: f32,
 }
 
 impl Renderer {
@@ -341,6 +344,8 @@ impl Renderer {
             font_size,
             ui: UiPalette::from_theme(theme),
             opacity: 1.0,
+            tab_bar_hover: None,
+            tab_bar_hover_progress: 0.0,
         })
     }
 
@@ -448,6 +453,12 @@ impl Renderer {
     /// Set window opacity (0.0 = fully transparent, 1.0 = fully opaque)
     pub fn set_opacity(&mut self, opacity: f32) {
         self.opacity = opacity.clamp(0.1, 1.0);
+    }
+
+    /// Update tab bar hover state for icon animations
+    pub fn set_tab_bar_hover(&mut self, hover: Option<TabBarClick>, progress: f32) {
+        self.tab_bar_hover = hover;
+        self.tab_bar_hover_progress = progress;
     }
 
     /// Add dividers between panes to the render data
@@ -1064,16 +1075,33 @@ impl Renderer {
                             close_bg, 3.0,
                         );
 
-                        // × character centered in the button
-                        let close_char_x = close_x + (close_btn_size - self.cell_width) / 2.0;
-                        let close_char_y = close_y + (close_btn_size - self.cell_height) / 2.0;
-                        let close_text_color = [
-                            text_color[0],
-                            text_color[1],
-                            text_color[2],
-                            text_color[3] * 0.7,
-                        ];
-                        self.text_pipeline.push_char('×', close_char_x, close_char_y, close_text_color);
+                        // Draw × close icon — two smooth anti-aliased diagonal lines
+                        {
+                            let close_hover = matches!(self.tab_bar_hover, Some(TabBarClick::CloseTab(idx)) if idx == i);
+                            let hover_t = if close_hover { self.tab_bar_hover_progress } else { 0.0 };
+                            let scale = 1.0 + hover_t * 0.2;
+                            let base_alpha = text_color[3] * (0.5 + hover_t * 0.5);
+                            let close_color = [
+                                (text_color[0] + hover_t * 0.3).min(1.0),
+                                text_color[1],
+                                text_color[2],
+                                base_alpha,
+                            ];
+                            let arm = (close_btn_size * 0.25).min(4.5) * scale;
+                            let line_w = 1.5 + hover_t * 0.5;
+                            let cx = close_x + close_btn_size / 2.0;
+                            let cy = close_y + close_btn_size / 2.0;
+                            // Top-left to bottom-right
+                            self.rect_pipeline.push_line(
+                                cx - arm, cy - arm, cx + arm, cy + arm,
+                                line_w, close_color,
+                            );
+                            // Top-right to bottom-left
+                            self.rect_pipeline.push_line(
+                                cx + arm, cy - arm, cx - arm, cy + arm,
+                                line_w, close_color,
+                            );
+                        }
                     }
                 }
             }
@@ -1084,50 +1112,112 @@ impl Renderer {
         let border_color = adjust_alpha(self.ui.tab_border, 0.7);
         self.rect_pipeline.push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
 
+        // Helper: compute hover animation for a specific button
+        let hover_for = |target: TabBarClick| -> f32 {
+            if self.tab_bar_hover == Some(target) { self.tab_bar_hover_progress } else { 0.0 }
+        };
+
         // ── Add (+) tab button — positioned right after the last tab ──
         let add_size = tab_bar_height;
         let max_add_x = window_width - right_buttons_width - add_size;
         let add_x = current_x.min(max_add_x);
         let add_y = 0.0;
-        let add_bg = adjust_alpha(self.ui.tab_inactive, 0.35);
-        self.rect_pipeline.push_rounded_rect(
-            add_x + 2.0, add_y + 2.0,
-            add_size - 4.0, tab_bar_height - 6.0,
-            add_bg, 4.0,
-        );
-        let add_char_x = add_x + (add_size - self.cell_width) / 2.0;
-        let add_char_y = add_y + (tab_bar_height - self.cell_height) / 2.0;
-        self.text_pipeline.push_char('+', add_char_x, add_char_y, self.ui.tab_text_inactive);
+        {
+            let hover_t = hover_for(TabBarClick::NewTab);
+            let bg_alpha = 0.35 + hover_t * 0.25;
+            let add_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
+            self.rect_pipeline.push_rounded_rect(
+                add_x + 2.0, add_y + 2.0,
+                add_size - 4.0, tab_bar_height - 6.0,
+                add_bg, 4.0,
+            );
+            // Plus icon — two perpendicular lines
+            let scale = 1.0 + hover_t * 0.15;
+            let arm = (add_size * 0.16).min(5.5) * scale;
+            let line_w = 1.5 + hover_t * 0.3;
+            let cx = add_x + add_size / 2.0;
+            let cy = add_y + tab_bar_height / 2.0;
+            let brightness = 1.0 + hover_t * 0.3;
+            let color = [
+                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
+                self.ui.tab_text_inactive[3],
+            ];
+            // Horizontal bar
+            self.rect_pipeline.push_line(cx - arm, cy, cx + arm, cy, line_w, color);
+            // Vertical bar
+            self.rect_pipeline.push_line(cx, cy - arm, cx, cy + arm, line_w, color);
+        }
 
-        // ── Session dropdown (▾) button ──
+        // ── Session dropdown button ──
         let session_size = tab_bar_height;
         let session_x = window_width - gear_button_width - session_size;
         let session_y = 0.0;
-        let session_bg = adjust_alpha(self.ui.tab_inactive, 0.35);
-        self.rect_pipeline.push_rounded_rect(
-            session_x + 2.0, session_y + 2.0,
-            session_size - 4.0, tab_bar_height - 6.0,
-            session_bg, 4.0,
-        );
-        let session_char_x = session_x + (session_size - self.cell_width) / 2.0;
-        let session_char_y = session_y + (tab_bar_height - self.cell_height) / 2.0;
-        self.text_pipeline.push_char('▾', session_char_x, session_char_y, self.ui.tab_text_inactive);
+        {
+            let hover_t = hover_for(TabBarClick::SessionDropdown);
+            let bg_alpha = 0.35 + hover_t * 0.25;
+            let session_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
+            self.rect_pipeline.push_rounded_rect(
+                session_x + 2.0, session_y + 2.0,
+                session_size - 4.0, tab_bar_height - 6.0,
+                session_bg, 4.0,
+            );
+            // Chevron (▾) — two angled lines forming a V shape
+            let scale = 1.0 + hover_t * 0.15;
+            let arm = (session_size * 0.18).min(6.0) * scale;
+            let cx = session_x + session_size / 2.0;
+            let cy = session_y + tab_bar_height / 2.0;
+            let line_w = 1.5 + hover_t * 0.3;
+            let brightness = 1.0 + hover_t * 0.3;
+            let color = [
+                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
+                self.ui.tab_text_inactive[3],
+            ];
+            let half_h = arm * 0.55;
+            // Left arm: top-left to center-bottom
+            self.rect_pipeline.push_line(cx - arm, cy - half_h, cx, cy + half_h, line_w, color);
+            // Right arm: center-bottom to top-right
+            self.rect_pipeline.push_line(cx, cy + half_h, cx + arm, cy - half_h, line_w, color);
+        }
 
-        // ── Gear icon button (right side of tab bar) ──
+        // ── Settings icon button (right side of tab bar) ──
         let gear_size = tab_bar_height;
         let gear_x = window_width - gear_size;
         let gear_y = 0.0;
-        // Subtle background for the gear button
-        let gear_bg = adjust_alpha(self.ui.tab_inactive, 0.5);
-        self.rect_pipeline.push_rounded_rect(
-            gear_x + 2.0, gear_y + 2.0,
-            gear_size - 4.0, tab_bar_height - 6.0,
-            gear_bg, 4.0,
-        );
-        // Render the gear icon character centered
-        let gear_char_x = gear_x + (gear_size - self.cell_width) / 2.0;
-        let gear_char_y = gear_y + (tab_bar_height - self.cell_height) / 2.0;
-        self.text_pipeline.push_char('⚙', gear_char_x, gear_char_y, self.ui.tab_text_inactive);
+        {
+            let hover_t = hover_for(TabBarClick::Gear);
+            let bg_alpha = 0.5 + hover_t * 0.2;
+            let gear_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
+            self.rect_pipeline.push_rounded_rect(
+                gear_x + 2.0, gear_y + 2.0,
+                gear_size - 4.0, tab_bar_height - 6.0,
+                gear_bg, 4.0,
+            );
+            // Three horizontal bars (hamburger) with varying widths
+            let scale = 1.0 + hover_t * 0.15;
+            let base_w = (gear_size * 0.16).min(5.5) * scale;
+            let gap = 3.0_f32;
+            let total_h = gap * 2.0;
+            let cx = gear_x + gear_size / 2.0;
+            let top_y = gear_y + (tab_bar_height - total_h) / 2.0;
+            let line_w = 1.5 + hover_t * 0.3;
+            let brightness = 1.0 + hover_t * 0.3;
+            let color = [
+                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
+                self.ui.tab_text_inactive[3],
+            ];
+            let widths = [base_w * 0.8, base_w, base_w * 0.8];
+            for i in 0..3 {
+                let y = top_y + i as f32 * gap;
+                let w = widths[i];
+                self.rect_pipeline.push_line(cx - w, y, cx + w, y, line_w, color);
+            }
+        }
     }
 
     /// Calculate command bar height based on content

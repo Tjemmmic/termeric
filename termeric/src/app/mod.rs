@@ -110,6 +110,10 @@ pub struct App {
     session_dropdown_items: Vec<(String, String)>,
     /// Session management panel
     session_panel: crate::session::panel::SessionPanel,
+    /// Which tab bar element is currently hovered (for icon animations)
+    tab_bar_hover: Option<crate::renderer::TabBarClick>,
+    /// Smooth hover animation progress (0.0 = not hovered, 1.0 = fully hovered)
+    tab_bar_hover_progress: f32,
 }
 
 impl App {
@@ -171,6 +175,8 @@ impl App {
             session_dropdown_open: false,
             session_dropdown_items: Vec::new(),
             session_panel: crate::session::panel::SessionPanel::new(),
+            tab_bar_hover: None,
+            tab_bar_hover_progress: 0.0,
         })
     }
 
@@ -455,6 +461,13 @@ impl App {
         // Update command mode (for message timeout)
         self.command_mode.update();
 
+        // Smooth hover animation progress for tab bar icons
+        if self.tab_bar_hover.is_some() {
+            self.tab_bar_hover_progress = (self.tab_bar_hover_progress + 0.2).min(1.0);
+        } else {
+            self.tab_bar_hover_progress = (self.tab_bar_hover_progress - 0.2).max(0.0);
+        }
+
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
         let copy_flash = self.copy_flash_intensity();
@@ -563,6 +576,7 @@ impl App {
             None
         };
 
+        renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
         match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, command_bar.as_ref(), settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
@@ -2104,6 +2118,38 @@ impl App {
             padding,
             scroll_offset,
         );
+
+        // ── Tab bar hover detection for icon animations ──
+        {
+            let px = position.0 as f32;
+            let py = position.1 as f32;
+            let window_size = self.window.as_ref().map(|w| w.inner_size());
+            let tab_infos = self.tabs.as_ref()
+                .map(|t| t.tab_info())
+                .unwrap_or_default();
+            let new_hover = if py < tab_bar_height {
+                if let Some(renderer) = &self.renderer {
+                    if let Some(size) = window_size {
+                        let hit = renderer.tab_bar_hit_test(px, py, &tab_infos, size.width as f32);
+                        if hit != crate::renderer::TabBarClick::None {
+                            Some(hit)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if new_hover != self.tab_bar_hover {
+                self.tab_bar_hover = new_hover;
+                self.tab_bar_hover_progress = 0.0;
+            }
+        }
 
         // Handle scrollbar dragging
         if self.scrollbar_dragging {
