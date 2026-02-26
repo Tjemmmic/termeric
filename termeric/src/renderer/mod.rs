@@ -945,11 +945,13 @@ impl Renderer {
         let inactive_text_color = self.ui.tab_text_inactive;
 
         // Calculate tab width - minimum 80px, maximum 200px, or divide space evenly
-        // Reserve space for the + button, session dropdown, and gear icon on the right
+        // Reserve space for the session dropdown and gear icon on the right
+        // The + button floats after the last tab, not in the reserved zone
         let gear_button_width = tab_bar_height;
         let session_button_width = tab_bar_height;
         let add_button_width = tab_bar_height;
-        let available_tab_width = window_width - gear_button_width - session_button_width - add_button_width;
+        let right_buttons_width = gear_button_width + session_button_width;
+        let available_tab_width = window_width - right_buttons_width - add_button_width;
         let tab_count = tabs.len().max(1);
         let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
         let tab_padding = 8.0;
@@ -1082,9 +1084,10 @@ impl Renderer {
         let border_color = adjust_alpha(self.ui.tab_border, 0.7);
         self.rect_pipeline.push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
 
-        // ── Add (+) tab button ──
+        // ── Add (+) tab button — positioned right after the last tab ──
         let add_size = tab_bar_height;
-        let add_x = window_width - gear_button_width - session_button_width - add_size;
+        let max_add_x = window_width - right_buttons_width - add_size;
+        let add_x = current_x.min(max_add_x);
         let add_y = 0.0;
         let add_bg = adjust_alpha(self.ui.tab_inactive, 0.35);
         self.rect_pipeline.push_rounded_rect(
@@ -2380,6 +2383,7 @@ impl Renderer {
         let gear_button_width = tab_bar_height;
         let session_button_width = tab_bar_height;
         let add_button_width = tab_bar_height;
+        let right_buttons_width = gear_button_width + session_button_width;
 
         // ── Gear icon (rightmost) ──
         let gear_x = window_width - gear_button_width;
@@ -2393,20 +2397,34 @@ impl Renderer {
             return TabBarClick::SessionDropdown;
         }
 
-        // ── Add (+) button (left of session) ──
-        let add_x = window_width - gear_button_width - session_button_width - add_button_width;
-        if x >= add_x {
-            return TabBarClick::NewTab;
-        }
-
-        // ── Individual tabs ──
-        let available_tab_width = window_width - gear_button_width - session_button_width - add_button_width;
+        // ── Compute tab layout to find where + button sits ──
+        let available_tab_width = window_width - right_buttons_width - add_button_width;
         let tab_count = tabs.len().max(1);
         let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
         let tab_height = tab_bar_height - 4.0;
         let show_close_buttons = true;
         let close_btn_size = self.cell_height;
         let close_btn_margin = 4.0;
+
+        // Walk through tabs to find cumulative end position
+        let mut current_x = 0.0_f32;
+        for tab in tabs.iter() {
+            let anim_multiplier = if tab.close_progress > 0.0 {
+                let t = tab.close_progress;
+                1.0 - t * t
+            } else {
+                let t = tab.slide_progress;
+                1.0 - (1.0 - t) * (1.0 - t)
+            };
+            current_x += full_tab_width * anim_multiplier;
+        }
+
+        // ── Add (+) button — right after last tab ──
+        let max_add_x = window_width - right_buttons_width - add_button_width;
+        let add_x = current_x.min(max_add_x);
+        if x >= add_x && x < add_x + add_button_width {
+            return TabBarClick::NewTab;
+        }
 
         let mut current_x = 0.0f32;
 
