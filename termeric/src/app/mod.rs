@@ -1779,7 +1779,6 @@ impl App {
                         }
                         return;
                     }
-                    self.mouse_pressed = true;
 
                     // Ctrl+Click to open hyperlinks
                     if self.modifiers.control_key() {
@@ -2054,6 +2053,7 @@ impl App {
                     }
                 }
                 if let Some(selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
+                    self.mouse_pressed = true;
                     if let Some(terminal) = self.active_terminal_mut() {
                         terminal.set_selection(Some(selection));
                     }
@@ -2111,6 +2111,14 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
+            return;
+        }
+
+        // Don't update selection when an overlay panel is open
+        if self.session_panel.is_open()
+            || self.settings_panel.is_active()
+            || self.session_dropdown_open
+        {
             return;
         }
 
