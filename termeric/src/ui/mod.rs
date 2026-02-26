@@ -5,4 +5,5 @@
 //! - Settings panel (Ctrl+,)
 
 pub mod command_palette;
+pub mod commands;
 pub mod settings;

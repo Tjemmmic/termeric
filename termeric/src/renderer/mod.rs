@@ -499,11 +499,10 @@ impl Renderer {
     /// cursor_pos: animated cursor position (col, row) as floats for smooth movement
     /// copy_flash: 0.0 = no flash, 1.0 = full flash (for copy confirmation)
     /// focus_dim: 0.0 = fully bright (focused), higher = dimmed (unfocused)
-    /// command_bar: optional command bar info when in command mode
     /// search_bar: optional search bar info when searching
     /// search: search state for match highlighting
     /// images: optional list of image placements and their data for Kitty graphics
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -512,7 +511,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs (inserts layer boundaries)
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, command_bar, settings_panel, search_bar, search, session_dropdown, session_panel);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel);
 
         // Build image render data if any
         self.build_image_data(images);
@@ -600,7 +599,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, command_bar: Option<&CommandBarInfo>, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -610,24 +609,6 @@ impl Renderer {
         let window_height = self.size.1 as f32;
         let padding = self.padding;
         let tab_bar_height = self.tab_bar_height();
-
-        // Calculate command bar height to know where grid ends
-        let command_bar_height = if let Some(cmd_bar) = command_bar {
-            self.calculate_command_bar_height(cmd_bar, window_width, window_height)
-        } else {
-            0.0
-        };
-
-        // Calculate dropdown height if showing suggestions
-        let dropdown_height = if let Some(cmd_bar) = command_bar {
-            if !cmd_bar.suggestions.is_empty() {
-                self.calculate_dropdown_height(cmd_bar, window_height - command_bar_height)
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
 
         // Calculate brightness multiplier for focus dimming (1.0 = full brightness, lower = dimmed)
         let brightness = 1.0 - focus_dim;
@@ -657,8 +638,7 @@ impl Renderer {
         let scroll_offset_i32 = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
         let default_bg = TermColor::default_bg();
 
-        // Calculate maximum y position for grid content (don't overlap command bar or dropdown)
-        let max_grid_y = window_height - padding - command_bar_height - dropdown_height - 8.0; // 8px gap for dropdown
+        let max_grid_y = window_height - padding;
 
         // Determine which rows to render based on filter mode
         let filter_mode = search.is_filter_mode() && !search.matching_rows().is_empty();
@@ -854,7 +834,7 @@ impl Renderer {
             let scrollbar_margin = 2.0_f32;
             let scrollbar_x = window_width - scrollbar_width - scrollbar_margin;
             let scrollbar_top = content_top + padding;
-            let scrollbar_bottom = window_height - padding - command_bar_height;
+            let scrollbar_bottom = window_height - padding;
             let scrollbar_height = scrollbar_bottom - scrollbar_top;
 
             if scrollbar_height > 20.0 {
@@ -902,12 +882,9 @@ impl Renderer {
             self.build_search_bar(search_info, window_width, tab_bar_height);
         }
 
-        // ── LAYER 2: Command bar + autocomplete dropdown (overlays grid and search) ──
+        // ── LAYER 2: (reserved) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
-        if let Some(cmd_bar) = command_bar {
-            self.build_command_bar(cmd_bar, window_width, window_height, command_bar_height);
-        }
 
         // ── LAYER 3: Settings panel + settings dropdown (overlays everything below) ──
         self.rect_pipeline.mark_layer();
@@ -942,6 +919,15 @@ impl Renderer {
                 self.build_session_management_panel(sp, window_width, window_height);
             }
         }
+
+        // ── LAYER 7: Commands panel ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(cp) = commands_panel {
+            if cp.animation > 0.001 {
+                self.build_commands_panel(cp, window_width, window_height);
+            }
+        }
     }
 
     /// Build tab bar render data
@@ -960,8 +946,9 @@ impl Renderer {
         // The + button floats after the last tab, not in the reserved zone
         let gear_button_width = tab_bar_height;
         let session_button_width = tab_bar_height;
+        let commands_button_width = tab_bar_height;
         let add_button_width = tab_bar_height;
-        let right_buttons_width = gear_button_width + session_button_width;
+        let right_buttons_width = gear_button_width + session_button_width + commands_button_width;
         let available_tab_width = window_width - right_buttons_width - add_button_width;
         let tab_count = tabs.len().max(1);
         let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
@@ -1181,6 +1168,41 @@ impl Renderer {
             self.rect_pipeline.push_line(cx - arm, cy - half_h, cx, cy + half_h, line_w, color);
             // Right arm: center-bottom to top-right
             self.rect_pipeline.push_line(cx, cy + half_h, cx + arm, cy - half_h, line_w, color);
+        }
+
+        // ── Commands button (⚡) ──
+        let commands_size = tab_bar_height;
+        let commands_x = window_width - gear_button_width - session_button_width - commands_size;
+        let commands_y = 0.0;
+        {
+            let hover_t = hover_for(TabBarClick::CommandsButton);
+            let bg_alpha = 0.35 + hover_t * 0.25;
+            let commands_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
+            self.rect_pipeline.push_rounded_rect(
+                commands_x + 2.0, commands_y + 2.0,
+                commands_size - 4.0, tab_bar_height - 6.0,
+                commands_bg, 4.0,
+            );
+            // ⚡ lightning bolt icon — drawn as two angled segments
+            let scale = 1.0 + hover_t * 0.15;
+            let cx = commands_x + commands_size / 2.0;
+            let cy = commands_y + tab_bar_height / 2.0;
+            let h = (commands_size * 0.28).min(9.0) * scale;
+            let w = h * 0.4;
+            let line_w = 1.5 + hover_t * 0.3;
+            let brightness = 1.0 + hover_t * 0.3;
+            let color = [
+                (self.ui.tab_text_inactive[0] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[1] * brightness).min(1.0),
+                (self.ui.tab_text_inactive[2] * brightness).min(1.0),
+                self.ui.tab_text_inactive[3],
+            ];
+            // Top segment: upper-right to center-left
+            self.rect_pipeline.push_line(cx + w * 0.3, cy - h, cx - w * 0.5, cy, line_w, color);
+            // Middle bar: left to right through center
+            self.rect_pipeline.push_line(cx - w * 0.3, cy - line_w * 0.25, cx + w * 0.7, cy - line_w * 0.25, line_w, color);
+            // Bottom segment: center-right to lower-left
+            self.rect_pipeline.push_line(cx + w * 0.5, cy, cx - w * 0.3, cy + h, line_w, color);
         }
 
         // ── Settings icon button (right side of tab bar) ──
@@ -2513,8 +2535,9 @@ impl Renderer {
 
         let gear_button_width = tab_bar_height;
         let session_button_width = tab_bar_height;
+        let commands_button_width = tab_bar_height;
         let add_button_width = tab_bar_height;
-        let right_buttons_width = gear_button_width + session_button_width;
+        let right_buttons_width = gear_button_width + session_button_width + commands_button_width;
 
         // ── Gear icon (rightmost) ──
         let gear_x = window_width - gear_button_width;
@@ -2526,6 +2549,12 @@ impl Renderer {
         let session_x = window_width - gear_button_width - session_button_width;
         if x >= session_x {
             return TabBarClick::SessionDropdown;
+        }
+
+        // ── Commands (⚡) button (left of session) ──
+        let commands_x = window_width - gear_button_width - session_button_width - commands_button_width;
+        if x >= commands_x {
+            return TabBarClick::CommandsButton;
         }
 
         // ── Compute tab layout to find where + button sits ──
@@ -2603,6 +2632,8 @@ pub enum TabBarClick {
     NewTab,
     /// Clicked the session dropdown (▾) button
     SessionDropdown,
+    /// Clicked the commands (⚡) button
+    CommandsButton,
     /// Clicked the gear icon
     Gear,
     /// No element was clicked
@@ -3046,6 +3077,460 @@ impl Renderer {
                 self.ui.settings_separator,
             );
         }
+    }
+
+    /// Build custom commands panel render data
+    fn build_commands_panel(&mut self, info: &crate::ui::commands::panel::CommandsPanelInfo, window_width: f32, window_height: f32) {
+        use crate::ui::commands::panel::EditMode;
+
+        let anim = info.animation;
+        if anim <= 0.0 {
+            return;
+        }
+
+        let ui_cw = self.cell_width;
+        let cell_height = self.cell_height;
+
+        // Panel dimensions
+        let panel_width = (ui_cw * 36.0).max(340.0).min(window_width * 0.45);
+        let panel_x = window_width - panel_width * anim;
+        let padding = ui_cw * 1.8;
+        let small_pad = ui_cw * 0.8;
+
+        // Colors
+        let text_color = self.ui.settings_text;
+        let dim_color = self.ui.settings_text_dim;
+        let accent = self.ui.settings_accent;
+        let separator = self.ui.settings_separator;
+        let hover_color = [
+            self.ui.settings_selected[0],
+            self.ui.settings_selected[1],
+            self.ui.settings_selected[2],
+            self.ui.settings_selected[3] * 0.35,
+        ];
+
+        // ── Scrim ──
+        let scrim = self.ui.scrim;
+        self.rect_pipeline.push_rect(
+            0.0, 0.0, panel_x, window_height,
+            [scrim[0], scrim[1], scrim[2], scrim[3] * anim],
+        );
+
+        // ── Panel background ──
+        self.rect_pipeline.push_rect(panel_x, 0.0, panel_width, window_height, self.ui.settings_bg);
+
+        // ── HEADER: " ⚡ Custom Commands                × " ──
+        let header_height = cell_height * 2.8;
+        let header_text_y = (header_height - cell_height) / 2.0;
+
+        // Title with accent icon
+        let title_x = panel_x + padding;
+        self.text_pipeline.push_char('⚡', title_x, header_text_y, accent);
+        let title = "Custom Commands";
+        let mut tx = title_x + ui_cw * 2.2;
+        for c in title.chars() {
+            if !c.is_whitespace() {
+                self.text_pipeline.push_char(c, tx, header_text_y, text_color);
+            }
+            tx += ui_cw * 0.95;
+        }
+
+        // Close (×) button
+        let close_x = panel_x + panel_width - padding - ui_cw;
+        self.text_pipeline.push_char('×', close_x, header_text_y, dim_color);
+
+        // Header separator
+        self.rect_pipeline.push_rect(
+            panel_x + padding, header_height,
+            panel_width - padding * 2.0, 1.0, separator,
+        );
+
+        // ── "+ New Command" button ──
+        let btn_y = header_height + cell_height * 0.8;
+        let btn_height = cell_height * 2.0;
+        let btn_width = panel_width - padding * 2.0;
+        let btn_x = panel_x + padding;
+
+        // Button background — accent outline with subtle fill on hover
+        let btn_bg = if info.hovered_add {
+            [accent[0], accent[1], accent[2], 0.15]
+        } else {
+            [accent[0], accent[1], accent[2], 0.06]
+        };
+        self.rect_pipeline.push_rounded_rect(btn_x, btn_y, btn_width, btn_height, btn_bg, 6.0);
+        // Accent border
+        let border_color = [accent[0], accent[1], accent[2], if info.hovered_add { 0.8 } else { 0.4 }];
+        // Top/bottom borders
+        self.rect_pipeline.push_rect(btn_x, btn_y, btn_width, 1.0, border_color);
+        self.rect_pipeline.push_rect(btn_x, btn_y + btn_height - 1.0, btn_width, 1.0, border_color);
+        // Left/right borders
+        self.rect_pipeline.push_rect(btn_x, btn_y, 1.0, btn_height, border_color);
+        self.rect_pipeline.push_rect(btn_x + btn_width - 1.0, btn_y, 1.0, btn_height, border_color);
+
+        // Button text: "+ New Command"
+        let btn_text = "+ New Command";
+        let btn_text_w = btn_text.len() as f32 * ui_cw * 0.9;
+        let btn_text_x = btn_x + (btn_width - btn_text_w) / 2.0;
+        let btn_text_y = btn_y + (btn_height - cell_height) / 2.0;
+        let btn_text_color = if info.hovered_add { accent } else { [accent[0], accent[1], accent[2], 0.8] };
+        for (j, c) in btn_text.chars().enumerate() {
+            if !c.is_whitespace() {
+                self.text_pipeline.push_char(c, btn_text_x + j as f32 * ui_cw * 0.9, btn_text_y, btn_text_color);
+            }
+        }
+
+        // ── Inline form (shown when editing) ──
+        let mut list_start_y = btn_y + btn_height + cell_height * 0.8;
+
+        if info.edit_mode != EditMode::Browse {
+            let form_x = panel_x + padding;
+            let form_w = panel_width - padding * 2.0;
+            let field_height = cell_height * 1.8;
+            let label_w = ui_cw * 10.0;
+
+            // Form background
+            let form_bg = [accent[0], accent[1], accent[2], 0.05];
+            let form_total_h = field_height * 2.0 + cell_height * 3.2;
+            self.rect_pipeline.push_rounded_rect(form_x, list_start_y, form_w, form_total_h, form_bg, 6.0);
+
+            let fy = list_start_y + small_pad;
+
+            // "Name:" label + input
+            let name_label = "Name:";
+            let name_label_y = fy + (field_height - cell_height) / 2.0;
+            for (j, c) in name_label.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, form_x + small_pad + j as f32 * ui_cw * 0.85, name_label_y, dim_color);
+                }
+            }
+            // Name input box
+            let input_x = form_x + label_w;
+            let input_w = form_w - label_w - small_pad;
+            let name_active = info.edit_mode == EditMode::EditingName;
+            let input_border = if name_active { accent } else { separator };
+            self.rect_pipeline.push_rounded_rect(input_x, fy, input_w, field_height, [0.0, 0.0, 0.0, 0.2], 4.0);
+            self.rect_pipeline.push_rect(input_x, fy + field_height - 2.0, input_w, 2.0, input_border);
+            // Name text
+            let name_text_y = fy + (field_height - cell_height) / 2.0;
+            for (j, c) in info.form_name.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.85, name_text_y, text_color);
+                }
+            }
+            // Cursor
+            if name_active {
+                let cursor_x = input_x + small_pad + info.form_name[..info.form_cursor].chars().count() as f32 * ui_cw * 0.85;
+                self.rect_pipeline.push_rect(cursor_x, fy + 3.0, 1.5, field_height - 6.0, accent);
+            }
+            // Placeholder
+            if info.form_name.is_empty() && !name_active {
+                let ph = "e.g. SSH Production";
+                for (j, c) in ph.chars().enumerate() {
+                    if !c.is_whitespace() {
+                        self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.8, name_text_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
+                    }
+                }
+            }
+
+            // "Command:" label + input
+            let cmd_fy = fy + field_height + small_pad;
+            let cmd_label = "Command:";
+            let cmd_label_y = cmd_fy + (field_height - cell_height) / 2.0;
+            for (j, c) in cmd_label.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, form_x + small_pad + j as f32 * ui_cw * 0.85, cmd_label_y, dim_color);
+                }
+            }
+            let cmd_active = info.edit_mode == EditMode::EditingCommand;
+            let cmd_border = if cmd_active { accent } else { separator };
+            self.rect_pipeline.push_rounded_rect(input_x, cmd_fy, input_w, field_height, [0.0, 0.0, 0.0, 0.2], 4.0);
+            self.rect_pipeline.push_rect(input_x, cmd_fy + field_height - 2.0, input_w, 2.0, cmd_border);
+            let cmd_text_y = cmd_fy + (field_height - cell_height) / 2.0;
+            for (j, c) in info.form_command.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.85, cmd_text_y, text_color);
+                }
+            }
+            if cmd_active {
+                let cursor_x = input_x + small_pad + info.form_command[..info.form_cursor].chars().count() as f32 * ui_cw * 0.85;
+                self.rect_pipeline.push_rect(cursor_x, cmd_fy + 3.0, 1.5, field_height - 6.0, accent);
+            }
+            if info.form_command.is_empty() && !cmd_active {
+                let ph = "e.g. ssh admin@prod.app.com";
+                for (j, c) in ph.chars().enumerate() {
+                    if !c.is_whitespace() {
+                        self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.8, cmd_text_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
+                    }
+                }
+            }
+
+            // Save / Cancel buttons
+            let buttons_y = cmd_fy + field_height + small_pad * 1.5;
+            let save_text = "Save";
+            let save_w = ui_cw * 7.0;
+            let save_x = form_x + form_w - save_w;
+            let save_h = cell_height * 1.6;
+            self.rect_pipeline.push_rounded_rect(save_x, buttons_y, save_w, save_h, accent, 4.0);
+            let save_text_y = buttons_y + (save_h - cell_height) / 2.0;
+            let save_text_x = save_x + (save_w - save_text.len() as f32 * ui_cw * 0.9) / 2.0;
+            for (j, c) in save_text.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, save_text_x + j as f32 * ui_cw * 0.9, save_text_y, self.ui.settings_bg);
+                }
+            }
+
+            let cancel_text = "Cancel";
+            let cancel_w = ui_cw * 8.0;
+            let cancel_x = save_x - cancel_w - small_pad;
+            self.rect_pipeline.push_rounded_rect(cancel_x, buttons_y, cancel_w, save_h, separator, 4.0);
+            let cancel_text_y = buttons_y + (save_h - cell_height) / 2.0;
+            let cancel_text_x = cancel_x + (cancel_w - cancel_text.len() as f32 * ui_cw * 0.9) / 2.0;
+            for (j, c) in cancel_text.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, cancel_text_x + j as f32 * ui_cw * 0.9, cancel_text_y, text_color);
+                }
+            }
+
+            // Hint
+            let hint = "Tab to switch fields, Enter to save";
+            let hint_y = buttons_y + save_h + small_pad;
+            let mut hx = form_x + small_pad;
+            for c in hint.chars() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, hx, hint_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
+                }
+                hx += ui_cw * 0.75;
+            }
+
+            list_start_y = list_start_y + form_total_h + cell_height * 0.5;
+        }
+
+        // ── Section label ──
+        if !info.commands.is_empty() {
+            let section_y = list_start_y;
+            let section_label = if info.commands.len() == 1 {
+                "1 command".to_string()
+            } else {
+                format!("{} commands", info.commands.len())
+            };
+            let mut sx = panel_x + padding;
+            for c in section_label.chars() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, sx, section_y, dim_color);
+                }
+                sx += ui_cw * 0.8;
+            }
+            list_start_y = section_y + cell_height * 1.5;
+        }
+
+        // ── Command rows ──
+        let row_height = cell_height * 3.0;
+
+        if info.commands.is_empty() && info.edit_mode == EditMode::Browse {
+            // Empty state
+            let empty_y = list_start_y + cell_height;
+            let msg = "No commands yet";
+            let msg_w = msg.len() as f32 * ui_cw * 0.9;
+            let msg_x = panel_x + (panel_width - msg_w) / 2.0;
+            for (j, c) in msg.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, msg_x + j as f32 * ui_cw * 0.9, empty_y, dim_color);
+                }
+            }
+            let hint = "Click + New Command above to add one";
+            let hint_w = hint.len() as f32 * ui_cw * 0.75;
+            let hint_x = panel_x + (panel_width - hint_w) / 2.0;
+            let hint_y = empty_y + cell_height * 1.5;
+            for (j, c) in hint.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, hint_x + j as f32 * ui_cw * 0.75, hint_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
+                }
+            }
+        }
+
+        for (i, cmd) in info.commands.iter().enumerate() {
+            let item_y = list_start_y + i as f32 * row_height;
+
+            // Hover highlight (full row)
+            if info.hovered_index == Some(i) && info.hovered_delete != Some(i) {
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x + padding * 0.5, item_y,
+                    panel_width - padding, row_height,
+                    hover_color, 6.0,
+                );
+            }
+
+            // Run indicator (left side) — shows accent on hover
+            let run_y = item_y + (row_height - cell_height) / 2.0;
+            let run_color = if info.hovered_index == Some(i) { accent } else { dim_color };
+            self.text_pipeline.push_char('▶', panel_x + padding, run_y, run_color);
+
+            // Command name
+            let name_x = panel_x + padding + ui_cw * 2.2;
+            let name_y = item_y + cell_height * 0.5;
+            let name: String = if cmd.name.chars().count() > 24 {
+                let truncated: String = cmd.name.chars().take(23).collect();
+                format!("{}…", truncated)
+            } else {
+                cmd.name.clone()
+            };
+            for (j, c) in name.chars().enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, name_x + j as f32 * ui_cw * 0.9, name_y, text_color);
+                }
+            }
+
+            // Command text (second line, dimmed)
+            let cmd_y = name_y + cell_height * 1.2;
+            let cmd_text: String = if cmd.command.chars().count() > 32 {
+                let truncated: String = cmd.command.chars().take(31).collect();
+                format!("{}…", truncated)
+            } else {
+                cmd.command.clone()
+            };
+            let mut cx = name_x;
+            for c in cmd_text.chars() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, cx, cmd_y, dim_color);
+                }
+                cx += ui_cw * 0.82;
+            }
+
+            // Delete (x) button (right side)
+            let del_x = panel_x + panel_width - padding - ui_cw * 1.5;
+            let del_y = item_y + (row_height - cell_height) / 2.0;
+            let del_color = if info.hovered_delete == Some(i) {
+                [0.9, 0.3, 0.3, 1.0]
+            } else {
+                [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]
+            };
+            self.text_pipeline.push_char('×', del_x, del_y, del_color);
+
+            // Row separator
+            let sep_y = item_y + row_height - 0.5;
+            self.rect_pipeline.push_rect(
+                panel_x + padding + ui_cw * 2.0, sep_y,
+                panel_width - padding * 2.0 - ui_cw * 2.0, 0.5, separator,
+            );
+        }
+    }
+
+    /// Hit-test the custom commands panel
+    pub fn commands_panel_hit_test(
+        &self,
+        x: f32,
+        y: f32,
+        commands: &[crate::config::CustomCommand],
+        window_width: f32,
+        _window_height: f32,
+        animation: f32,
+        edit_mode: &crate::ui::commands::panel::EditMode,
+    ) -> crate::ui::commands::panel::CommandsPanelAction {
+        use crate::ui::commands::panel::{CommandsPanelAction, EditMode};
+
+        let ui_cw = self.cell_width;
+        let cell_height = self.cell_height;
+
+        let panel_width = (ui_cw * 36.0).max(340.0).min(window_width * 0.45);
+        let panel_x = window_width - panel_width * animation;
+        let padding = ui_cw * 1.8;
+
+        // Click outside panel = close
+        if x < panel_x {
+            return CommandsPanelAction::Close;
+        }
+
+        let header_height = cell_height * 2.8;
+        let header_text_y = (header_height - cell_height) / 2.0;
+
+        // Close (x) button
+        let close_x = panel_x + panel_width - padding - ui_cw;
+        if x >= close_x && y >= header_text_y && y <= header_text_y + cell_height * 1.5 {
+            return CommandsPanelAction::Close;
+        }
+
+        // "+ New Command" button
+        let btn_y = header_height + cell_height * 0.8;
+        let btn_height = cell_height * 2.0;
+        let btn_x = panel_x + padding;
+        let btn_width = panel_width - padding * 2.0;
+        if x >= btn_x && x <= btn_x + btn_width && y >= btn_y && y <= btn_y + btn_height {
+            return CommandsPanelAction::AddSubmit {
+                name: String::new(),
+                command: String::new(),
+            };
+        }
+
+        // Calculate list start
+        let mut list_start_y = btn_y + btn_height + cell_height * 0.8;
+
+        // Hit-test form fields if editing
+        if *edit_mode != EditMode::Browse {
+            let small_pad = ui_cw * 0.8;
+            let field_height = cell_height * 1.8;
+            let label_w = ui_cw * 10.0;
+            let form_x = panel_x + padding;
+            let form_w = panel_width - padding * 2.0;
+            let form_total_h = field_height * 2.0 + cell_height * 3.2;
+
+            let fy = list_start_y + small_pad;
+            let input_x = form_x + label_w;
+            let input_w = form_w - label_w - small_pad;
+
+            // Name field click
+            if x >= input_x && x <= input_x + input_w && y >= fy && y <= fy + field_height {
+                return CommandsPanelAction::ClickName;
+            }
+
+            // Command field click
+            let cmd_fy = fy + field_height + small_pad;
+            if x >= input_x && x <= input_x + input_w && y >= cmd_fy && y <= cmd_fy + field_height {
+                return CommandsPanelAction::ClickCommand;
+            }
+
+            // Save button
+            let buttons_y = cmd_fy + field_height + small_pad * 1.5;
+            let save_w = ui_cw * 7.0;
+            let save_x = form_x + form_w - save_w;
+            let save_h = cell_height * 1.6;
+            if x >= save_x && x <= save_x + save_w && y >= buttons_y && y <= buttons_y + save_h {
+                return CommandsPanelAction::AddSubmit {
+                    name: "SAVE".to_string(),
+                    command: "SAVE".to_string(),
+                };
+            }
+
+            // Cancel button
+            let cancel_w = ui_cw * 8.0;
+            let cancel_x = save_x - cancel_w - small_pad;
+            if x >= cancel_x && x <= cancel_x + cancel_w && y >= buttons_y && y <= buttons_y + save_h {
+                return CommandsPanelAction::Close;
+            }
+
+            list_start_y = list_start_y + form_total_h + cell_height * 0.5;
+        }
+
+        // Skip section label
+        if !commands.is_empty() {
+            list_start_y += cell_height * 1.5;
+        }
+
+        // Command rows
+        let row_height = cell_height * 3.0;
+        for i in 0..commands.len() {
+            let item_y = list_start_y + i as f32 * row_height;
+            if y >= item_y && y < item_y + row_height {
+                // Delete (x) button
+                let del_x = panel_x + panel_width - padding - ui_cw * 1.5;
+                if x >= del_x - ui_cw * 0.5 && x <= del_x + ui_cw * 1.5 {
+                    return CommandsPanelAction::Delete(i);
+                }
+                // Click row = Run
+                return CommandsPanelAction::Run(i);
+            }
+        }
+
+        CommandsPanelAction::None
     }
 
     /// Hit-test the session management panel

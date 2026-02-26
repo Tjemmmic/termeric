@@ -131,32 +131,62 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Handle command mode input first
-                if self.handle_command_mode_input(&event) {
+                // Handle commands panel inline form input
+                if self.commands_panel.is_open() && self.commands_panel.is_editing() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.commands_panel.cancel_edit();
+                            }
+                            Key::Named(NamedKey::Tab) => {
+                                self.commands_panel.next_field();
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if let Some(cmd) = self.commands_panel.try_submit() {
+                                    self.config.commands.push(cmd);
+                                    if let Ok(msg) = self.save_config() {
+                                        log::info!("{}", msg);
+                                    }
+                                }
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.commands_panel.form_backspace();
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.commands_panel.form_char(' ');
+                            }
+                            Key::Character(c) => {
+                                for ch in c.chars() {
+                                    self.commands_panel.form_char(ch);
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
                     return;
+                }
+
+                // Handle commands panel Escape to close
+                if self.commands_panel.is_open() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        if let Key::Named(NamedKey::Escape) = &event.logical_key {
+                            self.commands_panel.close();
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return;
+                        }
+                    }
                 }
 
                 // Handle search mode input
                 if self.handle_search_mode_input(&event) {
                     return;
-                }
-
-                // Check for Ctrl+Shift+P to enter command mode
-                if event.state == winit::event::ElementState::Pressed {
-                    use winit::keyboard::Key;
-
-                    // Ctrl+Shift+P activates command palette
-                    if self.modifiers.control_key() && self.modifiers.shift_key() {
-                        if let Key::Character(c) = &event.logical_key {
-                            if c.eq_ignore_ascii_case("p") {
-                                self.command_mode.activate();
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                                return;
-                            }
-                        }
-                    }
                 }
 
                 // Check custom keybindings first (highest priority after modal UI)

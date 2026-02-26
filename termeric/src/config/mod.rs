@@ -38,6 +38,21 @@ pub struct Config {
     /// Splash screen configuration
     #[serde(default)]
     pub splash: SplashConfig,
+    /// User-defined custom commands / shortcuts
+    #[serde(default)]
+    pub commands: Vec<CustomCommand>,
+}
+
+/// A user-defined custom command (e.g. SSH into a box)
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CustomCommand {
+    /// Display name (e.g. "SSH Production")
+    pub name: String,
+    /// Shell command to execute (e.g. "ssh admin@prod.myapp.com")
+    pub command: String,
+    /// Optional short alias for command palette (e.g. "prod")
+    #[serde(default)]
+    pub alias: Option<String>,
 }
 
 impl Default for Config {
@@ -54,6 +69,7 @@ impl Default for Config {
             session: SessionConfig::default(),
             harvest: HarvestConfig::default(),
             splash: SplashConfig::default(),
+            commands: Vec::new(),
         }
     }
 }

@@ -5,6 +5,8 @@
 use std::fmt;
 use sublime_fuzzy::FuzzySearch;
 
+use crate::config::CustomCommand;
+
 /// Result of executing a command
 #[derive(Debug, Clone)]
 pub enum CommandResult {
@@ -46,6 +48,10 @@ pub enum CommandResult {
     ShowVersion,
     /// Show about/credits information
     ShowAbout,
+    /// Run a custom user-defined command (opens in new tab)
+    RunCustomCommand(String),
+    /// Open the custom commands panel
+    OpenCommandsPanel,
     /// Exit command mode without action
     Cancel,
 }
@@ -90,6 +96,10 @@ pub enum Command {
 
     /// Unknown command
     Unknown(String),
+    /// Run a user-defined custom command
+    RunCustom(String),
+    /// Open custom commands panel
+    CommandsPanel,
 }
 
 impl Command {
@@ -179,6 +189,14 @@ impl Command {
             "list-keybindings" | "listkeybindings" | "keybindings" | "keys" | "shortcuts" => Command::ListKeybindings,
             "version" | "v" | "ver" => Command::Version,
             "about" | "credits" | "info" => Command::About,
+            "commands-panel" => Command::CommandsPanel,
+            "run" => {
+                if args.is_empty() {
+                    Command::CommandsPanel // open panel when no arg
+                } else {
+                    Command::RunCustom(args.join(" "))
+                }
+            }
 
             "" => Command::Unknown("empty command".to_string()),
             other => Command::Unknown(format!("unknown command: {}", other)),
@@ -205,6 +223,8 @@ impl Command {
             Command::ListKeybindings => CommandResult::ListKeybindings,
             Command::Version => CommandResult::ShowVersion,
             Command::About => CommandResult::ShowAbout,
+            Command::RunCustom(cmd) => CommandResult::RunCustomCommand(cmd),
+            Command::CommandsPanel => CommandResult::OpenCommandsPanel,
 
             Command::Unknown(msg) => CommandResult::Error(msg),
         }
@@ -422,6 +442,13 @@ impl CommandRegistry {
                     description: "Show about/credits",
                     usage: "about",
                 },
+                CommandDef {
+                    name: "commands-panel",
+                    alias: Some("shortcuts"),
+                    category: "Custom",
+                    description: "Open custom commands panel",
+                    usage: "commands-panel",
+                },
 
             ],
         }
@@ -501,6 +528,24 @@ impl CommandRegistry {
     /// Get all commands
     pub fn all(&self) -> &[CommandDef] {
         &self.commands
+    }
+
+    /// Inject user-defined custom commands into the registry
+    pub fn set_custom_commands(&mut self, custom_commands: &[CustomCommand]) {
+        // Remove previous custom command entries
+        self.commands.retain(|c| c.category != "Custom" || c.name == "commands-panel");
+
+        // Add each custom command as a registry entry
+        for cmd in custom_commands {
+            self.commands.push(CommandDef {
+                // Leak is safe here — these are long-lived app-lifetime strings
+                name: Box::leak(format!("run {}", cmd.name).into_boxed_str()),
+                alias: cmd.alias.as_ref().map(|a| -> &'static str { Box::leak(a.clone().into_boxed_str()) }),
+                category: "Custom",
+                description: Box::leak(format!("Run: {}", cmd.command).into_boxed_str()),
+                usage: Box::leak(format!("run {}", cmd.name).into_boxed_str()),
+            });
+        }
     }
 }
 
@@ -816,7 +861,9 @@ impl CommandMode {
             CommandResult::ResetConfig |
             CommandResult::OpenConfigUI |
             CommandResult::SaveConfig |
-            CommandResult::ReloadConfig => {
+            CommandResult::ReloadConfig |
+            CommandResult::RunCustomCommand(_) |
+            CommandResult::OpenCommandsPanel => {
                 self.deactivate();
             }
         }
