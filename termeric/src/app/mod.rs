@@ -31,6 +31,8 @@ use crate::tabs::TabManager;
 use crate::config::theme::Theme;
 use crate::plugin::{PluginManager, PluginContext};
 use crate::plugin::claude_code::ClaudeCodePlugin;
+use crate::ui::command_palette::{CommandPalette, PaletteResult, CommandSource, RegisteredCommand};
+use crate::ui::command_palette::palette::core_commands;
 
 /// Main application state
 ///
@@ -129,6 +131,8 @@ pub struct App {
     tab_bar_hover_progress: f32,
     /// Plugin manager
     plugin_manager: PluginManager,
+    /// Command palette
+    command_palette: CommandPalette,
 }
 
 impl App {
@@ -199,6 +203,7 @@ impl App {
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
             plugin_manager: PluginManager::new(),
+            command_palette: CommandPalette::new(),
         });
 
         let mut app = result?;
@@ -240,6 +245,38 @@ impl App {
             }
             app.keybinding_manager.load(all_bindings);
             log::info!("Registered {} plugin keybinding(s)", plugin_keybindings.len());
+        }
+
+        // Initialize command palette with core commands
+        app.command_palette.register_commands(core_commands());
+
+        // Register plugin commands in the palette
+        let plugin_commands = app.plugin_manager.all_commands();
+        if !plugin_commands.is_empty() {
+            let keybindings = app.plugin_manager.all_keybindings();
+            let palette_cmds: Vec<RegisteredCommand> = plugin_commands.iter().map(|pc| {
+                let shortcut = keybindings.iter()
+                    .find(|k| k.command_id == pc.id)
+                    .map(|k| {
+                        let mut parts = Vec::new();
+                        if k.ctrl { parts.push("Ctrl".to_string()); }
+                        if k.alt { parts.push("Alt".to_string()); }
+                        if k.shift { parts.push("Shift".to_string()); }
+                        parts.push(k.key.to_uppercase());
+                        parts.join("+")
+                    });
+                RegisteredCommand {
+                    id: pc.id.clone(),
+                    title: pc.name.clone(),
+                    category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
+                    shortcut,
+                    icon: None,
+                    source: CommandSource::Plugin("claude-code".into()),
+                    destructive: false,
+                }
+            }).collect();
+            app.command_palette.register_commands(palette_cmds);
+            log::info!("Registered {} plugin command(s) in palette", plugin_commands.len());
         }
 
         Ok(app)
@@ -738,6 +775,19 @@ impl App {
             None
         };
 
+        // Update command palette animation
+        if self.command_palette.update_animation() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        // Build palette info if active or animating
+        let palette_info = if self.command_palette.is_active() {
+            Some(self.command_palette.build_info())
+        } else {
+            None
+        };
+
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
         renderer.set_git_completions(if self.git_completions_visible && !self.git_completions.is_empty() {
             Some(crate::renderer::GitCompletionInfo {
@@ -747,7 +797,7 @@ impl App {
         } else {
             None
         });
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref()) {
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -1034,6 +1084,95 @@ impl App {
             Action::PluginCommand(command_id) => {
                 self.execute_plugin_command(&command_id);
             }
+            Action::ToggleCommandPalette => {
+                if self.command_palette.is_active() {
+                    self.command_palette.close();
+                } else {
+                    self.command_palette.open();
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    /// Handle the result of executing a command from the palette
+    fn handle_palette_result(&mut self, result: PaletteResult) {
+        match result {
+            PaletteResult::RunAction(id) => {
+                let action = match id.as_str() {
+                    "core.new-tab" => Action::NewTab,
+                    "core.close-tab" => Action::CloseTab,
+                    "core.next-tab" => Action::NextTab,
+                    "core.prev-tab" => Action::PrevTab,
+                    "core.find" => Action::ToggleSearch,
+                    "core.settings" => Action::ToggleSettings,
+                    "core.save-config" => {
+                        if let Ok(msg) = self.save_config() {
+                            log::info!("{}", msg);
+                        }
+                        return;
+                    }
+                    "core.reload-config" => {
+                        if let Ok(config) = crate::config::Config::load_or_default() {
+                            self.config = config;
+                            log::info!("Configuration reloaded");
+                        }
+                        return;
+                    }
+                    "core.reset-config" => {
+                        self.config = crate::config::Config::default();
+                        if let Ok(msg) = self.save_config() {
+                            log::info!("Config reset: {}", msg);
+                        }
+                        return;
+                    }
+                    "core.session-manager" => {
+                        if self.session_panel.is_open() {
+                            self.session_panel.close();
+                        } else {
+                            self.session_panel.open();
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
+                    "core.font-size-increase" => Action::IncreaseFontSize,
+                    "core.font-size-decrease" => Action::DecreaseFontSize,
+                    "core.font-size-reset" => Action::ResetFontSize,
+                    "core.copy" => Action::Copy,
+                    "core.paste" => Action::Paste,
+                    "core.version" | "core.about" => {
+                        log::info!("Termeric v{}", env!("CARGO_PKG_VERSION"));
+                        return;
+                    }
+                    id if id.starts_with("core.theme.") => {
+                        let theme_name = id.strip_prefix("core.theme.").unwrap_or("");
+                        if let Ok(theme) = Theme::load_builtin(theme_name) {
+                            self.config.theme.name = theme_name.to_string();
+                            self.apply_theme(theme);
+                            if let Ok(msg) = self.save_config() {
+                                log::info!("Theme changed to {}: {}", theme_name, msg);
+                            }
+                        }
+                        return;
+                    }
+                    _ => {
+                        log::warn!("Unknown palette action: {}", id);
+                        return;
+                    }
+                };
+                self.handle_action(action);
+            }
+            PaletteResult::RunPluginCommand(id) => {
+                self.execute_plugin_command(&id);
+            }
+            PaletteResult::Cancelled => {}
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
 

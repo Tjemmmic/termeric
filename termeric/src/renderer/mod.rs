@@ -29,6 +29,7 @@ use rect::RectPipeline;
 
 use crate::tabs::TabInfo;
 use crate::ui::command_palette::CommandDef;
+use crate::ui::command_palette::PaletteInfo;
 use crate::panes::{PaneRect, Divider};
 
 /// Render information for a single pane in a multi-pane layout
@@ -112,6 +113,20 @@ struct UiPalette {
     search_error: [f32; 4],
     // URL/hyperlink color
     url: [f32; 4],
+    // Command palette colors
+    palette_scrim: [f32; 4],
+    palette_bg: [f32; 4],
+    palette_input_bg: [f32; 4],
+    palette_accent: [f32; 4],
+    palette_text: [f32; 4],
+    palette_text_dim: [f32; 4],
+    palette_match_highlight: [f32; 4],
+    palette_keycap_bg: [f32; 4],
+    palette_keycap_text: [f32; 4],
+    palette_border: [f32; 4],
+    palette_destructive: [f32; 4],
+    palette_category: [f32; 4],
+    palette_footer: [f32; 4],
 }
 
 impl UiPalette {
@@ -175,6 +190,20 @@ impl UiPalette {
             search_error: theme.primary.red.to_f32_array(),
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
+            // Command palette — fully theme-derived
+            palette_scrim: adjust_alpha(shade(bg.to_f32_array(), 0.0), 0.55),
+            palette_bg: shade(bg.to_f32_array(), 0.65),
+            palette_input_bg: shade(bg.to_f32_array(), 0.50),
+            palette_accent: cursor.to_f32_array(),
+            palette_text: fg.to_f32_array(),
+            palette_text_dim: adjust_alpha(fg.to_f32_array(), 0.50),
+            palette_match_highlight: cursor.to_f32_array(),
+            palette_keycap_bg: adjust_alpha(shade(bg.to_f32_array(), 0.45), 0.9),
+            palette_keycap_text: adjust_alpha(fg.to_f32_array(), 0.70),
+            palette_border: adjust_alpha(tab_border.to_f32_array(), 0.5),
+            palette_destructive: adjust_alpha(theme.primary.red.to_f32_array(), 0.08),
+            palette_category: adjust_alpha(fg.to_f32_array(), 0.40),
+            palette_footer: adjust_alpha(fg.to_f32_array(), 0.35),
         }
     }
 }
@@ -431,6 +460,16 @@ impl Renderer {
         self.size
     }
 
+    /// Get cell width in logical pixels
+    pub fn cell_width(&self) -> f32 {
+        self.cell_width
+    }
+
+    /// Get cell height in logical pixels
+    pub fn cell_height(&self) -> f32 {
+        self.cell_height
+    }
+
     /// Change padding
     pub fn set_padding(&mut self, padding: f32) {
         self.padding_logical = padding.max(0.0);
@@ -510,7 +549,7 @@ impl Renderer {
     /// search_bar: optional search bar info when searching
     /// search: search state for match highlighting
     /// images: optional list of image placements and their data for Kitty graphics
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -519,7 +558,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs (inserts layer boundaries)
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette);
 
         // Build image render data if any
         self.build_image_data(images);
@@ -607,7 +646,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -937,6 +976,15 @@ impl Renderer {
         if let Some(cp) = commands_panel {
             if cp.animation > 0.001 {
                 self.build_commands_panel(cp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 8: Command palette (topmost overlay) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(palette) = command_palette {
+            if palette.animation > 0.001 {
+                self.build_command_palette(palette, window_width, window_height);
             }
         }
     }
@@ -3696,6 +3744,292 @@ impl Renderer {
         }
 
         CommandsPanelAction::None
+    }
+
+    /// Build command palette render data — centered modal with scrim
+    fn build_command_palette(&mut self, info: &PaletteInfo, window_width: f32, window_height: f32) {
+        let anim = info.animation;
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+
+        // ── Scrim (full-window dark overlay) ──
+        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
+        self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
+
+        // ── Panel geometry ──
+        let panel_width = (cell_width * 55.0).max(450.0).min(window_width * 0.65);
+        let panel_x = (window_width - panel_width) / 2.0;
+        let padding = cell_width * 1.5;
+        let row_height = cell_height * 2.2;
+        let input_height = cell_height * 2.0;
+        let footer_height = cell_height * 1.6;
+        let gap = 6.0;
+        let separator_height = 1.0;
+        let header_area = padding + input_height + gap + separator_height + gap;
+        let footer_area = footer_height + padding * 0.5;
+        let max_panel_height = window_height * 0.75;
+        // Calculate how many rows actually fit
+        let max_list_height = max_panel_height - header_area - footer_area;
+        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
+        let visible_count = info.entries.len().min(rows_that_fit);
+        let list_height = visible_count as f32 * row_height;
+        let panel_height = header_area + list_height + footer_area;
+
+        // Animate: slide in from top with fade
+        let panel_y = (window_height * 0.12) + (1.0 - anim) * -30.0;
+
+        // ── Panel background (rounded) ──
+        let panel_bg = adjust_alpha(self.ui.palette_bg, anim);
+        self.rect_pipeline.push_rounded_rect(
+            panel_x, panel_y,
+            panel_width, panel_height,
+            panel_bg, 12.0,
+        );
+
+        // ── Panel border ──
+        let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
+        self.rect_pipeline.push_rect(panel_x + 12.0, panel_y, panel_width - 24.0, 1.0, border);
+        self.rect_pipeline.push_rect(panel_x + 12.0, panel_y + panel_height - 1.0, panel_width - 24.0, 1.0, border);
+        self.rect_pipeline.push_rect(panel_x, panel_y + 12.0, 1.0, panel_height - 24.0, border);
+        self.rect_pipeline.push_rect(panel_x + panel_width - 1.0, panel_y + 12.0, 1.0, panel_height - 24.0, border);
+
+        // ── Search input area ──
+        let input_y = panel_y + padding;
+        let input_x = panel_x + padding;
+        let input_w = panel_width - padding * 2.0;
+        let input_bg = adjust_alpha(self.ui.palette_input_bg, 0.8 * anim);
+        self.rect_pipeline.push_rounded_rect(
+            input_x, input_y,
+            input_w, input_height,
+            input_bg, 8.0,
+        );
+
+        // Prompt ">"
+        let text_y = input_y + (input_height - cell_height) / 2.0;
+        let prompt_color = adjust_alpha(self.ui.palette_accent, anim);
+        self.text_pipeline.push_char('>', input_x + cell_width * 0.8, text_y, prompt_color);
+
+        // Input text
+        let text_start_x = input_x + cell_width * 2.2;
+        let mut text_x = text_start_x;
+        let text_color = adjust_alpha(self.ui.palette_text, anim);
+        for (byte_idx, c) in info.input.char_indices() {
+            if byte_idx == info.cursor {
+                let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
+                self.rect_pipeline.push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
+            }
+            self.text_pipeline.push_char(c, text_x, text_y, text_color);
+            text_x += cell_width;
+        }
+        if info.cursor >= info.input.len() {
+            let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
+            self.rect_pipeline.push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
+        }
+
+        // Placeholder when empty
+        if info.input.is_empty() {
+            let hint = "Search commands...";
+            let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
+            let mut hx = text_start_x;
+            for c in hint.chars() {
+                self.text_pipeline.push_char(c, hx, text_y, hint_color);
+                hx += cell_width;
+            }
+        }
+
+        // ── Separator ──
+        let sep_y = input_y + input_height + gap;
+        let sep_color = adjust_alpha(self.ui.palette_border, 0.3 * anim);
+        self.rect_pipeline.push_rect(
+            panel_x + padding, sep_y,
+            panel_width - padding * 2.0, separator_height,
+            sep_color,
+        );
+
+        // ── Result list ──
+        // info.entries is already sliced to only visible entries by build_info()
+        let list_y = sep_y + separator_height + gap;
+        let title_x = panel_x + padding + cell_width * 0.5;
+        let scrollbar_width = 4.0;
+        let shortcut_right = panel_x + panel_width - padding - scrollbar_width - cell_width * 0.5;
+
+        for (row_idx, entry) in info.entries.iter().enumerate() {
+            let entry_y = list_y + row_idx as f32 * row_height;
+
+            // Clip: skip entries that would render past the footer
+            if entry_y + row_height > panel_y + panel_height - footer_height {
+                break;
+            }
+
+            let is_selected = row_idx == info.selected;
+
+            // ── Row background ──
+            if is_selected {
+                let sel_bg = adjust_alpha(self.ui.palette_accent, 0.12 * anim);
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x + padding * 0.5, entry_y,
+                    panel_width - padding, row_height,
+                    sel_bg, 6.0,
+                );
+                // Left accent border
+                let accent = adjust_alpha(self.ui.palette_accent, anim);
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x + padding * 0.5, entry_y + 4.0,
+                    3.0, row_height - 8.0,
+                    accent, 2.0,
+                );
+            }
+
+            // Destructive row — subtle left border accent
+            if entry.destructive {
+                let mut destruct_color = self.ui.palette_destructive;
+                destruct_color[3] = 0.45 * anim;
+                // Left border
+                self.rect_pipeline.push_rounded_rect(
+                    panel_x + padding * 0.5, entry_y + 3.0,
+                    2.0, row_height - 6.0,
+                    destruct_color, 1.0,
+                );
+            }
+
+            let entry_text_y = entry_y + (row_height - cell_height) / 2.0;
+
+            // ── Title with fuzzy match highlighting ──
+            let title_color = if is_selected {
+                adjust_alpha(self.ui.palette_text, anim)
+            } else {
+                adjust_alpha(self.ui.palette_text, 0.85 * anim)
+            };
+            let highlight_color = adjust_alpha(self.ui.palette_match_highlight, anim);
+
+            let mut tx = title_x;
+            for (char_idx, c) in entry.title.chars().enumerate() {
+                let color = if entry.match_positions.contains(&char_idx) {
+                    highlight_color
+                } else {
+                    title_color
+                };
+                self.text_pipeline.push_char(c, tx, entry_text_y, color);
+                tx += cell_width;
+            }
+
+            // ── Category tag (dimmed, after title) ──
+            let cat_color = adjust_alpha(self.ui.palette_category, 0.5 * anim);
+            let cat_x = tx + cell_width * 1.0;
+            let cat_scale = cell_width * 0.85;
+            for (ci, c) in entry.category.chars().enumerate() {
+                self.text_pipeline.push_char(c, cat_x + ci as f32 * cat_scale, entry_text_y, cat_color);
+            }
+
+            // ── Shortcut keycaps (right-aligned) ──
+            if let Some(shortcut) = &entry.shortcut {
+                let parts: Vec<&str> = shortcut.split('+').collect();
+                let mut key_right = shortcut_right;
+
+                for part in parts.iter().rev() {
+                    let part = part.trim();
+                    let char_count = part.chars().count();
+                    let keycap_text_w = char_count as f32 * cell_width * 0.75;
+                    let keycap_w = keycap_text_w + cell_width * 0.8;
+                    let keycap_h = cell_height * 1.15;
+                    let keycap_x = key_right - keycap_w;
+                    let keycap_y = entry_text_y + (cell_height - keycap_h) / 2.0;
+
+                    let kc_bg = adjust_alpha(self.ui.palette_keycap_bg, anim);
+                    self.rect_pipeline.push_rounded_rect(
+                        keycap_x, keycap_y,
+                        keycap_w, keycap_h,
+                        kc_bg, 4.0,
+                    );
+
+                    let kc_text_color = adjust_alpha(self.ui.palette_keycap_text, anim);
+                    let kc_text_x = keycap_x + (keycap_w - keycap_text_w) / 2.0;
+                    let kc_text_y = keycap_y + (keycap_h - cell_height) / 2.0;
+                    for (i, c) in part.chars().enumerate() {
+                        self.text_pipeline.push_char(c, kc_text_x + i as f32 * cell_width * 0.75, kc_text_y, kc_text_color);
+                    }
+
+                    key_right = keycap_x - cell_width * 0.3;
+                }
+            }
+        }
+
+        // ── Scrollbar (when more entries than visible) ──
+        if info.total_entries > visible_count && visible_count > 0 {
+            let track_x = panel_x + panel_width - padding * 0.5 - scrollbar_width;
+            let track_y = list_y;
+            let track_h = list_height;
+
+            // Track background
+            let track_color = adjust_alpha(self.ui.palette_border, 0.15 * anim);
+            self.rect_pipeline.push_rounded_rect(
+                track_x, track_y,
+                scrollbar_width, track_h,
+                track_color, 2.0,
+            );
+
+            // Thumb
+            let thumb_frac = visible_count as f32 / info.total_entries as f32;
+            let thumb_h = (track_h * thumb_frac).max(cell_height);
+            let max_scroll = info.total_entries.saturating_sub(visible_count);
+            let scroll_frac = if max_scroll > 0 {
+                info.scroll_offset as f32 / max_scroll as f32
+            } else {
+                0.0
+            };
+            let thumb_y = track_y + scroll_frac * (track_h - thumb_h);
+            let thumb_color = adjust_alpha(self.ui.palette_accent, 0.5 * anim);
+            self.rect_pipeline.push_rounded_rect(
+                track_x, thumb_y,
+                scrollbar_width, thumb_h,
+                thumb_color, 2.0,
+            );
+        }
+
+        // ── Footer ──
+        let footer_y = panel_y + panel_height - footer_height;
+        let footer_sep = adjust_alpha(self.ui.palette_border, 0.2 * anim);
+        self.rect_pipeline.push_rect(
+            panel_x + padding, footer_y,
+            panel_width - padding * 2.0, 1.0,
+            footer_sep,
+        );
+
+        let footer_text = if info.total_entries < info.total_count {
+            format!("{} of {} commands", info.total_entries, info.total_count)
+        } else {
+            format!("{} commands", info.total_count)
+        };
+        let footer_color = adjust_alpha(self.ui.palette_footer, anim);
+        let footer_text_y = footer_y + (footer_height - cell_height) / 2.0;
+        let footer_text_x = panel_x + padding;
+        for (i, c) in footer_text.chars().enumerate() {
+            self.text_pipeline.push_char(c, footer_text_x + i as f32 * cell_width * 0.85, footer_text_y, footer_color);
+        }
+
+        // Hint on right side of footer
+        let hint_parts = [("Up", "↑"), ("Down", "↓"), ("Enter", "Select"), ("Esc", "Close")];
+        let mut hint_x = panel_x + panel_width - padding;
+        let hint_color = adjust_alpha(self.ui.palette_footer, 0.6 * anim);
+        let hint_scale = cell_width * 0.75;
+        // Draw hints right-to-left
+        for (key, label) in hint_parts.iter().rev() {
+            // Label
+            let label_w = label.chars().count() as f32 * hint_scale;
+            hint_x -= label_w;
+            for (i, c) in label.chars().enumerate() {
+                self.text_pipeline.push_char(c, hint_x + i as f32 * hint_scale, footer_text_y, hint_color);
+            }
+            // Key
+            hint_x -= cell_width * 0.3;
+            let key_w = key.chars().count() as f32 * hint_scale;
+            hint_x -= key_w;
+            let key_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+            for (i, c) in key.chars().enumerate() {
+                self.text_pipeline.push_char(c, hint_x + i as f32 * hint_scale, footer_text_y, key_color);
+            }
+            hint_x -= cell_width * 1.0; // gap between hint groups
+        }
     }
 
     /// Hit-test the session management panel

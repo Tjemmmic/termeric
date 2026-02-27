@@ -46,6 +46,8 @@ pub enum Action {
     NextPrompt,
     /// Execute a plugin command by its ID
     PluginCommand(String),
+    /// Toggle command palette
+    ToggleCommandPalette,
     /// No action (pass through to PTY)
     None,
 }
@@ -81,6 +83,7 @@ pub fn check_keybinding(event: &KeyEvent, modifiers: ModifiersState) -> Option<A
                 "t" if ctrl && shift => Some(Action::NewTab),
                 "w" if ctrl && shift => Some(Action::CloseTab),
                 "f" if ctrl && shift => Some(Action::ToggleSearch),
+                "p" if ctrl && shift => Some(Action::ToggleCommandPalette),
                 // Tab switching by number (Ctrl+1-9)
                 "1" if ctrl => Some(Action::SwitchToTab(0)),
                 "2" if ctrl => Some(Action::SwitchToTab(1)),

@@ -98,6 +98,51 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
+                // Handle command palette input first (highest priority when open)
+                if self.command_palette.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.command_palette.close();
+                            }
+                            Key::Named(NamedKey::ArrowUp) => {
+                                self.command_palette.select_prev();
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                self.command_palette.select_next();
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                let result = self.command_palette.execute();
+                                self.handle_palette_result(result);
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.command_palette.handle_backspace();
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.command_palette.handle_char(' ');
+                            }
+                            Key::Character(c) => {
+                                // Ctrl+Shift+P to close (toggle)
+                                if self.modifiers.control_key() && self.modifiers.shift_key()
+                                    && (c.as_str() == "p" || c.as_str() == "P")
+                                {
+                                    self.command_palette.close();
+                                } else if !self.modifiers.control_key() && !self.modifiers.alt_key() {
+                                    for ch in c.chars() {
+                                        self.command_palette.handle_char(ch);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 // Handle settings panel input first (highest priority when open)
                 if self.settings_panel.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
@@ -268,6 +313,36 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
+                // When palette is open, only dismiss on clicks outside the panel
+                if self.command_palette.is_active() {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                    {
+                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
+                            let cw = renderer.cell_width();
+                            let (sw, sh) = renderer.window_size();
+                            let (ww, wh) = (sw as f32, sh as f32);
+                            // Approximate panel bounds (must match build_command_palette geometry)
+                            let panel_width = (cw * 55.0_f32).max(450.0).min(ww * 0.65);
+                            let panel_x = (ww - panel_width) / 2.0;
+                            let panel_y = wh * 0.12; // top position
+                            let panel_height = wh * 0.75; // max height
+                            let (mx, my) = (pos.0 as f32, pos.1 as f32);
+                            // Only close if click is outside the panel
+                            if mx < panel_x || mx > panel_x + panel_width
+                                || my < panel_y || my > panel_y + panel_height
+                            {
+                                self.command_palette.close();
+                            }
+                        } else {
+                            self.command_palette.close();
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 // Use tracked cursor position
                 if let Some(pos) = self.last_cursor_pos {
                     self.handle_mouse_input(button, state, pos);
@@ -280,6 +355,22 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
+                // Scroll palette list when palette is active
+                if self.command_palette.is_active() {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if lines > 0.0 {
+                        self.command_palette.scroll_up(lines.ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.command_palette.scroll_down((-lines).ceil() as usize);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 let scroll_speed = self.config.scrollback.scroll_speed;
                 let y_delta = match delta {
                     winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64 * scroll_speed,
