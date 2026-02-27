@@ -6,6 +6,7 @@ use std::fmt;
 use sublime_fuzzy::FuzzySearch;
 
 use crate::config::CustomCommand;
+use crate::plugin::PluginCommand;
 
 /// Result of executing a command
 #[derive(Debug, Clone)]
@@ -52,6 +53,8 @@ pub enum CommandResult {
     RunCustomCommand(String),
     /// Open the custom commands panel
     OpenCommandsPanel,
+    /// Run a plugin command by ID
+    RunPluginCommand(String),
     /// Exit command mode without action
     Cancel,
 }
@@ -547,6 +550,25 @@ impl CommandRegistry {
             });
         }
     }
+
+    /// Inject plugin commands into the registry
+    pub fn set_plugin_commands(&mut self, commands: &[PluginCommand]) {
+        // Remove previous plugin command entries
+        self.commands.retain(|c| c.category != "Plugin");
+
+        // Add each plugin command as a registry entry
+        for cmd in commands {
+            let category = cmd.category.as_deref().unwrap_or("Plugin");
+            self.commands.push(CommandDef {
+                // Leak is safe here — these are long-lived app-lifetime strings
+                name: Box::leak(cmd.name.clone().into_boxed_str()),
+                alias: None,
+                category: Box::leak(category.to_string().into_boxed_str()),
+                description: Box::leak(cmd.description.clone().into_boxed_str()),
+                usage: Box::leak(cmd.id.clone().into_boxed_str()),
+            });
+        }
+    }
 }
 
 impl Default for CommandRegistry {
@@ -863,7 +885,8 @@ impl CommandMode {
             CommandResult::SaveConfig |
             CommandResult::ReloadConfig |
             CommandResult::RunCustomCommand(_) |
-            CommandResult::OpenCommandsPanel => {
+            CommandResult::OpenCommandsPanel |
+            CommandResult::RunPluginCommand(_) => {
                 self.deactivate();
             }
         }

@@ -29,6 +29,8 @@ use crate::terminal::splash::show_splash;
 use self::state::AppState;
 use crate::tabs::TabManager;
 use crate::config::theme::Theme;
+use crate::plugin::{PluginManager, PluginContext};
+use crate::plugin::claude_code::ClaudeCodePlugin;
 
 /// Main application state
 ///
@@ -125,6 +127,8 @@ pub struct App {
     tab_bar_hover: Option<crate::renderer::TabBarClick>,
     /// Smooth hover animation progress (0.0 = not hovered, 1.0 = fully hovered)
     tab_bar_hover_progress: f32,
+    /// Plugin manager
+    plugin_manager: PluginManager,
 }
 
 impl App {
@@ -148,7 +152,7 @@ impl App {
             None
         };
 
-        Ok(Self {
+        let result: Result<Self> = Ok(Self {
             config,
             window: None,
             renderer: None,
@@ -194,7 +198,51 @@ impl App {
             git_completions_visible: false,
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
-        })
+            plugin_manager: PluginManager::new(),
+        });
+
+        let mut app = result?;
+
+        // Register enabled plugins
+        let plugin_ctx = PluginContext {
+            cwd: None,
+            tab_count: 0,
+            active_tab: 0,
+            terminal_size: (app.cols, app.rows),
+        };
+
+        if app.config.plugins.claude_code.enabled {
+            let plugin = ClaudeCodePlugin::new(app.config.plugins.claude_code.clone());
+            if let Err(e) = app.plugin_manager.register(Box::new(plugin), &plugin_ctx) {
+                log::error!("Failed to register Claude Code plugin: {}", e);
+            }
+        }
+
+        log::info!("Loaded {} plugin(s)", app.plugin_manager.count());
+
+        // Register plugin keybindings with the keybinding manager
+        let plugin_keybindings = app.plugin_manager.all_keybindings();
+        if !plugin_keybindings.is_empty() {
+            let mut all_bindings = app.config.keybindings.clone();
+            for pk in &plugin_keybindings {
+                all_bindings.push(crate::input::keybindings::KeyBinding {
+                    key: pk.key.clone(),
+                    modifiers: crate::input::keybindings::KeyModifiers {
+                        ctrl: pk.ctrl,
+                        alt: pk.alt,
+                        shift: pk.shift,
+                        super_key: false,
+                    },
+                    action: crate::input::keybindings::KeyAction::PluginCommand {
+                        command_id: pk.command_id.clone(),
+                    },
+                });
+            }
+            app.keybinding_manager.load(all_bindings);
+            log::info!("Registered {} plugin keybinding(s)", plugin_keybindings.len());
+        }
+
+        Ok(app)
     }
 
     /// Load window icon from embedded PNG data
@@ -284,6 +332,9 @@ impl App {
         self.maybe_show_splash(false);
 
         log::info!("Tab manager initialized: {}x{}", self.cols, self.rows);
+
+        // Notify plugins that the app is ready
+        self.dispatch_plugin_hook(crate::plugin::Hook::AppReady);
 
         Ok(())
     }
@@ -980,6 +1031,75 @@ impl App {
                 }
             }
             Action::None => {}
+            Action::PluginCommand(command_id) => {
+                self.execute_plugin_command(&command_id);
+            }
+        }
+    }
+
+    /// Build a PluginContext from current app state.
+    fn build_plugin_context(&self) -> PluginContext {
+        let cwd = self.tabs.as_ref()
+            .and_then(|t| t.active_tab())
+            .and_then(|tab| tab.working_directory());
+
+        let tab_count = self.tabs.as_ref().map_or(0, |t| t.count());
+        let active_tab = self.tabs.as_ref().map_or(0, |t| t.active_index());
+
+        PluginContext {
+            cwd,
+            tab_count,
+            active_tab,
+            terminal_size: (self.cols, self.rows),
+        }
+    }
+
+    /// Dispatch a plugin hook and execute any returned actions.
+    fn dispatch_plugin_hook(&mut self, hook: crate::plugin::Hook) {
+        let ctx = self.build_plugin_context();
+        let actions = self.plugin_manager.dispatch(&hook, &ctx);
+        self.execute_plugin_actions(actions);
+    }
+
+    /// Execute a plugin command by ID.
+    fn execute_plugin_command(&mut self, command_id: &str) {
+        let ctx = self.build_plugin_context();
+        if let Some(action) = self.plugin_manager.execute_command(command_id, &ctx) {
+            self.execute_plugin_actions(vec![action]);
+        }
+    }
+
+    /// Execute a list of plugin actions.
+    fn execute_plugin_actions(&mut self, actions: Vec<crate::plugin::PluginAction>) {
+        use crate::plugin::PluginAction;
+
+        for action in actions {
+            match action {
+                PluginAction::OpenTab { program, args, cwd, title } => {
+                    if let Some(tabs) = &mut self.tabs {
+                        match tabs.new_tab_with_command(
+                            &program,
+                            &args,
+                            cwd.as_deref(),
+                            title.as_deref(),
+                        ) {
+                            Ok(id) => {
+                                log::info!("Plugin opened tab {} running '{}'", id, program);
+                            }
+                            Err(e) => log::error!("Plugin failed to open tab for '{}': {}", program, e),
+                        }
+                    }
+                }
+                PluginAction::WriteToPty { data } => {
+                    self.write_to_pty(&data);
+                }
+                PluginAction::Notify { title, body } => {
+                    self.notifications.notify(&title, &body);
+                }
+                PluginAction::ShowMessage { message } => {
+                    log::info!("Plugin message: {}", message);
+                }
+            }
         }
     }
 

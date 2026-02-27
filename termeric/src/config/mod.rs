@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::input::keybindings::KeyBinding;
+use crate::plugin::claude_code::ClaudeCodeConfig;
 
 /// Application configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -41,6 +42,9 @@ pub struct Config {
     /// User-defined custom commands / shortcuts
     #[serde(default)]
     pub commands: Vec<CustomCommand>,
+    /// Plugin configuration
+    #[serde(default)]
+    pub plugins: PluginsConfig,
 }
 
 /// A user-defined custom command (e.g. SSH into a box)
@@ -70,6 +74,7 @@ impl Default for Config {
             harvest: HarvestConfig::default(),
             splash: SplashConfig::default(),
             commands: Vec::new(),
+            plugins: PluginsConfig::default(),
         }
     }
 }
@@ -385,4 +390,13 @@ impl Default for SplashConfig {
             mode: SplashMode::FirstBoot,
         }
     }
+}
+
+/// Plugin configuration section
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PluginsConfig {
+    /// Claude Code plugin settings
+    #[serde(default)]
+    pub claude_code: ClaudeCodeConfig,
 }

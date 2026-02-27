@@ -44,6 +44,8 @@ pub enum Action {
     PreviousPrompt,
     /// Navigate to next prompt (shell integration)
     NextPrompt,
+    /// Execute a plugin command by its ID
+    PluginCommand(String),
     /// No action (pass through to PTY)
     None,
 }

@@ -105,6 +105,8 @@ pub enum KeyAction {
     PreviousPrompt,
     /// Navigate to next prompt (shell integration)
     NextPrompt,
+    /// Execute a plugin command by its ID
+    PluginCommand { command_id: String },
 }
 
 impl KeyAction {
@@ -140,6 +142,7 @@ impl KeyAction {
             KeyAction::SplitHorizontal => None,
             KeyAction::NavigatePane { .. } => None,
             KeyAction::ClosePane => None,
+            KeyAction::PluginCommand { command_id } => Some(Action::PluginCommand(command_id.clone())),
         }
     }
 

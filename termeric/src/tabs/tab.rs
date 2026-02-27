@@ -80,6 +80,57 @@ impl Tab {
         })
     }
 
+    /// Create a new tab running a specific command (not a shell).
+    ///
+    /// The program runs directly as the tab's process — no shell prompt or
+    /// command echo. When the program exits, the tab closes.
+    pub fn new_with_command(
+        id: usize,
+        cols: usize,
+        rows: usize,
+        program: &str,
+        args: &[String],
+        working_dir: Option<&str>,
+        title: Option<&str>,
+        scrollback_lines: usize,
+    ) -> anyhow::Result<Self> {
+        let mut terminal = Terminal::new(cols, rows);
+        terminal.grid_mut().set_scrollback_limit(scrollback_lines);
+
+        // Build environment with PWD if a working directory was specified
+        let env: Vec<(String, String)> = working_dir
+            .map(|pwd| vec![("PWD".to_string(), pwd.to_string())])
+            .unwrap_or_default();
+
+        let pty = Pty::new_with_env(
+            cols as u16,
+            rows as u16,
+            Some(program),
+            args,
+            &env,
+        )?;
+        let (handle, reader) = pty.take_reader();
+        let rx = spawn_reader_thread(reader);
+
+        let tab_title = title
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| program.to_string());
+
+        Ok(Self {
+            id,
+            title: tab_title,
+            terminal,
+            pty: handle,
+            pty_rx: rx,
+            has_activity: false,
+            closed: false,
+            created_at: Instant::now(),
+            closing_at: None,
+            session_id: None,
+            last_command: Some(program.to_string()),
+        })
+    }
+
     /// Process any pending PTY events, returns (had_output, terminal_events)
     pub fn process_events(&mut self) -> (bool, Vec<TerminalEvent>) {
         let mut had_output = false;

@@ -9,6 +9,7 @@ mod harvest;
 mod input;
 mod notifications;
 mod panes;
+mod plugin;
 mod renderer;
 mod session;
 mod tabs;

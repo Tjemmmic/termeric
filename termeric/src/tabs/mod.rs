@@ -55,6 +55,36 @@ impl TabManager {
         Ok(id)
     }
 
+    /// Create a new tab running a specific command and make it active.
+    ///
+    /// The program runs directly — no shell prompt or command echo.
+    pub fn new_tab_with_command(
+        &mut self,
+        program: &str,
+        args: &[String],
+        working_dir: Option<&str>,
+        title: Option<&str>,
+    ) -> anyhow::Result<usize> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let tab = Tab::new_with_command(
+            id,
+            self.cols,
+            self.rows,
+            program,
+            args,
+            working_dir,
+            title,
+            self.scrollback_lines,
+        )?;
+        self.tabs.push(tab);
+        self.active = self.tabs.len() - 1;
+
+        log::info!("Created command tab {} running '{}'", id, program);
+        Ok(id)
+    }
+
     /// Start closing a tab by index (begins shrink animation)
     pub fn close_tab(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() {
