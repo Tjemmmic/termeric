@@ -3123,21 +3123,32 @@ impl Renderer {
         let header_height = cell_height * 2.8;
         let header_text_y = (header_height - cell_height) / 2.0;
 
-        // Title with accent icon
-        let title_x = panel_x + padding;
-        self.text_pipeline.push_char('⚡', title_x, header_text_y, accent);
+        // Title with drawn lightning bolt icon (matches tab bar)
+        let icon_cx = panel_x + padding + cell_height * 0.5;
+        let icon_cy = header_height / 2.0;
+        let icon_h = cell_height * 0.45;
+        let icon_w = icon_h * 0.4;
+        let icon_lw = 1.5;
+        // Top segment: upper-right to center-left
+        self.rect_pipeline.push_line(icon_cx + icon_w * 0.3, icon_cy - icon_h, icon_cx - icon_w * 0.5, icon_cy, icon_lw, accent);
+        // Middle bar
+        self.rect_pipeline.push_line(icon_cx - icon_w * 0.3, icon_cy, icon_cx + icon_w * 0.7, icon_cy, icon_lw, accent);
+        // Bottom segment: center-right to lower-left
+        self.rect_pipeline.push_line(icon_cx + icon_w * 0.5, icon_cy, icon_cx - icon_w * 0.3, icon_cy + icon_h, icon_lw, accent);
+
         let title = "Custom Commands";
-        let mut tx = title_x + ui_cw * 2.2;
-        for c in title.chars() {
-            if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, tx, header_text_y, text_color);
-            }
-            tx += ui_cw * 0.95;
+        let tx = panel_x + padding + cell_height * 1.2;
+        for (i, c) in title.chars().enumerate() {
+            self.text_pipeline.push_char(c, tx + i as f32 * ui_cw, header_text_y, text_color);
         }
 
-        // Close (×) button
+        // Close (×) button — drawn as two diagonal lines
         let close_x = panel_x + panel_width - padding - ui_cw;
-        self.text_pipeline.push_char('×', close_x, header_text_y, dim_color);
+        let close_cx = close_x + ui_cw * 0.5;
+        let close_cy = header_height / 2.0;
+        let close_arm = cell_height * 0.25;
+        self.rect_pipeline.push_line(close_cx - close_arm, close_cy - close_arm, close_cx + close_arm, close_cy + close_arm, 1.5, dim_color);
+        self.rect_pipeline.push_line(close_cx + close_arm, close_cy - close_arm, close_cx - close_arm, close_cy + close_arm, 1.5, dim_color);
 
         // Header separator
         self.rect_pipeline.push_rect(
@@ -3169,14 +3180,12 @@ impl Renderer {
 
         // Button text: "+ New Command"
         let btn_text = "+ New Command";
-        let btn_text_w = btn_text.len() as f32 * ui_cw * 0.9;
+        let btn_text_w = btn_text.len() as f32 * ui_cw;
         let btn_text_x = btn_x + (btn_width - btn_text_w) / 2.0;
         let btn_text_y = btn_y + (btn_height - cell_height) / 2.0;
         let btn_text_color = if info.hovered_add { accent } else { [accent[0], accent[1], accent[2], 0.8] };
-        for (j, c) in btn_text.chars().enumerate() {
-            if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, btn_text_x + j as f32 * ui_cw * 0.9, btn_text_y, btn_text_color);
-            }
+        for (i, c) in btn_text.chars().enumerate() {
+            self.text_pipeline.push_char(c, btn_text_x + i as f32 * ui_cw, btn_text_y, btn_text_color);
         }
 
         // ── Inline form (shown when editing) ──
@@ -3198,10 +3207,8 @@ impl Renderer {
             // "Name:" label + input
             let name_label = "Name:";
             let name_label_y = fy + (field_height - cell_height) / 2.0;
-            for (j, c) in name_label.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, form_x + small_pad + j as f32 * ui_cw * 0.85, name_label_y, dim_color);
-                }
+            for (i, c) in name_label.chars().enumerate() {
+                self.text_pipeline.push_char(c, form_x + small_pad + i as f32 * ui_cw, name_label_y, dim_color);
             }
             // Name input box
             let input_x = form_x + label_w;
@@ -3212,23 +3219,19 @@ impl Renderer {
             self.rect_pipeline.push_rect(input_x, fy + field_height - 2.0, input_w, 2.0, input_border);
             // Name text
             let name_text_y = fy + (field_height - cell_height) / 2.0;
-            for (j, c) in info.form_name.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.85, name_text_y, text_color);
-                }
+            for (i, c) in info.form_name.chars().enumerate() {
+                self.text_pipeline.push_char(c, input_x + small_pad + i as f32 * ui_cw, name_text_y, text_color);
             }
             // Cursor
             if name_active {
-                let cursor_x = input_x + small_pad + info.form_name[..info.form_cursor].chars().count() as f32 * ui_cw * 0.85;
+                let cursor_x = input_x + small_pad + info.form_name[..info.form_cursor].chars().count() as f32 * ui_cw;
                 self.rect_pipeline.push_rect(cursor_x, fy + 3.0, 1.5, field_height - 6.0, accent);
             }
             // Placeholder
             if info.form_name.is_empty() && !name_active {
                 let ph = "e.g. SSH Production";
-                for (j, c) in ph.chars().enumerate() {
-                    if !c.is_whitespace() {
-                        self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.8, name_text_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
-                    }
+                for (i, c) in ph.chars().enumerate() {
+                    self.text_pipeline.push_char(c, input_x + small_pad + i as f32 * ui_cw, name_text_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
                 }
             }
 
@@ -3236,31 +3239,25 @@ impl Renderer {
             let cmd_fy = fy + field_height + small_pad;
             let cmd_label = "Command:";
             let cmd_label_y = cmd_fy + (field_height - cell_height) / 2.0;
-            for (j, c) in cmd_label.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, form_x + small_pad + j as f32 * ui_cw * 0.85, cmd_label_y, dim_color);
-                }
+            for (i, c) in cmd_label.chars().enumerate() {
+                self.text_pipeline.push_char(c, form_x + small_pad + i as f32 * ui_cw, cmd_label_y, dim_color);
             }
             let cmd_active = info.edit_mode == EditMode::EditingCommand;
             let cmd_border = if cmd_active { accent } else { separator };
             self.rect_pipeline.push_rounded_rect(input_x, cmd_fy, input_w, field_height, [0.0, 0.0, 0.0, 0.2], 4.0);
             self.rect_pipeline.push_rect(input_x, cmd_fy + field_height - 2.0, input_w, 2.0, cmd_border);
             let cmd_text_y = cmd_fy + (field_height - cell_height) / 2.0;
-            for (j, c) in info.form_command.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.85, cmd_text_y, text_color);
-                }
+            for (i, c) in info.form_command.chars().enumerate() {
+                self.text_pipeline.push_char(c, input_x + small_pad + i as f32 * ui_cw, cmd_text_y, text_color);
             }
             if cmd_active {
-                let cursor_x = input_x + small_pad + info.form_command[..info.form_cursor].chars().count() as f32 * ui_cw * 0.85;
+                let cursor_x = input_x + small_pad + info.form_command[..info.form_cursor].chars().count() as f32 * ui_cw;
                 self.rect_pipeline.push_rect(cursor_x, cmd_fy + 3.0, 1.5, field_height - 6.0, accent);
             }
             if info.form_command.is_empty() && !cmd_active {
                 let ph = "e.g. ssh admin@prod.app.com";
-                for (j, c) in ph.chars().enumerate() {
-                    if !c.is_whitespace() {
-                        self.text_pipeline.push_char(c, input_x + small_pad + j as f32 * ui_cw * 0.8, cmd_text_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
-                    }
+                for (i, c) in ph.chars().enumerate() {
+                    self.text_pipeline.push_char(c, input_x + small_pad + i as f32 * ui_cw, cmd_text_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
                 }
             }
 
@@ -3272,11 +3269,9 @@ impl Renderer {
             let save_h = cell_height * 1.6;
             self.rect_pipeline.push_rounded_rect(save_x, buttons_y, save_w, save_h, accent, 4.0);
             let save_text_y = buttons_y + (save_h - cell_height) / 2.0;
-            let save_text_x = save_x + (save_w - save_text.len() as f32 * ui_cw * 0.9) / 2.0;
-            for (j, c) in save_text.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, save_text_x + j as f32 * ui_cw * 0.9, save_text_y, self.ui.settings_bg);
-                }
+            let save_text_x = save_x + (save_w - save_text.len() as f32 * ui_cw) / 2.0;
+            for (i, c) in save_text.chars().enumerate() {
+                self.text_pipeline.push_char(c, save_text_x + i as f32 * ui_cw, save_text_y, self.ui.settings_bg);
             }
 
             let cancel_text = "Cancel";
@@ -3284,22 +3279,17 @@ impl Renderer {
             let cancel_x = save_x - cancel_w - small_pad;
             self.rect_pipeline.push_rounded_rect(cancel_x, buttons_y, cancel_w, save_h, separator, 4.0);
             let cancel_text_y = buttons_y + (save_h - cell_height) / 2.0;
-            let cancel_text_x = cancel_x + (cancel_w - cancel_text.len() as f32 * ui_cw * 0.9) / 2.0;
-            for (j, c) in cancel_text.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, cancel_text_x + j as f32 * ui_cw * 0.9, cancel_text_y, text_color);
-                }
+            let cancel_text_x = cancel_x + (cancel_w - cancel_text.len() as f32 * ui_cw) / 2.0;
+            for (i, c) in cancel_text.chars().enumerate() {
+                self.text_pipeline.push_char(c, cancel_text_x + i as f32 * ui_cw, cancel_text_y, text_color);
             }
 
             // Hint
             let hint = "Tab to switch fields, Enter to save";
             let hint_y = buttons_y + save_h + small_pad;
-            let mut hx = form_x + small_pad;
-            for c in hint.chars() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, hx, hint_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
-                }
-                hx += ui_cw * 0.75;
+            let hx = form_x + small_pad;
+            for (i, c) in hint.chars().enumerate() {
+                self.text_pipeline.push_char(c, hx + i as f32 * ui_cw, hint_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
             }
 
             list_start_y = list_start_y + form_total_h + cell_height * 0.5;
@@ -3313,12 +3303,9 @@ impl Renderer {
             } else {
                 format!("{} commands", info.commands.len())
             };
-            let mut sx = panel_x + padding;
-            for c in section_label.chars() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, sx, section_y, dim_color);
-                }
-                sx += ui_cw * 0.8;
+            let sx = panel_x + padding;
+            for (i, c) in section_label.chars().enumerate() {
+                self.text_pipeline.push_char(c, sx + i as f32 * ui_cw, section_y, dim_color);
             }
             list_start_y = section_y + cell_height * 1.5;
         }
@@ -3330,21 +3317,17 @@ impl Renderer {
             // Empty state
             let empty_y = list_start_y + cell_height;
             let msg = "No commands yet";
-            let msg_w = msg.len() as f32 * ui_cw * 0.9;
+            let msg_w = msg.len() as f32 * ui_cw;
             let msg_x = panel_x + (panel_width - msg_w) / 2.0;
-            for (j, c) in msg.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, msg_x + j as f32 * ui_cw * 0.9, empty_y, dim_color);
-                }
+            for (i, c) in msg.chars().enumerate() {
+                self.text_pipeline.push_char(c, msg_x + i as f32 * ui_cw, empty_y, dim_color);
             }
             let hint = "Click + New Command above to add one";
-            let hint_w = hint.len() as f32 * ui_cw * 0.75;
+            let hint_w = hint.len() as f32 * ui_cw;
             let hint_x = panel_x + (panel_width - hint_w) / 2.0;
             let hint_y = empty_y + cell_height * 1.5;
-            for (j, c) in hint.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, hint_x + j as f32 * ui_cw * 0.75, hint_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
-                }
+            for (i, c) in hint.chars().enumerate() {
+                self.text_pipeline.push_char(c, hint_x + i as f32 * ui_cw, hint_y, [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]);
             }
         }
 
@@ -3360,10 +3343,16 @@ impl Renderer {
                 );
             }
 
-            // Run indicator (left side) — shows accent on hover
-            let run_y = item_y + (row_height - cell_height) / 2.0;
+            // Run indicator (left side) — drawn play triangle
             let run_color = if info.hovered_index == Some(i) { accent } else { dim_color };
-            self.text_pipeline.push_char('▶', panel_x + padding, run_y, run_color);
+            let tri_x = panel_x + padding;
+            let tri_cy = item_y + row_height / 2.0;
+            let tri_h = cell_height * 0.3;
+            let tri_w = tri_h * 0.7;
+            // Three lines forming a triangle: top-left to right-center, right-center to bottom-left, bottom-left to top-left
+            self.rect_pipeline.push_line(tri_x, tri_cy - tri_h, tri_x + tri_w, tri_cy, 1.3, run_color);
+            self.rect_pipeline.push_line(tri_x + tri_w, tri_cy, tri_x, tri_cy + tri_h, 1.3, run_color);
+            self.rect_pipeline.push_line(tri_x, tri_cy + tri_h, tri_x, tri_cy - tri_h, 1.3, run_color);
 
             // Command name
             let name_x = panel_x + padding + ui_cw * 2.2;
@@ -3374,10 +3363,8 @@ impl Renderer {
             } else {
                 cmd.name.clone()
             };
-            for (j, c) in name.chars().enumerate() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, name_x + j as f32 * ui_cw * 0.9, name_y, text_color);
-                }
+            for (i, c) in name.chars().enumerate() {
+                self.text_pipeline.push_char(c, name_x + i as f32 * ui_cw, name_y, text_color);
             }
 
             // Command text (second line, dimmed)
@@ -3388,12 +3375,8 @@ impl Renderer {
             } else {
                 cmd.command.clone()
             };
-            let mut cx = name_x;
-            for c in cmd_text.chars() {
-                if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, cx, cmd_y, dim_color);
-                }
-                cx += ui_cw * 0.82;
+            for (i, c) in cmd_text.chars().enumerate() {
+                self.text_pipeline.push_char(c, name_x + i as f32 * ui_cw, cmd_y, dim_color);
             }
 
             // Delete (x) button (right side)
@@ -3404,7 +3387,12 @@ impl Renderer {
             } else {
                 [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5]
             };
-            self.text_pipeline.push_char('×', del_x, del_y, del_color);
+            // Delete button — drawn as two diagonal lines (X)
+            let del_cx = del_x + ui_cw * 0.5;
+            let del_cy = item_y + row_height / 2.0;
+            let del_arm = cell_height * 0.22;
+            self.rect_pipeline.push_line(del_cx - del_arm, del_cy - del_arm, del_cx + del_arm, del_cy + del_arm, 1.3, del_color);
+            self.rect_pipeline.push_line(del_cx + del_arm, del_cy - del_arm, del_cx - del_arm, del_cy + del_arm, 1.3, del_color);
 
             // Row separator
             let sep_y = item_y + row_height - 0.5;
