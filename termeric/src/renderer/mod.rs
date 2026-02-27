@@ -282,6 +282,8 @@ pub struct Renderer {
     tab_bar_hover_progress: f32,
     // Git completion overlay state
     git_completions: Option<GitCompletionInfo>,
+    // Info overlay state (About/Version)
+    info_overlay: Option<InfoOverlayInfo>,
 }
 
 impl Renderer {
@@ -378,6 +380,7 @@ impl Renderer {
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
             git_completions: None,
+            info_overlay: None,
         })
     }
 
@@ -506,6 +509,11 @@ impl Renderer {
     /// Set git completion info for rendering
     pub fn set_git_completions(&mut self, info: Option<GitCompletionInfo>) {
         self.git_completions = info;
+    }
+
+    /// Set info overlay data for rendering
+    pub fn set_info_overlay(&mut self, info: Option<InfoOverlayInfo>) {
+        self.info_overlay = info;
     }
 
     /// Add dividers between panes to the render data
@@ -985,6 +993,15 @@ impl Renderer {
         if let Some(palette) = command_palette {
             if palette.animation > 0.001 {
                 self.build_command_palette(palette, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 9: Info overlay (above everything) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.info_overlay.clone() {
+            if info.animation > 0.001 {
+                self.build_info_overlay(info, window_width, window_height);
             }
         }
     }
@@ -2725,6 +2742,14 @@ pub struct GitCompletionInfo {
     pub selected_index: Option<usize>,
 }
 
+/// Info overlay data for rendering (About/Version)
+#[derive(Debug, Clone)]
+pub struct InfoOverlayInfo {
+    pub title: String,
+    pub lines: Vec<String>,
+    pub animation: f32,
+}
+
 /// Info for rendering the session dropdown
 pub struct SessionDropdownInfo {
     /// List of sessions as (id, display_title) pairs
@@ -4029,6 +4054,69 @@ impl Renderer {
                 self.text_pipeline.push_char(c, hint_x + i as f32 * hint_scale, footer_text_y, key_color);
             }
             hint_x -= cell_width * 1.0; // gap between hint groups
+        }
+    }
+
+    /// Build the info overlay (About/Version centered card)
+    fn build_info_overlay(&mut self, info: &InfoOverlayInfo, window_width: f32, window_height: f32) {
+        let anim = info.animation;
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+
+        // Scrim
+        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
+        self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
+
+        // Card geometry
+        let padding = cell_width * 2.0;
+        let line_height = cell_height * 1.8;
+        let title_height = cell_height * 2.5;
+        let footer_height = cell_height * 1.6;
+        let content_height = info.lines.len() as f32 * line_height;
+        let card_height = padding + title_height + content_height + footer_height + padding * 0.5;
+        let card_width = (cell_width * 40.0).max(320.0).min(window_width * 0.5);
+        let card_x = (window_width - card_width) / 2.0;
+        let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -20.0;
+
+        // Card background
+        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, card_height, card_bg, 12.0);
+
+        // Card border
+        let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
+
+        // Title
+        let title_y = card_y + padding;
+        let title_color = adjust_alpha(self.ui.palette_accent, anim);
+        let title_x = card_x + (card_width - info.title.chars().count() as f32 * cell_width) / 2.0;
+        for (i, c) in info.title.chars().enumerate() {
+            self.text_pipeline.push_char(c, title_x + i as f32 * cell_width, title_y, title_color);
+        }
+
+        // Content lines
+        let text_color = adjust_alpha(self.ui.palette_text, anim);
+        let dim_color = adjust_alpha(self.ui.palette_text_dim, anim);
+        let content_start_y = title_y + title_height;
+        for (row, line) in info.lines.iter().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let line_y = content_start_y + row as f32 * line_height;
+            let line_x = card_x + (card_width - line.chars().count() as f32 * cell_width) / 2.0;
+            let color = if row == 0 { text_color } else { dim_color };
+            for (i, c) in line.chars().enumerate() {
+                self.text_pipeline.push_char(c, line_x + i as f32 * cell_width, line_y, color);
+            }
+        }
+
+        // Footer hint
+        let hint = "Press any key to dismiss";
+        let footer_y = card_y + card_height - footer_height;
+        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let hint_x = card_x + (card_width - hint.chars().count() as f32 * cell_width) / 2.0;
+        for (i, c) in hint.chars().enumerate() {
+            self.text_pipeline.push_char(c, hint_x + i as f32 * cell_width, footer_y, hint_color);
         }
     }
 

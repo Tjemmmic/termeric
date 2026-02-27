@@ -98,6 +98,17 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
+                // Dismiss info overlay on any keypress (highest priority)
+                if self.info_overlay.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        self.info_overlay.dismiss();
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 // Handle command palette input first (highest priority when open)
                 if self.command_palette.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
@@ -313,6 +324,16 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
+                // Dismiss info overlay on any click
+                if self.info_overlay.is_active() {
+                    if state == winit::event::ElementState::Pressed {
+                        self.info_overlay.dismiss();
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 // When palette is open, only dismiss on clicks outside the panel
                 if self.command_palette.is_active() {
                     if state == winit::event::ElementState::Pressed

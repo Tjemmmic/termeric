@@ -33,6 +33,7 @@ use crate::plugin::{PluginManager, PluginContext};
 use crate::plugin::claude_code::ClaudeCodePlugin;
 use crate::ui::command_palette::{CommandPalette, PaletteResult, CommandSource, RegisteredCommand};
 use crate::ui::command_palette::palette::core_commands;
+use crate::ui::info_overlay::InfoOverlay;
 
 /// Main application state
 ///
@@ -133,6 +134,8 @@ pub struct App {
     plugin_manager: PluginManager,
     /// Command palette
     command_palette: CommandPalette,
+    /// Info overlay (About/Version)
+    info_overlay: InfoOverlay,
 }
 
 impl App {
@@ -204,6 +207,7 @@ impl App {
             tab_bar_hover_progress: 0.0,
             plugin_manager: PluginManager::new(),
             command_palette: CommandPalette::new(),
+            info_overlay: InfoOverlay::new(),
         });
 
         let mut app = result?;
@@ -788,6 +792,25 @@ impl App {
             None
         };
 
+        // Build info overlay if visible
+        let info_overlay_data = if self.info_overlay.is_visible() {
+            Some(crate::renderer::InfoOverlayInfo {
+                title: self.info_overlay.title.clone(),
+                lines: self.info_overlay.lines.clone(),
+                animation: self.info_overlay.animation(),
+            })
+        } else {
+            None
+        };
+        renderer.set_info_overlay(info_overlay_data);
+
+        // Update info overlay animation
+        if self.info_overlay.update_animation() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
         renderer.set_git_completions(if self.git_completions_visible && !self.git_completions.is_empty() {
             Some(crate::renderer::GitCompletionInfo {
@@ -1144,8 +1167,12 @@ impl App {
                     "core.font-size-reset" => Action::ResetFontSize,
                     "core.copy" => Action::Copy,
                     "core.paste" => Action::Paste,
-                    "core.version" | "core.about" => {
-                        log::info!("Termeric v{}", env!("CARGO_PKG_VERSION"));
+                    "core.version" => {
+                        self.info_overlay.show_version();
+                        return;
+                    }
+                    "core.about" => {
+                        self.info_overlay.show_about();
                         return;
                     }
                     id if id.starts_with("core.theme.") => {
