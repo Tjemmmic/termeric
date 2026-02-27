@@ -2,6 +2,9 @@
 //!
 //! Provides a Ctrl+Shift+P command palette for configuring the terminal.
 
+pub mod palette;
+pub use palette::{CommandPalette, PaletteInfo, PaletteEntryInfo, PaletteResult, RegisteredCommand, CommandSource};
+
 use std::fmt;
 use sublime_fuzzy::FuzzySearch;
 
