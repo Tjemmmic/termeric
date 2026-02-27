@@ -42,15 +42,21 @@ pub fn key_to_bytes_with_modifiers(event: &KeyEvent, modifiers: ModifiersState) 
                 // Basic control keys
                 NamedKey::Enter => b"\r".to_vec(),
                 NamedKey::Tab => b"\t".to_vec(),
-                NamedKey::Backspace => b"\x7f".to_vec(),
+                NamedKey::Backspace => {
+                    if ctrl {
+                        b"\x17".to_vec() // Ctrl+W: delete previous word
+                    } else {
+                        b"\x7f".to_vec()
+                    }
+                }
                 NamedKey::Escape => b"\x1b".to_vec(),
                 NamedKey::Space => b" ".to_vec(),
 
-                // Arrow keys
-                NamedKey::ArrowUp => b"\x1b[A".to_vec(),
-                NamedKey::ArrowDown => b"\x1b[B".to_vec(),
-                NamedKey::ArrowRight => b"\x1b[C".to_vec(),
-                NamedKey::ArrowLeft => b"\x1b[D".to_vec(),
+                // Arrow keys (with modifier support: Ctrl=5, Shift=2, Alt=3)
+                NamedKey::ArrowUp => if ctrl { b"\x1b[1;5A".to_vec() } else { b"\x1b[A".to_vec() },
+                NamedKey::ArrowDown => if ctrl { b"\x1b[1;5B".to_vec() } else { b"\x1b[B".to_vec() },
+                NamedKey::ArrowRight => if ctrl { b"\x1b[1;5C".to_vec() } else { b"\x1b[C".to_vec() },
+                NamedKey::ArrowLeft => if ctrl { b"\x1b[1;5D".to_vec() } else { b"\x1b[D".to_vec() },
 
                 // Navigation keys
                 NamedKey::Home => b"\x1b[H".to_vec(),
@@ -58,7 +64,7 @@ pub fn key_to_bytes_with_modifiers(event: &KeyEvent, modifiers: ModifiersState) 
                 NamedKey::PageUp => b"\x1b[5~".to_vec(),
                 NamedKey::PageDown => b"\x1b[6~".to_vec(),
                 NamedKey::Insert => b"\x1b[2~".to_vec(),
-                NamedKey::Delete => b"\x1b[3~".to_vec(),
+                NamedKey::Delete => if ctrl { b"\x1b[3;5~".to_vec() } else { b"\x1b[3~".to_vec() },
 
                 // Function keys
                 NamedKey::F1 => b"\x1bOP".to_vec(),
