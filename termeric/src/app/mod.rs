@@ -113,6 +113,14 @@ pub struct App {
     commands_panel: crate::ui::commands::panel::CommandsPanel,
     /// Buffer tracking what the user has typed on the current line (for alias expansion)
     input_line_buffer: String,
+    /// Git repository watcher (tracks branch, dirty status per tab)
+    git_watcher: crate::git::GitWatcher,
+    /// Current git completion candidates
+    git_completions: Vec<String>,
+    /// Selected index in git completion dropdown (None = no selection)
+    git_completion_index: Option<usize>,
+    /// Whether git completion dropdown is visible
+    git_completions_visible: bool,
     /// Which tab bar element is currently hovered (for icon animations)
     tab_bar_hover: Option<crate::renderer::TabBarClick>,
     /// Smooth hover animation progress (0.0 = not hovered, 1.0 = fully hovered)
@@ -180,6 +188,10 @@ impl App {
             session_panel: crate::session::panel::SessionPanel::new(),
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
             input_line_buffer: String::new(),
+            git_watcher: crate::git::GitWatcher::new(),
+            git_completions: Vec::new(),
+            git_completion_index: None,
+            git_completions_visible: false,
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
         })
@@ -395,8 +407,39 @@ impl App {
         // Reset cursor blink so cursor is fully visible when typing
         self.reset_cursor_blink();
 
-        // Track the input line buffer for alias expansion
+        // Track the input line buffer for alias expansion + git completion
         if data == b"\r" {
+            // If git completions are visible and a selection is active, accept it
+            if self.git_completions_visible {
+                if let Some(idx) = self.git_completion_index {
+                    if let Some(branch) = self.git_completions.get(idx).cloned() {
+                        // Determine how many chars of partial text to erase
+                        if let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer) {
+                            let partial_len = partial.len();
+                            // Send backspaces to erase the partial, then type the branch name
+                            if let Some(tabs) = &mut self.tabs {
+                                if let Some(tab) = tabs.active_tab_mut() {
+                                    for _ in 0..partial_len {
+                                        let _ = tab.write(b"\x7f"); // backspace
+                                    }
+                                    let _ = tab.write(branch.as_bytes());
+                                    let _ = tab.write(b"\r"); // then Enter
+                                }
+                            }
+                            self.input_line_buffer.clear();
+                            self.git_completions_visible = false;
+                            self.git_completions.clear();
+                            self.git_completion_index = None;
+                            return;
+                        }
+                    }
+                }
+                // Dismiss completions
+                self.git_completions_visible = false;
+                self.git_completions.clear();
+                self.git_completion_index = None;
+            }
+
             // Enter pressed — check if first word matches a custom command name or alias
             let trimmed = self.input_line_buffer.trim().to_string();
             let (first_word, rest) = match trimmed.find(' ') {
@@ -407,6 +450,11 @@ impl App {
                 cmd.name == first_word
                     || cmd.alias.as_deref() == Some(&first_word)
             }).map(|cmd| cmd.command.clone());
+
+            // If a git command was run, invalidate the watcher to refresh branch state
+            if trimmed.starts_with("git ") {
+                self.git_watcher.invalidate();
+            }
 
             self.input_line_buffer.clear();
 
@@ -450,6 +498,24 @@ impl App {
             if let Ok(s) = std::str::from_utf8(data) {
                 self.input_line_buffer.push_str(s);
             }
+        }
+
+        // Update git completions based on current input
+        if let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer) {
+            let completions = self.git_watcher.complete_branch(partial);
+            if !completions.is_empty() {
+                self.git_completions = completions;
+                self.git_completion_index = Some(0);
+                self.git_completions_visible = true;
+            } else {
+                self.git_completions_visible = false;
+                self.git_completions.clear();
+                self.git_completion_index = None;
+            }
+        } else {
+            self.git_completions_visible = false;
+            self.git_completions.clear();
+            self.git_completion_index = None;
         }
 
         if let Some(tabs) = &mut self.tabs {
@@ -526,6 +592,12 @@ impl App {
         } else {
             self.tab_bar_hover_progress = (self.tab_bar_hover_progress - 0.2).max(0.0);
         }
+
+        // Update git watcher with active tab's working directory
+        let working_dir = self.tabs.as_ref()
+            .and_then(|t| t.active_tab())
+            .and_then(|tab| tab.working_directory());
+        self.git_watcher.update(working_dir.as_deref());
 
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
@@ -616,6 +688,14 @@ impl App {
         };
 
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
+        renderer.set_git_completions(if self.git_completions_visible && !self.git_completions.is_empty() {
+            Some(crate::renderer::GitCompletionInfo {
+                completions: self.git_completions.clone(),
+                selected_index: self.git_completion_index,
+            })
+        } else {
+            None
+        });
         match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {

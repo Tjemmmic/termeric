@@ -189,6 +189,63 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // Handle git completion navigation (Tab to accept, Up/Down to navigate, Escape to dismiss)
+                if self.git_completions_visible && event.state == winit::event::ElementState::Pressed {
+                    use winit::keyboard::Key;
+                    match event.logical_key.as_ref() {
+                        Key::Named(winit::keyboard::NamedKey::Tab) => {
+                            // Accept the selected completion
+                            if let Some(idx) = self.git_completion_index {
+                                if let Some(branch) = self.git_completions.get(idx).cloned() {
+                                    if let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer) {
+                                        let partial_len = partial.len();
+                                        if let Some(tabs) = &mut self.tabs {
+                                            if let Some(tab) = tabs.active_tab_mut() {
+                                                // Erase partial text with backspaces
+                                                for _ in 0..partial_len {
+                                                    let _ = tab.write(b"\x7f");
+                                                }
+                                                // Insert branch name
+                                                let _ = tab.write(branch.as_bytes());
+                                            }
+                                        }
+                                        // Update input buffer to reflect the accepted completion
+                                        let buf = self.input_line_buffer.clone();
+                                        if let Some(last_space) = buf.rfind(' ') {
+                                            self.input_line_buffer.truncate(last_space + 1);
+                                            self.input_line_buffer.push_str(&branch);
+                                        }
+                                    }
+                                }
+                            }
+                            self.git_completions_visible = false;
+                            self.git_completions.clear();
+                            self.git_completion_index = None;
+                            return;
+                        }
+                        Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                            if let Some(ref mut idx) = self.git_completion_index {
+                                let max = self.git_completions.len().saturating_sub(1);
+                                *idx = (*idx + 1).min(max);
+                            }
+                            return;
+                        }
+                        Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                            if let Some(ref mut idx) = self.git_completion_index {
+                                *idx = idx.saturating_sub(1);
+                            }
+                            return;
+                        }
+                        Key::Named(winit::keyboard::NamedKey::Escape) => {
+                            self.git_completions_visible = false;
+                            self.git_completions.clear();
+                            self.git_completion_index = None;
+                            return;
+                        }
+                        _ => {} // Other keys fall through normally
+                    }
+                }
+
                 // Check custom keybindings first (highest priority after modal UI)
                 if event.state == winit::event::ElementState::Pressed {
                     if let Some(key_action) = self.keybinding_manager.check(&event.logical_key, self.modifiers) {

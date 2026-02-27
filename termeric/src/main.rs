@@ -4,6 +4,7 @@
 
 mod app;
 mod config;
+mod git;
 mod harvest;
 mod input;
 mod notifications;

@@ -41,6 +41,9 @@ directories = "6.0"
 # Fuzzy matching for command palette
 sublime_fuzzy = "0.7"
 
+# Git integration
+git2 = "0.19"
+
 # Regular expressions for search
 regex = "1"
 
