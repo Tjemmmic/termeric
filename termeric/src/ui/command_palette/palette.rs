@@ -400,7 +400,7 @@ impl CommandPalette {
 
 /// Build the default set of core commands
 pub fn core_commands() -> Vec<RegisteredCommand> {
-    vec![
+    let mut commands = vec![
         // ── Core ──
         RegisteredCommand {
             id: "core.new-tab".into(),
@@ -495,43 +495,6 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             source: CommandSource::Core,
             destructive: false,
         },
-        // ── Theme ──
-        RegisteredCommand {
-            id: "core.theme.turmeric".into(),
-            title: "Theme: Turmeric".into(),
-            category: "Theme".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.theme.dracula".into(),
-            title: "Theme: Dracula".into(),
-            category: "Theme".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.theme.solarized-dark".into(),
-            title: "Theme: Solarized Dark".into(),
-            category: "Theme".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
-        RegisteredCommand {
-            id: "core.theme.nord".into(),
-            title: "Theme: Nord".into(),
-            category: "Theme".into(),
-            shortcut: None,
-            icon: None,
-            source: CommandSource::Core,
-            destructive: false,
-        },
         // ── Help ──
         RegisteredCommand {
             id: "core.version".into(),
@@ -598,7 +561,37 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             source: CommandSource::Core,
             destructive: false,
         },
-    ]
+    ];
+
+    // ── Theme commands — generated dynamically from all available themes ──
+    for name in crate::config::theme::Theme::list_available() {
+        let display = theme_display_name(name);
+        commands.push(RegisteredCommand {
+            id: format!("core.theme.{}", name),
+            title: format!("Theme: {}", display),
+            category: "Theme".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        });
+    }
+
+    commands
+}
+
+/// Convert a theme slug (e.g., "catppuccin-mocha") to display name ("Catppuccin Mocha")
+fn theme_display_name(slug: &str) -> String {
+    slug.split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => format!("{}{}", c.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
