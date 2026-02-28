@@ -157,6 +157,37 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // Handle context picker input
+                if self.context_picker.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.context_picker.dismiss();
+                            }
+                            Key::Named(NamedKey::ArrowUp) => {
+                                self.context_picker.move_up();
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                self.context_picker.move_down();
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.context_picker.toggle_selected();
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                if self.context_picker.has_selection() {
+                                    self.inject_context();
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 // Handle command palette input first (highest priority when open)
                 if self.command_palette.is_active() {
                     if event.state == winit::event::ElementState::Pressed {

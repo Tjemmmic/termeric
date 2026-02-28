@@ -285,6 +285,7 @@ pub struct Renderer {
     // Info overlay state (About/Version)
     info_overlay: Option<InfoOverlayInfo>,
     diff_review: Option<DiffReviewInfo>,
+    context_picker: Option<ContextPickerInfo>,
 }
 
 impl Renderer {
@@ -383,6 +384,7 @@ impl Renderer {
             git_completions: None,
             info_overlay: None,
             diff_review: None,
+            context_picker: None,
         })
     }
 
@@ -520,6 +522,10 @@ impl Renderer {
 
     pub fn set_diff_review(&mut self, info: Option<DiffReviewInfo>) {
         self.diff_review = info;
+    }
+
+    pub fn set_context_picker(&mut self, info: Option<ContextPickerInfo>) {
+        self.context_picker = info;
     }
 
     /// Add dividers between panes to the render data
@@ -1017,6 +1023,15 @@ impl Renderer {
         if let Some(ref info) = self.diff_review.clone() {
             if info.animation > 0.001 {
                 self.build_diff_review(info, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 11: Context picker overlay ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.context_picker.clone() {
+            if info.animation > 0.001 {
+                self.build_context_picker(info, window_width, window_height);
             }
         }
     }
@@ -2828,6 +2843,22 @@ pub enum DiffReviewLine {
     Blank,
 }
 
+/// Info for rendering the context picker overlay
+#[derive(Debug, Clone)]
+pub struct ContextPickerInfo {
+    pub sources: Vec<ContextPickerSource>,
+    pub selected_index: usize,
+    pub animation: f32,
+}
+
+/// A context source item in the picker
+#[derive(Debug, Clone)]
+pub struct ContextPickerSource {
+    pub label: String,
+    pub selected: bool,
+    pub available: bool,
+}
+
 /// Info for rendering the session dropdown
 pub struct SessionDropdownInfo {
     /// List of sessions as (id, display_title) pairs
@@ -4317,6 +4348,98 @@ impl Renderer {
             self.text_pipeline.push_char(c, hint_x + i as f32 * char_scale, footer_y, hint_color);
         }
     }
+
+    /// Build the context picker overlay
+    fn build_context_picker(&mut self, info: &ContextPickerInfo, window_width: f32, window_height: f32) {
+        let anim = info.animation;
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+        let char_scale = cell_width * 0.85;
+
+        // Scrim
+        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
+        self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
+
+        // Card geometry
+        let padding = cell_width * 2.0;
+        let line_height = cell_height * 2.2;
+        let title_height = cell_height * 2.5;
+        let footer_height = cell_height * 1.8;
+        let content_height = info.sources.len() as f32 * line_height;
+        let card_height = padding + title_height + content_height + footer_height + padding * 0.5;
+        let card_width = (cell_width * 45.0).max(400.0).min(window_width * 0.6);
+        let card_x = (window_width - card_width) / 2.0;
+        let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -20.0;
+
+        // Card background
+        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, card_height, card_bg, 12.0);
+
+        // Card border
+        let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
+
+        // Title
+        let title_y = card_y + padding;
+        let title = "Insert Context";
+        let title_color = adjust_alpha(self.ui.palette_accent, anim);
+        let title_x = card_x + (card_width - title.chars().count() as f32 * cell_width) / 2.0;
+        for (i, c) in title.chars().enumerate() {
+            self.text_pipeline.push_char(c, title_x + i as f32 * cell_width, title_y, title_color);
+        }
+
+        // Source list
+        let content_start_y = title_y + title_height;
+        let text_color = adjust_alpha(self.ui.palette_text, anim);
+        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let highlight_color = adjust_alpha(self.ui.palette_accent, 0.12 * anim);
+        let check_color = adjust_alpha(self.ui.palette_accent, anim);
+
+        for (row, source) in info.sources.iter().enumerate() {
+            let line_y = content_start_y + row as f32 * line_height;
+            let line_x = card_x + padding;
+
+            // Highlight selected row
+            if row == info.selected_index {
+                self.rect_pipeline.push_rounded_rect(
+                    card_x + 4.0, line_y, card_width - 8.0, line_height, highlight_color, 4.0,
+                );
+            }
+
+            // Checkbox
+            let checkbox = if source.selected { "[✓] " } else { "[ ] " };
+            let cb_color = if source.available { check_color } else { dim_color };
+            let mut cx = line_x;
+            for c in checkbox.chars() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, cx, line_y + (line_height - cell_height) / 2.0, cb_color);
+                }
+                cx += char_scale;
+            }
+
+            // Label
+            let label_color = if source.available { text_color } else { dim_color };
+            for c in source.label.chars() {
+                if cx + char_scale > card_x + card_width - padding {
+                    break;
+                }
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, cx, line_y + (line_height - cell_height) / 2.0, label_color);
+                }
+                cx += char_scale;
+            }
+        }
+
+        // Footer hints
+        let footer_y = card_y + card_height - footer_height;
+        let hint = "↑↓ Navigate  Space Toggle  Enter Inject  Esc Cancel";
+        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
+        for (i, c) in hint.chars().enumerate() {
+            self.text_pipeline.push_char(c, hint_x + i as f32 * char_scale, footer_y, hint_color);
+        }
+    }
+
     /// Hit-test the session management panel
     pub fn session_panel_hit_test(
         &self,

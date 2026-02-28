@@ -35,6 +35,7 @@ use crate::ui::command_palette::{CommandPalette, PaletteResult, CommandSource, R
 use crate::ui::command_palette::palette::core_commands;
 use crate::ui::info_overlay::InfoOverlay;
 use crate::ui::diff_review::DiffReviewOverlay;
+use crate::ui::context_picker::ContextPicker;
 
 /// Main application state
 ///
@@ -139,6 +140,8 @@ pub struct App {
     info_overlay: InfoOverlay,
     /// Diff review overlay
     diff_review: DiffReviewOverlay,
+    /// Context picker modal
+    context_picker: ContextPicker,
 }
 
 impl App {
@@ -212,6 +215,7 @@ impl App {
             command_palette: CommandPalette::new(),
             info_overlay: InfoOverlay::new(),
             diff_review: DiffReviewOverlay::new(),
+            context_picker: ContextPicker::new(),
         });
 
         let mut app = result?;
@@ -850,6 +854,31 @@ impl App {
             }
         }
 
+        // Build context picker overlay if visible
+        let context_picker_data = if self.context_picker.is_visible() {
+            Some(crate::renderer::ContextPickerInfo {
+                sources: self.context_picker.sources.iter().map(|s| {
+                    crate::renderer::ContextPickerSource {
+                        label: s.label.clone(),
+                        selected: s.selected,
+                        available: s.available,
+                    }
+                }).collect(),
+                selected_index: self.context_picker.selected_index,
+                animation: self.context_picker.animation(),
+            })
+        } else {
+            None
+        };
+        renderer.set_context_picker(context_picker_data);
+
+        // Update context picker animation
+        if self.context_picker.update_animation() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
         renderer.set_git_completions(if self.git_completions_visible && !self.git_completions.is_empty() {
             Some(crate::renderer::GitCompletionInfo {
@@ -1278,6 +1307,10 @@ impl App {
                 self.copy_latest_diff();
                 return;
             }
+            "claude-code.insert-context" => {
+                self.open_context_picker();
+                return;
+            }
             _ => {}
         }
         let ctx = self.build_plugin_context();
@@ -1316,6 +1349,46 @@ impl App {
             }
         }
         log::info!("No diffs to copy");
+    }
+
+    /// Open the context picker modal
+    fn open_context_picker(&mut self) {
+        let cwd = if let Some(tabs) = &self.tabs {
+            tabs.plugin_tab_cwd("claude-code")
+                .or_else(|| tabs.iter().find(|(_, t)| !t.closed).and_then(|(_, t)| t.working_directory()))
+        } else {
+            None
+        };
+        self.context_picker.open(cwd);
+    }
+
+    /// Gather context and inject it into the Claude Code tab
+    fn inject_context(&mut self) {
+        // Get terminal output from active shell tab (if selected)
+        let terminal_output = if let Some(tabs) = &self.tabs {
+            // Get output from the first non-plugin tab
+            tabs.iter()
+                .find(|(_, t)| matches!(t.tab_type, crate::tabs::TabType::Shell) && !t.closed)
+                .map(|(_, tab)| {
+                    let lines = tab.terminal.grid().export_scrollback_text();
+                    let start = lines.len().saturating_sub(50);
+                    lines[start..].join("\n")
+                })
+        } else {
+            None
+        };
+
+        let assembled = self.context_picker.gather(terminal_output);
+
+        // Inject into Claude Code tab's PTY
+        if let Some(tabs) = &mut self.tabs {
+            // Wrap in a clear marker so Claude can parse it
+            let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", assembled);
+            tabs.write_to_plugin_tab("claude-code", injected.as_bytes());
+            log::info!("Injected {} chars of context into Claude Code", injected.len());
+        }
+
+        self.context_picker.dismiss();
     }
 
     /// Execute a list of plugin actions.
