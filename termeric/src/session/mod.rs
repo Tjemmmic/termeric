@@ -11,6 +11,8 @@
 pub mod save;
 pub mod restore;
 pub mod panel;
+pub mod transcript;
+pub mod export;
 
 pub use save::save_session;
 pub use restore::restore_session;
