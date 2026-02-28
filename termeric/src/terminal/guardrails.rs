@@ -3,6 +3,13 @@
 //! Scans PTY input for dangerous patterns (rm -rf, sudo, dd, mkfs, etc.)
 //! and triggers a confirmation prompt before allowing the command through.
 
+/// Get the current username
+fn whoami() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
 /// A matched destructive command
 #[derive(Debug, Clone)]
 pub struct GuardrailMatch {
@@ -12,6 +19,10 @@ pub struct GuardrailMatch {
     pub reason: String,
     /// Severity level
     pub severity: Severity,
+    /// Where this will execute (e.g., "Local", "SSH: dev01", "docker: devbox")
+    pub target: String,
+    /// As which user (e.g., "root", "deploy")
+    pub user: String,
 }
 
 /// Threat severity
@@ -70,6 +81,8 @@ pub fn check_command(input: &str) -> Option<GuardrailMatch> {
                     command: trimmed.to_string(),
                     reason: reason.to_string(),
                     severity,
+                    target: "Local".to_string(),
+                    user: whoami(),
                 });
             }
         }

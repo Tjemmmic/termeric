@@ -75,6 +75,16 @@ pub enum PluginAction {
     RestartPlugin { plugin_id: String },
     /// Copy N lines from a plugin tab to clipboard
     CopyFromPluginTab { plugin_id: String, lines: usize },
+    /// Apply a detected diff to the filesystem via `git apply`
+    ApplyDiff { diff_content: String, cwd: Option<String> },
+    /// Stage a detected diff via `git apply --cached`
+    StageDiff { diff_content: String, cwd: Option<String> },
+    /// Revert a detected diff via `git apply --reverse`
+    RevertDiff { diff_content: String, cwd: Option<String> },
+    /// Toggle transcript recording for the active Claude session
+    ToggleTranscript,
+    /// Inject context text into the active plugin tab
+    InjectContext { text: String },
 }
 
 /// Metadata for a command a plugin contributes to the command palette.

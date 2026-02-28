@@ -37,6 +37,10 @@ pub enum ContextKind {
     FileTree,
     /// Last N lines from any terminal tab
     TerminalOutput { lines: usize },
+    /// Last detected test output (PASS/FAIL/error patterns)
+    TestOutput,
+    /// Specific files (file content injection)
+    SpecificFiles { paths: Vec<String> },
 }
 
 /// Context picker overlay state
@@ -76,17 +80,18 @@ impl ContextPicker {
     /// Open the context picker with the given working directory
     pub fn open(&mut self, cwd: Option<String>) {
         self.cwd = cwd.clone();
+        let in_git = is_git_repo(cwd.as_deref());
         self.sources = vec![
             ContextSource {
                 label: "Git Diff (unstaged)".into(),
                 selected: true,
-                available: is_git_repo(cwd.as_deref()),
+                available: in_git,
                 kind: ContextKind::GitDiffUnstaged,
             },
             ContextSource {
                 label: "Git Diff (staged)".into(),
                 selected: false,
-                available: is_git_repo(cwd.as_deref()),
+                available: in_git,
                 kind: ContextKind::GitDiffStaged,
             },
             ContextSource {
@@ -100,6 +105,18 @@ impl ContextPicker {
                 selected: false,
                 available: true,
                 kind: ContextKind::TerminalOutput { lines: 50 },
+            },
+            ContextSource {
+                label: "Last Test Output".into(),
+                selected: false,
+                available: true,
+                kind: ContextKind::TestOutput,
+            },
+            ContextSource {
+                label: "Specific Files...".into(),
+                selected: false,
+                available: in_git,
+                kind: ContextKind::SpecificFiles { paths: Vec::new() },
             },
         ];
         self.selected_index = 0;
@@ -165,6 +182,21 @@ impl ContextPicker {
                     if let Some(ref output) = terminal_output {
                         if !output.trim().is_empty() {
                             parts.push(format!("=== Recent Terminal Output ===\n{}", truncate(output, MAX_SOURCE_CHARS)));
+                        }
+                    }
+                }
+                ContextKind::TestOutput => {
+                    if let Some(ref output) = terminal_output {
+                        if let Some(test_output) = extract_test_output(output) {
+                            parts.push(format!("=== Test Output ===\n{}", truncate(&test_output, MAX_SOURCE_CHARS)));
+                        }
+                    }
+                }
+                ContextKind::SpecificFiles { paths } => {
+                    for path in paths {
+                        if let Ok(content) = std::fs::read_to_string(path) {
+                            let truncated = truncate(&content, MAX_SOURCE_CHARS);
+                            parts.push(format!("=== File: {} ===\n{}", path, truncated));
                         }
                     }
                 }
@@ -271,6 +303,56 @@ fn run_file_tree(cwd: Option<&str>) -> Option<String> {
     }
 }
 
+/// Extract test-related output from terminal text.
+///
+/// Looks for patterns that indicate test output: PASS, FAIL, error[E,
+/// "panicked at", "test result:", and captures the surrounding block.
+pub fn extract_test_output(output: &str) -> Option<String> {
+    let test_patterns = [
+        "test result:",
+        "PASS",
+        "FAIL",
+        "panicked at",
+        "error[E",
+        "PASSED",
+        "FAILED",
+        "tests passed",
+        "tests failed",
+    ];
+
+    let lines: Vec<&str> = output.lines().collect();
+    let mut test_lines = Vec::new();
+    let mut in_test_block = false;
+    let mut last_test_line = 0;
+
+    for (i, line) in lines.iter().enumerate() {
+        let is_test_line = test_patterns.iter().any(|p| line.contains(p));
+        if is_test_line {
+            // Include 5 lines of context before the first match
+            if !in_test_block {
+                let start = i.saturating_sub(5);
+                for prev in &lines[start..i] {
+                    test_lines.push(*prev);
+                }
+            }
+            in_test_block = true;
+            last_test_line = i;
+            test_lines.push(line);
+        } else if in_test_block && i - last_test_line < 3 {
+            // Include a few lines after test output
+            test_lines.push(line);
+        } else {
+            in_test_block = false;
+        }
+    }
+
+    if test_lines.is_empty() {
+        None
+    } else {
+        Some(test_lines.join("\n"))
+    }
+}
+
 /// Truncate a string to a maximum number of characters
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
@@ -282,5 +364,31 @@ fn truncate(s: &str, max: usize) -> &str {
             end -= 1;
         }
         &s[..end]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_test_output() {
+        let output = "some random output\ncompiling...\ntest foo ... ok\ntest bar ... FAIL\ntest result: 1 passed; 1 failed\nmore stuff";
+        let extracted = extract_test_output(output).unwrap();
+        assert!(extracted.contains("FAIL"));
+        assert!(extracted.contains("test result:"));
+    }
+
+    #[test]
+    fn test_extract_test_output_none() {
+        let output = "hello world\nno test results here";
+        assert!(extract_test_output(output).is_none());
+    }
+
+    #[test]
+    fn test_extract_test_output_rust_panic() {
+        let output = "running tests\nthread 'main' panicked at 'assertion failed'\nnote: run with RUST_BACKTRACE=1";
+        let extracted = extract_test_output(output).unwrap();
+        assert!(extracted.contains("panicked at"));
     }
 }

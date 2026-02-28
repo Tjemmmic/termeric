@@ -3044,6 +3044,10 @@ pub struct GuardrailInfo {
     pub reason: String,
     pub is_critical: bool,
     pub animation: f32,
+    /// Where the command will run (e.g., "Local", "SSH: dev01")
+    pub target: String,
+    /// As which user (e.g., "root", "deploy")
+    pub user: String,
 }
 
 /// Info for rendering the session dropdown
@@ -4644,8 +4648,9 @@ impl Renderer {
         let title_height = cell_height * 2.5;
         let cmd_height = cell_height * 2.0;
         let reason_height = cell_height * 1.8;
+        let context_height = cell_height * 1.5;
         let footer_height = cell_height * 1.8;
-        let card_height = padding + title_height + cmd_height + reason_height + footer_height + padding;
+        let card_height = padding + title_height + cmd_height + reason_height + context_height + footer_height + padding;
         let card_width = (cell_width * 50.0).max(400.0).min(window_width * 0.7);
         let card_x = (window_width - card_width) / 2.0;
         let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -20.0;
@@ -4701,6 +4706,21 @@ impl Renderer {
             }
             if !c.is_whitespace() {
                 self.text_pipeline.push_char(c, cx, reason_y, reason_color);
+            }
+        }
+
+        // Context line: "Where: <target> · As: <user>"
+        let context_y = reason_y + reason_height;
+        let context_label = format!("Where: {} · As: {}", info.target, info.user);
+        let context_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
+        let context_x = card_x + padding;
+        for (i, c) in context_label.chars().enumerate() {
+            let cx = context_x + i as f32 * char_scale;
+            if cx + char_scale > card_x + card_width - padding {
+                break;
+            }
+            if !c.is_whitespace() {
+                self.text_pipeline.push_char(c, cx, context_y, context_color);
             }
         }
 
