@@ -312,6 +312,7 @@ impl TabManager {
                 slide_progress: tab.slide_progress(),
                 close_progress: tab.close_progress(),
                 tab_type: tab.tab_type.clone(),
+                unreviewed_diff_count: tab.diff_detector.unreviewed_count(),
             })
             .collect()
     }
@@ -407,6 +408,8 @@ pub struct TabInfo {
     pub close_progress: f32,
     /// What type of tab this is
     pub tab_type: TabType,
+    /// Number of unreviewed diffs detected in this tab
+    pub unreviewed_diff_count: usize,
 }
 
 #[cfg(test)]

@@ -34,6 +34,7 @@ use crate::plugin::claude_code::ClaudeCodePlugin;
 use crate::ui::command_palette::{CommandPalette, PaletteResult, CommandSource, RegisteredCommand};
 use crate::ui::command_palette::palette::core_commands;
 use crate::ui::info_overlay::InfoOverlay;
+use crate::ui::diff_review::DiffReviewOverlay;
 
 /// Main application state
 ///
@@ -136,6 +137,8 @@ pub struct App {
     command_palette: CommandPalette,
     /// Info overlay (About/Version)
     info_overlay: InfoOverlay,
+    /// Diff review overlay
+    diff_review: DiffReviewOverlay,
 }
 
 impl App {
@@ -208,6 +211,7 @@ impl App {
             plugin_manager: PluginManager::new(),
             command_palette: CommandPalette::new(),
             info_overlay: InfoOverlay::new(),
+            diff_review: DiffReviewOverlay::new(),
         });
 
         let mut app = result?;
@@ -811,6 +815,41 @@ impl App {
             }
         }
 
+        // Build diff review overlay if visible
+        let diff_review_data = if self.diff_review.is_visible() {
+            self.diff_review.diff.as_ref().map(|diff| {
+                use crate::terminal::diff_detector::DiffLine;
+                let mut lines = Vec::new();
+                for hunk in &diff.hunks {
+                    lines.push(crate::renderer::DiffReviewLine::Header(hunk.header.clone()));
+                    for dl in &hunk.lines {
+                        lines.push(match dl {
+                            DiffLine::Context(s) => crate::renderer::DiffReviewLine::Context(s.clone()),
+                            DiffLine::Added(s) => crate::renderer::DiffReviewLine::Added(s.clone()),
+                            DiffLine::Removed(s) => crate::renderer::DiffReviewLine::Removed(s.clone()),
+                        });
+                    }
+                    lines.push(crate::renderer::DiffReviewLine::Blank);
+                }
+                crate::renderer::DiffReviewInfo {
+                    filename: diff.filename.clone(),
+                    lines,
+                    scroll_offset: self.diff_review.scroll_offset,
+                    animation: self.diff_review.animation(),
+                }
+            })
+        } else {
+            None
+        };
+        renderer.set_diff_review(diff_review_data);
+
+        // Update diff review animation
+        if self.diff_review.update_animation() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
         renderer.set_git_completions(if self.git_completions_visible && !self.git_completions.is_empty() {
             Some(crate::renderer::GitCompletionInfo {
@@ -1229,10 +1268,54 @@ impl App {
 
     /// Execute a plugin command by ID.
     fn execute_plugin_command(&mut self, command_id: &str) {
+        // Handle diff-related commands directly (need App state access)
+        match command_id {
+            "claude-code.review-diff" => {
+                self.open_diff_review();
+                return;
+            }
+            "claude-code.copy-diff" => {
+                self.copy_latest_diff();
+                return;
+            }
+            _ => {}
+        }
         let ctx = self.build_plugin_context();
         if let Some(action) = self.plugin_manager.execute_command(command_id, &ctx) {
             self.execute_plugin_actions(vec![action]);
         }
+    }
+
+    /// Open the diff review overlay with the latest unreviewed diff
+    fn open_diff_review(&mut self) {
+        if let Some(tabs) = &self.tabs {
+            // Find the first tab with unreviewed diffs
+            for (i, tab) in tabs.iter() {
+                if tab.diff_detector.unreviewed_count() > 0 {
+                    if let Some(diff) = tab.diff_detector.latest_unreviewed() {
+                        self.diff_review.show(diff.clone(), i);
+                        return;
+                    }
+                }
+            }
+        }
+        log::info!("No unreviewed diffs to show");
+    }
+
+    /// Copy the latest detected diff to clipboard
+    fn copy_latest_diff(&mut self) {
+        if let Some(tabs) = &self.tabs {
+            for (_, tab) in tabs.iter() {
+                if let Some(diff) = tab.diff_detector.latest_unreviewed() {
+                    if let Some(clipboard) = &mut self.clipboard {
+                        let _ = clipboard.set_text(diff.raw.clone());
+                        log::info!("Copied diff for '{}' to clipboard", diff.filename);
+                    }
+                    return;
+                }
+            }
+        }
+        log::info!("No diffs to copy");
     }
 
     /// Execute a list of plugin actions.

@@ -284,6 +284,7 @@ pub struct Renderer {
     git_completions: Option<GitCompletionInfo>,
     // Info overlay state (About/Version)
     info_overlay: Option<InfoOverlayInfo>,
+    diff_review: Option<DiffReviewInfo>,
 }
 
 impl Renderer {
@@ -381,6 +382,7 @@ impl Renderer {
             tab_bar_hover_progress: 0.0,
             git_completions: None,
             info_overlay: None,
+            diff_review: None,
         })
     }
 
@@ -514,6 +516,10 @@ impl Renderer {
     /// Set info overlay data for rendering
     pub fn set_info_overlay(&mut self, info: Option<InfoOverlayInfo>) {
         self.info_overlay = info;
+    }
+
+    pub fn set_diff_review(&mut self, info: Option<DiffReviewInfo>) {
+        self.diff_review = info;
     }
 
     /// Add dividers between panes to the render data
@@ -1004,6 +1010,15 @@ impl Renderer {
                 self.build_info_overlay(info, window_width, window_height);
             }
         }
+
+        // ── LAYER 10: Diff review overlay (topmost) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.diff_review.clone() {
+            if info.animation > 0.001 {
+                self.build_diff_review(info, window_width, window_height);
+            }
+        }
     }
 
     /// Build tab bar render data
@@ -1135,6 +1150,33 @@ impl Renderer {
                             self.text_pipeline.push_char(c, text_x, text_y, text_color);
                         }
                         text_x += self.cell_width * 0.85;
+                    }
+
+                    // Diff count pill badge
+                    if tab.unreviewed_diff_count > 0 {
+                        let badge_x = text_x + 2.0;
+                        let badge_y = text_y + 1.0;
+                        let badge_w = self.cell_width * 1.8;
+                        let badge_h = self.cell_height - 2.0;
+                        // Only show if there's room before the close button
+                        if badge_x + badge_w < x + tab_width - right_reserve {
+                            let badge_color = [
+                                self.ui.palette_accent[0],
+                                self.ui.palette_accent[1],
+                                self.ui.palette_accent[2],
+                                0.8 * text_alpha,
+                            ];
+                            self.rect_pipeline.push_rounded_rect(
+                                badge_x, badge_y, badge_w, badge_h, badge_color, 3.0,
+                            );
+                            // Badge text (diff count)
+                            let count_str = format!("{}", tab.unreviewed_diff_count);
+                            let count_x = badge_x + (badge_w - count_str.len() as f32 * self.cell_width * 0.85) / 2.0;
+                            let count_color = [0.0, 0.0, 0.0, text_alpha];
+                            for c in count_str.chars() {
+                                self.text_pipeline.push_char(c, count_x, text_y, count_color);
+                            }
+                        }
                     }
 
                     // ── Close (×) button ──
@@ -2762,6 +2804,30 @@ pub struct InfoOverlayInfo {
     pub animation: f32,
 }
 
+/// Info for rendering the diff review overlay
+#[derive(Debug, Clone)]
+pub struct DiffReviewInfo {
+    pub filename: String,
+    pub lines: Vec<DiffReviewLine>,
+    pub scroll_offset: usize,
+    pub animation: f32,
+}
+
+/// A single line in the diff review overlay
+#[derive(Debug, Clone)]
+pub enum DiffReviewLine {
+    /// Section header (e.g., @@ -1,3 +1,4 @@)
+    Header(String),
+    /// Context (unchanged) line
+    Context(String),
+    /// Added line (+)
+    Added(String),
+    /// Removed line (-)
+    Removed(String),
+    /// Blank separator
+    Blank,
+}
+
 /// Info for rendering the session dropdown
 pub struct SessionDropdownInfo {
     /// List of sessions as (id, display_title) pairs
@@ -4132,6 +4198,125 @@ impl Renderer {
         }
     }
 
+    /// Build the diff review overlay
+    fn build_diff_review(&mut self, info: &DiffReviewInfo, window_width: f32, window_height: f32) {
+        let anim = info.animation;
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+        let char_scale = cell_width * 0.85;
+
+        // Scrim
+        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
+        self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
+
+        // Card geometry — wider than info overlay for code content
+        let padding = cell_width * 1.5;
+        let line_height = cell_height * 1.4;
+        let title_height = cell_height * 2.5;
+        let footer_height = cell_height * 1.6;
+        let card_width = (cell_width * 80.0).max(500.0).min(window_width * 0.85);
+        let max_visible_lines = ((window_height * 0.6) / line_height) as usize;
+        let visible_lines = max_visible_lines.min(info.lines.len().saturating_sub(info.scroll_offset));
+        let content_height = visible_lines as f32 * line_height;
+        let card_height = padding + title_height + content_height + footer_height + padding * 0.5;
+        let card_x = (window_width - card_width) / 2.0;
+        let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -20.0;
+
+        // Card background
+        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, card_height, card_bg, 12.0);
+
+        // Card border
+        let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
+
+        // Title — filename
+        let title_y = card_y + padding;
+        let title = format!("Diff: {}", info.filename);
+        let title_color = adjust_alpha(self.ui.palette_accent, anim);
+        let title_x = card_x + padding;
+        for (i, c) in title.chars().enumerate() {
+            let cx = title_x + i as f32 * char_scale;
+            if cx + char_scale > card_x + card_width - padding {
+                break;
+            }
+            self.text_pipeline.push_char(c, cx, title_y, title_color);
+        }
+
+        // Diff content — color-coded lines
+        let content_start_y = title_y + title_height;
+        let text_color = adjust_alpha(self.ui.palette_text, anim);
+        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * anim);
+        let added_color = adjust_alpha([0.4, 0.85, 0.4, 1.0], anim);
+        let removed_color = adjust_alpha([0.9, 0.4, 0.4, 1.0], anim);
+        let header_color = adjust_alpha([0.5, 0.6, 0.9, 1.0], anim);
+        let added_bg = adjust_alpha([0.2, 0.5, 0.2, 0.15], anim);
+        let removed_bg = adjust_alpha([0.5, 0.2, 0.2, 0.15], anim);
+
+        for (row_idx, line) in info.lines.iter().skip(info.scroll_offset).take(max_visible_lines).enumerate() {
+            let line_y = content_start_y + row_idx as f32 * line_height;
+            let line_x = card_x + padding;
+
+            let (text, color, bg) = match line {
+                DiffReviewLine::Header(s) => (s.as_str(), header_color, None),
+                DiffReviewLine::Context(s) => (s.as_str(), dim_color, None),
+                DiffReviewLine::Added(s) => (s.as_str(), added_color, Some(added_bg)),
+                DiffReviewLine::Removed(s) => (s.as_str(), removed_color, Some(removed_bg)),
+                DiffReviewLine::Blank => continue,
+            };
+
+            // Line background for +/- lines
+            if let Some(bg_color) = bg {
+                self.rect_pipeline.push_rect(
+                    card_x + 2.0, line_y, card_width - 4.0, line_height, bg_color,
+                );
+            }
+
+            // Prefix for diff lines
+            let prefix = match line {
+                DiffReviewLine::Added(_) => "+ ",
+                DiffReviewLine::Removed(_) => "- ",
+                DiffReviewLine::Header(_) => "",
+                DiffReviewLine::Context(_) => "  ",
+                DiffReviewLine::Blank => "",
+            };
+
+            let mut cx = line_x;
+            for c in prefix.chars().chain(text.chars()) {
+                if cx + char_scale > card_x + card_width - padding {
+                    break;
+                }
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(c, cx, line_y, color);
+                }
+                cx += char_scale;
+            }
+        }
+
+        // Scroll indicator
+        if info.lines.len() > max_visible_lines {
+            let scrollbar_x = card_x + card_width - 6.0;
+            let scrollbar_h = content_height;
+            let scrollbar_y = content_start_y;
+            let ratio = max_visible_lines as f32 / info.lines.len() as f32;
+            let thumb_h = (scrollbar_h * ratio).max(10.0);
+            let scroll_ratio = info.scroll_offset as f32 / (info.lines.len() - max_visible_lines) as f32;
+            let thumb_y = scrollbar_y + (scrollbar_h - thumb_h) * scroll_ratio;
+            let track_color = adjust_alpha(self.ui.palette_border, 0.2 * anim);
+            let thumb_color = adjust_alpha(self.ui.palette_accent, 0.4 * anim);
+            self.rect_pipeline.push_rounded_rect(scrollbar_x, scrollbar_y, 4.0, scrollbar_h, track_color, 2.0);
+            self.rect_pipeline.push_rounded_rect(scrollbar_x, thumb_y, 4.0, thumb_h, thumb_color, 2.0);
+        }
+
+        // Footer hints
+        let footer_y = card_y + card_height - footer_height;
+        let hint = "↑↓ Scroll  c Copy  Esc Close";
+        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
+        for (i, c) in hint.chars().enumerate() {
+            self.text_pipeline.push_char(c, hint_x + i as f32 * char_scale, footer_y, hint_color);
+        }
+    }
     /// Hit-test the session management panel
     pub fn session_panel_hit_test(
         &self,

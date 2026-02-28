@@ -9,6 +9,7 @@ use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
 use crate::terminal::container::TerminalContainer;
+use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
 use crate::session::Session;
 
 use super::title::{get_process_cwd, dir_name_from_path, abbreviate_path, get_foreground_process};
@@ -54,6 +55,8 @@ pub struct Tab {
     pub(crate) last_command: Option<String>,
     /// What kind of tab this is (shell, plugin, etc.)
     pub tab_type: TabType,
+    /// Diff detector for plugin tabs (watches output for unified diffs)
+    pub diff_detector: DiffDetector,
 }
 
 impl Tab {
@@ -89,6 +92,7 @@ impl Tab {
             session_id: None,
             last_command: None,
             tab_type: TabType::Shell,
+            diff_detector: DiffDetector::new(),
         })
     }
 
@@ -142,6 +146,7 @@ impl Tab {
             session_id: None,
             last_command: Some(program.to_string()),
             tab_type: tab_type.unwrap_or(TabType::Shell),
+            diff_detector: DiffDetector::new(),
         })
     }
 
@@ -152,6 +157,15 @@ impl Tab {
         while let Ok(event) = self.pty_rx.try_recv() {
             match event {
                 PtyEvent::Output(data) => {
+                    // Feed output to diff detector for plugin tabs
+                    if matches!(self.tab_type, TabType::Plugin { .. }) {
+                        if let Ok(text) = std::str::from_utf8(&data) {
+                            for line in text.lines() {
+                                let clean = strip_ansi(line);
+                                self.diff_detector.feed_line(&clean);
+                            }
+                        }
+                    }
                     self.terminal.process(&data);
                     had_output = true;
                 }
@@ -169,6 +183,10 @@ impl Tab {
         // Update title when there's output (directory may have changed)
         if had_output {
             self.update_title();
+            // Flush the diff detector to finalize any in-progress diffs
+            if matches!(self.tab_type, TabType::Plugin { .. }) {
+                self.diff_detector.flush();
+            }
         }
 
         // Drain any terminal events that were emitted during processing
@@ -254,6 +272,7 @@ impl Tab {
             session_id: None,
             last_command: None,
             tab_type: TabType::Shell,
+            diff_detector: DiffDetector::new(),
         })
     }
 

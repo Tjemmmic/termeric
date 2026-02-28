@@ -126,6 +126,8 @@ impl Plugin for ClaudeCodePlugin {
                 "claude-code.restart" => HookResponse::Action(PluginAction::RestartPlugin {
                     plugin_id: "claude-code".to_string(),
                 }),
+                // review-diff and copy-diff are handled directly by the App
+                "claude-code.review-diff" | "claude-code.copy-diff" => HookResponse::Handled,
                 _ => HookResponse::Ignored,
             },
             _ => HookResponse::Ignored,
@@ -162,6 +164,18 @@ impl Plugin for ClaudeCodePlugin {
                 id: "claude-code.restart".to_string(),
                 name: "Claude Code: Restart".to_string(),
                 description: "Close and reopen Claude Code in the same directory".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.review-diff".to_string(),
+                name: "Claude Code: Review Diff".to_string(),
+                description: "Open the diff review overlay for detected changes".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.copy-diff".to_string(),
+                name: "Claude Code: Copy Diff".to_string(),
+                description: "Copy the latest detected diff to clipboard".to_string(),
                 category: Some("AI".to_string()),
             },
         ]
@@ -230,12 +244,14 @@ mod tests {
     fn test_plugin_commands() {
         let plugin = ClaudeCodePlugin::new(ClaudeCodeConfig::default());
         let commands = plugin.commands();
-        assert_eq!(commands.len(), 5);
+        assert_eq!(commands.len(), 7);
         assert_eq!(commands[0].id, "claude-code.open");
         assert_eq!(commands[1].id, "claude-code.resume");
         assert_eq!(commands[2].id, "claude-code.copy-last");
         assert_eq!(commands[3].id, "claude-code.clear");
         assert_eq!(commands[4].id, "claude-code.restart");
+        assert_eq!(commands[5].id, "claude-code.review-diff");
+        assert_eq!(commands[6].id, "claude-code.copy-diff");
     }
 
     #[test]

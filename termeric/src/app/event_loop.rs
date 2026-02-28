@@ -109,6 +109,54 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // Handle diff review overlay input
+                if self.diff_review.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                // Mark diffs as reviewed before dismissing
+                                if let (Some(tab_idx), Some(tabs)) = (self.diff_review.diff_tab_index, &mut self.tabs) {
+                                    if let Some((_, tab)) = tabs.iter().enumerate().find(|(i, _)| *i == tab_idx) {
+                                        // We can't mutate through iter(), use the index directly
+                                    }
+                                    // Mark via active tab's diff detector
+                                    if let Some(tab) = tabs.active_tab_mut() {
+                                        tab.diff_detector.mark_all_reviewed();
+                                    }
+                                }
+                                self.diff_review.dismiss();
+                            }
+                            Key::Named(NamedKey::ArrowUp) => {
+                                self.diff_review.scroll_up(3);
+                            }
+                            Key::Character(k) if k == "k" => {
+                                self.diff_review.scroll_up(3);
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                self.diff_review.scroll_down(3);
+                            }
+                            Key::Character(k) if k == "j" => {
+                                self.diff_review.scroll_down(3);
+                            }
+                            Key::Character(c) if c == "c" => {
+                                // Copy raw diff to clipboard
+                                if let Some(raw) = self.diff_review.raw_text() {
+                                    if let Some(clipboard) = &mut self.clipboard {
+                                        let _ = clipboard.set_text(raw.to_string());
+                                        log::info!("Copied diff to clipboard");
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 // Handle command palette input first (highest priority when open)
                 if self.command_palette.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
