@@ -1118,8 +1118,9 @@ impl App {
         }
     }
 
-    /// Handle an action triggered by a keybinding
-    fn handle_action(&mut self, action: Action) {
+    /// Handle an action triggered by a keybinding.
+    /// Returns true if the action was handled and the key should be consumed.
+    fn handle_action(&mut self, action: Action) -> bool {
         match action {
             Action::Copy => {
                 self.copy_selection();
@@ -1151,6 +1152,10 @@ impl App {
                 }
             }
             Action::ClearSelection => {
+                // Only consume the key if there's actually a selection to clear
+                if self.mouse_state.current_selection().is_none() {
+                    return false;
+                }
                 self.mouse_state.clear_selection();
                 if let Some(terminal) = self.active_terminal_mut() {
                     terminal.set_selection(None);
@@ -1263,6 +1268,7 @@ impl App {
                 }
             }
         }
+        true
     }
 
     /// Handle the result of executing a command from the palette
@@ -1532,7 +1538,113 @@ impl App {
                         self.execute_plugin_actions(vec![action]);
                     }
                 }
+                PluginAction::ApplyDiff { diff_content, cwd } => {
+                    self.apply_diff_via_git(&diff_content, cwd.as_deref(), false);
+                }
+                PluginAction::StageDiff { diff_content, cwd } => {
+                    self.apply_diff_via_git(&diff_content, cwd.as_deref(), true);
+                }
+                PluginAction::RevertDiff { diff_content, cwd } => {
+                    self.revert_diff_via_git(&diff_content, cwd.as_deref());
+                }
+                PluginAction::ToggleTranscript => {
+                    self.toggle_transcript();
+                }
+                PluginAction::InjectContext { text } => {
+                    self.inject_context_to_plugin(&text);
+                }
             }
+        }
+    }
+
+    /// Apply a diff via `git apply`
+    fn apply_diff_via_git(&mut self, diff_content: &str, cwd: Option<&str>, staged: bool) {
+        use std::process::Command;
+        let mut cmd = Command::new("git");
+        cmd.arg("apply");
+        if staged {
+            cmd.arg("--cached");
+        }
+        cmd.stdin(std::process::Stdio::piped());
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        match cmd.spawn() {
+            Ok(mut child) => {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    use std::io::Write;
+                    let _ = stdin.write_all(diff_content.as_bytes());
+                }
+                match child.wait() {
+                    Ok(status) if status.success() => {
+                        let action = if staged { "staged" } else { "applied" };
+                        log::info!("Diff {} successfully", action);
+                        self.notifications.notify("Diff Applied", &format!("Diff {} successfully", action));
+                    }
+                    Ok(status) => {
+                        log::error!("git apply failed with status: {}", status);
+                        self.notifications.notify("Diff Failed", "git apply returned an error");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to wait for git apply: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to spawn git apply: {}", e);
+                self.notifications.notify("Diff Failed", &format!("Failed to run git: {}", e));
+            }
+        }
+    }
+
+    /// Revert a diff via `git apply --reverse`
+    fn revert_diff_via_git(&mut self, diff_content: &str, cwd: Option<&str>) {
+        use std::process::Command;
+        let mut cmd = Command::new("git");
+        cmd.args(["apply", "--reverse"]);
+        cmd.stdin(std::process::Stdio::piped());
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+        match cmd.spawn() {
+            Ok(mut child) => {
+                if let Some(stdin) = child.stdin.as_mut() {
+                    use std::io::Write;
+                    let _ = stdin.write_all(diff_content.as_bytes());
+                }
+                match child.wait() {
+                    Ok(status) if status.success() => {
+                        log::info!("Diff reverted successfully");
+                        self.notifications.notify("Diff Reverted", "Changes have been undone");
+                    }
+                    Ok(status) => {
+                        log::error!("git apply --reverse failed with status: {}", status);
+                        self.notifications.notify("Revert Failed", "git apply --reverse returned an error");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to wait for git apply: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to spawn git apply: {}", e);
+                self.notifications.notify("Revert Failed", &format!("Failed to run git: {}", e));
+            }
+        }
+    }
+
+    /// Toggle transcript recording for the active Claude session
+    fn toggle_transcript(&mut self) {
+        // TODO: Implement transcript toggle when transcript system is added
+        log::info!("Transcript toggle requested (not yet implemented)");
+    }
+
+    /// Inject context text into the active plugin tab
+    fn inject_context_to_plugin(&mut self, text: &str) {
+        if let Some(tabs) = &mut self.tabs {
+            let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
+            tabs.write_to_plugin_tab("claude-code", injected.as_bytes());
+            log::info!("Injected {} chars of context into Claude Code", injected.len());
         }
     }
 
@@ -2832,7 +2944,7 @@ impl App {
     }
 
     /// Check if a click position is within the scrollbar area
-    fn is_click_on_scrollbar(&self, x: f64, y: f64) -> bool {
+    fn is_click_on_scrollbar(&self, x: f64, _y: f64) -> bool {
         let Some(renderer) = &self.renderer else { return false };
         let (window_width, _) = renderer.window_size();
 

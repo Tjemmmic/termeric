@@ -143,7 +143,7 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Escape) => {
                                 // Mark diffs as reviewed before dismissing
                                 if let (Some(tab_idx), Some(tabs)) = (self.diff_review.diff_tab_index, &mut self.tabs) {
-                                    if let Some((_, tab)) = tabs.iter().enumerate().find(|(i, _)| *i == tab_idx) {
+                                    if tabs.iter().enumerate().any(|(i, _)| i == tab_idx) {
                                         // We can't mutate through iter(), use the index directly
                                     }
                                     // Mark via active tab's diff detector
@@ -418,8 +418,9 @@ impl ApplicationHandler for App {
 
                 // Check for default keybindings
                 if let Some(action) = check_keybinding(&event, self.modifiers) {
-                    self.handle_action(action);
-                    return;
+                    if self.handle_action(action) {
+                        return;
+                    }
                 }
 
                 // Convert key event to terminal input
