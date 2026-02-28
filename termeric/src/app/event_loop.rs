@@ -98,6 +98,32 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
+                // Handle guardrail confirmation (highest priority)
+                if self.guardrail.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Enter) => {
+                                // Confirm — send the pending data
+                                let data = self.guardrail.confirm();
+                                if let Some(tabs) = &mut self.tabs {
+                                    if let Some(tab) = tabs.active_tab_mut() {
+                                        let _ = tab.write(&data);
+                                    }
+                                }
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                self.guardrail.dismiss();
+                            }
+                            _ => {}
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 // Dismiss info overlay on any keypress (highest priority)
                 if self.info_overlay.is_active() {
                     if event.state == winit::event::ElementState::Pressed {

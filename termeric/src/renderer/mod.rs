@@ -286,6 +286,7 @@ pub struct Renderer {
     info_overlay: Option<InfoOverlayInfo>,
     diff_review: Option<DiffReviewInfo>,
     context_picker: Option<ContextPickerInfo>,
+    guardrail: Option<GuardrailInfo>,
 }
 
 impl Renderer {
@@ -385,6 +386,7 @@ impl Renderer {
             info_overlay: None,
             diff_review: None,
             context_picker: None,
+            guardrail: None,
         })
     }
 
@@ -526,6 +528,10 @@ impl Renderer {
 
     pub fn set_context_picker(&mut self, info: Option<ContextPickerInfo>) {
         self.context_picker = info;
+    }
+
+    pub fn set_guardrail(&mut self, info: Option<GuardrailInfo>) {
+        self.guardrail = info;
     }
 
     /// Add dividers between panes to the render data
@@ -1032,6 +1038,15 @@ impl Renderer {
         if let Some(ref info) = self.context_picker.clone() {
             if info.animation > 0.001 {
                 self.build_context_picker(info, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 12: Guardrail confirmation overlay (absolute topmost) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.guardrail.clone() {
+            if info.animation > 0.001 {
+                self.build_guardrail_confirmation(info, window_width, window_height);
             }
         }
     }
@@ -2859,6 +2874,15 @@ pub struct ContextPickerSource {
     pub available: bool,
 }
 
+/// Info for rendering the guardrail confirmation overlay
+#[derive(Debug, Clone)]
+pub struct GuardrailInfo {
+    pub command: String,
+    pub reason: String,
+    pub is_critical: bool,
+    pub animation: f32,
+}
+
 /// Info for rendering the session dropdown
 pub struct SessionDropdownInfo {
     /// List of sessions as (id, display_title) pairs
@@ -4433,6 +4457,93 @@ impl Renderer {
         // Footer hints
         let footer_y = card_y + card_height - footer_height;
         let hint = "↑↓ Navigate  Space Toggle  Enter Inject  Esc Cancel";
+        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
+        let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
+        for (i, c) in hint.chars().enumerate() {
+            self.text_pipeline.push_char(c, hint_x + i as f32 * char_scale, footer_y, hint_color);
+        }
+    }
+
+    /// Build the guardrail confirmation overlay
+    fn build_guardrail_confirmation(&mut self, info: &GuardrailInfo, window_width: f32, window_height: f32) {
+        let anim = info.animation;
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+        let char_scale = cell_width * 0.85;
+
+        // Scrim — stronger for dangerous operations
+        let scrim_alpha = if info.is_critical { 0.6 } else { 0.4 };
+        let scrim = adjust_alpha(self.ui.palette_scrim, scrim_alpha * anim);
+        self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
+
+        // Card geometry
+        let padding = cell_width * 2.0;
+        let title_height = cell_height * 2.5;
+        let cmd_height = cell_height * 2.0;
+        let reason_height = cell_height * 1.8;
+        let footer_height = cell_height * 1.8;
+        let card_height = padding + title_height + cmd_height + reason_height + footer_height + padding;
+        let card_width = (cell_width * 50.0).max(400.0).min(window_width * 0.7);
+        let card_x = (window_width - card_width) / 2.0;
+        let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -20.0;
+
+        // Card background with warning tint
+        let card_bg = if info.is_critical {
+            adjust_alpha([0.15, 0.05, 0.05, 1.0], anim)
+        } else {
+            adjust_alpha([0.12, 0.10, 0.03, 1.0], anim)
+        };
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, card_height, card_bg, 12.0);
+
+        // severity-colored top border bar
+        let border_color = if info.is_critical {
+            adjust_alpha([0.9, 0.2, 0.2, 0.8], anim)
+        } else {
+            adjust_alpha([0.9, 0.7, 0.2, 0.8], anim)
+        };
+        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, 3.0, border_color, 0.0);
+
+        // Title with icon
+        let title_y = card_y + padding;
+        let icon = if info.is_critical { "⛔ DANGEROUS COMMAND" } else { "⚠ Caution" };
+        let title_color = border_color;
+        let title_x = card_x + (card_width - icon.chars().count() as f32 * char_scale) / 2.0;
+        for (i, c) in icon.chars().enumerate() {
+            self.text_pipeline.push_char(c, title_x + i as f32 * char_scale, title_y, title_color);
+        }
+
+        // Command display
+        let cmd_y = title_y + title_height;
+        let cmd_label = format!("> {}", info.command);
+        let cmd_color = adjust_alpha(self.ui.palette_text, anim);
+        let cmd_x = card_x + padding;
+        for (i, c) in cmd_label.chars().enumerate() {
+            let cx = cmd_x + i as f32 * char_scale;
+            if cx + char_scale > card_x + card_width - padding {
+                break;
+            }
+            if !c.is_whitespace() {
+                self.text_pipeline.push_char(c, cx, cmd_y, cmd_color);
+            }
+        }
+
+        // Reason text
+        let reason_y = cmd_y + cmd_height;
+        let reason_color = adjust_alpha(self.ui.palette_text_dim, 0.8 * anim);
+        let reason_x = card_x + padding;
+        for (i, c) in info.reason.chars().enumerate() {
+            let cx = reason_x + i as f32 * char_scale;
+            if cx + char_scale > card_x + card_width - padding {
+                break;
+            }
+            if !c.is_whitespace() {
+                self.text_pipeline.push_char(c, cx, reason_y, reason_color);
+            }
+        }
+
+        // Footer hints
+        let footer_y = card_y + card_height - footer_height - padding * 0.5;
+        let hint = "Enter Confirm  Esc Cancel";
         let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
         let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
         for (i, c) in hint.chars().enumerate() {

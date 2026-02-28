@@ -36,6 +36,7 @@ use crate::ui::command_palette::palette::core_commands;
 use crate::ui::info_overlay::InfoOverlay;
 use crate::ui::diff_review::DiffReviewOverlay;
 use crate::ui::context_picker::ContextPicker;
+use crate::terminal::guardrails::GuardrailOverlay;
 
 /// Main application state
 ///
@@ -142,6 +143,10 @@ pub struct App {
     diff_review: DiffReviewOverlay,
     /// Context picker modal
     context_picker: ContextPicker,
+    /// Guardrail confirmation overlay
+    guardrail: GuardrailOverlay,
+    /// Input line buffer for guardrail checking (accumulates until Enter)
+    guardrail_input_buffer: String,
 }
 
 impl App {
@@ -216,6 +221,8 @@ impl App {
             info_overlay: InfoOverlay::new(),
             diff_review: DiffReviewOverlay::new(),
             context_picker: ContextPicker::new(),
+            guardrail: GuardrailOverlay::new(),
+            guardrail_input_buffer: String::new(),
         });
 
         let mut app = result?;
@@ -538,6 +545,21 @@ impl App {
                 self.git_completions_visible = false;
                 self.git_completions.clear();
                 self.git_completion_index = None;
+            }
+
+            // Enter pressed — guardrail check for plugin tabs
+            let is_plugin_tab = self.tabs.as_ref()
+                .and_then(|tabs| tabs.active_tab().map(|t| matches!(t.tab_type, crate::tabs::TabType::Plugin { .. })))
+                .unwrap_or(false);
+
+            if is_plugin_tab {
+                let input = self.input_line_buffer.trim().to_string();
+                if let Some(matched) = crate::terminal::guardrails::check_command(&input) {
+                    log::warn!("Guardrail triggered: {} — {}", matched.command, matched.reason);
+                    self.guardrail.show(matched, data.to_vec());
+                    self.input_line_buffer.clear();
+                    return;
+                }
             }
 
             // Enter pressed — check if first word matches a custom command name or alias
@@ -874,6 +896,28 @@ impl App {
 
         // Update context picker animation
         if self.context_picker.update_animation() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
+        // Build guardrail overlay if visible
+        let guardrail_data = if self.guardrail.is_visible() {
+            self.guardrail.matched.as_ref().map(|m| {
+                crate::renderer::GuardrailInfo {
+                    command: m.command.clone(),
+                    reason: m.reason.clone(),
+                    is_critical: m.severity == crate::terminal::guardrails::Severity::Critical,
+                    animation: self.guardrail.animation(),
+                }
+            })
+        } else {
+            None
+        };
+        renderer.set_guardrail(guardrail_data);
+
+        // Update guardrail animation
+        if self.guardrail.update_animation() {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
