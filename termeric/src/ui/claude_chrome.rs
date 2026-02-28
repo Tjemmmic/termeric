@@ -2,7 +2,6 @@
 //!
 //! Shows: repo name · branch · host badge · [Context] button · transcript indicator
 
-use std::time::Instant;
 
 /// Host where the Claude Code session is running
 #[derive(Debug, Clone, PartialEq, Eq)]
