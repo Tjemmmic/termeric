@@ -1238,16 +1238,19 @@ impl App {
     /// Execute a list of plugin actions.
     fn execute_plugin_actions(&mut self, actions: Vec<crate::plugin::PluginAction>) {
         use crate::plugin::PluginAction;
+        use crate::tabs::TabType;
 
         for action in actions {
             match action {
-                PluginAction::OpenTab { program, args, cwd, title } => {
+                PluginAction::OpenTab { program, args, cwd, title, plugin_id } => {
+                    let tab_type = plugin_id.map(|id| TabType::Plugin { plugin_id: id });
                     if let Some(tabs) = &mut self.tabs {
                         match tabs.new_tab_with_command(
                             &program,
                             &args,
                             cwd.as_deref(),
                             title.as_deref(),
+                            tab_type,
                         ) {
                             Ok(id) => {
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
@@ -1264,6 +1267,37 @@ impl App {
                 }
                 PluginAction::ShowMessage { message } => {
                     log::info!("Plugin message: {}", message);
+                }
+                PluginAction::ClearPluginTab { plugin_id } => {
+                    if let Some(tabs) = &mut self.tabs {
+                        // Send Ctrl+C then clear
+                        tabs.write_to_plugin_tab(&plugin_id, b"\x03");
+                        tabs.write_to_plugin_tab(&plugin_id, b"clear\n");
+                    }
+                }
+                PluginAction::CopyFromPluginTab { plugin_id, lines } => {
+                    if let Some(tabs) = &self.tabs {
+                        if let Some(text) = tabs.copy_from_plugin_tab(&plugin_id, lines) {
+                            if let Some(clipboard) = &mut self.clipboard {
+                                let _ = clipboard.set_text(text);
+                                log::info!("Copied last {} lines from '{}' tab", lines, plugin_id);
+                            }
+                        }
+                    }
+                }
+                PluginAction::RestartPlugin { plugin_id } => {
+                    // Close existing plugin tab
+                    if let Some(tabs) = &mut self.tabs {
+                        if let Some(idx) = tabs.find_plugin_tab_index(&plugin_id) {
+                            tabs.close_tab(idx);
+                        }
+                    }
+                    // Re-open via plugin command
+                    let open_cmd = format!("{}.open", plugin_id);
+                    let ctx = self.build_plugin_context();
+                    if let Some(action) = self.plugin_manager.execute_command(&open_cmd, &ctx) {
+                        self.execute_plugin_actions(vec![action]);
+                    }
                 }
             }
         }

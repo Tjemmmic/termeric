@@ -107,12 +107,24 @@ impl Plugin for ClaudeCodePlugin {
                     args: self.build_args(&[]),
                     cwd: self.resolve_cwd(ctx).map(|s| s.to_string()),
                     title: Some("Claude Code".to_string()),
+                    plugin_id: Some("claude-code".to_string()),
                 }),
                 "claude-code.resume" => HookResponse::Action(PluginAction::OpenTab {
                     program: self.config.binary.clone(),
                     args: self.build_args(&["--continue"]),
                     cwd: self.resolve_cwd(ctx).map(|s| s.to_string()),
                     title: Some("Claude Code (resume)".to_string()),
+                    plugin_id: Some("claude-code".to_string()),
+                }),
+                "claude-code.copy-last" => HookResponse::Action(PluginAction::CopyFromPluginTab {
+                    plugin_id: "claude-code".to_string(),
+                    lines: 50,
+                }),
+                "claude-code.clear" => HookResponse::Action(PluginAction::ClearPluginTab {
+                    plugin_id: "claude-code".to_string(),
+                }),
+                "claude-code.restart" => HookResponse::Action(PluginAction::RestartPlugin {
+                    plugin_id: "claude-code".to_string(),
                 }),
                 _ => HookResponse::Ignored,
             },
@@ -132,6 +144,24 @@ impl Plugin for ClaudeCodePlugin {
                 id: "claude-code.resume".to_string(),
                 name: "Claude Code: Resume".to_string(),
                 description: "Resume the last Claude Code conversation".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.copy-last".to_string(),
+                name: "Claude Code: Copy Last Response".to_string(),
+                description: "Copy the last 50 lines from the Claude Code tab".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.clear".to_string(),
+                name: "Claude Code: Clear Session".to_string(),
+                description: "Send Ctrl+C and clear the Claude Code tab".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.restart".to_string(),
+                name: "Claude Code: Restart".to_string(),
+                description: "Close and reopen Claude Code in the same directory".to_string(),
                 category: Some("AI".to_string()),
             },
         ]
@@ -200,9 +230,12 @@ mod tests {
     fn test_plugin_commands() {
         let plugin = ClaudeCodePlugin::new(ClaudeCodeConfig::default());
         let commands = plugin.commands();
-        assert_eq!(commands.len(), 2);
+        assert_eq!(commands.len(), 5);
         assert_eq!(commands[0].id, "claude-code.open");
         assert_eq!(commands[1].id, "claude-code.resume");
+        assert_eq!(commands[2].id, "claude-code.copy-last");
+        assert_eq!(commands[3].id, "claude-code.clear");
+        assert_eq!(commands[4].id, "claude-code.restart");
     }
 
     #[test]
@@ -238,11 +271,13 @@ mod tests {
                 args,
                 cwd,
                 title,
+                plugin_id,
             }) => {
                 assert_eq!(program, "claude");
                 assert!(args.is_empty());
                 assert_eq!(cwd, Some("/tmp/project".to_string()));
                 assert_eq!(title, Some("Claude Code".to_string()));
+                assert_eq!(plugin_id, Some("claude-code".to_string()));
             }
             _ => panic!("Expected Action(OpenTab)"),
         }

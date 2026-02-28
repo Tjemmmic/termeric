@@ -5,7 +5,7 @@
 mod tab;
 mod title;
 
-pub use tab::Tab;
+pub use tab::{Tab, TabType};
 
 use crate::config::ShellConfig;
 use crate::session::Session;
@@ -64,6 +64,7 @@ impl TabManager {
         args: &[String],
         working_dir: Option<&str>,
         title: Option<&str>,
+        tab_type: Option<TabType>,
     ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
@@ -77,6 +78,7 @@ impl TabManager {
             working_dir,
             title,
             self.scrollback_lines,
+            tab_type,
         )?;
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
@@ -264,6 +266,38 @@ impl TabManager {
         self.tabs.iter().enumerate()
     }
 
+    /// Find the index of the first tab owned by a given plugin
+    pub fn find_plugin_tab_index(&self, plugin_id: &str) -> Option<usize> {
+        self.tabs.iter().position(|tab| {
+            matches!(&tab.tab_type, TabType::Plugin { plugin_id: id } if id == plugin_id)
+        })
+    }
+
+    /// Write data to a plugin-owned tab's PTY
+    pub fn write_to_plugin_tab(&mut self, plugin_id: &str, data: &[u8]) -> bool {
+        if let Some(idx) = self.find_plugin_tab_index(plugin_id) {
+            let _ = self.tabs[idx].write(data);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Copy the last N lines from a plugin-owned tab's terminal
+    pub fn copy_from_plugin_tab(&self, plugin_id: &str, lines: usize) -> Option<String> {
+        let idx = self.find_plugin_tab_index(plugin_id)?;
+        let tab = &self.tabs[idx];
+        let all_lines = tab.terminal.grid().export_scrollback_text();
+        let start = all_lines.len().saturating_sub(lines);
+        Some(all_lines[start..].join("\n"))
+    }
+
+    /// Get the working directory of a plugin-owned tab
+    pub fn plugin_tab_cwd(&self, plugin_id: &str) -> Option<String> {
+        let idx = self.find_plugin_tab_index(plugin_id)?;
+        self.tabs[idx].working_directory()
+    }
+
     /// Get tab info for display (index, title, is_active, has_activity)
     pub fn tab_info(&self) -> Vec<TabInfo> {
         self.tabs
@@ -277,6 +311,7 @@ impl TabManager {
                 is_closed: tab.closed,
                 slide_progress: tab.slide_progress(),
                 close_progress: tab.close_progress(),
+                tab_type: tab.tab_type.clone(),
             })
             .collect()
     }
@@ -370,6 +405,8 @@ pub struct TabInfo {
     pub slide_progress: f32,
     /// Close animation progress (0.0 = not closing, 1.0 = fully closed)
     pub close_progress: f32,
+    /// What type of tab this is
+    pub tab_type: TabType,
 }
 
 #[cfg(test)]

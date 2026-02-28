@@ -60,6 +60,8 @@ pub enum PluginAction {
         cwd: Option<String>,
         /// Tab title (None = use program name)
         title: Option<String>,
+        /// Plugin ID that owns this tab (None = generic command tab)
+        plugin_id: Option<String>,
     },
     /// Write data to the active PTY
     WriteToPty { data: Vec<u8> },
@@ -67,6 +69,12 @@ pub enum PluginAction {
     Notify { title: String, body: String },
     /// Show a message in the command palette area
     ShowMessage { message: String },
+    /// Clear a plugin-owned tab (send Ctrl+C + clear)
+    ClearPluginTab { plugin_id: String },
+    /// Close all tabs of a plugin and reopen fresh
+    RestartPlugin { plugin_id: String },
+    /// Copy N lines from a plugin tab to clipboard
+    CopyFromPluginTab { plugin_id: String, lines: usize },
 }
 
 /// Metadata for a command a plugin contributes to the command palette.
@@ -202,6 +210,7 @@ mod tests {
                 args: vec![],
                 cwd: None,
                 title: Some("Test".to_string()),
+                plugin_id: None,
             },
             PluginAction::WriteToPty {
                 data: b"hello".to_vec(),

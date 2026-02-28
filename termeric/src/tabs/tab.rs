@@ -13,6 +13,15 @@ use crate::session::Session;
 
 use super::title::{get_process_cwd, dir_name_from_path, abbreviate_path, get_foreground_process};
 
+/// What kind of tab this is
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabType {
+    /// Regular shell terminal
+    Shell,
+    /// Plugin-spawned tab (e.g., Claude Code)
+    Plugin { plugin_id: String },
+}
+
 /// Duration of tab slide-in animation in seconds
 const TAB_SLIDE_DURATION: f32 = 0.15;
 
@@ -43,6 +52,8 @@ pub struct Tab {
     pub session_id: Option<String>,
     /// Last known foreground command (e.g. "cargo"), preserved after command finishes
     pub(crate) last_command: Option<String>,
+    /// What kind of tab this is (shell, plugin, etc.)
+    pub tab_type: TabType,
 }
 
 impl Tab {
@@ -77,6 +88,7 @@ impl Tab {
             closing_at: None,
             session_id: None,
             last_command: None,
+            tab_type: TabType::Shell,
         })
     }
 
@@ -93,6 +105,7 @@ impl Tab {
         working_dir: Option<&str>,
         title: Option<&str>,
         scrollback_lines: usize,
+        tab_type: Option<TabType>,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(cols, rows);
         terminal.grid_mut().set_scrollback_limit(scrollback_lines);
@@ -128,6 +141,7 @@ impl Tab {
             closing_at: None,
             session_id: None,
             last_command: Some(program.to_string()),
+            tab_type: tab_type.unwrap_or(TabType::Shell),
         })
     }
 
@@ -239,6 +253,7 @@ impl Tab {
             closing_at: None,
             session_id: None,
             last_command: None,
+            tab_type: TabType::Shell,
         })
     }
 

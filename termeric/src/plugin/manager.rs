@@ -187,6 +187,7 @@ mod tests {
                         args: vec!["hello".to_string()],
                         cwd: None,
                         title: Some("Test Tab".to_string()),
+                        plugin_id: None,
                     })
                 }
                 _ => HookResponse::Ignored,
