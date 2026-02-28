@@ -13,6 +13,7 @@
 //! - **Claude Code** (`claude_code`) — Launch Claude Code AI assistant
 
 pub mod claude_code;
+pub mod claude_profiles;
 pub mod hooks;
 pub mod manager;
 

@@ -9,6 +9,7 @@
 
 pub mod command_palette;
 pub mod commands;
+pub mod claude_chrome;
 pub mod context_picker;
 pub mod diff_review;
 pub mod info_overlay;

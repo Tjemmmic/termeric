@@ -721,6 +721,36 @@ impl App {
             .and_then(|tab| tab.working_directory());
         self.git_watcher.update(working_dir.as_deref());
 
+        // Update Claude session chrome bar for plugin tabs
+        let chrome_bar_data = {
+            let branch = self.git_watcher.branch().map(|s| s.to_string());
+            let dirty = self.git_watcher.is_dirty();
+            let wd = working_dir.clone();
+
+            if let Some(tabs) = &mut self.tabs {
+                if let Some(tab) = tabs.active_tab_mut() {
+                    if let Some(ref mut session) = tab.claude_session {
+                        session.update_git(branch.as_deref(), dirty, wd.as_deref());
+                        Some(crate::ui::claude_chrome::ChromeBarInfo {
+                            repo_name: session.repo_name.clone(),
+                            branch: session.branch.clone(),
+                            dirty: session.dirty,
+                            host_label: session.host.badge_label(),
+                            profile: session.profile.clone(),
+                            recording: session.recording,
+                            height: 0.0, // set by renderer
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
         let copy_flash = self.copy_flash_intensity();
@@ -832,6 +862,7 @@ impl App {
         } else {
             None
         };
+        renderer.set_chrome_bar(chrome_bar_data);
         renderer.set_info_overlay(info_overlay_data);
 
         // Update info overlay animation

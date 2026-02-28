@@ -19,10 +19,12 @@
 //! `Ctrl+Shift+I` — Open Claude Code
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use super::hooks::{
     Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext, PluginKeybinding,
 };
+use super::claude_profiles::ClaudeProfile;
 
 /// Configuration for the Claude Code plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -39,6 +41,11 @@ pub struct ClaudeCodeConfig {
     /// Additional CLI arguments to pass to claude
     #[serde(default)]
     pub args: Vec<String>,
+    /// Named profiles for different session configurations
+    #[serde(default)]
+    pub profiles: HashMap<String, ClaudeProfile>,
+    /// Default profile to use when no repo-specific config exists
+    pub default_profile: Option<String>,
 }
 
 impl Default for ClaudeCodeConfig {
@@ -49,6 +56,8 @@ impl Default for ClaudeCodeConfig {
             model: None,
             inherit_cwd: true,
             args: Vec::new(),
+            profiles: HashMap::new(),
+            default_profile: None,
         }
     }
 }
@@ -184,6 +193,30 @@ impl Plugin for ClaudeCodePlugin {
                 description: "Open context picker to assemble and inject context into Claude".to_string(),
                 category: Some("AI".to_string()),
             },
+            PluginCommand {
+                id: "claude-code.toggle-transcript".to_string(),
+                name: "Claude Code: Toggle Transcript".to_string(),
+                description: "Start or stop recording the session transcript".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.export-session".to_string(),
+                name: "Claude Code: Export Session".to_string(),
+                description: "Export the current session as Markdown or JSONL".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.jump-to-error".to_string(),
+                name: "Claude Code: Jump to Last Error".to_string(),
+                description: "Scroll to the last detected error in terminal output".to_string(),
+                category: Some("AI".to_string()),
+            },
+            PluginCommand {
+                id: "claude-code.select-profile".to_string(),
+                name: "Claude Code: Select Profile".to_string(),
+                description: "Choose a profile for the Claude Code session".to_string(),
+                category: Some("AI".to_string()),
+            },
         ]
     }
 
@@ -250,7 +283,7 @@ mod tests {
     fn test_plugin_commands() {
         let plugin = ClaudeCodePlugin::new(ClaudeCodeConfig::default());
         let commands = plugin.commands();
-        assert_eq!(commands.len(), 8);
+        assert_eq!(commands.len(), 12);
         assert_eq!(commands[0].id, "claude-code.open");
         assert_eq!(commands[1].id, "claude-code.resume");
         assert_eq!(commands[2].id, "claude-code.copy-last");
@@ -259,6 +292,10 @@ mod tests {
         assert_eq!(commands[5].id, "claude-code.review-diff");
         assert_eq!(commands[6].id, "claude-code.copy-diff");
         assert_eq!(commands[7].id, "claude-code.insert-context");
+        assert_eq!(commands[8].id, "claude-code.toggle-transcript");
+        assert_eq!(commands[9].id, "claude-code.export-session");
+        assert_eq!(commands[10].id, "claude-code.jump-to-error");
+        assert_eq!(commands[11].id, "claude-code.select-profile");
     }
 
     #[test]

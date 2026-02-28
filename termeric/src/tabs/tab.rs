@@ -10,6 +10,7 @@ use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
 use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
+use crate::ui::claude_chrome::ClaudeSessionState;
 use crate::session::Session;
 
 use super::title::{get_process_cwd, dir_name_from_path, abbreviate_path, get_foreground_process};
@@ -57,6 +58,8 @@ pub struct Tab {
     pub tab_type: TabType,
     /// Diff detector for plugin tabs (watches output for unified diffs)
     pub diff_detector: DiffDetector,
+    /// Claude session state (only for plugin tabs running Claude Code)
+    pub claude_session: Option<ClaudeSessionState>,
 }
 
 impl Tab {
@@ -93,6 +96,7 @@ impl Tab {
             last_command: None,
             tab_type: TabType::Shell,
             diff_detector: DiffDetector::new(),
+            claude_session: None,
         })
     }
 
@@ -145,8 +149,13 @@ impl Tab {
             closing_at: None,
             session_id: None,
             last_command: Some(program.to_string()),
-            tab_type: tab_type.unwrap_or(TabType::Shell),
+            tab_type: tab_type.clone().unwrap_or(TabType::Shell),
             diff_detector: DiffDetector::new(),
+            claude_session: if matches!(tab_type, Some(TabType::Plugin { .. })) {
+                Some(ClaudeSessionState::default())
+            } else {
+                None
+            },
         })
     }
 
@@ -273,6 +282,7 @@ impl Tab {
             last_command: None,
             tab_type: TabType::Shell,
             diff_detector: DiffDetector::new(),
+            claude_session: None,
         })
     }
 
