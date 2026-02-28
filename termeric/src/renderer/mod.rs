@@ -27,7 +27,7 @@ use crate::terminal::search::{Search, SearchBarInfo};
 use text::TextPipeline;
 use rect::RectPipeline;
 
-use crate::tabs::TabInfo;
+use crate::tabs::{TabInfo, TabType};
 use crate::ui::command_palette::CommandDef;
 use crate::ui::command_palette::PaletteInfo;
 use crate::panes::{PaneRect, Divider};
@@ -1114,6 +1114,18 @@ impl Renderer {
                     // Render each character of the label
                     let text_y = y + (tab_height - self.cell_height) / 2.0; // Center vertically
                     let mut text_x = x + tab_padding;
+
+                    // Plugin accent dot before the label
+                    if matches!(&tab.tab_type, TabType::Plugin { .. }) {
+                        let dot_color = [
+                            self.ui.palette_accent[0],
+                            self.ui.palette_accent[1],
+                            self.ui.palette_accent[2],
+                            text_alpha,
+                        ];
+                        self.text_pipeline.push_char('●', text_x, text_y, dot_color);
+                        text_x += self.cell_width * 0.85;
+                    }
 
                     for c in label.chars() {
                         if text_x + self.cell_width > x + tab_width - right_reserve {
