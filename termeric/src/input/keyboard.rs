@@ -16,6 +16,7 @@ pub fn key_to_bytes_with_modifiers(event: &KeyEvent, modifiers: ModifiersState) 
     }
 
     let ctrl = modifiers.control_key();
+    let shift = modifiers.shift_key();
     let _alt = modifiers.alt_key();
 
     match &event.logical_key {
@@ -41,7 +42,13 @@ pub fn key_to_bytes_with_modifiers(event: &KeyEvent, modifiers: ModifiersState) 
             let bytes = match named {
                 // Basic control keys
                 NamedKey::Enter => b"\r".to_vec(),
-                NamedKey::Tab => b"\t".to_vec(),
+                NamedKey::Tab => {
+                    if shift {
+                        b"\x1b[Z".to_vec() // Shift+Tab (backtab)
+                    } else {
+                        b"\t".to_vec()
+                    }
+                }
                 NamedKey::Backspace => {
                     if ctrl {
                         b"\x17".to_vec() // Ctrl+W: delete previous word
