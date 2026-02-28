@@ -210,14 +210,14 @@ impl ImagePipeline {
         });
 
         queue.write_texture(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &image.data,
-            ImageDataLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(image.width * 4),
                 rows_per_image: Some(image.height),

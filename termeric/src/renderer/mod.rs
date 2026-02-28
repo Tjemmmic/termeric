@@ -793,8 +793,10 @@ impl Renderer {
                 let is_search_match = search.is_match(grid_row, col);
                 let is_current_match = search.is_current_match(grid_row, col);
 
+                // Apply inverse attribute if set (swap fg/bg)
+                let (fg, bg) = cell.apply_inverse();
+
                 // Draw background if not default or if selected/matched
-                let bg = cell.bg;
                 if is_selected {
                     self.rect_pipeline.push_rect(
                         x, y,
@@ -831,7 +833,6 @@ impl Renderer {
                 // Draw character with focus dimming applied
                 if let Some(c) = cell.content.char() {
                     if !c.is_whitespace() {
-                        let fg = cell.fg;
                         self.text_pipeline.push_char(
                             c,
                             x, y,
@@ -3931,7 +3932,7 @@ impl Renderer {
 
             // Delete (x) button (right side)
             let del_x = panel_x + panel_width - padding - ui_cw * 1.5;
-            let del_y = item_y + (row_height - cell_height) / 2.0;
+            let _del_y = item_y + (row_height - cell_height) / 2.0;
             let del_color = if info.hovered_delete == Some(i) {
                 [0.9, 0.3, 0.3, 1.0]
             } else {
@@ -4467,7 +4468,7 @@ impl Renderer {
 
         // Diff content — color-coded lines
         let content_start_y = title_y + title_height;
-        let text_color = adjust_alpha(self.ui.palette_text, anim);
+        let _text_color = adjust_alpha(self.ui.palette_text, anim);
         let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * anim);
         let added_color = adjust_alpha([0.4, 0.85, 0.4, 1.0], anim);
         let removed_color = adjust_alpha([0.9, 0.4, 0.4, 1.0], anim);
@@ -4741,7 +4742,7 @@ impl Renderer {
         y: f32,
         sessions: &[crate::session::panel::SessionEntry],
         window_width: f32,
-        window_height: f32,
+        _window_height: f32,
         animation: f32,
     ) -> crate::session::panel::SessionPanelAction {
         use crate::session::panel::SessionPanelAction;
