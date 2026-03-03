@@ -1327,6 +1327,14 @@ impl App {
                         }
                         return;
                     }
+                    "core.plugins" => {
+                        use crate::ui::settings::SettingsSection;
+                        self.settings_panel.open_to_section(SettingsSection::Plugins);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
                     "core.font-size-increase" => Action::IncreaseFontSize,
                     "core.font-size-decrease" => Action::DecreaseFontSize,
                     "core.font-size-reset" => Action::ResetFontSize,
@@ -2053,6 +2061,67 @@ impl App {
             SettingsAction::SetSessionSaveScrollback(enabled) => {
                 self.config.session.save_scrollback = enabled;
             }
+            SettingsAction::SetPluginEnabled { plugin_id, enabled } => {
+                match plugin_id.as_str() {
+                    "claude-code" => {
+                        self.config.plugins.claude_code.enabled = enabled;
+                        if enabled {
+                            let plugin = crate::plugin::claude_code::ClaudeCodePlugin::new(
+                                self.config.plugins.claude_code.clone(),
+                            );
+                            let ctx = self.build_plugin_context();
+                            if let Err(e) = self.plugin_manager.register(Box::new(plugin), &ctx) {
+                                log::error!("Failed to register claude-code: {}", e);
+                            } else {
+                                self.refresh_plugin_commands();
+                            }
+                        } else {
+                            self.plugin_manager.deregister("claude-code");
+                            self.refresh_plugin_commands();
+                        }
+                    }
+                    "codex" => {
+                        self.config.plugins.codex.enabled = enabled;
+                        if enabled {
+                            let plugin = crate::plugin::codex::CodexPlugin::new(
+                                self.config.plugins.codex.clone(),
+                            );
+                            let ctx = self.build_plugin_context();
+                            if let Err(e) = self.plugin_manager.register(Box::new(plugin), &ctx) {
+                                log::error!("Failed to register codex: {}", e);
+                            } else {
+                                self.refresh_plugin_commands();
+                            }
+                        } else {
+                            self.plugin_manager.deregister("codex");
+                            self.refresh_plugin_commands();
+                        }
+                    }
+                    _ => log::warn!("Unknown plugin: {}", plugin_id),
+                }
+                let _ = self.save_config();
+            }
+            SettingsAction::SetPluginModel { plugin_id, model } => {
+                let model_val = if model == "(default)" { None } else { Some(model) };
+                match plugin_id.as_str() {
+                    "claude-code" => self.config.plugins.claude_code.model = model_val,
+                    "codex" => self.config.plugins.codex.model = model_val,
+                    _ => {}
+                }
+                let _ = self.save_config();
+            }
+            SettingsAction::SetPluginApprovalMode { plugin_id, mode } => {
+                match plugin_id.as_str() {
+                    "claude-code" => {
+                        self.config.plugins.claude_code.approval_mode = if mode == "(interactive)" { None } else { Some(mode) };
+                    }
+                    "codex" => {
+                        self.config.plugins.codex.approval_mode = mode;
+                    }
+                    _ => {}
+                }
+                let _ = self.save_config();
+            }
             SettingsAction::None => {}
         }
     }
@@ -2333,6 +2402,55 @@ impl App {
                 let _ = tab.write(cmd_with_newline.as_bytes());
             }
         }
+    }
+
+    /// Re-sync the command palette with currently registered plugins.
+    ///
+    /// Called after a plugin is registered or deregistered at runtime.
+    fn refresh_plugin_commands(&mut self) {
+        use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
+
+        let plugin_commands = self.plugin_manager.all_commands();
+        let keybindings = self.plugin_manager.all_keybindings();
+
+        let palette_cmds: Vec<RegisteredCommand> = plugin_commands.iter().map(|pc| {
+            let shortcut = keybindings.iter()
+                .find(|k| k.command_id == pc.id)
+                .map(|k| {
+                    let mut parts = Vec::new();
+                    if k.ctrl { parts.push("Ctrl".to_string()); }
+                    if k.alt { parts.push("Alt".to_string()); }
+                    if k.shift { parts.push("Shift".to_string()); }
+                    parts.push(k.key.to_uppercase());
+                    parts.join("+")
+                });
+            let plugin_source = pc.id.split_once('.')
+                .map(|(prefix, _)| prefix.to_string())
+                .unwrap_or_else(|| "plugin".to_string());
+            RegisteredCommand {
+                id: pc.id.clone(),
+                title: pc.name.clone(),
+                category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
+                shortcut,
+                icon: None,
+                source: CommandSource::Plugin(plugin_source),
+                destructive: false,
+            }
+        }).collect();
+
+        // Clear all plugin commands then re-add current ones
+        // register_commands replaces from same source, but we need to handle
+        // the case where a plugin is fully removed (no commands to re-register).
+        // The simplest approach: re-register core commands then plugin commands.
+        self.command_palette.register_commands(crate::ui::command_palette::palette::core_commands());
+        if !palette_cmds.is_empty() {
+            self.command_palette.register_commands(palette_cmds);
+        }
+
+        log::info!("Refreshed plugin commands: {} plugin(s), {} command(s)",
+            self.plugin_manager.count(),
+            plugin_commands.len(),
+        );
     }
 
     /// Save current configuration to file

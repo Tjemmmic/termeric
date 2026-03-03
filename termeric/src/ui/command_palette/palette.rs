@@ -495,6 +495,16 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             source: CommandSource::Core,
             destructive: false,
         },
+        // ── Plugins ──
+        RegisteredCommand {
+            id: "core.plugins".into(),
+            title: "Configure Plugins".into(),
+            category: "Config".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
         // ── Help ──
         RegisteredCommand {
             id: "core.version".into(),

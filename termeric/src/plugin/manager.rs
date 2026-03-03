@@ -41,6 +41,21 @@ impl PluginManager {
         Ok(())
     }
 
+    /// Deregister and unload a plugin by ID.
+    ///
+    /// Calls `on_unload` on the plugin before removing it.
+    /// Returns true if a plugin was found and removed.
+    pub fn deregister(&mut self, plugin_id: &str) -> bool {
+        if let Some(pos) = self.plugins.iter().position(|p| p.id() == plugin_id) {
+            self.plugins[pos].on_unload();
+            log::info!("Unloaded plugin: {}", plugin_id);
+            self.plugins.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Dispatch a hook to all plugins, collecting any requested actions.
     ///
     /// Plugins are called in registration order. Each plugin can return

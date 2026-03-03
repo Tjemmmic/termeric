@@ -173,6 +173,7 @@ pub enum SettingsSection {
     Startup,
     Shell,
     Sessions,
+    Plugins,
 }
 
 impl SettingsSection {
@@ -187,6 +188,7 @@ impl SettingsSection {
             Self::Startup => "Startup",
             Self::Shell => "Shell",
             Self::Sessions => "Sessions",
+            Self::Plugins => "Plugins",
         }
     }
 
@@ -200,6 +202,7 @@ impl SettingsSection {
         Self::Startup,
         Self::Shell,
         Self::Sessions,
+        Self::Plugins,
     ];
 
     pub fn index(&self) -> usize {
@@ -269,6 +272,12 @@ pub enum SettingsAction {
     SetSessionAutoRestore(bool),
     /// Toggle session save scrollback
     SetSessionSaveScrollback(bool),
+    /// Enable or disable a plugin
+    SetPluginEnabled { plugin_id: String, enabled: bool },
+    /// Change a plugin's model
+    SetPluginModel { plugin_id: String, model: String },
+    /// Change a plugin's approval mode
+    SetPluginApprovalMode { plugin_id: String, mode: String },
     /// Save current config
     SaveConfig,
     /// Reset to default config
@@ -629,6 +638,86 @@ impl SettingsPanel {
                     },
                 ]
             }
+            SettingsSection::Plugins => {
+                let en_dis: Vec<String> = vec!["Enabled".into(), "Disabled".into()];
+                let claude_model_opts: Vec<String> = vec![
+                    "(default)".into(), "sonnet".into(), "opus".into(), "haiku".into(),
+                ];
+                let claude_model_val = config.plugins.claude_code.model.clone().unwrap_or_else(|| "(default)".into());
+                let claude_model_sel = claude_model_opts.iter().position(|m| m == &claude_model_val).unwrap_or(0);
+
+                let codex_model_opts: Vec<String> = vec![
+                    "(default)".into(), "o3-mini".into(), "o4-mini".into(), "gpt-4.1".into(),
+                ];
+                let codex_model_val = config.plugins.codex.model.clone().unwrap_or_else(|| "(default)".into());
+                let codex_model_sel = codex_model_opts.iter().position(|m| m == &codex_model_val).unwrap_or(0);
+
+                let codex_approval_opts: Vec<String> = vec![
+                    "suggest".into(), "auto-edit".into(), "full-auto".into(),
+                ];
+                let codex_approval_sel = codex_approval_opts.iter()
+                    .position(|m| m == &config.plugins.codex.approval_mode)
+                    .unwrap_or(0);
+
+                let claude_approval_opts: Vec<String> = vec![
+                    "(interactive)".into(), "auto-accept".into(),
+                ];
+                let claude_approval_val = config.plugins.claude_code.approval_mode.clone().unwrap_or_else(|| "(interactive)".into());
+                let claude_approval_sel = claude_approval_opts.iter()
+                    .position(|m| m == &claude_approval_val)
+                    .unwrap_or(0);
+
+                vec![
+                    // ── Claude Code ──
+                    SettingItem {
+                        label: "Claude Code",
+                        value: if config.plugins.claude_code.enabled { "Enabled".into() } else { "Disabled".into() },
+                        kind: SettingKind::Dropdown {
+                            options: en_dis.clone(),
+                            selected: if config.plugins.claude_code.enabled { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "  Binary",
+                        value: config.plugins.claude_code.binary.clone(),
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
+                        label: "  Model",
+                        value: claude_model_val,
+                        kind: SettingKind::Dropdown { options: claude_model_opts, selected: claude_model_sel },
+                    },
+                    SettingItem {
+                        label: "  Approval",
+                        value: claude_approval_val,
+                        kind: SettingKind::Dropdown { options: claude_approval_opts, selected: claude_approval_sel },
+                    },
+                    // ── Codex ──
+                    SettingItem {
+                        label: "Codex",
+                        value: if config.plugins.codex.enabled { "Enabled".into() } else { "Disabled".into() },
+                        kind: SettingKind::Dropdown {
+                            options: en_dis,
+                            selected: if config.plugins.codex.enabled { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "  Binary",
+                        value: config.plugins.codex.binary.clone(),
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
+                        label: "  Model",
+                        value: codex_model_val,
+                        kind: SettingKind::Dropdown { options: codex_model_opts, selected: codex_model_sel },
+                    },
+                    SettingItem {
+                        label: "  Approval",
+                        value: config.plugins.codex.approval_mode.clone(),
+                        kind: SettingKind::Dropdown { options: codex_approval_opts, selected: codex_approval_sel },
+                    },
+                ]
+            }
         }
     }
 
@@ -769,6 +858,30 @@ impl SettingsPanel {
                     (SettingsSection::Sessions, "Auto Save") => SettingsAction::SetSessionAutoSave(new_val == "On"),
                     (SettingsSection::Sessions, "Auto Restore") => SettingsAction::SetSessionAutoRestore(new_val == "On"),
                     (SettingsSection::Sessions, "Save Scrollback") => SettingsAction::SetSessionSaveScrollback(new_val == "On"),
+                    (SettingsSection::Plugins, "Claude Code") => SettingsAction::SetPluginEnabled {
+                        plugin_id: "claude-code".into(),
+                        enabled: new_val == "Enabled",
+                    },
+                    (SettingsSection::Plugins, "  Model") if self.selected_item < 4 => SettingsAction::SetPluginModel {
+                        plugin_id: "claude-code".into(),
+                        model: new_val,
+                    },
+                    (SettingsSection::Plugins, "  Approval") if self.selected_item < 4 => SettingsAction::SetPluginApprovalMode {
+                        plugin_id: "claude-code".into(),
+                        mode: new_val,
+                    },
+                    (SettingsSection::Plugins, "Codex") => SettingsAction::SetPluginEnabled {
+                        plugin_id: "codex".into(),
+                        enabled: new_val == "Enabled",
+                    },
+                    (SettingsSection::Plugins, "  Model") => SettingsAction::SetPluginModel {
+                        plugin_id: "codex".into(),
+                        model: new_val,
+                    },
+                    (SettingsSection::Plugins, "  Approval") => SettingsAction::SetPluginApprovalMode {
+                        plugin_id: "codex".into(),
+                        mode: new_val,
+                    },
                     _ => SettingsAction::None,
                 }
             }
