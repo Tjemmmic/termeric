@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::ui::claude_chrome::HostTarget;
 
 /// A Claude Code profile defining behavior for a session
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ClaudeProfile {
     /// Human-readable description
@@ -36,19 +36,10 @@ pub struct ClaudeProfile {
     /// Whether to auto-record transcript
     #[serde(default)]
     pub auto_record: bool,
-}
 
-impl Default for ClaudeProfile {
-    fn default() -> Self {
-        Self {
-            description: String::new(),
-            confirm_all_commands: false,
-            env: HashMap::new(),
-            extra_args: Vec::new(),
-            target: None,
-            auto_record: false,
-        }
-    }
+    /// Approval mode override (e.g., "auto-accept" for --dangerously-skip-permissions)
+    #[serde(default)]
+    pub approval_mode: Option<String>,
 }
 
 /// Target specification for a profile
@@ -87,30 +78,57 @@ impl ProfileTarget {
 /// Try to resolve a profile name from a `.termeric/config` file in the given directory.
 ///
 /// Walks up from `cwd` to find the nearest `.termeric/config` file.
-/// If found, reads the `[claude_code]` section for a `profile` key.
-pub fn resolve_repo_profile(cwd: &str) -> Option<String> {
+/// If found, reads the `[section]` (e.g. `[claude_code]` or `[codex]`) for a `profile` key.
+///
+/// The `section` parameter selects which TOML section to read from
+/// (e.g. `"claude_code"` or `"codex"`).
+pub fn resolve_repo_profile(cwd: &str, section: &str) -> Option<String> {
     let mut dir = Path::new(cwd);
     loop {
         let config_path = dir.join(".termeric").join("config");
-        if config_path.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&config_path) {
-                // Simple TOML parsing: look for profile = "name"
-                for line in contents.lines() {
-                    let trimmed = line.trim();
-                    if let Some(rest) = trimmed.strip_prefix("profile") {
-                        let rest = rest.trim();
-                        if let Some(rest) = rest.strip_prefix('=') {
-                            let val = rest.trim().trim_matches('"').trim_matches('\'');
-                            if !val.is_empty() {
-                                return Some(val.to_string());
-                            }
-                        }
-                    }
-                }
-            }
+        if config_path.exists()
+            && let Ok(contents) = std::fs::read_to_string(&config_path)
+            && let Some(val) = parse_section_profile(&contents, section)
+        {
+            return Some(val);
         }
         dir = dir.parent()?;
     }
+}
+
+/// Parse a `profile = "name"` key from a specific `[section]` in TOML-like content.
+///
+/// Returns `None` if the section or key is not found.
+fn parse_section_profile(contents: &str, section: &str) -> Option<String> {
+    let section_header = format!("[{}]", section);
+    let mut in_section = false;
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+
+        // Detect section headers
+        if trimmed.starts_with('[') {
+            in_section = trimmed == section_header;
+            continue;
+        }
+
+        if !in_section {
+            continue;
+        }
+
+        // Look for `profile = "value"` within the target section
+        if let Some(rest) = trimmed.strip_prefix("profile") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let val = rest.trim().trim_matches('"').trim_matches('\'');
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -153,7 +171,62 @@ mod tests {
 
     #[test]
     fn test_resolve_repo_profile_nonexistent() {
-        assert!(resolve_repo_profile("/tmp/nonexistent_repo_xyzzy").is_none());
+        assert!(resolve_repo_profile("/tmp/nonexistent_repo_xyzzy", "claude_code").is_none());
+    }
+
+    #[test]
+    fn test_parse_section_profile_found() {
+        let contents = r#"
+[claude_code]
+profile = "work"
+
+[codex]
+profile = "dev"
+"#;
+        assert_eq!(
+            super::parse_section_profile(contents, "claude_code"),
+            Some("work".to_string())
+        );
+        assert_eq!(
+            super::parse_section_profile(contents, "codex"),
+            Some("dev".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_section_profile_missing_section() {
+        let contents = r#"
+[claude_code]
+profile = "work"
+"#;
+        assert_eq!(super::parse_section_profile(contents, "codex"), None);
+    }
+
+    #[test]
+    fn test_parse_section_profile_no_key() {
+        let contents = r#"
+[claude_code]
+model = "opus"
+"#;
+        assert_eq!(super::parse_section_profile(contents, "claude_code"), None);
+    }
+
+    #[test]
+    fn test_parse_section_profile_empty() {
+        assert_eq!(super::parse_section_profile("", "claude_code"), None);
+    }
+
+    #[test]
+    fn test_parse_section_profile_wrong_section_key_ignored() {
+        // profile key in [other] section should not be returned for [claude_code]
+        let contents = r#"
+[other]
+profile = "wrong"
+
+[claude_code]
+model = "opus"
+"#;
+        assert_eq!(super::parse_section_profile(contents, "claude_code"), None);
     }
 
     #[test]
@@ -175,6 +248,7 @@ mod tests {
         assert!(profile.confirm_all_commands);
         assert!(profile.auto_record);
         assert_eq!(profile.env.get("CLAUDE_SAFE"), Some(&"1".to_string()));
+        assert!(profile.approval_mode.is_none());
         match profile.target.unwrap() {
             ProfileTarget::Ssh { host, user } => {
                 assert_eq!(host, "dev01");
@@ -182,5 +256,21 @@ mod tests {
             }
             _ => panic!("Expected SSH target"),
         }
+    }
+
+    #[test]
+    fn test_profile_deserialization_with_approval_mode() {
+        let toml_str = r#"
+            description = "Auto-accept profile"
+            approval_mode = "auto-accept"
+            extra_args = ["--verbose"]
+
+            [env]
+            API_KEY = "test-key"
+        "#;
+        let profile: ClaudeProfile = toml::from_str(toml_str).unwrap();
+        assert_eq!(profile.approval_mode, Some("auto-accept".to_string()));
+        assert_eq!(profile.extra_args, vec!["--verbose"]);
+        assert_eq!(profile.env.get("API_KEY"), Some(&"test-key".to_string()));
     }
 }
