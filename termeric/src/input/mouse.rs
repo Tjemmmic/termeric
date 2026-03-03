@@ -99,7 +99,16 @@ impl MouseState {
 
         if let Some(ref mut selection) = self.selection {
             selection.finish();
-            return Some(selection.clone());
+            let result = selection.clone();
+            // Clear trivial (zero-length) selections so they don't
+            // consume Escape keypresses intended for the terminal/PTY.
+            // A click without drag creates a selection where start == end,
+            // which would otherwise persist and cause ClearSelection to
+            // swallow every Escape press.
+            if selection.is_empty() {
+                self.selection = None;
+            }
+            return Some(result);
         }
 
         None

@@ -1736,21 +1736,6 @@ impl App {
             }
             Err(e) => {
                 log::error!("Failed to spawn git {}: {}", label, e);
-                PluginAction::ApplyDiff { diff_content, cwd } => {
-                    self.apply_diff_via_git(&diff_content, cwd.as_deref(), false);
-                }
-                PluginAction::StageDiff { diff_content, cwd } => {
-                    self.apply_diff_via_git(&diff_content, cwd.as_deref(), true);
-                }
-                PluginAction::RevertDiff { diff_content, cwd } => {
-                    self.revert_diff_via_git(&diff_content, cwd.as_deref());
-                }
-                PluginAction::ToggleTranscript => {
-                    self.toggle_transcript();
-                }
-                PluginAction::InjectContext { text } => {
-                    self.inject_context_to_plugin(&text);
-                }
             }
         }
     }
