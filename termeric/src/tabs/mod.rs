@@ -226,6 +226,59 @@ impl TabManager {
         }
     }
 
+    /// Detect plugin tabs that are about to be cleaned up but exited suspiciously
+    /// fast (within 5 seconds of creation). Returns a list of (plugin_id, output_lines)
+    /// for each quick-exiting plugin tab, so the caller can show an error overlay.
+    ///
+    /// Must be called BEFORE `cleanup_closed`, since that removes the tabs.
+    pub fn drain_quick_exit_plugin_info(&self) -> Vec<(String, Vec<String>)> {
+        let mut results = Vec::new();
+
+        for tab in &self.tabs {
+            // Only interested in plugin tabs that just closed
+            if !tab.closed {
+                continue;
+            }
+            let plugin_id = match &tab.tab_type {
+                TabType::Plugin { plugin_id } => plugin_id.clone(),
+                TabType::Shell => continue,
+            };
+
+            // Was it a quick exit? (< 5 seconds from creation)
+            if tab.created_at.elapsed().as_secs() >= 5 {
+                continue;
+            }
+
+            // Extract the terminal's visible content for the error message
+            let grid = tab.terminal.grid();
+            let mut lines: Vec<String> = Vec::new();
+            for row in 0..grid.rows() {
+                let mut line = String::new();
+                for col in 0..grid.cols() {
+                    if let Some(cell) = grid.cell(row, col) {
+                        if let Some(ch) = cell.content.char() {
+                            line.push(ch);
+                        } else if cell.content.is_empty() {
+                            line.push(' ');
+                        }
+                    }
+                }
+                let trimmed = line.trim_end().to_string();
+                if !trimmed.is_empty() || !lines.is_empty() {
+                    lines.push(trimmed);
+                }
+            }
+            // Trim trailing empty lines
+            while lines.last().map_or(false, |l| l.is_empty()) {
+                lines.pop();
+            }
+
+            results.push((plugin_id, lines));
+        }
+
+        results
+    }
+
     /// Remove closed tabs and tabs with completed close animations.
     /// Before removing, saves each non-empty tab as a session.
     /// Returns true if any tabs were removed.

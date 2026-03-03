@@ -66,6 +66,15 @@ impl InfoOverlay {
         self.animation_start = Instant::now();
     }
 
+    /// Show a custom info overlay with the given title and lines
+    pub fn show(&mut self, title: impl Into<String>, lines: Vec<String>) {
+        self.title = title.into();
+        self.lines = lines;
+        self.active = true;
+        self.animating_open = true;
+        self.animation_start = Instant::now();
+    }
+
     /// Dismiss the overlay
     pub fn dismiss(&mut self) {
         self.animating_open = false;

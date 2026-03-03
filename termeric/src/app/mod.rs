@@ -148,6 +148,9 @@ pub struct App {
     guardrail: GuardrailOverlay,
     /// Input line buffer for guardrail checking (accumulates until Enter)
     guardrail_input_buffer: String,
+    /// Pending profile selection: (plugin_id, [profile_name, ...])
+    /// When set, the info overlay is showing a profile list and number keys select one.
+    pending_profile_selection: Option<(String, Vec<String>)>,
 }
 
 impl App {
@@ -224,6 +227,7 @@ impl App {
             context_picker: ContextPicker::new(),
             guardrail: GuardrailOverlay::new(),
             guardrail_input_buffer: String::new(),
+            pending_profile_selection: None,
         });
 
         let mut app = result?;
@@ -463,12 +467,54 @@ impl App {
     /// Process PTY events for all tabs
     fn process_pty_events(&mut self) {
         // Process events and collect results
-        let (events, should_exit) = {
+        let (events, quick_exits, should_exit) = {
             let Some(tabs) = &mut self.tabs else { return };
             let (_, events) = tabs.process_all_events();
+
+            // Detect plugin tabs that exited too quickly (< 5s) — before cleanup removes them
+            let quick_exits = tabs.drain_quick_exit_plugin_info();
+
             let should_exit = tabs.cleanup_closed(self.config.session.save_scrollback) && tabs.is_empty();
-            (events, should_exit)
+            (events, quick_exits, should_exit)
         };
+
+        // Show overlay for any plugin that exited immediately
+        for (plugin_id, output_lines) in quick_exits {
+            let display_name = match plugin_id.as_str() {
+                "claude-code" => "Claude Code",
+                "codex" => "Codex",
+                _ => &plugin_id,
+            };
+
+            let mut overlay_lines = vec![
+                format!("{} exited immediately.", display_name),
+                String::new(),
+            ];
+
+            if output_lines.is_empty() {
+                overlay_lines.push("No output was captured.".into());
+                overlay_lines.push("Check that the tool is installed and".into());
+                overlay_lines.push("configured correctly.".into());
+            } else {
+                overlay_lines.push("Output:".into());
+                // Show up to 8 lines of output
+                for line in output_lines.iter().take(8) {
+                    overlay_lines.push(format!("  {}", line));
+                }
+                if output_lines.len() > 8 {
+                    overlay_lines.push(format!("  ... ({} more lines)", output_lines.len() - 8));
+                }
+            }
+
+            self.info_overlay.show(
+                format!("{} failed to start", display_name),
+                overlay_lines,
+            );
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            log::warn!("Plugin '{}' exited within 5 seconds of launch", plugin_id);
+        }
 
         // Handle terminal events (notifications, bells, etc.)
         for event in events {
@@ -513,6 +559,9 @@ impl App {
             }
             TerminalEvent::CursorVisibilityChanged(_) => {
                 // Cursor visibility is handled in render
+            }
+            TerminalEvent::PtyWrite(_) => {
+                // Handled in Tab::process_events (written back to tab PTY)
             }
             TerminalEvent::Exit => {
                 // Individual tab exit is handled by Tab::process_events
@@ -872,6 +921,8 @@ impl App {
                 title: self.info_overlay.title.clone(),
                 lines: self.info_overlay.lines.clone(),
                 animation: self.info_overlay.animation(),
+                mouse_pos: self.last_cursor_pos.map(|(x, y)| (x as f32, y as f32)),
+                mouse_pressed: self.mouse_pressed,
             })
         } else {
             None
@@ -1430,7 +1481,9 @@ impl App {
                     return;
                 }
                 "select-profile" => {
-                    log::info!("Profile selection not yet implemented — use config.toml profiles");
+                    self.execute_plugin_actions(vec![
+                        crate::plugin::PluginAction::ListProfiles { plugin_id: plugin_id.to_string() },
+                    ]);
                     return;
                 }
                 _ => {}
@@ -1607,6 +1660,36 @@ impl App {
         for action in actions {
             match action {
                 PluginAction::OpenTab { program, args, cwd, title, plugin_id, env } => {
+                    // Proactively check if the binary actually works before spawning a tab.
+                    // We try running it with --version; if the binary doesn't exist or
+                    // immediately fails, we show an in-app overlay instead of opening
+                    // a ghost tab that exits instantly.
+                    let binary_works = std::process::Command::new(&program)
+                        .arg("--version")
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+
+                    if !binary_works {
+                        self.info_overlay.show(
+                            format!("Plugin: '{}' not available", program),
+                            vec![
+                                format!("The '{}' binary could not be found or", program),
+                                "is not working correctly.".into(),
+                                String::new(),
+                                "Please install it and ensure it is in your PATH,".into(),
+                                "then try again.".into(),
+                            ],
+                        );
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        log::warn!("Plugin binary '{}' not available, showing info overlay", program);
+                        continue;
+                    }
+
                     let tab_type = plugin_id.map(|id| TabType::Plugin { plugin_id: id });
                     if let Some(tabs) = &mut self.tabs {
                         match tabs.new_tab_with_command(
@@ -1620,7 +1703,16 @@ impl App {
                             Ok(id) => {
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
                             }
-                            Err(e) => log::error!("Plugin failed to open tab for '{}': {}", program, e),
+                            Err(e) => {
+                                self.info_overlay.show(
+                                    format!("Failed to launch '{}'", program),
+                                    vec![format!("{}", e)],
+                                );
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                log::error!("Plugin failed to open tab for '{}': {}", program, e);
+                            }
                         }
                     }
                 }
@@ -1669,9 +1761,60 @@ impl App {
                         if let Some(tab) = tabs.active_tab_mut() {
                             if let Some(ref mut session) = tab.ai_session {
                                 session.toggle_recording();
-                                log::info!("Transcript recording: {}", if session.recording { "started" } else { "stopped" });
+                                if session.recording {
+                                    // Start recording — create a new TranscriptRecorder
+                                    if let Some(base) = crate::session::sessions_base_dir() {
+                                        let transcript_dir = base.join("transcripts");
+                                        let _ = std::fs::create_dir_all(&transcript_dir);
+                                        match crate::session::transcript::TranscriptRecorder::new(
+                                            &transcript_dir,
+                                            session.repo_name.as_deref(),
+                                            session.branch.as_deref(),
+                                            &session.host.badge_label(),
+                                            &session.profile,
+                                        ) {
+                                            Ok(recorder) => {
+                                                let path = recorder.path().display().to_string();
+                                                tab.transcript = Some(recorder);
+                                                log::info!("Transcript recording started: {}", path);
+                                                self.info_overlay.show(
+                                                    "Transcript Started".to_string(),
+                                                    vec![
+                                                        "Recording session output to:".into(),
+                                                        format!("  {}", path),
+                                                    ],
+                                                );
+                                            }
+                                            Err(e) => {
+                                                session.recording = false; // revert
+                                                log::error!("Failed to start transcript: {}", e);
+                                                self.info_overlay.show(
+                                                    "Transcript Error".to_string(),
+                                                    vec![format!("Failed to start recording: {}", e)],
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Stop recording — drop the recorder
+                                    if let Some(recorder) = tab.transcript.take() {
+                                        let path = recorder.path().display().to_string();
+                                        drop(recorder);
+                                        log::info!("Transcript recording stopped: {}", path);
+                                        self.info_overlay.show(
+                                            "Transcript Stopped".to_string(),
+                                            vec![
+                                                "Transcript saved to:".into(),
+                                                format!("  {}", path),
+                                            ],
+                                        );
+                                    }
+                                }
                             }
                         }
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
                     }
                 }
                 PluginAction::ApplyDiff { diff_content, cwd } => {
@@ -1697,6 +1840,79 @@ impl App {
                                 log::warn!("InjectContext: active tab is not a plugin tab");
                             }
                         }
+                    }
+                }
+                PluginAction::ListProfiles { plugin_id } => {
+                    // Gather profile names from config
+                    let profiles: Vec<String> = match plugin_id.as_str() {
+                        "claude-code" => {
+                            self.config.plugins.claude_code.profiles.keys().cloned().collect()
+                        }
+                        "codex" => {
+                            self.config.plugins.codex.profiles.keys().cloned().collect()
+                        }
+                        _ => Vec::new(),
+                    };
+
+                    if profiles.is_empty() {
+                        self.info_overlay.show(
+                            format!("No Profiles Configured"),
+                            vec![
+                                format!("No profiles found for '{}'.", plugin_id),
+                                String::new(),
+                                "Add profiles in config.toml under:".into(),
+                                format!("  [plugins.{}.profiles.<name>]", plugin_id.replace('-', "_")),
+                            ],
+                        );
+                    } else {
+                        let mut lines = vec![
+                            "Press a number key to select:".into(),
+                            String::new(),
+                        ];
+                        for (i, name) in profiles.iter().enumerate() {
+                            if i < 9 {
+                                lines.push(format!("  {}  {}", i + 1, name));
+                            }
+                        }
+                        // Also show current profile
+                        if let Some(tabs) = &self.tabs {
+                            if let Some(tab) = tabs.active_tab() {
+                                if let Some(ref session) = tab.ai_session {
+                                    lines.push(String::new());
+                                    lines.push(format!("Current: {}", session.profile));
+                                }
+                            }
+                        }
+                        self.info_overlay.show(
+                            format!("Select Profile — {}", plugin_id),
+                            lines,
+                        );
+                        self.pending_profile_selection = Some((plugin_id, profiles));
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+                PluginAction::ApplyProfile { plugin_id, profile_name } => {
+                    if let Some(tabs) = &mut self.tabs {
+                        if let Some(tab) = tabs.active_tab_mut() {
+                            if let Some(ref mut session) = tab.ai_session {
+                                session.profile = profile_name.clone();
+                                log::info!("Profile for '{}' set to '{}'", plugin_id, profile_name);
+                            }
+                        }
+                    }
+                    self.info_overlay.show(
+                        "Profile Applied".to_string(),
+                        vec![
+                            format!("Active profile: {}", profile_name),
+                            String::new(),
+                            "This profile will be used for the".into(),
+                            "next session restart.".into(),
+                        ],
+                    );
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
                     }
                 }
             }
@@ -1824,10 +2040,9 @@ impl App {
         }
     }
 
-    /// Toggle transcript recording for the active Claude session
+    /// Toggle transcript recording for the active plugin session
     fn toggle_transcript(&mut self) {
-        // TODO: Implement transcript toggle when transcript system is added
-        log::info!("Transcript toggle requested (not yet implemented)");
+        self.execute_plugin_actions(vec![crate::plugin::PluginAction::ToggleTranscript]);
     }
 
     /// Inject context text into the active plugin tab
@@ -2062,10 +2277,39 @@ impl App {
                 self.config.session.save_scrollback = enabled;
             }
             SettingsAction::SetPluginEnabled { plugin_id, enabled } => {
+                // Helper: test if a binary actually works by running --version
+                let binary_works = |binary: &str| -> bool {
+                    std::process::Command::new(binary)
+                        .arg("--version")
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
+                };
+
                 match plugin_id.as_str() {
                     "claude-code" => {
                         self.config.plugins.claude_code.enabled = enabled;
                         if enabled {
+                            let binary = &self.config.plugins.claude_code.binary;
+                            if !binary_works(binary) {
+                                self.info_overlay.show(
+                                    "Claude Code not available",
+                                    vec![
+                                        format!("'{}' could not be found or is not", binary),
+                                        "working correctly.".into(),
+                                        String::new(),
+                                        "Plugin enabled in config — install the".into(),
+                                        "binary to use it.".into(),
+                                        String::new(),
+                                        "https://docs.anthropic.com/en/docs/claude-code".into(),
+                                    ],
+                                );
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
                             let plugin = crate::plugin::claude_code::ClaudeCodePlugin::new(
                                 self.config.plugins.claude_code.clone(),
                             );
@@ -2083,6 +2327,24 @@ impl App {
                     "codex" => {
                         self.config.plugins.codex.enabled = enabled;
                         if enabled {
+                            let binary = &self.config.plugins.codex.binary;
+                            if !binary_works(binary) {
+                                self.info_overlay.show(
+                                    "Codex not available",
+                                    vec![
+                                        format!("'{}' could not be found or is not", binary),
+                                        "working correctly.".into(),
+                                        String::new(),
+                                        "Plugin enabled in config — install the".into(),
+                                        "binary to use it.".into(),
+                                        String::new(),
+                                        "https://github.com/openai/codex".into(),
+                                    ],
+                                );
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
                             let plugin = crate::plugin::codex::CodexPlugin::new(
                                 self.config.plugins.codex.clone(),
                             );

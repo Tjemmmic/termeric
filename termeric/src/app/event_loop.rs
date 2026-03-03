@@ -124,12 +124,48 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Dismiss info overlay on any keypress (highest priority)
+                // Info overlay input: Enter/Escape dismiss, 'c' copies text, 1-9 selects profile
                 if self.info_overlay.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
-                        self.info_overlay.dismiss();
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
+                                self.info_overlay.dismiss();
+                                self.pending_profile_selection = None;
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
+                            Key::Character(c) if c.as_str() == "c" => {
+                                // Copy overlay text to clipboard
+                                let text = self.info_overlay.lines.join("\n");
+                                if let Some(clipboard) = &mut self.clipboard {
+                                    let _ = clipboard.set_text(&text);
+                                }
+                            }
+                            Key::Character(c) => {
+                                // Number key 1-9 for profile selection
+                                if let Some(digit) = c.as_str().chars().next().and_then(|ch| ch.to_digit(10)) {
+                                    if digit >= 1 && digit <= 9 {
+                                        let idx = (digit - 1) as usize;
+                                        if let Some((ref plugin_id, ref profiles)) = self.pending_profile_selection {
+                                            if idx < profiles.len() {
+                                                let profile_name = profiles[idx].clone();
+                                                let plugin_id = plugin_id.clone();
+                                                self.info_overlay.dismiss();
+                                                self.pending_profile_selection = None;
+                                                self.execute_plugin_actions(vec![
+                                                    crate::plugin::PluginAction::ApplyProfile {
+                                                        plugin_id,
+                                                        profile_name,
+                                                    },
+                                                ]);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     return;
@@ -434,12 +470,81 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                // Dismiss info overlay on any click
+                // Dismiss info overlay only when clicking the "Continue" button
                 if self.info_overlay.is_active() {
-                    if state == winit::event::ElementState::Pressed {
-                        self.info_overlay.dismiss();
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                    {
+                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
+                            let cw = renderer.cell_width();
+                            let ch = renderer.cell_height();
+                            let (sw, sh) = renderer.window_size();
+                            let (ww, wh) = (sw as f32, sh as f32);
+                            let char_scale = cw * 0.85;
+                            let padding = cw * 2.5;
+                            let line_height = ch * 1.6;
+                            let title_height = ch * 2.8;
+
+                            // Compute card geometry (must match build_info_overlay)
+                            let hint_chars = 37_usize; // "Esc / Enter to dismiss  ·  C to copy"
+                            let max_line_chars = self.info_overlay.lines.iter()
+                                .map(|l| l.chars().count())
+                                .max()
+                                .unwrap_or(20);
+                            let content_w = max_line_chars.max(hint_chars) as f32 * char_scale;
+                            let title_w = self.info_overlay.title.chars().count() as f32 * cw;
+                            let inner_w = content_w.max(title_w);
+                            let card_width = (inner_w + padding * 2.0 + cw * 2.0)
+                                .max(380.0)
+                                .min(ww * 0.85);
+                            let content_height = self.info_overlay.lines.len() as f32 * line_height;
+                            let btn_area_height = ch * 4.5;
+                            let card_height = padding + title_height + content_height + btn_area_height + padding * 0.5;
+                            let card_x = (ww - card_width) / 2.0;
+                            let card_y = (wh - card_height) / 2.0;
+
+                            // Compute two-button geometry (must match renderer)
+                            let title_y = card_y + padding;
+                            let content_start_y = title_y + title_height;
+                            let btn_sep_y = content_start_y + content_height + ch * 0.5;
+                            let btn_h = ch * 1.8;
+                            let btn_h_padding = cw * 2.0;
+                            let btn_gap = cw * 1.5;
+                            let btn_y = btn_sep_y + ch * 0.8;
+
+                            // Copy button: 4 chars
+                            let copy_btn_w = 4.0 * cw + btn_h_padding * 2.0;
+                            // Continue button: 8 chars
+                            let continue_btn_w = 8.0 * cw + btn_h_padding * 2.0;
+                            let total_btns_w = copy_btn_w + btn_gap + continue_btn_w;
+                            let copy_btn_x = card_x + (card_width - total_btns_w) / 2.0;
+                            let continue_btn_x = copy_btn_x + copy_btn_w + btn_gap;
+
+                            let (mx, my) = (pos.0 as f32, pos.1 as f32);
+
+                            // Hit-test Copy button
+                            if mx >= copy_btn_x && mx <= copy_btn_x + copy_btn_w
+                                && my >= btn_y && my <= btn_y + btn_h
+                            {
+                                let text = self.info_overlay.lines.join("\n");
+                                if let Some(clipboard) = &mut self.clipboard {
+                                    let _ = clipboard.set_text(&text);
+                                }
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
+
+                            // Hit-test Continue button
+                            if mx >= continue_btn_x && mx <= continue_btn_x + continue_btn_w
+                                && my >= btn_y && my <= btn_y + btn_h
+                            {
+                                self.info_overlay.dismiss();
+                                self.pending_profile_selection = None;
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
                         }
                     }
                     return;
@@ -482,6 +587,12 @@ impl ApplicationHandler for App {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.last_cursor_pos = Some((position.x, position.y));
+                // Redraw for hover effects on overlays
+                if self.info_overlay.is_active() || self.diff_review.is_active() {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
                 self.handle_mouse_move((position.x, position.y));
             }
 

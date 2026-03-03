@@ -13,6 +13,7 @@ use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
 use crate::ui::claude_chrome::AiSessionState;
 use crate::session::Session;
+use crate::session::transcript::TranscriptRecorder;
 
 use super::title::{get_process_cwd, dir_name_from_path, abbreviate_path, get_foreground_process};
 
@@ -61,6 +62,8 @@ pub struct Tab {
     pub diff_detector: DiffDetector,
     /// AI session state (for plugin tabs running AI tools like Claude Code, Codex, etc.)
     pub ai_session: Option<AiSessionState>,
+    /// Active transcript recorder (writes JSONL to disk while recording)
+    pub transcript: Option<TranscriptRecorder>,
 }
 
 impl Tab {
@@ -98,6 +101,7 @@ impl Tab {
             tab_type: TabType::Shell,
             diff_detector: DiffDetector::new(),
             ai_session: None,
+            transcript: None,
         })
     }
 
@@ -162,6 +166,7 @@ impl Tab {
             } else {
                 None
             },
+            transcript: None,
         })
     }
 
@@ -179,6 +184,12 @@ impl Tab {
                                 let clean = strip_ansi(line);
                                 self.diff_detector.feed_line(&clean);
                             }
+                        }
+                    }
+                    // Record to transcript if active
+                    if let Some(ref mut recorder) = self.transcript {
+                        if let Ok(text) = std::str::from_utf8(&data) {
+                            recorder.record_output(text);
                         }
                     }
                     self.terminal.process(&data);
@@ -205,7 +216,20 @@ impl Tab {
         }
 
         // Drain any terminal events that were emitted during processing
-        let events = self.terminal.drain_events();
+        let mut events = self.terminal.drain_events();
+
+        // Handle PtyWrite events locally — write response back to this tab's PTY
+        events.retain(|ev| {
+            if let TerminalEvent::PtyWrite(data) = ev {
+                if let Err(e) = self.pty.write_all(data) {
+                    log::error!("Tab {} failed to write DSR response: {}", self.id, e);
+                }
+                false // consumed, don't forward
+            } else {
+                true // forward to app
+            }
+        });
+
         (had_output, events)
     }
 
@@ -289,6 +313,7 @@ impl Tab {
             tab_type: TabType::Shell,
             diff_detector: DiffDetector::new(),
             ai_session: None,
+            transcript: None,
         })
     }
 

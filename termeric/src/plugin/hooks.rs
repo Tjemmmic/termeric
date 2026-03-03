@@ -89,6 +89,10 @@ pub enum PluginAction {
     ToggleTranscript,
     /// Inject context text into the active plugin tab
     InjectContext { text: String },
+    /// List available profiles for a plugin (shows selection overlay)
+    ListProfiles { plugin_id: String },
+    /// Apply a named profile to the active plugin session
+    ApplyProfile { plugin_id: String, profile_name: String },
 }
 
 /// Metadata for a command a plugin contributes to the command palette.
