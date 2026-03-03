@@ -166,7 +166,7 @@ const BRANCH_SUBCOMMANDS: &[&str] = &[
 /// Returns `Some(partial)` if completions should be shown,
 /// where `partial` is the partial branch name typed so far.
 pub fn detect_git_completion(input: &str) -> Option<&str> {
-    let trimmed = input.trim();
+    let trimmed = input.trim_start();
 
     // Must start with "git "
     let rest = trimmed.strip_prefix("git ")?;

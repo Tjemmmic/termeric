@@ -474,12 +474,7 @@ impl Handler<'_> {
     /// Handle SGR with raw VTE Params (preserves colon-separated subparameters)
     fn handle_sgr_raw(&mut self, params: &Params) {
         // Check for empty params (reset all)
-        let mut has_params = false;
-        for _ in params.iter() {
-            has_params = true;
-            break;
-        }
-        if !has_params {
+        if params.iter().next().is_none() {
             self.terminal.reset_attrs();
             return;
         }

@@ -685,13 +685,11 @@ fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &s
 
     let mut measured_width: f32 = 0.0;
     let mut font_id: Option<cosmic_text::fontdb::ID> = None;
-    for run in buffer.layout_runs() {
-        for glyph in run.glyphs.iter() {
+    if let Some(run) = buffer.layout_runs().next() {
+        if let Some(glyph) = run.glyphs.first() {
             measured_width = glyph.w;
             font_id = Some(glyph.font_id);
-            break;
         }
-        break;
     }
 
     // Try to get the actual font name and check if it's monospace
@@ -737,12 +735,10 @@ fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &s
         );
 
         let mut mono_width: f32 = 0.0;
-        for run in mono_buffer.layout_runs() {
-            for glyph in run.glyphs.iter() {
+        if let Some(run) = mono_buffer.layout_runs().next() {
+            if let Some(glyph) = run.glyphs.first() {
                 mono_width = glyph.w;
-                break;
             }
-            break;
         }
 
         log::warn!(
