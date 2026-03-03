@@ -2996,6 +2996,10 @@ pub struct InfoOverlayInfo {
     pub title: String,
     pub lines: Vec<String>,
     pub animation: f32,
+    /// Current mouse position (for hover effects)
+    pub mouse_pos: Option<(f32, f32)>,
+    /// Whether the mouse is currently pressed (for click effects)
+    pub mouse_pressed: bool,
 }
 
 /// Info for rendering the diff review overlay
@@ -4358,66 +4362,228 @@ impl Renderer {
         }
     }
 
-    /// Build the info overlay (About/Version centered card)
+    /// Build the info overlay (error/info centered card with Copy/Continue buttons)
     fn build_info_overlay(&mut self, info: &InfoOverlayInfo, window_width: f32, window_height: f32) {
         let anim = info.animation;
+        // Smooth ease-out curve for polished feel
+        let ease = 1.0 - (1.0 - anim).powi(3);
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
+        let char_scale = cell_width * 0.85;
 
-        // Scrim
-        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
+        // ── Scrim ──
+        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * 0.85 * ease);
         self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
 
-        // Card geometry
-        let padding = cell_width * 2.0;
-        let line_height = cell_height * 1.8;
-        let title_height = cell_height * 2.5;
-        let footer_height = cell_height * 1.6;
-        let content_height = info.lines.len() as f32 * line_height;
-        let card_height = padding + title_height + content_height + footer_height + padding * 0.5;
-        let card_width = (cell_width * 40.0).max(320.0).min(window_width * 0.5);
-        let card_x = (window_width - card_width) / 2.0;
-        let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -20.0;
+        // ── Card geometry — auto-width based on content ──
+        let padding = cell_width * 2.5;
+        let line_height = cell_height * 1.6;
+        let title_height = cell_height * 2.8;
+        let btn_area_height = cell_height * 4.5; // buttons + hint text below
 
-        // Card background
-        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
+        // Compute widest element to size the card
+        let hint_text = "Esc / Enter to dismiss  \u{00b7}  C to copy";
+        let hint_chars = hint_text.chars().count();
+        let max_line_chars = info.lines.iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(20);
+        // Content and hint use char_scale; title uses full cell_width
+        let content_w = max_line_chars.max(hint_chars) as f32 * char_scale;
+        let title_w = info.title.chars().count() as f32 * cell_width;
+        let inner_w = content_w.max(title_w);
+        let card_width = (inner_w + padding * 2.0 + cell_width * 2.0)
+            .max(380.0)
+            .min(window_width * 0.85);
+
+        let content_height = info.lines.len() as f32 * line_height;
+        let card_height = padding + title_height + content_height + btn_area_height + padding * 0.5;
+        let card_x = (window_width - card_width) / 2.0;
+        let card_y = (window_height - card_height) / 2.0 + (1.0 - ease) * -30.0;
+
+        // ── Drop shadow (layered for softness) ──
+        let shadow_layers = 3;
+        for i in 0..shadow_layers {
+            let spread = (i as f32 + 1.0) * 4.0;
+            let alpha = 0.08 * ease / (i as f32 + 1.0);
+            let shadow_color = [0.0, 0.0, 0.0, alpha];
+            self.rect_pipeline.push_rounded_rect(
+                card_x - spread, card_y - spread * 0.5 + spread * 0.8,
+                card_width + spread * 2.0, card_height + spread * 1.5,
+                shadow_color, 12.0 + spread,
+            );
+        }
+
+        // ── Card background ──
+        let card_bg = adjust_alpha(self.ui.palette_bg, ease);
         self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, card_height, card_bg, 12.0);
 
-        // Card border
-        let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
-        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, 1.0, border, 0.0);
+        // ── Card border (subtle) ──
+        let border = adjust_alpha(self.ui.palette_border, 0.3 * ease);
+        // Top/bottom
+        self.rect_pipeline.push_rect(card_x + 12.0, card_y, card_width - 24.0, 1.0, border);
+        self.rect_pipeline.push_rect(card_x + 12.0, card_y + card_height - 1.0, card_width - 24.0, 1.0, border);
+        // Left/right
+        self.rect_pipeline.push_rect(card_x, card_y + 12.0, 1.0, card_height - 24.0, border);
+        self.rect_pipeline.push_rect(card_x + card_width - 1.0, card_y + 12.0, 1.0, card_height - 24.0, border);
 
-        // Title
+        // ── Outer glow accent line at top ──
+        let glow_color = adjust_alpha(self.ui.palette_accent, 0.2 * ease);
+        self.rect_pipeline.push_rect(card_x + 24.0, card_y, card_width - 48.0, 2.0, glow_color);
+
+        // ── Title — centered, accent ──
         let title_y = card_y + padding;
-        let title_color = adjust_alpha(self.ui.palette_accent, anim);
+        let title_color = adjust_alpha(self.ui.palette_accent, ease);
         let title_x = card_x + (card_width - info.title.chars().count() as f32 * cell_width) / 2.0;
         for (i, c) in info.title.chars().enumerate() {
             self.text_pipeline.push_char(c, title_x + i as f32 * cell_width, title_y, title_color);
         }
 
-        // Content lines
-        let text_color = adjust_alpha(self.ui.palette_text, anim);
-        let dim_color = adjust_alpha(self.ui.palette_text_dim, anim);
+        // ── Separator under title (faded edges) ──
+        let sep_y = title_y + cell_height * 1.5;
+        let sep_full = card_width - padding * 2.0;
+        let sep_fade_w = sep_full * 0.15;
+
+        // Center segment (full opacity)
+        let sep_color = adjust_alpha(self.ui.palette_border, 0.25 * ease);
+        self.rect_pipeline.push_rect(
+            card_x + padding + sep_fade_w, sep_y,
+            sep_full - sep_fade_w * 2.0, 1.0,
+            sep_color,
+        );
+        // Left fade
+        let sep_dim = adjust_alpha(self.ui.palette_border, 0.08 * ease);
+        self.rect_pipeline.push_rect(
+            card_x + padding, sep_y,
+            sep_fade_w, 1.0,
+            sep_dim,
+        );
+        // Right fade
+        self.rect_pipeline.push_rect(
+            card_x + padding + sep_full - sep_fade_w, sep_y,
+            sep_fade_w, 1.0,
+            sep_dim,
+        );
+
+        // ── Content lines ──
         let content_start_y = title_y + title_height;
+        let text_color = adjust_alpha(self.ui.palette_text, 0.9 * ease);
+        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * ease);
+        let content_x = card_x + padding;
+
         for (row, line) in info.lines.iter().enumerate() {
-            if line.is_empty() {
-                continue;
-            }
+            if line.is_empty() { continue; }
             let line_y = content_start_y + row as f32 * line_height;
-            let line_x = card_x + (card_width - line.chars().count() as f32 * cell_width) / 2.0;
-            let color = if row == 0 { text_color } else { dim_color };
+            let color = if line.starts_with("  ") { dim_color } else { text_color };
             for (i, c) in line.chars().enumerate() {
-                self.text_pipeline.push_char(c, line_x + i as f32 * cell_width, line_y, color);
+                let cx = content_x + i as f32 * char_scale;
+                if cx + char_scale > card_x + card_width - padding { break; }
+                self.text_pipeline.push_char(c, cx, line_y, color);
             }
         }
 
-        // Footer hint
-        let hint = "Press any key to dismiss";
-        let footer_y = card_y + card_height - footer_height;
-        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
-        let hint_x = card_x + (card_width - hint.chars().count() as f32 * cell_width) / 2.0;
-        for (i, c) in hint.chars().enumerate() {
-            self.text_pipeline.push_char(c, hint_x + i as f32 * cell_width, footer_y, hint_color);
+        // ── Separator above buttons (same faded style) ──
+        let btn_sep_y = content_start_y + content_height + cell_height * 0.5;
+        self.rect_pipeline.push_rect(
+            card_x + padding + sep_fade_w, btn_sep_y,
+            sep_full - sep_fade_w * 2.0, 1.0,
+            sep_color,
+        );
+        self.rect_pipeline.push_rect(card_x + padding, btn_sep_y, sep_fade_w, 1.0, sep_dim);
+        self.rect_pipeline.push_rect(card_x + padding + sep_full - sep_fade_w, btn_sep_y, sep_fade_w, 1.0, sep_dim);
+
+        // ── Two buttons: "Copy" and "Continue" ──
+        let btn_h = cell_height * 1.8;
+        let btn_h_padding = cell_width * 2.0;
+        let btn_gap = cell_width * 1.5;
+        let btn_y = btn_sep_y + cell_height * 0.8;
+
+        let copy_label = "Copy";
+        let continue_label = "Continue";
+        let copy_text_w = copy_label.chars().count() as f32 * cell_width;
+        let continue_text_w = continue_label.chars().count() as f32 * cell_width;
+        let copy_btn_w = copy_text_w + btn_h_padding * 2.0;
+        let continue_btn_w = continue_text_w + btn_h_padding * 2.0;
+        let total_btns_w = copy_btn_w + btn_gap + continue_btn_w;
+
+        let copy_btn_x = card_x + (card_width - total_btns_w) / 2.0;
+        let continue_btn_x = copy_btn_x + copy_btn_w + btn_gap;
+
+        // --- Hit-testing for hover/click ---
+        let (mx, my) = info.mouse_pos.unwrap_or((-1.0, -1.0));
+        let copy_hovered = mx >= copy_btn_x && mx <= copy_btn_x + copy_btn_w
+            && my >= btn_y && my <= btn_y + btn_h;
+        let continue_hovered = mx >= continue_btn_x && mx <= continue_btn_x + continue_btn_w
+            && my >= btn_y && my <= btn_y + btn_h;
+        let copy_pressed = copy_hovered && info.mouse_pressed;
+        let continue_pressed = continue_hovered && info.mouse_pressed;
+
+        // Helper: draw a single button
+        // (x, y, w, h, label, is_primary, hovered, pressed)
+        let draw_button = |this: &mut Self, bx: f32, by: f32, bw: f32, bh: f32,
+                           label: &str, primary: bool, hovered: bool, pressed: bool| {
+            // Background intensity varies by state
+            let base_alpha = if primary { 0.12 } else { 0.05 };
+            let bg_alpha = if pressed {
+                base_alpha + 0.18
+            } else if hovered {
+                base_alpha + 0.10
+            } else {
+                base_alpha
+            };
+
+            // Press effect: slight inset
+            let inset = if pressed { 1.0 } else { 0.0 };
+            let bx = bx + inset;
+            let by = by + inset;
+            let bw = bw - inset * 2.0;
+            let bh = bh - inset * 2.0;
+
+            // Button background
+            let btn_bg = adjust_alpha(this.ui.palette_accent, bg_alpha * ease);
+            this.rect_pipeline.push_rounded_rect(bx, by, bw, bh, btn_bg, 6.0);
+
+            // Button border (brighter on hover)
+            let border_alpha = if hovered { 0.65 } else { 0.35 };
+            let btn_border = adjust_alpha(this.ui.palette_accent, border_alpha * ease);
+            // Top/bottom
+            this.rect_pipeline.push_rect(bx + 6.0, by, bw - 12.0, 1.0, btn_border);
+            this.rect_pipeline.push_rect(bx + 6.0, by + bh - 1.0, bw - 12.0, 1.0, btn_border);
+            // Left/right
+            this.rect_pipeline.push_rect(bx, by + 6.0, 1.0, bh - 12.0, btn_border);
+            this.rect_pipeline.push_rect(bx + bw - 1.0, by + 6.0, 1.0, bh - 12.0, btn_border);
+
+            // Hover glow underneath
+            if hovered && !pressed {
+                let glow = adjust_alpha(this.ui.palette_accent, 0.06 * ease);
+                this.rect_pipeline.push_rounded_rect(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0, glow, 8.0);
+            }
+
+            // Button text (brighter on hover)
+            let text_alpha = if hovered { 1.0 } else { 0.8 };
+            let text_color = adjust_alpha(this.ui.palette_accent, text_alpha * ease);
+            let text_x = bx + (bw - label.chars().count() as f32 * cell_width) / 2.0;
+            let text_y = by + (bh - cell_height) / 2.0;
+            for (i, c) in label.chars().enumerate() {
+                this.text_pipeline.push_char(c, text_x + i as f32 * cell_width, text_y, text_color);
+            }
+        };
+
+        // Draw Copy button
+        draw_button(self, copy_btn_x, btn_y, copy_btn_w, btn_h,
+                    copy_label, false, copy_hovered, copy_pressed);
+        // Draw Continue button (primary)
+        draw_button(self, continue_btn_x, btn_y, continue_btn_w, btn_h,
+                    continue_label, true, continue_hovered, continue_pressed);
+
+        // ── Keyboard hint ──
+        let hint_y = btn_y + btn_h + cell_height * 0.5;
+        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.35 * ease);
+        let hint_text = "Esc / Enter to dismiss  ·  C to copy";
+        let hint_w = hint_text.chars().count() as f32 * char_scale;
+        let hint_x = card_x + (card_width - hint_w) / 2.0;
+        for (i, c) in hint_text.chars().enumerate() {
+            self.text_pipeline.push_char(c, hint_x + i as f32 * char_scale, hint_y, hint_color);
         }
     }
 
