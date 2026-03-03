@@ -1,4 +1,4 @@
-//! Claude session chrome — status bar UI displayed below the tab bar for Claude Code tabs
+//! AI session chrome — status bar UI displayed below the tab bar for AI plugin tabs
 //!
 //! Shows: repo name · branch · host badge · [Context] button · transcript indicator
 
@@ -31,9 +31,13 @@ impl HostTarget {
     }
 }
 
-/// Persistent state for a Claude Code session tab
+/// Persistent state for an AI plugin session tab (Claude Code, Codex, etc.)
 #[derive(Debug, Clone)]
-pub struct ClaudeSessionState {
+pub struct AiSessionState {
+    /// Which plugin owns this session (e.g. "claude-code", "codex")
+    pub plugin_id: String,
+    /// Human-readable name for chrome bar display (e.g. "Claude Code", "Codex")
+    pub display_name: String,
     /// Currently active profile name
     pub profile: String,
     /// Where this session is running
@@ -46,34 +50,47 @@ pub struct ClaudeSessionState {
     pub branch: Option<String>,
     /// Whether the working tree is dirty
     pub dirty: bool,
+    /// Approval mode (e.g. "auto-accept", "suggest")
+    pub approval_mode: Option<String>,
 }
 
-impl Default for ClaudeSessionState {
+impl Default for AiSessionState {
     fn default() -> Self {
         Self {
+            plugin_id: "unknown".to_string(),
+            display_name: "AI".to_string(),
             profile: "default".to_string(),
             host: HostTarget::Local,
             recording: false,
             repo_name: None,
             branch: None,
             dirty: false,
+            approval_mode: None,
         }
     }
 }
 
-impl ClaudeSessionState {
+impl AiSessionState {
+    /// Create a new session state for a specific plugin
+    pub fn new(plugin_id: &str, display_name: &str) -> Self {
+        Self {
+            plugin_id: plugin_id.to_string(),
+            display_name: display_name.to_string(),
+            ..Default::default()
+        }
+    }
+
     /// Update git-related fields from a branch name, dirty status, and working dir
     pub fn update_git(&mut self, branch: Option<&str>, dirty: bool, cwd: Option<&str>) {
         self.branch = branch.map(|s| s.to_string());
         self.dirty = dirty;
 
         // Extract repo name from cwd (last path component)
-        if self.repo_name.is_none() {
-            if let Some(dir) = cwd {
-                if let Some(name) = std::path::Path::new(dir).file_name() {
-                    self.repo_name = Some(name.to_string_lossy().to_string());
-                }
-            }
+        if self.repo_name.is_none()
+            && let Some(dir) = cwd
+            && let Some(name) = std::path::Path::new(dir).file_name()
+        {
+            self.repo_name = Some(name.to_string_lossy().to_string());
         }
     }
 
@@ -86,6 +103,10 @@ impl ClaudeSessionState {
 /// Chrome bar render info (passed to renderer)
 #[derive(Debug, Clone)]
 pub struct ChromeBarInfo {
+    /// Which plugin owns this session
+    pub plugin_id: String,
+    /// Human-readable display name (e.g. "Claude Code", "Codex")
+    pub display_name: String,
     /// Repo name (e.g., "termeric")
     pub repo_name: Option<String>,
     /// Branch name (e.g., "main")
@@ -98,6 +119,8 @@ pub struct ChromeBarInfo {
     pub profile: String,
     /// Whether transcript is recording
     pub recording: bool,
+    /// Approval mode (e.g. "auto-accept", "suggest")
+    pub approval_mode: Option<String>,
     /// Height of the chrome bar in pixels (set by renderer)
     pub height: f32,
 }
@@ -125,16 +148,28 @@ mod tests {
 
     #[test]
     fn test_session_state_defaults() {
-        let state = ClaudeSessionState::default();
+        let state = AiSessionState::default();
+        assert_eq!(state.plugin_id, "unknown");
+        assert_eq!(state.display_name, "AI");
         assert_eq!(state.profile, "default");
         assert_eq!(state.host, HostTarget::Local);
         assert!(!state.recording);
         assert!(state.repo_name.is_none());
+        assert!(state.approval_mode.is_none());
+    }
+
+    #[test]
+    fn test_session_state_new() {
+        let state = AiSessionState::new("claude-code", "Claude Code");
+        assert_eq!(state.plugin_id, "claude-code");
+        assert_eq!(state.display_name, "Claude Code");
+        assert_eq!(state.profile, "default");
+        assert_eq!(state.host, HostTarget::Local);
     }
 
     #[test]
     fn test_update_git() {
-        let mut state = ClaudeSessionState::default();
+        let mut state = AiSessionState::default();
         state.update_git(Some("main"), true, Some("/home/user/projects/termeric"));
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert!(state.dirty);
@@ -143,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_toggle_recording() {
-        let mut state = ClaudeSessionState::default();
+        let mut state = AiSessionState::default();
         assert!(!state.recording);
         state.toggle_recording();
         assert!(state.recording);

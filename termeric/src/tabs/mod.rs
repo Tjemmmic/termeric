@@ -7,6 +7,7 @@ mod title;
 
 pub use tab::{Tab, TabType};
 
+use std::collections::HashMap;
 use crate::config::ShellConfig;
 use crate::session::Session;
 use termeric_core::TerminalEvent;
@@ -65,6 +66,7 @@ impl TabManager {
         working_dir: Option<&str>,
         title: Option<&str>,
         tab_type: Option<TabType>,
+        env: HashMap<String, String>,
     ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
@@ -79,6 +81,7 @@ impl TabManager {
             title,
             self.scrollback_lines,
             tab_type,
+            env,
         )?;
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;

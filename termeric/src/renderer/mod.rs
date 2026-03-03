@@ -2411,7 +2411,7 @@ impl Renderer {
         }
     }
 
-    /// Build the Claude session chrome bar (between tab bar and terminal content)
+    /// Build the AI session chrome bar (between tab bar and terminal content)
     fn build_chrome_bar(
         &mut self,
         info: &crate::ui::claude_chrome::ChromeBarInfo,

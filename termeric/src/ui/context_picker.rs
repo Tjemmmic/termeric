@@ -55,6 +55,8 @@ pub struct ContextPicker {
     pub assembled: Option<String>,
     /// Working directory for commands
     pub cwd: Option<String>,
+    /// The plugin ID to inject context into (e.g. "claude-code", "codex")
+    pub target_plugin_id: Option<String>,
     /// Animation start time
     animation_start: Instant,
     /// Whether animating open
@@ -71,6 +73,7 @@ impl ContextPicker {
             selected_index: 0,
             assembled: None,
             cwd: None,
+            target_plugin_id: None,
             animation_start: Instant::now(),
             animating_open: false,
             status: None,

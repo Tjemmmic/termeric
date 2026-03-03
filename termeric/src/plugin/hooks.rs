@@ -3,6 +3,8 @@
 //! Defines the core [`Plugin`] trait that all plugins implement,
 //! along with lifecycle hooks and response types.
 
+use std::collections::HashMap;
+
 /// Read-only context passed to plugins during hook dispatch.
 #[derive(Debug, Clone)]
 pub struct PluginContext {
@@ -62,6 +64,8 @@ pub enum PluginAction {
         title: Option<String>,
         /// Plugin ID that owns this tab (None = generic command tab)
         plugin_id: Option<String>,
+        /// Additional environment variables to set for the spawned process
+        env: HashMap<String, String>,
     },
     /// Write data to the active PTY
     WriteToPty { data: Vec<u8> },
@@ -221,6 +225,7 @@ mod tests {
                 cwd: None,
                 title: Some("Test".to_string()),
                 plugin_id: None,
+                env: HashMap::new(),
             },
             PluginAction::WriteToPty {
                 data: b"hello".to_vec(),

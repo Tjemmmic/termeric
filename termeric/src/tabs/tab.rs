@@ -2,6 +2,7 @@
 //!
 //! A `Tab` wraps a terminal + PTY pair and provides session save/restore support.
 
+use std::collections::HashMap;
 use std::io;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -10,7 +11,7 @@ use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
 use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
-use crate::ui::claude_chrome::ClaudeSessionState;
+use crate::ui::claude_chrome::AiSessionState;
 use crate::session::Session;
 
 use super::title::{get_process_cwd, dir_name_from_path, abbreviate_path, get_foreground_process};
@@ -58,8 +59,8 @@ pub struct Tab {
     pub tab_type: TabType,
     /// Diff detector for plugin tabs (watches output for unified diffs)
     pub diff_detector: DiffDetector,
-    /// Claude session state (only for plugin tabs running Claude Code)
-    pub claude_session: Option<ClaudeSessionState>,
+    /// AI session state (for plugin tabs running AI tools like Claude Code, Codex, etc.)
+    pub ai_session: Option<AiSessionState>,
 }
 
 impl Tab {
@@ -96,7 +97,7 @@ impl Tab {
             last_command: None,
             tab_type: TabType::Shell,
             diff_detector: DiffDetector::new(),
-            claude_session: None,
+            ai_session: None,
         })
     }
 
@@ -114,14 +115,19 @@ impl Tab {
         title: Option<&str>,
         scrollback_lines: usize,
         tab_type: Option<TabType>,
+        extra_env: HashMap<String, String>,
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(cols, rows);
         terminal.grid_mut().set_scrollback_limit(scrollback_lines);
 
-        // Build environment with PWD if a working directory was specified
-        let env: Vec<(String, String)> = working_dir
+        // Build environment: start with PWD if a working directory was specified,
+        // then merge any additional environment variables from the plugin
+        let mut env: Vec<(String, String)> = working_dir
             .map(|pwd| vec![("PWD".to_string(), pwd.to_string())])
             .unwrap_or_default();
+        for (key, value) in extra_env {
+            env.push((key, value));
+        }
 
         let pty = Pty::new_with_env(
             cols as u16,
@@ -151,8 +157,8 @@ impl Tab {
             last_command: Some(program.to_string()),
             tab_type: tab_type.clone().unwrap_or(TabType::Shell),
             diff_detector: DiffDetector::new(),
-            claude_session: if matches!(tab_type, Some(TabType::Plugin { .. })) {
-                Some(ClaudeSessionState::default())
+            ai_session: if matches!(tab_type, Some(TabType::Plugin { .. })) {
+                Some(AiSessionState::default())
             } else {
                 None
             },
@@ -282,7 +288,7 @@ impl Tab {
             last_command: None,
             tab_type: TabType::Shell,
             diff_detector: DiffDetector::new(),
-            claude_session: None,
+            ai_session: None,
         })
     }
 
