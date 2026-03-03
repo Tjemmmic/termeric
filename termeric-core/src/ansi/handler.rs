@@ -198,14 +198,28 @@ impl Perform for Handler<'_> {
                 } else {
                     match param!(0, 0) {
                         5 => {
-                            // DSR - Device Status Report
+                            // DSR - Device Status Report: respond with "OK"
                             log::trace!("Device status report requested");
-                            // Would respond with ESC [ 0 n (OK)
+                            self.terminal.push_event(
+                                crate::event::TerminalEvent::PtyWrite(b"\x1b[0n".to_vec()),
+                            );
                         }
                         6 => {
                             // CPR - Cursor Position Report
-                            log::trace!("Cursor position report requested");
-                            // Would respond with ESC [ row ; col R
+                            let cursor = self.terminal.grid().cursor();
+                            let row = cursor.row + 1; // 1-indexed
+                            let col = cursor.col + 1; // 1-indexed
+                            let response = format!("\x1b[{};{}R", row, col);
+                            log::trace!(
+                                "Cursor position report: row={}, col={}",
+                                row,
+                                col
+                            );
+                            self.terminal.push_event(
+                                crate::event::TerminalEvent::PtyWrite(
+                                    response.into_bytes(),
+                                ),
+                            );
                         }
                         _ => {}
                     }

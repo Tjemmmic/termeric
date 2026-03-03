@@ -26,6 +26,9 @@ pub enum TerminalEvent {
     /// Desktop notification request (OSC 9, OSC 777)
     Notification(NotificationRequest),
 
+    /// Data that should be written back to the PTY (e.g., DSR responses)
+    PtyWrite(Vec<u8>),
+
     /// The terminal exited
     Exit,
 }
