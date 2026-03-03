@@ -31,6 +31,7 @@ use crate::tabs::TabManager;
 use crate::config::theme::Theme;
 use crate::plugin::{PluginManager, PluginContext};
 use crate::plugin::claude_code::ClaudeCodePlugin;
+use crate::plugin::codex::CodexPlugin;
 use crate::ui::command_palette::{CommandPalette, PaletteResult, CommandSource, RegisteredCommand};
 use crate::ui::command_palette::palette::core_commands;
 use crate::ui::info_overlay::InfoOverlay;
@@ -242,6 +243,13 @@ impl App {
             }
         }
 
+        if app.config.plugins.codex.enabled {
+            let plugin = CodexPlugin::new(app.config.plugins.codex.clone());
+            if let Err(e) = app.plugin_manager.register(Box::new(plugin), &plugin_ctx) {
+                log::error!("Failed to register Codex plugin: {}", e);
+            }
+        }
+
         log::info!("Loaded {} plugin(s)", app.plugin_manager.count());
 
         // Register plugin keybindings with the keybinding manager
@@ -284,13 +292,16 @@ impl App {
                         parts.push(k.key.to_uppercase());
                         parts.join("+")
                     });
+                let plugin_source = pc.id.split_once('.')
+                    .map(|(prefix, _)| prefix.to_string())
+                    .unwrap_or_else(|| "plugin".to_string());
                 RegisteredCommand {
                     id: pc.id.clone(),
                     title: pc.name.clone(),
                     category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
                     shortcut,
                     icon: None,
-                    source: CommandSource::Plugin("claude-code".into()),
+                    source: CommandSource::Plugin(plugin_source),
                     destructive: false,
                 }
             }).collect();
@@ -721,7 +732,7 @@ impl App {
             .and_then(|tab| tab.working_directory());
         self.git_watcher.update(working_dir.as_deref());
 
-        // Update Claude session chrome bar for plugin tabs
+        // Update AI session chrome bar for plugin tabs
         let chrome_bar_data = {
             let branch = self.git_watcher.branch().map(|s| s.to_string());
             let dirty = self.git_watcher.is_dirty();
@@ -729,15 +740,18 @@ impl App {
 
             if let Some(tabs) = &mut self.tabs {
                 if let Some(tab) = tabs.active_tab_mut() {
-                    if let Some(ref mut session) = tab.claude_session {
+                    if let Some(ref mut session) = tab.ai_session {
                         session.update_git(branch.as_deref(), dirty, wd.as_deref());
                         Some(crate::ui::claude_chrome::ChromeBarInfo {
+                            plugin_id: session.plugin_id.clone(),
+                            display_name: session.display_name.clone(),
                             repo_name: session.repo_name.clone(),
                             branch: session.branch.clone(),
                             dirty: session.dirty,
                             host_label: session.host.badge_label(),
                             profile: session.profile.clone(),
                             recording: session.recording,
+                            approval_mode: session.approval_mode.clone(),
                             height: 0.0, // set by renderer
                         })
                     } else {
@@ -1379,22 +1393,40 @@ impl App {
     }
 
     /// Execute a plugin command by ID.
+    ///
+    /// Commands that require direct App state access (review-diff, copy-diff, etc.)
+    /// are matched by suffix so they work for any AI plugin (claude-code, codex, etc.).
     fn execute_plugin_command(&mut self, command_id: &str) {
-        // Handle diff-related commands directly (need App state access)
-        match command_id {
-            "claude-code.review-diff" => {
-                self.open_diff_review();
-                return;
+        // Extract the suffix after the first '.' for plugin-agnostic matching
+        if let Some(suffix) = command_id.split_once('.').map(|(_, s)| s) {
+            let plugin_id = command_id.split_once('.').map(|(p, _)| p).unwrap_or("");
+            match suffix {
+                "review-diff" => {
+                    self.open_diff_review();
+                    return;
+                }
+                "copy-diff" => {
+                    self.copy_latest_diff();
+                    return;
+                }
+                "insert-context" => {
+                    self.open_context_picker_for(plugin_id);
+                    return;
+                }
+                "export-session" => {
+                    self.export_plugin_session(plugin_id);
+                    return;
+                }
+                "jump-to-error" => {
+                    self.jump_to_last_error(plugin_id);
+                    return;
+                }
+                "select-profile" => {
+                    log::info!("Profile selection not yet implemented — use config.toml profiles");
+                    return;
+                }
+                _ => {}
             }
-            "claude-code.copy-diff" => {
-                self.copy_latest_diff();
-                return;
-            }
-            "claude-code.insert-context" => {
-                self.open_context_picker();
-                return;
-            }
-            _ => {}
         }
         let ctx = self.build_plugin_context();
         if let Some(action) = self.plugin_manager.execute_command(command_id, &ctx) {
@@ -1434,18 +1466,19 @@ impl App {
         log::info!("No diffs to copy");
     }
 
-    /// Open the context picker modal
-    fn open_context_picker(&mut self) {
+    /// Open the context picker modal targeting a specific plugin tab
+    fn open_context_picker_for(&mut self, plugin_id: &str) {
         let cwd = if let Some(tabs) = &self.tabs {
-            tabs.plugin_tab_cwd("claude-code")
+            tabs.plugin_tab_cwd(plugin_id)
                 .or_else(|| tabs.iter().find(|(_, t)| !t.closed).and_then(|(_, t)| t.working_directory()))
         } else {
             None
         };
+        self.context_picker.target_plugin_id = Some(plugin_id.to_string());
         self.context_picker.open(cwd);
     }
 
-    /// Gather context and inject it into the Claude Code tab
+    /// Gather context and inject it into the target plugin tab
     fn inject_context(&mut self) {
         // Get terminal output from active shell tab (if selected)
         let terminal_output = if let Some(tabs) = &self.tabs {
@@ -1463,15 +1496,99 @@ impl App {
 
         let assembled = self.context_picker.gather(terminal_output);
 
-        // Inject into Claude Code tab's PTY
+        // Inject into the target plugin tab's PTY
+        let target = self.context_picker.target_plugin_id.clone()
+            .unwrap_or_else(|| "claude-code".to_string());
         if let Some(tabs) = &mut self.tabs {
-            // Wrap in a clear marker so Claude can parse it
+            // Wrap in a clear marker so the AI tool can parse it
             let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", assembled);
-            tabs.write_to_plugin_tab("claude-code", injected.as_bytes());
-            log::info!("Injected {} chars of context into Claude Code", injected.len());
+            tabs.write_to_plugin_tab(&target, injected.as_bytes());
+            log::info!("Injected {} chars of context into {}", injected.len(), target);
         }
 
         self.context_picker.dismiss();
+    }
+
+    /// Export the session transcript for a plugin tab to a Markdown file.
+    ///
+    /// Copies the terminal scrollback as text and writes it to a file in the
+    /// session data directory. If a clipboard is available, also copies the path.
+    fn export_plugin_session(&mut self, plugin_id: &str) {
+        let content = if let Some(tabs) = &self.tabs {
+            tabs.find_plugin_tab_index(plugin_id).and_then(|idx| {
+                tabs.iter()
+                    .find(|(i, _)| *i == idx)
+                    .map(|(_, t)| {
+                        let lines = t.terminal.grid().export_scrollback_text();
+                        lines.join("\n")
+                    })
+            })
+        } else {
+            None
+        };
+
+        if let Some(text) = content {
+            if text.trim().is_empty() {
+                log::info!("No session content to export for '{}'", plugin_id);
+                return;
+            }
+            // Write to a file in the sessions directory
+            if let Some(base) = crate::session::sessions_base_dir() {
+                let _ = std::fs::create_dir_all(&base);
+                let id = crate::session::generate_session_id();
+                let filename = format!("{}-{}-export.md", plugin_id, id);
+                let path = base.join(&filename);
+                let md = format!(
+                    "# {} Session Export\n\n```\n{}\n```\n",
+                    plugin_id, text
+                );
+                match std::fs::write(&path, &md) {
+                    Ok(()) => {
+                        log::info!("Exported session to {}", path.display());
+                        if let Some(clipboard) = &mut self.clipboard {
+                            let _ = clipboard.set_text(path.display().to_string());
+                        }
+                    }
+                    Err(e) => log::error!("Failed to export session: {}", e),
+                }
+            }
+        } else {
+            log::info!("No {} tab found for export", plugin_id);
+        }
+    }
+
+    /// Scroll the plugin tab to the last line containing an error-like pattern.
+    ///
+    /// First switches to the plugin tab (if not already active), then scans
+    /// scrollback for error/failed/panic/exception patterns and scrolls there.
+    fn jump_to_last_error(&mut self, plugin_id: &str) {
+        let Some(tabs) = &mut self.tabs else { return };
+
+        // Switch to the plugin tab so active_tab_mut() works on it
+        if let Some(idx) = tabs.find_plugin_tab_index(plugin_id) {
+            tabs.switch_to(idx);
+        } else {
+            log::info!("No '{}' tab found for jump-to-error", plugin_id);
+            return;
+        }
+
+        if let Some(tab) = tabs.active_tab_mut() {
+            let lines = tab.terminal.grid().export_scrollback_text();
+            let error_pos = lines.iter().rposition(|line| {
+                let lower = line.to_lowercase();
+                lower.contains("error")
+                    || lower.contains("failed")
+                    || lower.contains("panic")
+                    || lower.contains("exception")
+            });
+            if let Some(pos) = error_pos {
+                let offset = lines.len().saturating_sub(pos);
+                tab.terminal.grid_mut().set_scroll_offset(offset);
+                log::info!("Jumped to error at line {} in '{}'", pos, plugin_id);
+            } else {
+                log::info!("No errors found in '{}' tab output", plugin_id);
+            }
+        }
     }
 
     /// Execute a list of plugin actions.
@@ -1481,7 +1598,7 @@ impl App {
 
         for action in actions {
             match action {
-                PluginAction::OpenTab { program, args, cwd, title, plugin_id } => {
+                PluginAction::OpenTab { program, args, cwd, title, plugin_id, env } => {
                     let tab_type = plugin_id.map(|id| TabType::Plugin { plugin_id: id });
                     if let Some(tabs) = &mut self.tabs {
                         match tabs.new_tab_with_command(
@@ -1490,6 +1607,7 @@ impl App {
                             cwd.as_deref(),
                             title.as_deref(),
                             tab_type,
+                            env,
                         ) {
                             Ok(id) => {
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
@@ -1538,6 +1656,86 @@ impl App {
                         self.execute_plugin_actions(vec![action]);
                     }
                 }
+                PluginAction::ToggleTranscript => {
+                    if let Some(tabs) = &mut self.tabs {
+                        if let Some(tab) = tabs.active_tab_mut() {
+                            if let Some(ref mut session) = tab.ai_session {
+                                session.toggle_recording();
+                                log::info!("Transcript recording: {}", if session.recording { "started" } else { "stopped" });
+                            }
+                        }
+                    }
+                }
+                PluginAction::ApplyDiff { diff_content, cwd } => {
+                    self.run_git_apply("apply", &[], &diff_content, cwd.as_deref());
+                }
+                PluginAction::StageDiff { diff_content, cwd } => {
+                    self.run_git_apply("stage", &["--cached"], &diff_content, cwd.as_deref());
+                }
+                PluginAction::RevertDiff { diff_content, cwd } => {
+                    self.run_git_apply("revert", &["--reverse"], &diff_content, cwd.as_deref());
+                }
+                PluginAction::InjectContext { text } => {
+                    if let Some(tabs) = &mut self.tabs {
+                        if let Some(tab) = tabs.active_tab_mut() {
+                            if matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }) {
+                                let injected = format!(
+                                    "\n--- Context ---\n{}\n--- End Context ---\n",
+                                    text
+                                );
+                                let _ = tab.write(injected.as_bytes());
+                                log::info!("Injected {} chars of context into active plugin tab", text.len());
+                            } else {
+                                log::warn!("InjectContext: active tab is not a plugin tab");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Run `git apply` with optional extra flags, piping diff_content via stdin.
+    ///
+    /// `label` is used for log messages (e.g. "apply", "stage", "revert").
+    /// `extra_args` are appended to `git apply` (e.g. `["--cached"]` or `["--reverse"]`).
+    fn run_git_apply(&self, label: &str, extra_args: &[&str], diff_content: &str, cwd: Option<&str>) {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut cmd = Command::new("git");
+        cmd.arg("apply");
+        for arg in extra_args {
+            cmd.arg(arg);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(diff_content.as_bytes());
+                }
+                match child.wait_with_output() {
+                    Ok(output) if output.status.success() => {
+                        log::info!("git {} succeeded", label);
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        log::error!("git {} failed: {}", label, stderr.trim());
+                    }
+                    Err(e) => {
+                        log::error!("git {} wait failed: {}", label, e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to spawn git {}: {}", label, e);
                 PluginAction::ApplyDiff { diff_content, cwd } => {
                     self.apply_diff_via_git(&diff_content, cwd.as_deref(), false);
                 }

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use crate::input::keybindings::KeyBinding;
 use crate::plugin::claude_code::ClaudeCodeConfig;
+use crate::plugin::codex::CodexConfig;
 
 /// Application configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -399,4 +400,7 @@ pub struct PluginsConfig {
     /// Claude Code plugin settings
     #[serde(default)]
     pub claude_code: ClaudeCodeConfig,
+    /// Codex plugin settings
+    #[serde(default)]
+    pub codex: CodexConfig,
 }
