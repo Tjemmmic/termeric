@@ -188,6 +188,7 @@ mod tests {
                         cwd: None,
                         title: Some("Test Tab".to_string()),
                         plugin_id: None,
+                        env: std::collections::HashMap::new(),
                     })
                 }
                 _ => HookResponse::Ignored,
