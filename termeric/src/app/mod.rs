@@ -895,6 +895,12 @@ impl App {
         } else {
             None
         };
+        // Update commands panel animation
+        if self.commands_panel.needs_redraw() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
         // Build commands panel info if panel is open or animating
         let commands_panel_info = if !self.commands_panel.is_closed() {
             Some(self.commands_panel.build_info(&self.config.commands))

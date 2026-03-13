@@ -134,6 +134,11 @@ impl CommandsPanel {
         self.animation.is_closed()
     }
 
+    /// Whether the panel animation needs a redraw
+    pub fn needs_redraw(&self) -> bool {
+        self.animation.needs_redraw()
+    }
+
     /// Whether the inline form is active
     pub fn is_editing(&self) -> bool {
         self.edit_mode != EditMode::Browse
