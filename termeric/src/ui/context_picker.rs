@@ -5,10 +5,8 @@
 //! plugin tab's PTY as a single coherent context bundle.
 
 use std::process::Command;
-use std::time::Instant;
 
-/// Animation duration in seconds
-const ANIMATION_DURATION: f32 = 0.15;
+use super::animation::OverlayAnimation;
 
 /// Maximum characters per context source
 const MAX_SOURCE_CHARS: usize = 10_000;
@@ -45,8 +43,8 @@ pub enum ContextKind {
 
 /// Context picker overlay state
 pub struct ContextPicker {
-    /// Whether the overlay is active
-    active: bool,
+    /// Animation state
+    animation: OverlayAnimation,
     /// Available context sources
     pub sources: Vec<ContextSource>,
     /// Currently highlighted source index
@@ -57,10 +55,6 @@ pub struct ContextPicker {
     pub cwd: Option<String>,
     /// The plugin ID to inject context into (e.g. "claude-code", "codex")
     pub target_plugin_id: Option<String>,
-    /// Animation start time
-    animation_start: Instant,
-    /// Whether animating open
-    animating_open: bool,
     /// Status message (e.g., "Gathering context...")
     pub status: Option<String>,
 }
@@ -68,14 +62,12 @@ pub struct ContextPicker {
 impl ContextPicker {
     pub fn new() -> Self {
         Self {
-            active: false,
+            animation: OverlayAnimation::new(),
             sources: Vec::new(),
             selected_index: 0,
             assembled: None,
             cwd: None,
             target_plugin_id: None,
-            animation_start: Instant::now(),
-            animating_open: false,
             status: None,
         }
     }
@@ -125,9 +117,7 @@ impl ContextPicker {
         self.selected_index = 0;
         self.assembled = None;
         self.status = None;
-        self.active = true;
-        self.animating_open = true;
-        self.animation_start = Instant::now();
+        self.animation.open();
     }
 
     /// Move selection up
@@ -218,36 +208,27 @@ impl ContextPicker {
 
     /// Dismiss the overlay
     pub fn dismiss(&mut self) {
-        self.animating_open = false;
-        self.animation_start = Instant::now();
+        self.animation.close();
     }
 
     /// Whether the overlay is active (accepting input)
     pub fn is_active(&self) -> bool {
-        self.active
+        self.animation.is_active()
     }
 
     /// Whether the overlay is visible (active or animating out)
     pub fn is_visible(&self) -> bool {
-        self.active || self.animation() > 0.001
+        self.animation.is_visible()
     }
 
     /// Get animation progress
     pub fn animation(&self) -> f32 {
-        let elapsed = self.animation_start.elapsed().as_secs_f32();
-        let t = (elapsed / ANIMATION_DURATION).min(1.0);
-        let raw = if self.animating_open { t } else { 1.0 - t };
-        raw.clamp(0.0, 1.0)
+        self.animation.progress()
     }
 
     /// Update animation state. Returns true if still animating.
     pub fn update_animation(&mut self) -> bool {
-        let anim = self.animation();
-        if !self.animating_open && anim < 0.001 {
-            self.active = false;
-            return false;
-        }
-        self.animation_start.elapsed().as_secs_f32() < ANIMATION_DURATION
+        self.animation.update()
     }
 
     /// Whether any source is selected

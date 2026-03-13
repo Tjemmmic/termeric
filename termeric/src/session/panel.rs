@@ -2,10 +2,7 @@
 //!
 //! A slide-in panel for listing, loading, and deleting saved sessions.
 
-use std::time::Instant;
-
-/// Animation duration in seconds (matches settings panel)
-const ANIMATION_DURATION: f32 = 0.2;
+use crate::ui::animation::PanelAnimation;
 
 /// Information about a single session for display
 #[derive(Debug, Clone)]
@@ -48,14 +45,8 @@ pub struct SessionPanelInfo {
 
 /// Session management panel state
 pub struct SessionPanel {
-    /// Whether the panel is currently visible
-    open: bool,
-    /// When the current animation started
-    animation_start: Instant,
-    /// Whether we are animating open (true) or closed (false)
-    animating_open: bool,
-    /// The animation value at the time the direction changed
-    animation_base: f32,
+    /// Animation state
+    animation: PanelAnimation,
     /// Currently highlighted session index
     selected_index: usize,
     /// Cached session entries
@@ -67,10 +58,7 @@ pub struct SessionPanel {
 impl SessionPanel {
     pub fn new() -> Self {
         Self {
-            open: false,
-            animation_start: Instant::now(),
-            animating_open: false,
-            animation_base: 0.0,
+            animation: PanelAnimation::new(),
             selected_index: 0,
             sessions: Vec::new(),
             hovered_index: None,
@@ -79,67 +67,39 @@ impl SessionPanel {
 
     /// Open the session management panel, refreshing the session list
     pub fn open(&mut self) {
-        self.animation_base = self.raw_animation();
-        self.open = true;
-        self.animating_open = true;
-        self.animation_start = Instant::now();
+        self.animation.open();
         self.selected_index = 0;
         self.refresh_sessions();
     }
 
     /// Close the panel
     pub fn close(&mut self) {
-        self.animation_base = self.raw_animation();
-        self.animating_open = false;
-        self.animation_start = Instant::now();
+        self.animation.close();
     }
 
     /// Whether the panel is logically open (may still be animating closed)
     pub fn is_open(&self) -> bool {
-        self.open
+        self.animation.is_open()
     }
 
     /// Whether the panel is fully closed and invisible
     pub fn is_closed(&self) -> bool {
-        !self.open && self.animation_progress() <= 0.0
+        self.animation.is_closed()
     }
 
     /// Whether the panel needs redrawing (animation in progress)
     pub fn needs_redraw(&self) -> bool {
-        let anim = self.animation_progress();
-        if self.open {
-            anim < 1.0
-        } else {
-            anim > 0.0
-        }
+        self.animation.needs_redraw()
     }
 
     /// Current animation progress (0.0 to 1.0)
     pub fn animation_progress(&self) -> f32 {
-        let raw = self.raw_animation();
-        // Ease-out cubic
-        let t = raw;
-        1.0 - (1.0 - t).powi(3)
-    }
-
-    fn raw_animation(&self) -> f32 {
-        let elapsed = self.animation_start.elapsed().as_secs_f32();
-        let linear = (elapsed / ANIMATION_DURATION).min(1.0);
-
-        if self.animating_open {
-            // Opening: animate from base to 1.0
-            self.animation_base + (1.0 - self.animation_base) * linear
-        } else {
-            // Closing: animate from base to 0.0
-            self.animation_base * (1.0 - linear)
-        }
+        self.animation.progress()
     }
 
     /// Mark the panel as fully closed once animation completes
     pub fn update(&mut self) {
-        if !self.animating_open && self.raw_animation() <= 0.0 {
-            self.open = false;
-        }
+        self.animation.update();
     }
 
     /// Refresh the session list from disk

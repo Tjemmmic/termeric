@@ -7,8 +7,9 @@
 //! - Delete commands with a small (×) button
 //! - Close via scrim click, × button, or Escape
 
-use std::time::Instant;
 use crate::config::CustomCommand;
+use crate::ui::animation::PanelAnimation;
+use crate::ui::text_input::TextInput;
 
 /// Action returned by the commands panel after a click
 #[derive(Debug, Clone)]
@@ -42,14 +43,8 @@ pub enum EditMode {
 
 /// State for the custom commands panel
 pub struct CommandsPanel {
-    /// Whether the panel is open
-    open: bool,
-    /// Animation start time
-    animation_start: Instant,
-    /// Whether we're animating open (vs closed)
-    animating_open: bool,
-    /// Base animation value at start of animation
-    animation_base: f32,
+    /// Animation state
+    animation: PanelAnimation,
     /// Mouse-hovered command index (None if not hovering a row)
     pub hovered_index: Option<usize>,
     /// Whether hovering the "Add Command" button
@@ -58,12 +53,10 @@ pub struct CommandsPanel {
     pub hovered_delete: Option<usize>,
     /// Current edit mode
     pub edit_mode: EditMode,
-    /// Name buffer for inline form
-    pub form_name: String,
-    /// Command buffer for inline form
-    pub form_command: String,
-    /// Cursor position in active text field
-    pub form_cursor: usize,
+    /// Name input for inline form
+    pub form_name: TextInput,
+    /// Command input for inline form
+    pub form_command: TextInput,
 }
 
 /// Info piped to the renderer
@@ -85,66 +78,60 @@ pub struct CommandsPanelInfo {
     pub form_name: String,
     /// Command field content (for inline form)
     pub form_command: String,
-    /// Cursor position in active field
+    /// Cursor position in active field (byte offset)
     pub form_cursor: usize,
 }
-
-const ANIMATION_DURATION: f32 = 0.25;
 
 impl CommandsPanel {
     pub fn new() -> Self {
         Self {
-            open: false,
-            animation_start: Instant::now(),
-            animating_open: false,
-            animation_base: 0.0,
+            animation: PanelAnimation::with_duration(0.25),
             hovered_index: None,
             hovered_add: false,
             hovered_delete: None,
             edit_mode: EditMode::Browse,
-            form_name: String::new(),
-            form_command: String::new(),
-            form_cursor: 0,
+            form_name: TextInput::new(),
+            form_command: TextInput::new(),
         }
     }
 
     /// Toggle the panel open/closed
     pub fn toggle(&mut self) {
-        self.animation_base = self.animation_progress();
-        self.animation_start = Instant::now();
-        self.open = !self.open;
-        self.animating_open = self.open;
-        if self.open {
+        if self.animation.is_open() {
+            self.cancel_edit();
+            self.animation.close();
+        } else {
             self.hovered_index = None;
             self.hovered_add = false;
             self.hovered_delete = None;
             self.cancel_edit();
+            self.animation.open();
         }
     }
 
     /// Open the panel
     pub fn open(&mut self) {
-        if !self.open {
+        if !self.animation.is_open() {
             self.toggle();
         }
     }
 
     /// Close the panel
     pub fn close(&mut self) {
-        if self.open {
+        if self.animation.is_open() {
             self.cancel_edit();
-            self.toggle();
+            self.animation.close();
         }
     }
 
     /// Whether the panel is currently open
     pub fn is_open(&self) -> bool {
-        self.open
+        self.animation.is_open()
     }
 
     /// Whether the panel is fully closed (animation complete)
     pub fn is_closed(&self) -> bool {
-        !self.open && self.animation_progress() <= 0.0
+        self.animation.is_closed()
     }
 
     /// Whether the inline form is active
@@ -154,15 +141,7 @@ impl CommandsPanel {
 
     /// Current animation progress (0.0 to 1.0)
     pub fn animation_progress(&self) -> f32 {
-        let elapsed = self.animation_start.elapsed().as_secs_f32();
-        let t = (elapsed / ANIMATION_DURATION).min(1.0);
-        let eased = 1.0 - (1.0 - t).powi(3);
-
-        if self.animating_open {
-            self.animation_base + (1.0 - self.animation_base) * eased
-        } else {
-            self.animation_base * (1.0 - eased)
-        }
+        self.animation.progress()
     }
 
     /// Update hover state from mouse position
@@ -179,7 +158,6 @@ impl CommandsPanel {
         self.edit_mode = EditMode::EditingName;
         self.form_name.clear();
         self.form_command.clear();
-        self.form_cursor = 0;
     }
 
     /// Cancel the inline form
@@ -187,7 +165,6 @@ impl CommandsPanel {
         self.edit_mode = EditMode::Browse;
         self.form_name.clear();
         self.form_command.clear();
-        self.form_cursor = 0;
     }
 
     /// Switch focus to the next field (Tab key)
@@ -195,11 +172,11 @@ impl CommandsPanel {
         match self.edit_mode {
             EditMode::EditingName => {
                 self.edit_mode = EditMode::EditingCommand;
-                self.form_cursor = self.form_command.len();
+                self.form_command.cursor_end();
             }
             EditMode::EditingCommand => {
                 self.edit_mode = EditMode::EditingName;
-                self.form_cursor = self.form_name.len();
+                self.form_name.cursor_end();
             }
             EditMode::Browse => {}
         }
@@ -208,48 +185,42 @@ impl CommandsPanel {
     /// Focus the Name field (e.g. from a click)
     pub fn focus_name(&mut self) {
         self.edit_mode = EditMode::EditingName;
-        self.form_cursor = self.form_name.len();
+        self.form_name.cursor_end();
     }
 
     /// Focus the Command field (e.g. from a click)
     pub fn focus_command(&mut self) {
         self.edit_mode = EditMode::EditingCommand;
-        self.form_cursor = self.form_command.len();
+        self.form_command.cursor_end();
+    }
+
+    /// Get the active text input for the current edit mode
+    fn active_input(&mut self) -> Option<&mut TextInput> {
+        match self.edit_mode {
+            EditMode::EditingName => Some(&mut self.form_name),
+            EditMode::EditingCommand => Some(&mut self.form_command),
+            EditMode::Browse => None,
+        }
     }
 
     /// Handle a character input in the form
     pub fn form_char(&mut self, c: char) {
-        let buf = match self.edit_mode {
-            EditMode::EditingName => &mut self.form_name,
-            EditMode::EditingCommand => &mut self.form_command,
-            EditMode::Browse => return,
-        };
-        buf.insert(self.form_cursor, c);
-        self.form_cursor += c.len_utf8();
+        if let Some(input) = self.active_input() {
+            input.insert_char(c);
+        }
     }
 
     /// Handle backspace in the form
     pub fn form_backspace(&mut self) {
-        let buf = match self.edit_mode {
-            EditMode::EditingName => &mut self.form_name,
-            EditMode::EditingCommand => &mut self.form_command,
-            EditMode::Browse => return,
-        };
-        if self.form_cursor > 0 {
-            let prev = buf[..self.form_cursor]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            buf.remove(prev);
-            self.form_cursor = prev;
+        if let Some(input) = self.active_input() {
+            input.backspace();
         }
     }
 
     /// Try to submit the form — returns the new command if valid
     pub fn try_submit(&mut self) -> Option<CustomCommand> {
-        let name = self.form_name.trim().to_string();
-        let command = self.form_command.trim().to_string();
+        let name = self.form_name.text().trim().to_string();
+        let command = self.form_command.text().trim().to_string();
         if name.is_empty() || command.is_empty() {
             return None;
         }
@@ -270,9 +241,13 @@ impl CommandsPanel {
             hovered_add: self.hovered_add,
             hovered_delete: self.hovered_delete,
             edit_mode: self.edit_mode.clone(),
-            form_name: self.form_name.clone(),
-            form_command: self.form_command.clone(),
-            form_cursor: self.form_cursor,
+            form_name: self.form_name.text().to_string(),
+            form_command: self.form_command.text().to_string(),
+            form_cursor: match self.edit_mode {
+                EditMode::EditingName => self.form_name.cursor(),
+                EditMode::EditingCommand => self.form_command.cursor(),
+                EditMode::Browse => 0,
+            },
         }
     }
 }

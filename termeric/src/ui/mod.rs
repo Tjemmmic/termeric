@@ -7,7 +7,10 @@
 //! - Diff review overlay
 //! - Context picker modal
 
+pub mod animation;
 pub mod command_palette;
+pub mod constants;
+pub mod text_input;
 pub mod commands;
 pub mod claude_chrome;
 pub mod context_picker;

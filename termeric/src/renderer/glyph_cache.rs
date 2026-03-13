@@ -8,6 +8,7 @@ use cosmic_text::{
     Attrs, Buffer, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, SwashCache,
 };
 use std::collections::HashMap;
+use crate::ui::constants::LINE_HEIGHT_MULTIPLIER;
 use wgpu::*;
 
 /// Size of the glyph atlas texture
@@ -128,7 +129,7 @@ impl GlyphCache {
         let swash_cache = SwashCache::new();
 
         // Calculate metrics
-        let line_height = font_size * 1.2;
+        let line_height = font_size * LINE_HEIGHT_MULTIPLIER;
         let metrics = Metrics::new(font_size, line_height);
 
         // Measure a character to get cell dimensions and check if font was found
@@ -568,7 +569,7 @@ impl GlyphCache {
         self.font_size = font_size;
 
         // Recalculate metrics
-        let line_height = font_size * 1.2;
+        let line_height = font_size * LINE_HEIGHT_MULTIPLIER;
         self.metrics = Metrics::new(font_size, line_height);
 
         // Remeasure cell dimensions
@@ -577,34 +578,7 @@ impl GlyphCache {
         self.cell_height = cell_height;
         self.use_monospace_fallback = use_fallback;
 
-        // Clear the atlas and caches
-        self.entries.clear();
-        self.ligature_cache.clear();
-        self.cursor_x = 0;
-        self.cursor_y = 0;
-        self.row_height = 0;
-
-        // Clear the texture
-        let clear_data = vec![0u8; (ATLAS_SIZE * ATLAS_SIZE) as usize];
-        queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            &clear_data,
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(ATLAS_SIZE),
-                rows_per_image: Some(ATLAS_SIZE),
-            },
-            Extent3d {
-                width: ATLAS_SIZE,
-                height: ATLAS_SIZE,
-                depth_or_array_layers: 1,
-            },
-        );
+        self.clear_atlas(queue);
 
         log::info!("Font size changed to {}, cell size: {}x{}", font_size, cell_width, cell_height);
     }
@@ -622,6 +596,13 @@ impl GlyphCache {
         self.cell_height = cell_height;
         self.use_monospace_fallback = use_fallback;
 
+        self.clear_atlas(queue);
+
+        log::info!("Font family changed to {}, cell size: {}x{}", self.font_family, cell_width, cell_height);
+    }
+
+    /// Clear the glyph atlas, entry caches, and reset packing cursor.
+    fn clear_atlas(&mut self, queue: &Queue) {
         self.entries.clear();
         self.ligature_cache.clear();
         self.cursor_x = 0;
@@ -648,8 +629,6 @@ impl GlyphCache {
                 depth_or_array_layers: 1,
             },
         );
-
-        log::info!("Font family changed to {}, cell size: {}x{}", self.font_family, cell_width, cell_height);
     }
 }
 

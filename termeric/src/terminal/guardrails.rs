@@ -93,26 +93,20 @@ pub fn check_command(input: &str) -> Option<GuardrailMatch> {
 
 /// Guardrail confirmation overlay state
 pub struct GuardrailOverlay {
-    /// Whether the overlay is active
-    active: bool,
+    /// Animation state
+    animation: crate::ui::animation::OverlayAnimation,
     /// The matched command that triggered the guardrail
     pub matched: Option<GuardrailMatch>,
     /// The raw bytes to send to PTY if confirmed
     pub pending_data: Vec<u8>,
-    /// Animation start time
-    animation_start: std::time::Instant,
-    /// Whether animating open
-    animating_open: bool,
 }
 
 impl GuardrailOverlay {
     pub fn new() -> Self {
         Self {
-            active: false,
+            animation: crate::ui::animation::OverlayAnimation::new(),
             matched: None,
             pending_data: Vec::new(),
-            animation_start: std::time::Instant::now(),
-            animating_open: false,
         }
     }
 
@@ -120,52 +114,43 @@ impl GuardrailOverlay {
     pub fn show(&mut self, matched: GuardrailMatch, pending_data: Vec<u8>) {
         self.matched = Some(matched);
         self.pending_data = pending_data;
-        self.active = true;
-        self.animating_open = true;
-        self.animation_start = std::time::Instant::now();
+        self.animation.open();
     }
 
     /// Dismiss without executing
     pub fn dismiss(&mut self) {
-        self.animating_open = false;
-        self.animation_start = std::time::Instant::now();
+        self.animation.close();
     }
 
     /// Confirm and return the pending data to send
     pub fn confirm(&mut self) -> Vec<u8> {
         let data = std::mem::take(&mut self.pending_data);
-        self.animating_open = false;
-        self.animation_start = std::time::Instant::now();
+        self.animation.close();
         data
     }
 
     /// Whether the overlay is active
     pub fn is_active(&self) -> bool {
-        self.active
+        self.animation.is_active()
     }
 
     /// Whether the overlay is visible
     pub fn is_visible(&self) -> bool {
-        self.active || self.animation() > 0.001
+        self.animation.is_visible()
     }
 
     /// Get animation progress
     pub fn animation(&self) -> f32 {
-        let elapsed = self.animation_start.elapsed().as_secs_f32();
-        let t = (elapsed / 0.15).min(1.0);
-        let raw = if self.animating_open { t } else { 1.0 - t };
-        raw.clamp(0.0, 1.0)
+        self.animation.progress()
     }
 
     /// Update animation state
     pub fn update_animation(&mut self) -> bool {
-        let anim = self.animation();
-        if !self.animating_open && anim < 0.001 {
-            self.active = false;
+        let still_animating = self.animation.update();
+        if !self.animation.is_active() && !self.animation.is_visible() {
             self.matched = None;
-            return false;
         }
-        self.animation_start.elapsed().as_secs_f32() < 0.15
+        still_animating
     }
 }
 

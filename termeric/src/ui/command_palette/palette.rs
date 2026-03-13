@@ -5,6 +5,9 @@
 
 use sublime_fuzzy::FuzzySearch;
 
+use super::super::animation::OverlayAnimation;
+use super::super::text_input::TextInput;
+
 /// Source of a registered command
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandSource {
@@ -90,12 +93,10 @@ pub struct PaletteEntryInfo {
 
 /// The command palette state
 pub struct CommandPalette {
-    /// Whether the palette is currently open
-    active: bool,
-    /// Search input buffer
-    input: String,
-    /// Cursor position in input
-    cursor: usize,
+    /// Animation state
+    animation: OverlayAnimation,
+    /// Search input buffer with cursor
+    input: TextInput,
     /// All registered commands
     registry: Vec<RegisteredCommand>,
     /// Filtered/scored results
@@ -106,8 +107,6 @@ pub struct CommandPalette {
     scroll_offset: usize,
     /// Recently used command IDs (most recent first)
     recently_used: Vec<String>,
-    /// Animation progress (0.0 = closed, 1.0 = fully open)
-    animation: f32,
     /// Maximum visible entries
     max_visible: usize,
 }
@@ -116,15 +115,13 @@ impl CommandPalette {
     /// Create a new command palette
     pub fn new() -> Self {
         Self {
-            active: false,
-            input: String::new(),
-            cursor: 0,
+            animation: OverlayAnimation::new(),
+            input: TextInput::new(),
             registry: Vec::new(),
             entries: Vec::new(),
             selected: 0,
             scroll_offset: 0,
             recently_used: Vec::new(),
-            animation: 0.0,
             max_visible: 9,
         }
     }
@@ -146,43 +143,31 @@ impl CommandPalette {
 
     /// Open the palette
     pub fn open(&mut self) {
-        self.active = true;
         self.input.clear();
-        self.cursor = 0;
         self.selected = 0;
         self.scroll_offset = 0;
+        self.animation.open();
         self.update_entries();
     }
 
-    /// Close the palette
+    /// Close the palette immediately (no close animation).
     pub fn close(&mut self) {
-        self.active = false;
-        self.animation = 0.0;
+        self.animation.close_immediately();
     }
 
     /// Check if palette is active
     pub fn is_active(&self) -> bool {
-        self.active
+        self.animation.is_active()
     }
 
     /// Update animation, returns true if still animating
     pub fn update_animation(&mut self) -> bool {
-        if self.active {
-            if self.animation < 1.0 {
-                self.animation = (self.animation + 0.15).min(1.0);
-                return true;
-            }
-        } else if self.animation > 0.0 {
-            self.animation = (self.animation - 0.2).max(0.0);
-            return true;
-        }
-        false
+        self.animation.update()
     }
 
     /// Handle a character input
     pub fn handle_char(&mut self, c: char) {
-        self.input.insert(self.cursor, c);
-        self.cursor += c.len_utf8();
+        self.input.insert_char(c);
         self.selected = 0;
         self.scroll_offset = 0;
         self.update_entries();
@@ -190,14 +175,7 @@ impl CommandPalette {
 
     /// Handle backspace
     pub fn handle_backspace(&mut self) {
-        if self.cursor > 0 {
-            let prev = self.input[..self.cursor]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.input.remove(prev);
-            self.cursor = prev;
+        if self.input.backspace() {
             self.selected = 0;
             self.scroll_offset = 0;
             self.update_entries();
@@ -295,14 +273,14 @@ impl CommandPalette {
             .collect();
 
         PaletteInfo {
-            input: self.input.clone(),
-            cursor: self.cursor,
+            input: self.input.text().to_string(),
+            cursor: self.input.cursor(),
             entries,
             selected: self.selected.saturating_sub(self.scroll_offset),
             scroll_offset: self.scroll_offset,
             total_count: self.registry.len(),
             total_entries: self.entries.len(),
-            animation: self.animation,
+            animation: self.animation.progress(),
         }
     }
 
@@ -310,7 +288,7 @@ impl CommandPalette {
     fn update_entries(&mut self) {
         self.entries.clear();
 
-        if self.input.is_empty() {
+        if self.input.text().is_empty() {
             // Show all commands, recently used first
             let mut scored: Vec<PaletteEntry> = self.registry
                 .iter()
@@ -331,7 +309,7 @@ impl CommandPalette {
             scored.sort_by(|a, b| b.score.cmp(&a.score));
             self.entries = scored;
         } else {
-            let query = &self.input;
+            let query = self.input.text();
 
             let mut scored: Vec<PaletteEntry> = self.registry
                 .iter()

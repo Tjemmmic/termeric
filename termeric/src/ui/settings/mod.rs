@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use crate::config::{Config, SplashMode};
 use crate::config::theme::Theme;
 
@@ -286,25 +284,16 @@ pub enum SettingsAction {
     None,
 }
 
-/// Animation duration in seconds
-const ANIMATION_DURATION: f32 = 0.2; // 200ms
-
 /// The settings panel state
 pub struct SettingsPanel {
-    /// Whether the panel is currently visible
-    open: bool,
+    /// Animation state
+    animation: super::animation::PanelAnimation,
     /// Currently active section
     section: SettingsSection,
     /// Currently selected item index within the section
     selected_item: usize,
     /// Scroll offset for sections that don't fit
     scroll_offset: usize,
-    /// When the current animation started
-    animation_start: Instant,
-    /// Whether we are animating open (true) or closed (false)
-    animating_open: bool,
-    /// The animation value at the time the direction changed (for seamless reversal)
-    animation_base: f32,
     /// Whether a dropdown overlay is currently open
     dropdown_open: bool,
     /// Which option is highlighted in the open dropdown
@@ -322,13 +311,10 @@ pub struct SettingsPanel {
 impl SettingsPanel {
     pub fn new() -> Self {
         Self {
-            open: false,
+            animation: super::animation::PanelAnimation::new(),
             section: SettingsSection::Font,
             selected_item: 0,
             scroll_offset: 0,
-            animation_start: Instant::now(),
-            animating_open: false,
-            animation_base: 0.0,
             dropdown_open: false,
             dropdown_highlight: 0,
             available_fonts: vec![DEFAULT_FONT.to_string()],
@@ -349,7 +335,7 @@ impl SettingsPanel {
 
     /// Toggle the panel open/closed
     pub fn toggle(&mut self) {
-        if self.open {
+        if self.animation.is_open() {
             self.close();
         } else {
             self.open();
@@ -358,10 +344,7 @@ impl SettingsPanel {
 
     /// Open the panel
     pub fn open(&mut self) {
-        self.animation_base = self.raw_animation();
-        self.open = true;
-        self.animating_open = true;
-        self.animation_start = Instant::now();
+        self.animation.open();
         self.section = SettingsSection::Font;
         self.selected_item = 0;
         self.scroll_offset = 0;
@@ -369,10 +352,7 @@ impl SettingsPanel {
 
     /// Open the panel directly to a specific section
     pub fn open_to_section(&mut self, section: SettingsSection) {
-        self.animation_base = self.raw_animation();
-        self.open = true;
-        self.animating_open = true;
-        self.animation_start = Instant::now();
+        self.animation.open();
         self.section = section;
         self.selected_item = 0;
         self.scroll_offset = 0;
@@ -380,55 +360,27 @@ impl SettingsPanel {
 
     /// Close the panel
     pub fn close(&mut self) {
-        self.animation_base = self.raw_animation();
-        self.animating_open = false;
-        self.animation_start = Instant::now();
-    }
-
-    /// Raw linear animation value (0.0 = closed, 1.0 = open)
-    fn raw_animation(&self) -> f32 {
-        let elapsed = self.animation_start.elapsed().as_secs_f32();
-        let t = (elapsed / ANIMATION_DURATION).min(1.0);
-
-        if self.animating_open {
-            // Animate from base toward 1.0
-            self.animation_base + (1.0 - self.animation_base) * t
-        } else {
-            // Animate from base toward 0.0
-            self.animation_base * (1.0 - t)
-        }
+        self.animation.close();
     }
 
     /// Whether the panel is open or animating
     pub fn is_visible(&self) -> bool {
-        self.open || self.raw_animation() > 0.001
+        self.animation.is_visible()
     }
 
     /// Whether the panel is fully open and accepting input
     pub fn is_active(&self) -> bool {
-        self.open && self.raw_animation() > 0.9
+        self.animation.is_active()
     }
 
     /// Check if animation is still in progress and update open state. Returns true if redraw needed.
     pub fn update_animation(&mut self) -> bool {
-        let anim = self.raw_animation();
-
-        // Close is complete
-        if !self.animating_open && anim < 0.001 {
-            self.open = false;
-            return false;
-        }
-
-        // Check if still animating
-        let elapsed = self.animation_start.elapsed().as_secs_f32();
-        elapsed < ANIMATION_DURATION
+        self.animation.update()
     }
 
     /// Get current animation progress with ease-out (0.0 = closed, 1.0 = fully open)
     pub fn animation_progress(&self) -> f32 {
-        let t = self.raw_animation();
-        // Ease-out for smooth deceleration
-        1.0 - (1.0 - t) * (1.0 - t)
+        self.animation.progress()
     }
 
     /// Get the current section
@@ -1202,6 +1154,8 @@ impl SettingsPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn test_toggle_open_close() {
@@ -1210,18 +1164,16 @@ mod tests {
         assert!(!panel.is_active());
 
         panel.toggle();
-        assert!(panel.open);
-        assert!(panel.animating_open);
+        assert!(panel.is_visible());
 
-        // Simulate animation completing by backdating the start time
-        panel.animation_start = Instant::now() - std::time::Duration::from_millis(300);
+        // Wait for animation to complete
+        thread::sleep(Duration::from_millis(250));
         panel.update_animation();
         assert!(panel.is_active());
 
         panel.toggle();
-        assert!(!panel.animating_open);
-        // Simulate close animation completing
-        panel.animation_start = Instant::now() - std::time::Duration::from_millis(300);
+        // Wait for close animation to complete
+        thread::sleep(Duration::from_millis(250));
         panel.update_animation();
         assert!(!panel.is_visible());
     }
@@ -1230,7 +1182,9 @@ mod tests {
     fn test_navigation() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        panel.animation_start = Instant::now() - std::time::Duration::from_millis(300);
+        // Wait for animation to complete so panel is active
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
 
         let config = Config::default();
 
@@ -1267,7 +1221,8 @@ mod tests {
     fn test_value_adjustment() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        panel.animation_start = Instant::now() - std::time::Duration::from_millis(300);
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
 
         let config = Config::default();
 
@@ -1289,7 +1244,8 @@ mod tests {
     fn test_theme_dropdown() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        panel.animation_start = Instant::now() - std::time::Duration::from_millis(300);
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
         panel.section = SettingsSection::Theme;
         panel.selected_item = 0;
 
