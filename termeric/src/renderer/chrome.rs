@@ -1,7 +1,6 @@
 //! AI session chrome bar rendering
 
-use super::{Renderer, adjust_alpha};
-use crate::ui::constants::*;
+use super::Renderer;
 
 impl Renderer {
     pub(super) fn build_chrome_bar(
@@ -74,6 +73,25 @@ impl Renderer {
                 cx += char_scale * 0.3;
                 self.text_pipeline.push_char('●', cx, text_y, [0.9, 0.6, 0.2, 1.0]);
                 cx += char_scale;
+            }
+
+            // Ahead/behind upstream
+            if info.ahead > 0 || info.behind > 0 {
+                cx += char_scale * 0.5;
+                if info.ahead > 0 {
+                    let label = format!("↑{}", info.ahead);
+                    for c in label.chars() {
+                        self.text_pipeline.push_char(c, cx, text_y, dim_color);
+                        cx += char_scale;
+                    }
+                }
+                if info.behind > 0 {
+                    let label = format!("↓{}", info.behind);
+                    for c in label.chars() {
+                        self.text_pipeline.push_char(c, cx, text_y, dim_color);
+                        cx += char_scale;
+                    }
+                }
             }
         }
 

@@ -189,9 +189,6 @@ impl Row {
                 if need_attrs {
                     // Reset and re-apply everything
                     params.push("0".to_string());
-                    cur_fg_spec = ColorSpec::Default;
-                    cur_bg_spec = ColorSpec::Default;
-                    cur_attrs = CellAttrs::empty();
 
                     if cell.attrs.contains(CellAttrs::BOLD) {
                         params.push("1".to_string());

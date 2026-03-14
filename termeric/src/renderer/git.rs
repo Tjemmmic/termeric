@@ -1,6 +1,6 @@
 //! Git branch completion dropdown rendering
 
-use super::{Renderer, adjust_alpha};
+use super::Renderer;
 use super::types::*;
 
 impl Renderer {

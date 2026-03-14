@@ -3,45 +3,6 @@
 //! Info structs, click result enums, and constants used by both the renderer
 //! and the application layer to pass rendering data.
 
-use termeric_core::{Grid, Selection};
-use crate::panes::PaneRect;
-use crate::ui::command_palette::{CommandDef, CommandInputPhase};
-
-/// Render information for a single pane in a multi-pane layout
-pub struct PaneRenderInfo<'a> {
-    /// The grid to render
-    pub grid: &'a Grid,
-    /// Selection in this pane (if any)
-    pub selection: Option<&'a Selection>,
-    /// Pane layout rectangle (in pixels)
-    pub rect: PaneRect,
-    /// Whether this pane is focused
-    pub is_focused: bool,
-    /// Cursor position for this pane (relative to pane)
-    pub cursor_pos: (f32, f32),
-}
-
-/// Command bar display information
-#[derive(Debug, Clone)]
-pub struct CommandBarInfo {
-    /// The current command input text
-    pub input: String,
-    /// Cursor position in the input
-    pub cursor_pos: usize,
-    /// Message to display (success or error)
-    pub message: Option<String>,
-    /// Whether the message is an error
-    pub is_error: bool,
-    /// Autocomplete suggestions to display
-    pub suggestions: Vec<CommandDef>,
-    /// Index of selected suggestion
-    pub selected_suggestion: usize,
-    /// Current input phase
-    pub phase: CommandInputPhase,
-    /// Scroll offset for message display (in lines)
-    pub message_scroll_offset: usize,
-}
-
 /// Result of clicking in the tab bar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabBarClick {

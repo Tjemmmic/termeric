@@ -14,8 +14,6 @@ pub mod panel;
 pub mod transcript;
 pub mod export;
 
-pub use save::save_session;
-pub use restore::restore_session;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

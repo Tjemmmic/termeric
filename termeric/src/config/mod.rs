@@ -34,9 +34,6 @@ pub struct Config {
     /// Session save/restore configuration
     #[serde(default)]
     pub session: SessionConfig,
-    /// Harvest mode configuration
-    #[serde(default)]
-    pub harvest: HarvestConfig,
     /// Splash screen configuration
     #[serde(default)]
     pub splash: SplashConfig,
@@ -72,7 +69,6 @@ impl Default for Config {
             bell: BellConfigFile::default(),
             keybindings: Vec::new(),
             session: SessionConfig::default(),
-            harvest: HarvestConfig::default(),
             splash: SplashConfig::default(),
             commands: Vec::new(),
             plugins: PluginsConfig::default(),
@@ -103,14 +99,6 @@ impl Config {
         }
     }
 
-    /// Get the themes directory path
-    pub fn themes_dir() -> PathBuf {
-        if let Some(dirs) = directories::ProjectDirs::from("", "", "termeric") {
-            dirs.config_dir().join("themes")
-        } else {
-            PathBuf::from("themes")
-        }
-    }
 }
 
 /// Shell configuration
@@ -318,28 +306,6 @@ impl Default for SessionConfig {
             auto_restore: true,
             auto_save: true,
             save_scrollback: true,
-        }
-    }
-}
-
-/// Harvest mode configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct HarvestConfig {
-    /// Enable harvest mode (command visualization)
-    pub enabled: bool,
-    /// Show growth indicators for running commands
-    pub show_indicators: bool,
-    /// Maximum number of commands to keep in history
-    pub max_history: usize,
-}
-
-impl Default for HarvestConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false, // Opt-in by default
-            show_indicators: true,
-            max_history: 100,
         }
     }
 }

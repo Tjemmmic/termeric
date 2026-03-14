@@ -20,13 +20,6 @@ impl TextInput {
         }
     }
 
-    /// Create a text input with initial content, cursor at end.
-    pub fn from(s: impl Into<String>) -> Self {
-        let buffer: String = s.into();
-        let cursor = buffer.len();
-        Self { buffer, cursor }
-    }
-
     /// Get the current text.
     pub fn text(&self) -> &str {
         &self.buffer
@@ -37,37 +30,10 @@ impl TextInput {
         self.cursor
     }
 
-    /// Set the cursor position (clamped to buffer length).
-    pub fn set_cursor(&mut self, pos: usize) {
-        self.cursor = pos.min(self.buffer.len());
-    }
-
-    /// Whether the buffer is empty.
-    pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-
-    /// Byte length of the buffer.
-    pub fn len(&self) -> usize {
-        self.buffer.len()
-    }
-
     /// Clear the buffer and reset cursor.
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.cursor = 0;
-    }
-
-    /// Set the buffer content, cursor at end.
-    pub fn set(&mut self, s: impl Into<String>) {
-        self.buffer = s.into();
-        self.cursor = self.buffer.len();
-    }
-
-    /// Take the buffer content, leaving it empty.
-    pub fn take(&mut self) -> String {
-        self.cursor = 0;
-        std::mem::take(&mut self.buffer)
     }
 
     /// Insert a character at the cursor position and advance cursor.
@@ -92,18 +58,74 @@ impl TextInput {
         true
     }
 
-    /// Delete the character after the cursor.
-    /// Returns true if a character was deleted.
-    pub fn delete(&mut self) -> bool {
+    /// Move cursor to the beginning.
+    #[cfg(test)]
+    pub fn cursor_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Move cursor to the end.
+    pub fn cursor_end(&mut self) {
+        self.cursor = self.buffer.len();
+    }
+
+}
+
+#[cfg(test)]
+impl TextInput {
+    fn push(&mut self, c: char) {
+        self.buffer.push(c);
+    }
+
+    fn pop(&mut self) -> Option<char> {
+        let c = self.buffer.pop();
+        if self.cursor > self.buffer.len() {
+            self.cursor = self.buffer.len();
+        }
+        c
+    }
+}
+
+#[cfg(test)]
+impl TextInput {
+    fn from(s: impl Into<String>) -> Self {
+        let buffer: String = s.into();
+        let cursor = buffer.len();
+        Self { buffer, cursor }
+    }
+
+    fn set_cursor(&mut self, pos: usize) {
+        self.cursor = pos.min(self.buffer.len());
+    }
+
+    fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    fn take(&mut self) -> String {
+        let s = std::mem::take(&mut self.buffer);
+        self.cursor = 0;
+        s
+    }
+
+    fn delete(&mut self) -> bool {
         if self.cursor >= self.buffer.len() {
             return false;
         }
-        self.buffer.remove(self.cursor);
+        let next = self.buffer[self.cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| self.cursor + i)
+            .unwrap_or(self.buffer.len());
+        self.buffer.drain(self.cursor..next);
         true
     }
 
-    /// Move cursor one character to the left.
-    pub fn cursor_left(&mut self) -> bool {
+    fn cursor_left(&mut self) -> bool {
         if self.cursor == 0 {
             return false;
         }
@@ -116,8 +138,7 @@ impl TextInput {
         true
     }
 
-    /// Move cursor one character to the right.
-    pub fn cursor_right(&mut self) -> bool {
+    fn cursor_right(&mut self) -> bool {
         if self.cursor >= self.buffer.len() {
             return false;
         }
@@ -128,30 +149,6 @@ impl TextInput {
             .unwrap_or(self.buffer.len());
         self.cursor = next;
         true
-    }
-
-    /// Move cursor to the beginning.
-    pub fn cursor_home(&mut self) {
-        self.cursor = 0;
-    }
-
-    /// Move cursor to the end.
-    pub fn cursor_end(&mut self) {
-        self.cursor = self.buffer.len();
-    }
-
-    /// Push a character to the end of the buffer (appends, ignores cursor).
-    pub fn push(&mut self, c: char) {
-        self.buffer.push(c);
-    }
-
-    /// Pop the last character from the buffer (ignores cursor).
-    pub fn pop(&mut self) -> Option<char> {
-        let c = self.buffer.pop();
-        if self.cursor > self.buffer.len() {
-            self.cursor = self.buffer.len();
-        }
-        c
     }
 }
 

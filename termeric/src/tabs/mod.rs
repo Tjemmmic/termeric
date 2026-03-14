@@ -312,11 +312,6 @@ impl TabManager {
         }
     }
 
-    /// Check if all remaining tabs are closing (app should exit)
-    pub fn all_tabs_closing(&self) -> bool {
-        !self.tabs.is_empty() && self.tabs.iter().all(|tab| tab.is_closing())
-    }
-
     /// Iterate over all tabs with their indices
     pub fn iter(&self) -> impl Iterator<Item = (usize, &Tab)> {
         self.tabs.iter().enumerate()
@@ -360,11 +355,9 @@ impl TabManager {
             .iter()
             .enumerate()
             .map(|(i, tab)| TabInfo {
-                index: i,
                 title: tab.title.clone(),
                 is_active: i == self.active && !tab.is_closing(),
                 has_activity: tab.has_activity,
-                is_closed: tab.closed,
                 slide_progress: tab.slide_progress(),
                 close_progress: tab.close_progress(),
                 tab_type: tab.tab_type.clone(),
@@ -453,11 +446,9 @@ impl TabManager {
 /// Tab information for display
 #[derive(Debug, Clone)]
 pub struct TabInfo {
-    pub index: usize,
     pub title: String,
     pub is_active: bool,
     pub has_activity: bool,
-    pub is_closed: bool,
     /// Slide-in animation progress (0.0 = just created, 1.0 = fully visible)
     pub slide_progress: f32,
     /// Close animation progress (0.0 = not closing, 1.0 = fully closed)

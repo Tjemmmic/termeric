@@ -1,7 +1,6 @@
 //! Command palette rendering — centered modal with search and results list
 
 use super::{Renderer, adjust_alpha};
-use super::types::*;
 use crate::ui::constants::*;
 use crate::ui::command_palette::PaletteInfo;
 

@@ -3,13 +3,11 @@
 //! A `Tab` wraps a terminal + PTY pair and provides session save/restore support.
 
 use std::collections::HashMap;
-use std::io;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
-use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
 use crate::ui::claude_chrome::AiSessionState;
 use crate::session::Session;
@@ -211,7 +209,16 @@ impl Tab {
             self.update_title();
             // Flush the diff detector to finalize any in-progress diffs
             if matches!(self.tab_type, TabType::Plugin { .. }) {
+                let pre_count = self.diff_detector.unreviewed_count();
                 self.diff_detector.flush();
+                // Record newly detected diffs to transcript
+                if self.diff_detector.unreviewed_count() > pre_count {
+                    if let Some(ref mut recorder) = self.transcript {
+                        if let Some(diff) = self.diff_detector.latest_unreviewed() {
+                            recorder.record_diff(&diff.filename, &diff.raw);
+                        }
+                    }
+                }
             }
         }
 
@@ -235,6 +242,11 @@ impl Tab {
 
     /// Write data to the PTY
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        if let Some(ref mut recorder) = self.transcript {
+            if let Ok(text) = std::str::from_utf8(data) {
+                recorder.record_input(text);
+            }
+        }
         self.pty.write_all(data)
     }
 
@@ -423,30 +435,3 @@ impl Tab {
     }
 }
 
-/// Implement TerminalContainer for Tab (single terminal per tab)
-impl TerminalContainer for Tab {
-    fn focused_terminal(&self) -> Option<&Terminal> {
-        Some(&self.terminal)
-    }
-
-    fn focused_terminal_mut(&mut self) -> Option<&mut Terminal> {
-        Some(&mut self.terminal)
-    }
-
-    fn write_input(&mut self, data: &[u8]) -> io::Result<()> {
-        self.write(data)
-    }
-
-    fn process_events(&mut self) -> (bool, Vec<TerminalEvent>) {
-        // Call the existing process_events method
-        Tab::process_events(self)
-    }
-
-    fn resize(&mut self, cols: usize, rows: usize) -> anyhow::Result<()> {
-        Tab::resize(self, cols, rows)
-    }
-
-    fn is_closed(&self) -> bool {
-        self.closed
-    }
-}

@@ -34,7 +34,7 @@ pub enum ContextKind {
     /// File tree from project root
     FileTree,
     /// Last N lines from any terminal tab
-    TerminalOutput { lines: usize },
+    TerminalOutput,
     /// Last detected test output (PASS/FAIL/error patterns)
     TestOutput,
     /// Specific files (file content injection)
@@ -99,7 +99,7 @@ impl ContextPicker {
                 label: "Recent Terminal Output (50 lines)".into(),
                 selected: false,
                 available: true,
-                kind: ContextKind::TerminalOutput { lines: 50 },
+                kind: ContextKind::TerminalOutput,
             },
             ContextSource {
                 label: "Last Test Output".into(),
@@ -221,9 +221,9 @@ impl ContextPicker {
         self.animation.is_visible()
     }
 
-    /// Get animation progress
+    /// Get eased animation progress
     pub fn animation(&self) -> f32 {
-        self.animation.progress()
+        self.animation.eased()
     }
 
     /// Update animation state. Returns true if still animating.

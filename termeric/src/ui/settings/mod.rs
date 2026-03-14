@@ -9,8 +9,6 @@ pub struct SettingsPanelLayout {
     pub panel_x: f32,
     /// Total panel width
     pub panel_width: f32,
-    /// Sidebar width (section list)
-    pub sidebar_width: f32,
     /// Content area x position
     pub content_x: f32,
     /// Content area width
@@ -19,22 +17,12 @@ pub struct SettingsPanelLayout {
     pub row_height: f32,
     /// Horizontal padding
     pub padding_x: f32,
-    /// Vertical padding
-    pub padding_y: f32,
-    /// Y position of the title/header
-    pub header_y: f32,
-    /// Y position of the separator line below header
-    pub separator_y: f32,
     /// Y position where items start
     pub items_start_y: f32,
     /// Y position where sidebar sections start
     pub sections_start_y: f32,
-    /// X position where value controls start (for dropdowns, numeric values)
-    pub value_area_x: f32,
     /// Cell width used for calculations
     pub cell_width: f32,
-    /// Cell height used for calculations
-    pub cell_height: f32,
 }
 
 impl SettingsPanelLayout {
@@ -81,37 +69,22 @@ impl SettingsPanelLayout {
         let items_start_y = separator_y + padding_y + cell_height * 0.5;
         let sections_start_y = header_y + cell_height * 2.5;
 
-        // Value area X is calculated dynamically in handle_click based on actual label lengths
-        // Set a placeholder here; the actual value is computed per-item
-        let value_area_x = content_x + content_width * 0.45;
-
         Self {
             panel_x,
             panel_width,
-            sidebar_width,
             content_x,
             content_width,
             row_height,
             padding_x,
-            padding_y,
-            header_y,
-            separator_y,
             items_start_y,
             sections_start_y,
-            value_area_x,
             cell_width,
-            cell_height,
         }
     }
 
     /// Get the Y position for a specific item index
     pub fn item_y(&self, index: usize) -> f32 {
         self.items_start_y + index as f32 * self.row_height
-    }
-
-    /// Get the Y position for a specific sidebar section index
-    pub fn section_y(&self, index: usize) -> f32 {
-        self.sections_start_y + index as f32 * self.row_height
     }
 
     /// Check if a point is within the panel bounds
@@ -306,6 +279,8 @@ pub struct SettingsPanel {
     hovered_section: Option<usize>,
     /// Mouse-hovered dropdown option index (None if not hovering any dropdown option)
     dropdown_hovered: Option<usize>,
+    /// Current theme metadata (name, author, description)
+    theme_meta: Option<crate::config::theme::ThemeMeta>,
 }
 
 impl SettingsPanel {
@@ -321,6 +296,7 @@ impl SettingsPanel {
             hovered_item: None,
             hovered_section: None,
             dropdown_hovered: None,
+            theme_meta: None,
         }
     }
 
@@ -333,21 +309,20 @@ impl SettingsPanel {
         };
     }
 
-    /// Toggle the panel open/closed
-    pub fn toggle(&mut self) {
-        if self.animation.is_open() {
-            self.close();
-        } else {
-            self.open();
-        }
+    /// Update the stored theme metadata (call when the theme changes)
+    pub fn set_theme_meta(&mut self, meta: crate::config::theme::ThemeMeta) {
+        self.theme_meta = Some(meta);
     }
 
-    /// Open the panel
-    pub fn open(&mut self) {
-        self.animation.open();
-        self.section = SettingsSection::Font;
-        self.selected_item = 0;
-        self.scroll_offset = 0;
+    /// Toggle the panel open/closed
+    pub fn toggle(&mut self) {
+        if !self.animation.is_open() {
+            // Reset state when opening
+            self.section = SettingsSection::Font;
+            self.selected_item = 0;
+            self.scroll_offset = 0;
+        }
+        self.animation.toggle();
     }
 
     /// Open the panel directly to a specific section
@@ -381,16 +356,6 @@ impl SettingsPanel {
     /// Get current animation progress with ease-out (0.0 = closed, 1.0 = fully open)
     pub fn animation_progress(&self) -> f32 {
         self.animation.progress()
-    }
-
-    /// Get the current section
-    pub fn section(&self) -> SettingsSection {
-        self.section
-    }
-
-    /// Get the currently selected item index
-    pub fn selected_item(&self) -> usize {
-        self.selected_item
     }
 
     /// Whether the dropdown overlay is currently open
@@ -430,13 +395,37 @@ impl SettingsPanel {
             SettingsSection::Theme => {
                 let options: Vec<String> = Theme::list_available().iter().map(|s| s.to_string()).collect();
                 let selected = options.iter().position(|n| n == &config.theme.name).unwrap_or(0);
-                vec![
+                let mut items = vec![
                     SettingItem {
                         label: "Theme",
                         value: config.theme.name.clone(),
                         kind: SettingKind::Dropdown { options, selected },
                     },
-                ]
+                ];
+                if let Some(meta) = &self.theme_meta {
+                    if !meta.name.is_empty() {
+                        items.push(SettingItem {
+                            label: "Name",
+                            value: meta.name.clone(),
+                            kind: SettingKind::ReadOnly,
+                        });
+                    }
+                    if !meta.author.is_empty() {
+                        items.push(SettingItem {
+                            label: "Author",
+                            value: meta.author.clone(),
+                            kind: SettingKind::ReadOnly,
+                        });
+                    }
+                    if !meta.description.is_empty() {
+                        items.push(SettingItem {
+                            label: "Description",
+                            value: meta.description.clone(),
+                            kind: SettingKind::ReadOnly,
+                        });
+                    }
+                }
+                items
             }
             SettingsSection::Window => vec![
                 SettingItem {
@@ -1148,6 +1137,13 @@ impl SettingsPanel {
     /// Update dropdown hover state from mouse position
     pub fn set_dropdown_hover(&mut self, index: Option<usize>) {
         self.dropdown_hovered = index;
+    }
+}
+
+#[cfg(test)]
+impl SettingsPanel {
+    fn open(&mut self) {
+        self.open_to_section(SettingsSection::Font);
     }
 }
 

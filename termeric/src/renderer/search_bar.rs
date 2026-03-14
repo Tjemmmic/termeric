@@ -2,7 +2,6 @@
 
 use super::{Renderer, adjust_alpha};
 use super::types::*;
-use crate::ui::constants::*;
 use crate::terminal::search::SearchBarInfo;
 
 impl Renderer {
@@ -16,7 +15,7 @@ impl Renderer {
         self.rect_pipeline.push_rect(0.0, bar_y, window_width, bar_height, bar_bg);
 
         // Bottom border
-        let border_color = adjust_alpha(self.ui.command_border, 0.5);
+        let border_color = adjust_alpha(self.ui.tab_border, 0.5);
         self.rect_pipeline.push_rect(0.0, bar_y + bar_height - 1.0, window_width, 1.0, border_color);
 
         let text_y = bar_y + padding;

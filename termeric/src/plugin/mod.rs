@@ -21,5 +21,5 @@ pub mod hooks;
 pub mod manager;
 
 // Re-export core types for convenience
-pub use hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext, PluginKeybinding};
+pub use hooks::{Hook, PluginAction, PluginContext};
 pub use manager::PluginManager;

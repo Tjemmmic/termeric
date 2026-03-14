@@ -10,14 +10,12 @@ impl Renderer {
     /// Build the info overlay (error/info centered card with Copy/Continue buttons)
     pub(super) fn build_info_overlay(&mut self, info: &InfoOverlayInfo, window_width: f32, window_height: f32) {
         let anim = info.animation;
-        // Smooth ease-out curve for polished feel
-        let ease = 1.0 - (1.0 - anim).powi(3);
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
         let char_scale = cell_width * CONTENT_CHAR_SCALE;
 
         // ── Scrim ──
-        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * 0.85 * ease);
+        let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * 0.85 * anim);
         self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
 
         // ── Card geometry — auto-width based on content ──
@@ -44,13 +42,13 @@ impl Renderer {
         let content_height = info.lines.len() as f32 * line_height;
         let card_height = padding + title_height + content_height + btn_area_height + padding * 0.5;
         let card_x = (window_width - card_width) / 2.0;
-        let card_y = (window_height - card_height) / 2.0 + (1.0 - ease) * -30.0;
+        let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -30.0;
 
         // ── Drop shadow (layered for softness) ──
         let shadow_layers = 3;
         for i in 0..shadow_layers {
             let spread = (i as f32 + 1.0) * 4.0;
-            let alpha = 0.08 * ease / (i as f32 + 1.0);
+            let alpha = 0.08 * anim / (i as f32 + 1.0);
             let shadow_color = [0.0, 0.0, 0.0, alpha];
             self.rect_pipeline.push_rounded_rect(
                 card_x - spread, card_y - spread * 0.5 + spread * 0.8,
@@ -60,11 +58,11 @@ impl Renderer {
         }
 
         // ── Card background ──
-        let card_bg = adjust_alpha(self.ui.palette_bg, ease);
+        let card_bg = adjust_alpha(self.ui.palette_bg, anim);
         self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, card_height, card_bg, CARD_CORNER_RADIUS);
 
         // ── Card border (subtle) ──
-        let border = adjust_alpha(self.ui.palette_border, 0.3 * ease);
+        let border = adjust_alpha(self.ui.palette_border, 0.3 * anim);
         // Top/bottom
         self.rect_pipeline.push_rect(card_x + CARD_CORNER_RADIUS, card_y, card_width - CARD_CORNER_RADIUS * 2.0, BORDER_WIDTH, border);
         self.rect_pipeline.push_rect(card_x + CARD_CORNER_RADIUS, card_y + card_height - BORDER_WIDTH, card_width - CARD_CORNER_RADIUS * 2.0, BORDER_WIDTH, border);
@@ -73,12 +71,12 @@ impl Renderer {
         self.rect_pipeline.push_rect(card_x + card_width - BORDER_WIDTH, card_y + CARD_CORNER_RADIUS, BORDER_WIDTH, card_height - CARD_CORNER_RADIUS * 2.0, border);
 
         // ── Outer glow accent line at top ──
-        let glow_color = adjust_alpha(self.ui.palette_accent, 0.2 * ease);
+        let glow_color = adjust_alpha(self.ui.palette_accent, 0.2 * anim);
         self.rect_pipeline.push_rect(card_x + 24.0, card_y, card_width - 48.0, 2.0, glow_color);
 
         // ── Title — centered, accent ──
         let title_y = card_y + padding;
-        let title_color = adjust_alpha(self.ui.palette_accent, ease);
+        let title_color = adjust_alpha(self.ui.palette_accent, anim);
         let title_x = card_x + (card_width - info.title.chars().count() as f32 * cell_width) / 2.0;
         for (i, c) in info.title.chars().enumerate() {
             self.text_pipeline.push_char(c, title_x + i as f32 * cell_width, title_y, title_color);
@@ -90,14 +88,14 @@ impl Renderer {
         let sep_fade_w = sep_full * 0.15;
 
         // Center segment (full opacity)
-        let sep_color = adjust_alpha(self.ui.palette_border, 0.25 * ease);
+        let sep_color = adjust_alpha(self.ui.palette_border, 0.25 * anim);
         self.rect_pipeline.push_rect(
             card_x + padding + sep_fade_w, sep_y,
             sep_full - sep_fade_w * 2.0, 1.0,
             sep_color,
         );
         // Left fade
-        let sep_dim = adjust_alpha(self.ui.palette_border, 0.08 * ease);
+        let sep_dim = adjust_alpha(self.ui.palette_border, 0.08 * anim);
         self.rect_pipeline.push_rect(
             card_x + padding, sep_y,
             sep_fade_w, 1.0,
@@ -112,8 +110,8 @@ impl Renderer {
 
         // ── Content lines ──
         let content_start_y = title_y + title_height;
-        let text_color = adjust_alpha(self.ui.palette_text, 0.9 * ease);
-        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * ease);
+        let text_color = adjust_alpha(self.ui.palette_text, 0.9 * anim);
+        let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.7 * anim);
         let content_x = card_x + padding;
 
         for (row, line) in info.lines.iter().enumerate() {
@@ -181,23 +179,23 @@ impl Renderer {
             let bw = bw - inset * 2.0;
             let bh = bh - inset * 2.0;
 
-            let btn_bg = adjust_alpha(this.ui.palette_accent, bg_alpha * ease);
+            let btn_bg = adjust_alpha(this.ui.palette_accent, bg_alpha * anim);
             this.rect_pipeline.push_rounded_rect(bx, by, bw, bh, btn_bg, BUTTON_CORNER_RADIUS);
 
             let border_alpha = if hovered { 0.65 } else { 0.35 };
-            let btn_border = adjust_alpha(this.ui.palette_accent, border_alpha * ease);
+            let btn_border = adjust_alpha(this.ui.palette_accent, border_alpha * anim);
             this.rect_pipeline.push_rect(bx + BUTTON_CORNER_RADIUS, by, bw - BUTTON_CORNER_RADIUS * 2.0, BORDER_WIDTH, btn_border);
             this.rect_pipeline.push_rect(bx + BUTTON_CORNER_RADIUS, by + bh - BORDER_WIDTH, bw - BUTTON_CORNER_RADIUS * 2.0, BORDER_WIDTH, btn_border);
             this.rect_pipeline.push_rect(bx, by + BUTTON_CORNER_RADIUS, BORDER_WIDTH, bh - BUTTON_CORNER_RADIUS * 2.0, btn_border);
             this.rect_pipeline.push_rect(bx + bw - BORDER_WIDTH, by + BUTTON_CORNER_RADIUS, BORDER_WIDTH, bh - BUTTON_CORNER_RADIUS * 2.0, btn_border);
 
             if hovered && !pressed {
-                let glow = adjust_alpha(this.ui.palette_accent, 0.06 * ease);
+                let glow = adjust_alpha(this.ui.palette_accent, 0.06 * anim);
                 this.rect_pipeline.push_rounded_rect(bx - 2.0, by - 2.0, bw + 4.0, bh + 4.0, glow, 8.0);
             }
 
             let text_alpha = if hovered { 1.0 } else { 0.8 };
-            let text_color = adjust_alpha(this.ui.palette_accent, text_alpha * ease);
+            let text_color = adjust_alpha(this.ui.palette_accent, text_alpha * anim);
             let text_x = bx + (bw - label.chars().count() as f32 * cell_width) / 2.0;
             let text_y = by + (bh - cell_height) / 2.0;
             for (i, c) in label.chars().enumerate() {
@@ -212,7 +210,7 @@ impl Renderer {
 
         // ── Keyboard hint ──
         let hint_y = btn_y + btn_h + cell_height * 0.5;
-        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.35 * ease);
+        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.35 * anim);
         let hint_text = "Esc / Enter to dismiss  ·  C to copy";
         let hint_w = hint_text.chars().count() as f32 * char_scale;
         let hint_x = card_x + (card_width - hint_w) / 2.0;

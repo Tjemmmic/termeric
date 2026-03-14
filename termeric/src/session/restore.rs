@@ -6,12 +6,6 @@ use anyhow::Result;
 
 use super::{Session, session_dir};
 
-/// Restore a session from the default location (legacy, no longer used for startup)
-pub fn restore_session() -> Result<Option<Session>> {
-    // No longer auto-restoring on startup — always start fresh
-    Ok(None)
-}
-
 /// Restore a named session by its ID
 pub fn restore_named_session(name: &str) -> Result<Option<Session>> {
     let dir = session_dir(name)
@@ -66,12 +60,6 @@ pub fn load_scrollback_text(
             Vec::new()
         }
     }
-}
-
-/// Clear the default session data (legacy cleanup)
-pub fn clear_session() -> Result<()> {
-    // No-op for the new per-tab model
-    Ok(())
 }
 
 #[cfg(test)]

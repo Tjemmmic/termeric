@@ -312,22 +312,6 @@ impl RectPipeline {
         }));
     }
 
-    /// Draw ALL rectangles (legacy single-pass method, kept for compatibility)
-    pub fn draw<'a>(&'a self, render_pass: &mut RenderPass<'a>) {
-        if self.indices.is_empty() {
-            return;
-        }
-
-        let Some(vertex_buffer) = &self.vertex_buffer else { return };
-        let Some(index_buffer) = &self.index_buffer else { return };
-
-        render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
-        render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
-    }
-
     /// Draw only the rectangles belonging to a specific layer.
     /// Layer 0 is everything before the first mark_layer() call.
     pub fn draw_layer<'a>(&'a self, render_pass: &mut RenderPass<'a>, layer: usize) {

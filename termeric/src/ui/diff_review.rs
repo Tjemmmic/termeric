@@ -84,9 +84,9 @@ impl DiffReviewOverlay {
         self.diff.as_ref().map(|d| d.raw.as_str())
     }
 
-    /// Get animation progress (0.0 = hidden, 1.0 = fully visible)
+    /// Get eased animation progress (0.0 = hidden, 1.0 = fully visible)
     pub fn animation(&self) -> f32 {
-        self.animation.progress()
+        self.animation.eased()
     }
 
     /// Update animation state. Returns true if still animating.

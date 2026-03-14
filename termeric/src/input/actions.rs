@@ -48,8 +48,6 @@ pub enum Action {
     PluginCommand(String),
     /// Toggle command palette
     ToggleCommandPalette,
-    /// No action (pass through to PTY)
-    None,
 }
 
 /// Check if a key event triggers a bound action

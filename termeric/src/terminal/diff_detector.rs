@@ -6,7 +6,6 @@
 //! The scanner operates as a simple state machine that can handle both
 //! standard `diff -u` output and `git diff` output with color escape sequences.
 
-use std::time::Instant;
 
 /// A single line in a diff hunk
 #[derive(Debug, Clone, PartialEq)]
@@ -37,8 +36,6 @@ pub struct DetectedDiff {
     pub hunks: Vec<DiffHunk>,
     /// Complete raw diff text (for copy/apply)
     pub raw: String,
-    /// When this diff was detected
-    pub timestamp: Instant,
     /// Whether the user has reviewed this diff
     pub reviewed: bool,
 }
@@ -282,7 +279,6 @@ impl DiffDetector {
             filename,
             hunks,
             raw,
-            timestamp: Instant::now(),
             reviewed: false,
         });
     }

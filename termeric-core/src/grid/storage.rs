@@ -30,16 +30,6 @@ impl GridStorage {
         }
     }
 
-    /// Get the number of visible rows
-    pub fn visible_rows(&self) -> usize {
-        self.rows.len()
-    }
-
-    /// Get the number of columns
-    pub fn cols(&self) -> usize {
-        self.cols
-    }
-
     /// Set the scrollback limit
     pub fn set_scrollback_limit(&mut self, limit: usize) {
         self.scrollback_limit = limit;
@@ -222,10 +212,6 @@ impl GridStorage {
         self.rows.iter()
     }
 
-    /// Iterate over all visible rows mutably
-    pub fn iter_visible_mut(&mut self) -> impl Iterator<Item = &mut Row> {
-        self.rows.iter_mut()
-    }
 }
 
 #[cfg(test)]
@@ -235,8 +221,8 @@ mod tests {
     #[test]
     fn test_storage_creation() {
         let storage = GridStorage::new(80, 24);
-        assert_eq!(storage.visible_rows(), 24);
-        assert_eq!(storage.cols(), 80);
+        assert_eq!(storage.iter_visible().count(), 24);
+        assert_eq!(storage.row(0).unwrap().len(), 80);
         assert_eq!(storage.scrollback_len(), 0);
     }
 
@@ -274,7 +260,7 @@ mod tests {
     fn test_resize() {
         let mut storage = GridStorage::new(80, 24);
         storage.resize(100, 30);
-        assert_eq!(storage.visible_rows(), 30);
-        assert_eq!(storage.cols(), 100);
+        assert_eq!(storage.iter_visible().count(), 30);
+        assert_eq!(storage.row(0).unwrap().len(), 100);
     }
 }

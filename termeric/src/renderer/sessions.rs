@@ -1,6 +1,6 @@
 //! Session dropdown rendering and hit-testing
 
-use super::{Renderer, adjust_alpha};
+use super::Renderer;
 use super::types::*;
 
 impl Renderer {

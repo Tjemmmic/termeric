@@ -101,13 +101,6 @@ impl Search {
         // Keep matches, current_match, and filter_mode for continued highlighting/filtering
     }
 
-    /// Clear search results (but keep active state)
-    pub fn clear_results(&mut self) {
-        self.matches.clear();
-        self.matching_rows.clear();
-        self.current_match = None;
-    }
-
     /// Toggle filter mode (show only matching lines)
     pub fn toggle_filter(&mut self) {
         self.filter_mode = !self.filter_mode;
@@ -144,13 +137,6 @@ impl Search {
         &self.query
     }
 
-    /// Set the search query and update matches
-    pub fn set_query(&mut self, query: &str, grid: &Grid) {
-        self.query = query.to_string();
-        self.compile_regex_if_needed();
-        self.update_matches(grid);
-    }
-
     /// Add a character to the query
     pub fn push_char(&mut self, c: char, grid: &Grid) {
         self.query.push(c);
@@ -172,26 +158,11 @@ impl Search {
         self.update_matches(grid);
     }
 
-    /// Is case sensitive?
-    pub fn is_case_sensitive(&self) -> bool {
-        self.case_sensitive
-    }
-
     /// Toggle regex mode
     pub fn toggle_regex(&mut self, grid: &Grid) {
         self.use_regex = !self.use_regex;
         self.compile_regex_if_needed();
         self.update_matches(grid);
-    }
-
-    /// Is regex mode enabled?
-    pub fn is_regex(&self) -> bool {
-        self.use_regex
-    }
-
-    /// Get regex error if any
-    pub fn regex_error(&self) -> Option<&str> {
-        self.regex_error.as_deref()
     }
 
     /// Get current match count
@@ -202,11 +173,6 @@ impl Search {
     /// Get current match index (1-based for display)
     pub fn current_match_index(&self) -> Option<usize> {
         self.current_match.map(|i| i + 1)
-    }
-
-    /// Get all matches
-    pub fn matches(&self) -> &[SearchMatch] {
-        &self.matches
     }
 
     /// Get current match

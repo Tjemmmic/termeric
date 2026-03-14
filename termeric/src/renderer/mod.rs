@@ -10,9 +10,8 @@ mod glyph_cache;
 mod text;
 mod rect;
 mod image;
-pub(crate) mod draw;
+
 mod chrome;
-mod command_bar;
 mod git;
 mod overlays;
 mod palette;
@@ -35,25 +34,23 @@ use wgpu::*;
 use winit::window::Window;
 use termeric_core::{Grid, Selection, Color as TermColor, CellAttrs, CellFlags};
 use crate::config::theme::Theme;
-use crate::ui::constants::*;
-use crate::ui::settings::{SettingsPanelInfo, SettingsPanelLayout};
+use crate::ui::settings::SettingsPanelInfo;
 use crate::terminal::search::{Search, SearchBarInfo};
 
 use text::TextPipeline;
 use rect::RectPipeline;
 
-use crate::tabs::{TabInfo, TabType};
-use crate::ui::command_palette::CommandDef;
+use crate::tabs::TabInfo;
 use crate::ui::command_palette::PaletteInfo;
-use crate::panes::{PaneRect, Divider};
 
 #[derive(Clone)]
 pub(crate) struct UiPalette {
     pub(crate) background: wgpu::Color,
-    pub(crate) foreground: [f32; 4],
     pub(crate) selection: [f32; 4],
     pub(crate) selection_flash: [f32; 4],
+    pub(crate) selection_text: Option<[f32; 4]>,
     pub(crate) cursor: [f32; 4],
+    pub(crate) cursor_text: [f32; 4],
     pub(crate) tab_bar_bg: [f32; 4],
     pub(crate) tab_active: [f32; 4],
     pub(crate) tab_inactive: [f32; 4],
@@ -61,18 +58,6 @@ pub(crate) struct UiPalette {
     pub(crate) tab_border: [f32; 4],
     pub(crate) tab_text_active: [f32; 4],
     pub(crate) tab_text_inactive: [f32; 4],
-    pub(crate) command_bg: [f32; 4],
-    pub(crate) command_border: [f32; 4],
-    pub(crate) command_text: [f32; 4],
-    pub(crate) command_error: [f32; 4],
-    pub(crate) command_success: [f32; 4],
-    pub(crate) command_hint: [f32; 4],
-    pub(crate) prompt_selecting: [f32; 4],
-    pub(crate) prompt_args: [f32; 4],
-    pub(crate) prompt_history: [f32; 4],
-    pub(crate) dropdown_bg: [f32; 4],
-    pub(crate) dropdown_border: [f32; 4],
-    pub(crate) dropdown_shadow: [f32; 4],
     // Settings panel colors
     pub(crate) settings_bg: [f32; 4],
     pub(crate) settings_sidebar_bg: [f32; 4],
@@ -121,15 +106,13 @@ impl UiPalette {
 
         let tab_text_active = contrast_text(tab_active.to_f32_array());
         let tab_text_inactive = adjust_alpha(fg.to_f32_array(), 0.9);
-        let command_bg = shade(bg.to_f32_array(), 0.9);
-        let command_text = fg.to_f32_array();
-
         Self {
             background: bg.to_wgpu(),
-            foreground: fg.to_f32_array(),
             selection: selection.to_f32_array(),
             selection_flash: adjust_alpha(fg.to_f32_array(), 0.85),
+            selection_text: theme.ui.selection_text.map(|c| c.to_f32_array()),
             cursor: cursor.to_f32_array(),
+            cursor_text: theme.ui.cursor_text.to_f32_array(),
             tab_bar_bg: shade(tab_inactive.to_f32_array(), 0.85),
             tab_active: tab_active.to_f32_array(),
             tab_inactive: tab_inactive.to_f32_array(),
@@ -137,18 +120,6 @@ impl UiPalette {
             tab_border: tab_border.to_f32_array(),
             tab_text_active,
             tab_text_inactive,
-            command_bg,
-            command_border: tab_border.to_f32_array(),
-            command_text,
-            command_error: theme.primary.red.to_f32_array(),
-            command_success: theme.primary.green.to_f32_array(),
-            command_hint: adjust_alpha(fg.to_f32_array(), 0.6),
-            prompt_selecting: cursor.to_f32_array(),
-            prompt_args: theme.primary.yellow.to_f32_array(),
-            prompt_history: theme.primary.blue.to_f32_array(),
-            dropdown_bg: shade(bg.to_f32_array(), 0.75),
-            dropdown_border: tab_border.to_f32_array(),
-            dropdown_shadow: shade(bg.to_f32_array(), 0.0),
             // Settings panel
             settings_bg: adjust_alpha(shade(bg.to_f32_array(), 0.85), 0.97),
             settings_sidebar_bg: adjust_alpha(shade(bg.to_f32_array(), 0.7), 0.97),
@@ -164,10 +135,10 @@ impl UiPalette {
             // Search colors - warm gold tones per style guide
             search_bg: shade(bg.to_f32_array(), 0.85),
             search_text: fg.to_f32_array(),
-            search_match: adjust_alpha(theme.primary.yellow.to_f32_array(), 0.35),
-            search_match_current: adjust_alpha(theme.primary.yellow.to_f32_array(), 0.65),
-            search_indicator: theme.primary.green.to_f32_array(),
-            search_error: theme.primary.red.to_f32_array(),
+            search_match: theme.ui.search_match.with_alpha(0.35).to_f32_array(),
+            search_match_current: theme.ui.search_match.with_alpha(0.65).to_f32_array(),
+            search_indicator: theme.ansi_color(2).to_f32_array(), // green
+            search_error: theme.ansi_color(1).to_f32_array(), // red
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
             // Command palette — fully theme-derived
@@ -268,11 +239,13 @@ pub struct Renderer {
     context_picker: Option<ContextPickerInfo>,
     guardrail: Option<GuardrailInfo>,
     chrome_bar: Option<crate::ui::claude_chrome::ChromeBarInfo>,
+    /// Visual bell intensity (0.0 = off, 1.0 = full flash)
+    bell_intensity: f32,
 }
 
 impl Renderer {
     /// Create a new renderer for the given window
-    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme, ligatures: bool) -> Result<Self> {
+    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme) -> Result<Self> {
         let size = window.inner_size();
 
         // Create wgpu instance
@@ -332,7 +305,7 @@ impl Renderer {
 
         // Create glyph cache
         let scaled_font_size = (font_size * scale_factor).max(1.0);
-        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family, ligatures)?;
+        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family)?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
@@ -369,6 +342,7 @@ impl Renderer {
             context_picker: None,
             guardrail: None,
             chrome_bar: None,
+            bell_intensity: 0.0,
         })
     }
 
@@ -411,11 +385,6 @@ impl Renderer {
     /// Get current font size
     pub fn font_size(&self) -> f32 {
         self.font_size
-    }
-
-    /// Get current font family
-    pub fn font_family(&self) -> &str {
-        self.glyph_cache.font_family()
     }
 
     /// Change font size
@@ -520,6 +489,10 @@ impl Renderer {
         self.chrome_bar = info;
     }
 
+    pub fn set_bell_intensity(&mut self, intensity: f32) {
+        self.bell_intensity = intensity;
+    }
+
     /// Height of the chrome bar (0 if no chrome bar is active)
     pub fn chrome_bar_height(&self) -> f32 {
         if self.chrome_bar.is_some() {
@@ -527,39 +500,6 @@ impl Renderer {
         } else {
             0.0
         }
-    }
-
-    /// Add dividers between panes to the render data
-    /// This should be called during build_render_data when panes are present
-    pub fn add_pane_dividers(&mut self, dividers: &[Divider], tab_bar_height: f32) {
-        let divider_color = self.ui.tab_border;
-        let divider_thickness = 2.0;
-
-        for divider in dividers {
-            if divider.vertical {
-                // Vertical divider (between left/right panes)
-                self.rect_pipeline.push_rect(
-                    divider.position - divider_thickness / 2.0,
-                    tab_bar_height + divider.start,
-                    divider_thickness,
-                    divider.end - divider.start,
-                    divider_color,
-                );
-            } else {
-                // Horizontal divider (between top/bottom panes)
-                self.rect_pipeline.push_rect(
-                    divider.start,
-                    tab_bar_height + divider.position - divider_thickness / 2.0,
-                    divider.end - divider.start,
-                    divider_thickness,
-                    divider_color,
-                );
-            }
-        }
-    }
-
-    fn command_bar_base_height(&self) -> f32 {
-        (self.cell_height + 16.0).round().max(28.0)
     }
 
     /// Render the terminal grid with tab bar
@@ -813,16 +753,17 @@ impl Renderer {
                 // Draw character with focus dimming applied
                 if let Some(c) = cell.content.char() {
                     if !c.is_whitespace() {
-                        self.text_pipeline.push_char(
-                            c,
-                            x, y,
-                            [
-                                fg.r as f32 / 255.0 * brightness,
-                                fg.g as f32 / 255.0 * brightness,
-                                fg.b as f32 / 255.0 * brightness,
-                                1.0
-                            ],
-                        );
+                        // Use selection_text color for selected cells if theme provides one
+                        let text_color = if is_selected {
+                            if let Some(sel_text) = self.ui.selection_text {
+                                apply_brightness(sel_text, brightness)
+                            } else {
+                                [fg.r as f32 / 255.0 * brightness, fg.g as f32 / 255.0 * brightness, fg.b as f32 / 255.0 * brightness, 1.0]
+                            }
+                        } else {
+                            [fg.r as f32 / 255.0 * brightness, fg.g as f32 / 255.0 * brightness, fg.b as f32 / 255.0 * brightness, 1.0]
+                        };
+                        self.text_pipeline.push_char(c, x, y, text_color);
                     }
                 }
 
@@ -894,6 +835,19 @@ impl Renderer {
                         [cursor_color[0], cursor_color[1], cursor_color[2], cursor_opacity],
                         2.0,
                     );
+
+                    // Re-render the character under cursor with cursor_text color
+                    let cursor_row = cursor.row as usize;
+                    let cursor_col = cursor.col as usize;
+                    if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
+                        if let Some(c) = cell.content.char() {
+                            if !c.is_whitespace() {
+                                let ct = apply_brightness(self.ui.cursor_text, brightness);
+                                self.text_pipeline.push_char(c, x, y,
+                                    [ct[0], ct[1], ct[2], cursor_opacity]);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -948,6 +902,13 @@ impl Renderer {
                     3.0,
                 );
             }
+        }
+
+        // Visual bell flash — subtle screen-edge glow
+        if self.bell_intensity > 0.0 {
+            let alpha = self.bell_intensity * 0.15;
+            let flash_color = [1.0, 1.0, 1.0, alpha];
+            self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, flash_color);
         }
 
         // ── LAYER 1: Search bar (overlays grid content) ──

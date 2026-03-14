@@ -1,6 +1,6 @@
 //! Color conversion utilities for ANSI escape sequences
 
-use crate::grid::{Color, ColorSpec};
+use crate::grid::Color;
 
 /// ANSI color index (0-15)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,41 +112,6 @@ pub fn color_256(idx: u8) -> Color {
     }
 }
 
-/// Parse an extended color from SGR parameters
-///
-/// Handles both 256-color (`38;5;N`) and true color (`38;2;R;G;B`) formats.
-pub fn parse_extended_color<'a, I>(iter: &mut I) -> Option<Color>
-where
-    I: Iterator<Item = &'a u16>,
-{
-    parse_extended_color_with_spec(iter).map(|(c, _)| c)
-}
-
-/// Parse an extended color with its specification from SGR parameters
-///
-/// Returns both the resolved RGB color and how it was specified.
-pub fn parse_extended_color_with_spec<'a, I>(iter: &mut I) -> Option<(Color, ColorSpec)>
-where
-    I: Iterator<Item = &'a u16>,
-{
-    match iter.next()? {
-        5 => {
-            // 256-color mode: `38;5;N` or `48;5;N`
-            let idx = *iter.next()? as u8;
-            Some((color_256(idx), ColorSpec::Indexed(idx)))
-        }
-        2 => {
-            // True color mode: `38;2;R;G;B` or `48;2;R;G;B`
-            let r = *iter.next()? as u8;
-            let g = *iter.next()? as u8;
-            let b = *iter.next()? as u8;
-            let color = Color::rgb(r, g, b);
-            Some((color, ColorSpec::TrueColor(color)))
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,19 +164,4 @@ mod tests {
         assert_eq!(light, Color::rgb(238, 238, 238));
     }
 
-    #[test]
-    fn test_parse_extended_256() {
-        let params: Vec<u16> = vec![5, 196];
-        let mut iter = params.iter();
-        let color = parse_extended_color(&mut iter);
-        assert_eq!(color, Some(Color::rgb(255, 0, 0)));
-    }
-
-    #[test]
-    fn test_parse_extended_true_color() {
-        let params: Vec<u16> = vec![2, 128, 64, 32];
-        let mut iter = params.iter();
-        let color = parse_extended_color(&mut iter);
-        assert_eq!(color, Some(Color::rgb(128, 64, 32)));
-    }
 }

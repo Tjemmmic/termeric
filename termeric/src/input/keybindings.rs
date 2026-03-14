@@ -40,15 +40,6 @@ impl KeyModifiers {
             && self.super_key == state.super_key()
     }
 
-    /// Create from a modifier state
-    pub fn from_state(state: ModifiersState) -> Self {
-        Self {
-            ctrl: state.control_key(),
-            alt: state.alt_key(),
-            shift: state.shift_key(),
-            super_key: state.super_key(),
-        }
-    }
 }
 
 /// Action to perform when a key binding is triggered
@@ -146,13 +137,6 @@ impl KeyAction {
         }
     }
 
-    /// Check if this action sends text directly to the PTY
-    pub fn send_text(&self) -> Option<&str> {
-        match self {
-            KeyAction::SendText { text } => Some(text),
-            _ => None,
-        }
-    }
 }
 
 /// Keybinding manager
@@ -203,10 +187,6 @@ impl KeyBindingManager {
         None
     }
 
-    /// Get all bindings
-    pub fn bindings(&self) -> &[KeyBinding] {
-        &self.bindings
-    }
 }
 
 /// Convert a winit Key to a string representation

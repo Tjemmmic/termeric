@@ -97,23 +97,14 @@ impl CommandsPanel {
 
     /// Toggle the panel open/closed
     pub fn toggle(&mut self) {
-        if self.animation.is_open() {
-            self.cancel_edit();
-            self.animation.close();
-        } else {
+        self.cancel_edit();
+        if !self.animation.is_open() {
+            // Reset hover state when opening
             self.hovered_index = None;
             self.hovered_add = false;
             self.hovered_delete = None;
-            self.cancel_edit();
-            self.animation.open();
         }
-    }
-
-    /// Open the panel
-    pub fn open(&mut self) {
-        if !self.animation.is_open() {
-            self.toggle();
-        }
+        self.animation.toggle();
     }
 
     /// Close the panel

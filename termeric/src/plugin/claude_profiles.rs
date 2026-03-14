@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 
-use crate::ui::claude_chrome::HostTarget;
 
 /// A Claude Code profile defining behavior for a session
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -56,23 +55,6 @@ pub enum ProfileTarget {
 
 fn default_runtime() -> String {
     "docker".to_string()
-}
-
-impl ProfileTarget {
-    /// Convert to a HostTarget for the chrome bar
-    pub fn to_host_target(&self) -> HostTarget {
-        match self {
-            ProfileTarget::Local => HostTarget::Local,
-            ProfileTarget::Ssh { host, user } => HostTarget::Ssh {
-                host: host.clone(),
-                user: user.clone(),
-            },
-            ProfileTarget::Container { name, runtime } => HostTarget::Container {
-                name: name.clone(),
-                runtime: runtime.clone(),
-            },
-        }
-    }
 }
 
 /// Try to resolve a profile name from a `.termeric/config` file in the given directory.
@@ -143,30 +125,6 @@ mod tests {
         assert!(profile.extra_args.is_empty());
         assert!(profile.target.is_none());
         assert!(!profile.auto_record);
-    }
-
-    #[test]
-    fn test_profile_target_to_host() {
-        let local = ProfileTarget::Local;
-        assert_eq!(local.to_host_target(), HostTarget::Local);
-
-        let ssh = ProfileTarget::Ssh { host: "dev01".into(), user: Some("root".into()) };
-        match ssh.to_host_target() {
-            HostTarget::Ssh { host, user } => {
-                assert_eq!(host, "dev01");
-                assert_eq!(user, Some("root".to_string()));
-            }
-            _ => panic!("Expected SSH"),
-        }
-
-        let container = ProfileTarget::Container { name: "devbox".into(), runtime: "docker".into() };
-        match container.to_host_target() {
-            HostTarget::Container { name, runtime } => {
-                assert_eq!(name, "devbox");
-                assert_eq!(runtime, "docker");
-            }
-            _ => panic!("Expected Container"),
-        }
     }
 
     #[test]

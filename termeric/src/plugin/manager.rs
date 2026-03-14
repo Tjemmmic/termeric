@@ -176,7 +176,6 @@ mod tests {
             vec![PluginCommand {
                 id: "tracking.test".to_string(),
                 name: "Test Command".to_string(),
-                description: "A test command".to_string(),
                 category: None,
             }]
         }
@@ -214,7 +213,6 @@ mod tests {
             vec![PluginCommand {
                 id: "action.open".to_string(),
                 name: "Open Test".to_string(),
-                description: "Open a test tab".to_string(),
                 category: Some("Test".to_string()),
             }]
         }

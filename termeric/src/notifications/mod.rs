@@ -152,19 +152,6 @@ impl Default for Bell {
     }
 }
 
-/// Urgency hint for window managers
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UrgencyHint {
-    /// No urgency
-    None,
-    /// Low urgency (activity in background tab)
-    Low,
-    /// Normal urgency (bell in background tab)
-    Normal,
-    /// Critical urgency (error or important notification)
-    Critical,
-}
-
 /// Notification manager for system notifications
 pub struct Notifications {
     /// Whether notifications are enabled
@@ -236,10 +223,6 @@ impl Notifications {
         log::debug!("Sent notification: {} - {}", title, body);
     }
 
-    /// Enable/disable notifications
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
 }
 
 #[cfg(test)]

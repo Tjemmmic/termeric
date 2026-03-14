@@ -4,7 +4,7 @@ use vte::{Params, Perform};
 use crate::grid::{CellAttrs, Color, ColorSpec};
 use crate::term::{Terminal, TerminalMode};
 use crate::event::{TerminalEvent, NotificationRequest};
-use super::color::{ansi_color, ansi_bright_color, parse_extended_color, parse_extended_color_with_spec};
+use super::color::{ansi_color, ansi_bright_color};
 
 /// Handler for VTE callbacks that updates terminal state
 pub struct Handler<'a> {
@@ -632,92 +632,6 @@ impl Handler<'_> {
                 }
             }
             _ => None,
-        }
-    }
-
-    /// Handle SGR (Select Graphic Rendition) parameters (legacy flat array version)
-    fn handle_sgr(&mut self, params: &[u16]) {
-        if params.is_empty() {
-            self.terminal.reset_attrs();
-            return;
-        }
-
-        let mut iter = params.iter().peekable();
-
-        while let Some(&param) = iter.next() {
-            match param {
-                // Reset
-                0 => {
-                    self.terminal.reset_attrs();
-                }
-
-                // Attributes
-                1 => self.add_attr(CellAttrs::BOLD),
-                2 => self.add_attr(CellAttrs::DIM),
-                3 => self.add_attr(CellAttrs::ITALIC),
-                4 => self.add_attr(CellAttrs::UNDERLINE),
-                5 => self.add_attr(CellAttrs::BLINK),
-                7 => self.add_attr(CellAttrs::INVERSE),
-                8 => self.add_attr(CellAttrs::HIDDEN),
-                9 => self.add_attr(CellAttrs::STRIKE),
-
-                // Reset attributes
-                22 => self.remove_attr(CellAttrs::BOLD | CellAttrs::DIM),
-                23 => self.remove_attr(CellAttrs::ITALIC),
-                24 => self.remove_attr(CellAttrs::UNDERLINE),
-                25 => self.remove_attr(CellAttrs::BLINK),
-                27 => self.remove_attr(CellAttrs::INVERSE),
-                28 => self.remove_attr(CellAttrs::HIDDEN),
-                29 => self.remove_attr(CellAttrs::STRIKE),
-
-                // Normal foreground colors (30-37)
-                30..=37 => {
-                    self.terminal.set_fg(ansi_color(param - 30), ColorSpec::Indexed((param - 30) as u8));
-                }
-
-                // Extended foreground color
-                38 => {
-                    if let Some((color, spec)) = parse_extended_color_with_spec(&mut iter) {
-                        self.terminal.set_fg(color, spec);
-                    }
-                }
-
-                // Default foreground
-                39 => {
-                    self.terminal.set_fg(Color::default_fg(), ColorSpec::Default);
-                }
-
-                // Normal background colors (40-47)
-                40..=47 => {
-                    self.terminal.set_bg(ansi_color(param - 40), ColorSpec::Indexed((param - 40) as u8));
-                }
-
-                // Extended background color
-                48 => {
-                    if let Some((color, spec)) = parse_extended_color_with_spec(&mut iter) {
-                        self.terminal.set_bg(color, spec);
-                    }
-                }
-
-                // Default background
-                49 => {
-                    self.terminal.set_bg(Color::default_bg(), ColorSpec::Default);
-                }
-
-                // Bright foreground colors (90-97)
-                90..=97 => {
-                    self.terminal.set_fg(ansi_bright_color(param - 90), ColorSpec::Indexed((param - 90 + 8) as u8));
-                }
-
-                // Bright background colors (100-107)
-                100..=107 => {
-                    self.terminal.set_bg(ansi_bright_color(param - 100), ColorSpec::Indexed((param - 100 + 8) as u8));
-                }
-
-                _ => {
-                    log::trace!("Unknown SGR parameter: {}", param);
-                }
-            }
         }
     }
 

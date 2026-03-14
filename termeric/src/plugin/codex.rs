@@ -207,13 +207,18 @@ impl CodexPlugin {
             None => (&[] as &[String], HashMap::new(), None, None),
         };
 
+        let mut env = profile_env;
+        // Pass terminal context to the spawned process
+        env.insert("COLUMNS".to_string(), ctx.terminal_size.0.to_string());
+        env.insert("LINES".to_string(), ctx.terminal_size.1.to_string());
+
         PluginAction::OpenTab {
             program: self.config.binary.clone(),
             args: self.build_args(extra_cli_args, profile_extra_args, profile_approval, profile_sandbox),
             cwd: cwd.map(|s| s.to_string()),
             title: Some(title.to_string()),
             plugin_id: Some("codex".to_string()),
-            env: profile_env,
+            env,
         }
     }
 }
@@ -541,7 +546,9 @@ mod tests {
                 assert_eq!(cwd, Some("/tmp/project".to_string()));
                 assert_eq!(title, Some("Codex".to_string()));
                 assert_eq!(plugin_id, Some("codex".to_string()));
-                assert!(env.is_empty());
+                // env contains terminal size (COLUMNS, LINES)
+                assert_eq!(env.get("COLUMNS"), Some(&"80".to_string()));
+                assert_eq!(env.get("LINES"), Some(&"24".to_string()));
             }
             _ => panic!("Expected Action(OpenTab)"),
         }
@@ -892,7 +899,10 @@ mod tests {
 
         match response {
             HookResponse::Action(PluginAction::OpenTab { env, .. }) => {
-                assert!(env.is_empty());
+                // No profile env, but terminal size is always passed
+                assert_eq!(env.len(), 2);
+                assert_eq!(env.get("COLUMNS"), Some(&"80".to_string()));
+                assert_eq!(env.get("LINES"), Some(&"24".to_string()));
             }
             _ => panic!("Expected Action(OpenTab)"),
         }

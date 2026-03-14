@@ -1,9 +1,6 @@
 //! Slide-in panel rendering — commands panel, session management panel
 
-use super::{Renderer, adjust_alpha, mix};
-use super::types::*;
-use crate::ui::constants::*;
-use crate::ui::commands::panel::{CommandsPanelInfo, CommandsPanelAction, EditMode};
+use super::Renderer;
 
 impl Renderer {
     pub(super) fn build_commands_panel(&mut self, info: &crate::ui::commands::panel::CommandsPanelInfo, window_width: f32, window_height: f32) {

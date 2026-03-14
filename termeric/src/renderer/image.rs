@@ -21,10 +21,7 @@ pub struct ImageVertex {
 struct GpuImage {
     #[allow(dead_code)]
     texture: Texture,
-    view: TextureView,
     bind_group: BindGroup,
-    width: u32,
-    height: u32,
 }
 
 /// Image rendering pipeline
@@ -248,10 +245,7 @@ impl ImagePipeline {
 
         self.images.insert(image.id, GpuImage {
             texture,
-            view,
             bind_group,
-            width: image.width,
-            height: image.height,
         });
     }
 
@@ -335,13 +329,4 @@ impl ImagePipeline {
         }
     }
 
-    /// Remove an image from the GPU
-    pub fn remove_image(&mut self, id: ImageId) {
-        self.images.remove(&id);
-    }
-
-    /// Check if an image is loaded
-    pub fn has_image(&self, id: ImageId) -> bool {
-        self.images.contains_key(&id)
-    }
 }

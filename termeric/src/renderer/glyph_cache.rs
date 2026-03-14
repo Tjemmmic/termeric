@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use cosmic_text::{
-    Attrs, Buffer, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, SwashCache,
+    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache,
 };
 use std::collections::HashMap;
 use crate::ui::constants::LINE_HEIGHT_MULTIPLIER;
@@ -49,44 +49,6 @@ impl GlyphKey {
     }
 }
 
-/// Key for cached ligature runs
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub struct LigatureKey {
-    /// The string being shaped
-    pub text: String,
-    /// Font size as bits
-    pub size_bits: u32,
-}
-
-impl LigatureKey {
-    pub fn new(text: &str, font_size: f32) -> Self {
-        Self {
-            text: text.to_string(),
-            size_bits: font_size.to_bits(),
-        }
-    }
-}
-
-/// A shaped glyph within a ligature run
-#[derive(Clone, Copy, Debug)]
-pub struct ShapedGlyph {
-    /// Atlas entry for this glyph
-    pub entry: GlyphEntry,
-    /// X offset from start of run
-    pub x_offset: f32,
-    /// Width this glyph occupies in the run
-    pub width: f32,
-}
-
-/// A cached ligature run (sequence of shaped glyphs)
-#[derive(Clone, Debug)]
-pub struct LigatureRun {
-    /// The shaped glyphs
-    pub glyphs: Vec<ShapedGlyph>,
-    /// Total width of the run
-    pub total_width: f32,
-}
-
 /// Glyph cache with texture atlas
 pub struct GlyphCache {
     /// The font system
@@ -103,8 +65,6 @@ pub struct GlyphCache {
     pub(crate) sampler: Sampler,
     /// Cached glyph entries
     entries: HashMap<GlyphKey, GlyphEntry>,
-    /// Cached ligature runs
-    ligature_cache: HashMap<LigatureKey, LigatureRun>,
     /// Current packing position
     cursor_x: u32,
     cursor_y: u32,
@@ -118,13 +78,11 @@ pub struct GlyphCache {
     font_family: String,
     /// Whether to use system monospace fallback (when requested font not found/not monospace)
     use_monospace_fallback: bool,
-    /// Whether ligatures are enabled
-    ligatures_enabled: bool,
 }
 
 impl GlyphCache {
     /// Create a new glyph cache
-    pub fn new(device: &Device, queue: &Queue, font_size: f32, font_family: &str, ligatures: bool) -> Result<Self> {
+    pub fn new(device: &Device, queue: &Queue, font_size: f32, font_family: &str) -> Result<Self> {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
 
@@ -193,7 +151,6 @@ impl GlyphCache {
             texture_view,
             sampler,
             entries: HashMap::new(),
-            ligature_cache: HashMap::new(),
             cursor_x: 0,
             cursor_y: 0,
             row_height: 0,
@@ -202,7 +159,6 @@ impl GlyphCache {
             font_size,
             font_family: font_family.to_string(),
             use_monospace_fallback,
-            ligatures_enabled: ligatures,
         })
     }
 
@@ -358,38 +314,6 @@ impl GlyphCache {
         Some(entry)
     }
 
-    /// Clear the cache
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.ligature_cache.clear();
-        self.cursor_x = 0;
-        self.cursor_y = 0;
-        self.row_height = 0;
-    }
-
-    /// Get current font size
-    pub fn font_size(&self) -> f32 {
-        self.font_size
-    }
-
-    /// Get current font family
-    pub fn font_family(&self) -> &str {
-        &self.font_family
-    }
-
-    /// Check if ligatures are enabled
-    pub fn ligatures_enabled(&self) -> bool {
-        self.ligatures_enabled
-    }
-
-    /// Enable or disable ligatures
-    pub fn set_ligatures(&mut self, enabled: bool) {
-        if self.ligatures_enabled != enabled {
-            self.ligatures_enabled = enabled;
-            self.ligature_cache.clear();
-        }
-    }
-
     /// Get all installed monospace font families
     ///
     /// Returns a sorted list of unique monospace font family names available on the system.
@@ -423,141 +347,6 @@ impl GlyphCache {
         result.extend(fonts.into_iter().filter(|f| f.to_lowercase() != "monospace"));
 
         result
-    }
-
-    /// Shape a text run with ligatures
-    ///
-    /// Returns a LigatureRun with all shaped glyphs and their positions.
-    /// If ligatures are disabled or the text is a single character, falls back to individual glyphs.
-    pub fn shape_run(&mut self, text: &str, queue: &Queue) -> Option<LigatureRun> {
-        // For single characters or disabled ligatures, no point in ligature shaping
-        if !self.ligatures_enabled || text.chars().count() <= 1 {
-            return None;
-        }
-
-        let key = LigatureKey::new(text, self.font_size);
-
-        // Check cache
-        if let Some(run) = self.ligature_cache.get(&key) {
-            return Some(run.clone());
-        }
-
-        // Shape the text
-        let run = self.shape_text_internal(text, queue)?;
-        self.ligature_cache.insert(key, run.clone());
-        Some(run)
-    }
-
-    /// Internal method to shape text and rasterize glyphs
-    fn shape_text_internal(&mut self, text: &str, queue: &Queue) -> Option<LigatureRun> {
-        // First, shape the text and collect glyph info
-        let mut glyph_infos: Vec<(cosmic_text::CacheKey, f32, f32)> = Vec::new();
-
-        {
-            let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
-
-            // Use monospace fallback if the requested font wasn't found
-            let family = if self.use_monospace_fallback {
-                Family::Monospace
-            } else {
-                family_for(&self.font_family)
-            };
-
-            // Enable ligature-related OpenType features
-            let mut features = FontFeatures::new();
-            // Standard ligatures (fi, fl, etc.)
-            features.enable(FeatureTag::STANDARD_LIGATURES);
-            // Contextual alternates (used by FiraCode for arrow ligatures like ->)
-            features.enable(FeatureTag::CONTEXTUAL_ALTERNATES);
-            // Discretionary ligatures (optional, some fonts use this)
-            features.enable(FeatureTag::DISCRETIONARY_LIGATURES);
-
-            let attrs = Attrs::new().family(family).font_features(features);
-            buffer.set_text(
-                &mut self.font_system,
-                text,
-                &attrs,
-                Shaping::Advanced,
-                None,
-            );
-
-            for run in buffer.layout_runs() {
-                for glyph in run.glyphs.iter() {
-                    let physical = glyph.physical((0.0, 0.0), 1.0);
-                    glyph_infos.push((physical.cache_key, glyph.x, glyph.w));
-                }
-            }
-        }
-
-        // Now rasterize each glyph
-        let mut glyphs = Vec::new();
-        let mut total_width: f32 = 0.0;
-
-        for (cache_key, x_offset, width) in glyph_infos {
-            // Rasterize the glyph
-            let entry = if let Some(image) = self.swash_cache.get_image(&mut self.font_system, cache_key) {
-                // Copy image data before allocating to avoid borrow issues
-                let img_width = image.placement.width;
-                let img_height = image.placement.height;
-                let img_left = image.placement.left;
-                let img_top = image.placement.top;
-                let img_data = image.data.clone();
-
-                // Allocate space in atlas
-                let entry = self.allocate(img_width, img_height, img_left, img_top)?;
-
-                // Upload to GPU
-                if img_width > 0 && img_height > 0 {
-                    queue.write_texture(
-                        TexelCopyTextureInfo {
-                            texture: &self.texture,
-                            mip_level: 0,
-                            origin: Origin3d {
-                                x: entry.x,
-                                y: entry.y,
-                                z: 0,
-                            },
-                            aspect: TextureAspect::All,
-                        },
-                        &img_data,
-                        TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(img_width),
-                            rows_per_image: Some(img_height),
-                        },
-                        Extent3d {
-                            width: img_width,
-                            height: img_height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-                entry
-            } else {
-                // Empty glyph
-                GlyphEntry {
-                    x: 0,
-                    y: 0,
-                    width: 0,
-                    height: 0,
-                    bearing_x: 0,
-                    bearing_y: 0,
-                }
-            };
-
-            glyphs.push(ShapedGlyph {
-                entry,
-                x_offset,
-                width,
-            });
-
-            total_width = total_width.max(x_offset + width);
-        }
-
-        Some(LigatureRun {
-            glyphs,
-            total_width,
-        })
     }
 
     /// Change font size, clearing the cache and recalculating metrics
@@ -604,7 +393,7 @@ impl GlyphCache {
     /// Clear the glyph atlas, entry caches, and reset packing cursor.
     fn clear_atlas(&mut self, queue: &Queue) {
         self.entries.clear();
-        self.ligature_cache.clear();
+
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.row_height = 0;

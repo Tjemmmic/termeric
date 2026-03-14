@@ -1,9 +1,7 @@
 //! Settings panel rendering
 
-use super::{Renderer, adjust_alpha, mix};
-use super::types::*;
-use crate::ui::constants::*;
-use crate::ui::settings::{SettingsPanelInfo, SettingsPanelLayout};
+use super::{Renderer, adjust_alpha};
+use crate::ui::settings::SettingsPanelInfo;
 
 impl Renderer {
     pub(super) fn build_settings_panel(&mut self, info: &SettingsPanelInfo, window_width: f32, window_height: f32) {

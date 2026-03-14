@@ -104,7 +104,7 @@ pub struct GuardrailOverlay {
 impl GuardrailOverlay {
     pub fn new() -> Self {
         Self {
-            animation: crate::ui::animation::OverlayAnimation::new(),
+            animation: crate::ui::animation::OverlayAnimation::with_duration(0.25),
             matched: None,
             pending_data: Vec::new(),
         }
@@ -139,9 +139,9 @@ impl GuardrailOverlay {
         self.animation.is_visible()
     }
 
-    /// Get animation progress
+    /// Get eased animation progress
     pub fn animation(&self) -> f32 {
-        self.animation.progress()
+        self.animation.eased()
     }
 
     /// Update animation state

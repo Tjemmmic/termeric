@@ -3,11 +3,6 @@
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-/// Convert a key event to bytes to send to the PTY
-pub fn key_to_bytes(event: &KeyEvent) -> Option<Vec<u8>> {
-    key_to_bytes_with_modifiers(event, ModifiersState::empty())
-}
-
 /// Convert a key event to bytes, taking modifiers into account
 pub fn key_to_bytes_with_modifiers(event: &KeyEvent, modifiers: ModifiersState) -> Option<Vec<u8>> {
     // Only handle key presses

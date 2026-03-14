@@ -1,9 +1,8 @@
 //! Tab bar rendering and hit-testing
 
-use super::{Renderer, adjust_alpha, contrast_text, mix};
+use super::{Renderer, adjust_alpha};
 use super::types::*;
 use crate::tabs::{TabInfo, TabType};
-use crate::ui::constants::*;
 
 impl Renderer {
     pub(super) fn build_tab_bar(&mut self, tabs: &[TabInfo], window_width: f32, tab_bar_height: f32) {
@@ -355,58 +354,6 @@ impl Renderer {
             }
         }
     }
-
-    /// Calculate command bar height based on content
-    fn calculate_command_bar_height(&self, info: &CommandBarInfo, window_width: f32, window_height: f32) -> f32 {
-        let padding = 8.0;
-
-        if let Some(msg) = &info.message {
-            // Count lines in message (considering newlines and wrapping)
-            let max_chars_per_line = ((window_width - padding * 2.0) / self.cell_width) as usize;
-            let mut line_count = 0;
-            let mut current_line_len = 0;
-
-            for c in msg.chars() {
-                if c == '\n' {
-                    line_count += 1;
-                    current_line_len = 0;
-                } else {
-                    current_line_len += 1;
-                    if current_line_len >= max_chars_per_line {
-                        line_count += 1;
-                        current_line_len = 0;
-                    }
-                }
-            }
-            if current_line_len > 0 {
-                line_count += 1;
-            }
-
-            // Use dynamic height for messages, capped at 60% of window height
-            let needed_height = (line_count as f32 * self.cell_height) + padding * 2.0;
-            needed_height.min(window_height * 0.6).max(self.command_bar_base_height())
-        } else {
-            self.command_bar_base_height()
-        }
-    }
-
-    /// Calculate dropdown height based on number of suggestions
-    fn calculate_dropdown_height(&self, info: &CommandBarInfo, available_height: f32) -> f32 {
-        const SUGGESTION_HEIGHT: f32 = 28.0;
-        const PADDING: f32 = PANEL_PADDING;
-        const SPACING: f32 = 1.0;
-        const BORDER_WIDTH: f32 = 1.0;
-        let actual_available_height = available_height - self.tab_bar_height() - 8.0;
-        let max_suggestions_that_fit = ((actual_available_height - PADDING * 2.0 - BORDER_WIDTH * 2.0) / (SUGGESTION_HEIGHT + SPACING)).floor() as usize;
-        let num_suggestions = info.suggestions.len().min(6).min(max_suggestions_that_fit.max(1));
-
-        if num_suggestions == 0 {
-            return 0.0;
-        }
-
-        num_suggestions as f32 * (SUGGESTION_HEIGHT + SPACING) - SPACING + PADDING * 2.0 + BORDER_WIDTH * 2.0
-    }
-
 
     pub fn tab_bar_hit_test(
         &self,

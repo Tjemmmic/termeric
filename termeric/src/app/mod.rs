@@ -7,24 +7,20 @@ use anyhow::Result;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::{
-    application::ApplicationHandler,
-    dpi::LogicalSize,
-    event::{ElementState, MouseButton, WindowEvent},
-    event_loop::ActiveEventLoop,
+    event::{ElementState, MouseButton},
     keyboard::ModifiersState,
-    window::{Icon, Window, WindowId},
+    window::{Icon, Window},
 };
 
 use termeric_core::TerminalEvent;
 
-use crate::notifications::Notifications;
+use crate::notifications::{Bell, BellConfig, Notifications};
 use crate::config::{Config, SplashMode};
-use crate::harvest::HarvestMode;
-use crate::input::{Action, MouseState, check_keybinding, key_to_bytes_with_modifiers, screen_to_grid};
+use crate::input::{Action, MouseState, screen_to_grid};
 use crate::input::keybindings::{KeyAction, KeyBindingManager};
 use crate::renderer::Renderer;
 use crate::terminal::search::Search;
-use crate::ui::settings::{SettingsPanel, SettingsAction, SettingsKey};
+use crate::ui::settings::{SettingsPanel, SettingsAction};
 use crate::terminal::splash::show_splash;
 use self::state::AppState;
 use crate::tabs::TabManager;
@@ -104,10 +100,10 @@ pub struct App {
     search_cursor_pos: usize,
     /// Notification manager for desktop notifications
     notifications: Notifications,
+    /// Bell handler (visual/audio bell)
+    bell: Bell,
     /// Custom keybinding manager
     keybinding_manager: KeyBindingManager,
-    /// Harvest mode (command visualization)
-    harvest: Option<HarvestMode>,
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
     /// Whether the session dropdown is currently open
@@ -146,8 +142,6 @@ pub struct App {
     context_picker: ContextPicker,
     /// Guardrail confirmation overlay
     guardrail: GuardrailOverlay,
-    /// Input line buffer for guardrail checking (accumulates until Enter)
-    guardrail_input_buffer: String,
     /// Pending profile selection: (plugin_id, [profile_name, ...])
     /// When set, the info overlay is showing a profile list and number keys select one.
     pending_profile_selection: Option<(String, Vec<String>)>,
@@ -160,19 +154,20 @@ impl App {
         let default_font_size = config.font.size;
         let theme = Self::load_theme_from_config(&config);
 
+        // Initialize bell from config
+        let bell = Bell::new(BellConfig {
+            visual: config.bell.visual,
+            audio: config.bell.audio,
+            visual_duration_ms: config.bell.visual_duration_ms,
+            ..Default::default()
+        });
+
         // Initialize clipboard (may fail on some systems)
         let clipboard = arboard::Clipboard::new().ok();
 
         // Initialize keybinding manager with custom bindings from config
         let mut keybinding_manager = KeyBindingManager::new();
         keybinding_manager.load(config.keybindings.clone());
-
-        // Initialize harvest mode if enabled
-        let harvest = if config.harvest.enabled {
-            Some(HarvestMode::new())
-        } else {
-            None
-        };
 
         let result: Result<Self> = Ok(Self {
             config,
@@ -205,8 +200,8 @@ impl App {
             search: Search::new(),
             search_cursor_pos: 0,
             notifications: Notifications::new(),
+            bell,
             keybinding_manager,
-            harvest,
             app_state: AppState::load(),
             session_dropdown_open: false,
             session_dropdown_items: Vec::new(),
@@ -226,7 +221,7 @@ impl App {
             diff_review: DiffReviewOverlay::new(),
             context_picker: ContextPicker::new(),
             guardrail: GuardrailOverlay::new(),
-            guardrail_input_buffer: String::new(),
+
             pending_profile_selection: None,
         });
 
@@ -304,7 +299,7 @@ impl App {
                     title: pc.name.clone(),
                     category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
                     shortcut,
-                    icon: None,
+
                     source: CommandSource::Plugin(plugin_source),
                     destructive: false,
                 }
@@ -360,7 +355,6 @@ impl App {
             self.config.window.padding as f32,
             scale_factor,
             &self.theme,
-            self.config.font.ligatures,
         )?;
 
         // Apply initial opacity from config
@@ -532,8 +526,7 @@ impl App {
     fn handle_terminal_event(&mut self, event: TerminalEvent) {
         match event {
             TerminalEvent::Bell => {
-                // TODO: Visual bell flash, audio bell
-                log::debug!("Bell event received");
+                self.bell.ring();
             }
             TerminalEvent::Notification(req) => {
                 let title = req.title.as_deref().unwrap_or("Terminal");
@@ -785,6 +778,7 @@ impl App {
         let chrome_bar_data = {
             let branch = self.git_watcher.branch().map(|s| s.to_string());
             let dirty = self.git_watcher.is_dirty();
+            let git_status = self.git_watcher.status();
             let wd = working_dir.clone();
 
             if let Some(tabs) = &mut self.tabs {
@@ -792,16 +786,14 @@ impl App {
                     if let Some(ref mut session) = tab.ai_session {
                         session.update_git(branch.as_deref(), dirty, wd.as_deref());
                         Some(crate::ui::claude_chrome::ChromeBarInfo {
-                            plugin_id: session.plugin_id.clone(),
-                            display_name: session.display_name.clone(),
                             repo_name: session.repo_name.clone(),
                             branch: session.branch.clone(),
                             dirty: session.dirty,
+                            ahead: git_status.map_or(0, |s| s.ahead),
+                            behind: git_status.map_or(0, |s| s.behind),
                             host_label: session.host.badge_label(),
                             profile: session.profile.clone(),
                             recording: session.recording,
-                            approval_mode: session.approval_mode.clone(),
-                            height: 0.0, // set by renderer
                         })
                     } else {
                         None
@@ -901,6 +893,14 @@ impl App {
                 window.request_redraw();
             }
         }
+        // Update visual bell animation
+        self.bell.update();
+        if self.bell.is_visual_active() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
         // Build commands panel info if panel is open or animating
         let commands_panel_info = if !self.commands_panel.is_closed() {
             Some(self.commands_panel.build_info(&self.config.commands))
@@ -1036,6 +1036,7 @@ impl App {
         } else {
             None
         });
+        renderer.set_bell_intensity(self.bell.visual_intensity());
         match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
@@ -1246,14 +1247,15 @@ impl App {
                     match tabs.new_tab() {
                         Ok(id) => {
                             log::info!("Created new tab {}", id);
-                            // Show splash for NewTab mode
                             self.maybe_show_splash(true);
+                            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated);
                         }
                         Err(e) => log::error!("Failed to create new tab: {}", e),
                     }
                 }
             }
             Action::CloseTab => {
+                let tab_id = self.tabs.as_ref().and_then(|t| t.active_tab().map(|tab| tab.id));
                 if let Some(tabs) = &mut self.tabs {
                     tabs.close_active_tab();
                     if tabs.is_empty() {
@@ -1261,20 +1263,38 @@ impl App {
                         self.should_exit = true;
                     }
                 }
+                if tab_id.is_some() {
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed);
+                }
             }
             Action::NextTab => {
+                let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if let Some(tabs) = &mut self.tabs {
                     tabs.next_tab();
                 }
+                let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
+                if from != to {
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
+                }
             }
             Action::PrevTab => {
+                let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if let Some(tabs) = &mut self.tabs {
                     tabs.prev_tab();
                 }
+                let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
+                if from != to {
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
+                }
             }
             Action::SwitchToTab(index) => {
+                let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if let Some(tabs) = &mut self.tabs {
                     tabs.switch_to(index);
+                }
+                let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
+                if from != to {
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
                 }
             }
             Action::ToggleSearch => {
@@ -1324,7 +1344,6 @@ impl App {
                     }
                 }
             }
-            Action::None => {}
             Action::PluginCommand(command_id) => {
                 self.execute_plugin_command(&command_id);
             }
@@ -1453,6 +1472,9 @@ impl App {
     /// Dispatch a plugin hook and execute any returned actions.
     fn dispatch_plugin_hook(&mut self, hook: crate::plugin::Hook) {
         let ctx = self.build_plugin_context();
+        log::debug!("Plugin hook: {:?} (tabs={}, active={}, size={}x{})",
+            hook, ctx.tab_count, ctx.active_tab,
+            ctx.terminal_size.0, ctx.terminal_size.1);
         let actions = self.plugin_manager.dispatch(&hook, &ctx);
         self.execute_plugin_actions(actions);
     }
@@ -1581,25 +1603,57 @@ impl App {
     /// Copies the terminal scrollback as text and writes it to a file in the
     /// session data directory. If a clipboard is available, also copies the path.
     fn export_plugin_session(&mut self, plugin_id: &str) {
-        let content = if let Some(tabs) = &self.tabs {
-            tabs.find_plugin_tab_index(plugin_id).and_then(|idx| {
-                tabs.iter()
-                    .find(|(i, _)| *i == idx)
-                    .map(|(_, t)| {
-                        let lines = t.terminal.grid().export_scrollback_text();
-                        lines.join("\n")
-                    })
-            })
-        } else {
-            None
+        let Some(tabs) = &self.tabs else {
+            log::info!("No {} tab found for export", plugin_id);
+            return;
         };
+        let Some(idx) = tabs.find_plugin_tab_index(plugin_id) else {
+            log::info!("No {} tab found for export", plugin_id);
+            return;
+        };
+
+        // Try JSONL transcript export first (richer structured format)
+        let transcript_path = tabs.iter()
+            .find(|(i, _)| *i == idx)
+            .and_then(|(_, t)| t.transcript.as_ref().map(|tr| tr.path().to_path_buf()));
+
+        if let Some(ref path) = transcript_path {
+            match crate::session::export::export_to_markdown(path) {
+                Ok(md) => {
+                    if let Some(base) = crate::session::sessions_base_dir() {
+                        let _ = std::fs::create_dir_all(&base);
+                        let id = crate::session::generate_session_id();
+                        let filename = format!("{}-{}-export.md", plugin_id, id);
+                        let dest = base.join(&filename);
+                        match std::fs::write(&dest, &md) {
+                            Ok(()) => {
+                                log::info!("Exported transcript to {}", dest.display());
+                                if let Some(clipboard) = &mut self.clipboard {
+                                    let _ = clipboard.set_text(dest.display().to_string());
+                                }
+                            }
+                            Err(e) => log::error!("Failed to write export: {}", e),
+                        }
+                        return;
+                    }
+                }
+                Err(e) => log::debug!("Transcript export failed, falling back to scrollback: {}", e),
+            }
+        }
+
+        // Fallback: export raw scrollback text
+        let content = tabs.iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, t)| {
+                let lines = t.terminal.grid().export_scrollback_text();
+                lines.join("\n")
+            });
 
         if let Some(text) = content {
             if text.trim().is_empty() {
                 log::info!("No session content to export for '{}'", plugin_id);
                 return;
             }
-            // Write to a file in the sessions directory
             if let Some(base) = crate::session::sessions_base_dir() {
                 let _ = std::fs::create_dir_all(&base);
                 let id = crate::session::generate_session_id();
@@ -1619,8 +1673,6 @@ impl App {
                     Err(e) => log::error!("Failed to export session: {}", e),
                 }
             }
-        } else {
-            log::info!("No {} tab found for export", plugin_id);
         }
     }
 
@@ -1708,6 +1760,7 @@ impl App {
                         ) {
                             Ok(id) => {
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
+                                self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated);
                             }
                             Err(e) => {
                                 self.info_overlay.show(
@@ -1721,15 +1774,6 @@ impl App {
                             }
                         }
                     }
-                }
-                PluginAction::WriteToPty { data } => {
-                    self.write_to_pty(&data);
-                }
-                PluginAction::Notify { title, body } => {
-                    self.notifications.notify(&title, &body);
-                }
-                PluginAction::ShowMessage { message } => {
-                    log::info!("Plugin message: {}", message);
                 }
                 PluginAction::ClearPluginTab { plugin_id } => {
                     if let Some(tabs) = &mut self.tabs {
@@ -1823,31 +1867,6 @@ impl App {
                         window.request_redraw();
                     }
                 }
-                PluginAction::ApplyDiff { diff_content, cwd } => {
-                    self.run_git_apply("apply", &[], &diff_content, cwd.as_deref());
-                }
-                PluginAction::StageDiff { diff_content, cwd } => {
-                    self.run_git_apply("stage", &["--cached"], &diff_content, cwd.as_deref());
-                }
-                PluginAction::RevertDiff { diff_content, cwd } => {
-                    self.run_git_apply("revert", &["--reverse"], &diff_content, cwd.as_deref());
-                }
-                PluginAction::InjectContext { text } => {
-                    if let Some(tabs) = &mut self.tabs {
-                        if let Some(tab) = tabs.active_tab_mut() {
-                            if matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }) {
-                                let injected = format!(
-                                    "\n--- Context ---\n{}\n--- End Context ---\n",
-                                    text
-                                );
-                                let _ = tab.write(injected.as_bytes());
-                                log::info!("Injected {} chars of context into active plugin tab", text.len());
-                            } else {
-                                log::warn!("InjectContext: active tab is not a plugin tab");
-                            }
-                        }
-                    }
-                }
                 PluginAction::ListProfiles { plugin_id } => {
                     // Gather profile names from config
                     let profiles: Vec<String> = match plugin_id.as_str() {
@@ -1927,139 +1946,6 @@ impl App {
 
     /// Run `git apply` with optional extra flags, piping diff_content via stdin.
     ///
-    /// `label` is used for log messages (e.g. "apply", "stage", "revert").
-    /// `extra_args` are appended to `git apply` (e.g. `["--cached"]` or `["--reverse"]`).
-    fn run_git_apply(&self, label: &str, extra_args: &[&str], diff_content: &str, cwd: Option<&str>) {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let mut cmd = Command::new("git");
-        cmd.arg("apply");
-        for arg in extra_args {
-            cmd.arg(arg);
-        }
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-
-        match cmd.spawn() {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(diff_content.as_bytes());
-                }
-                match child.wait_with_output() {
-                    Ok(output) if output.status.success() => {
-                        log::info!("git {} succeeded", label);
-                    }
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        log::error!("git {} failed: {}", label, stderr.trim());
-                    }
-                    Err(e) => {
-                        log::error!("git {} wait failed: {}", label, e);
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to spawn git {}: {}", label, e);
-            }
-        }
-    }
-
-    /// Apply a diff via `git apply`
-    fn apply_diff_via_git(&mut self, diff_content: &str, cwd: Option<&str>, staged: bool) {
-        use std::process::Command;
-        let mut cmd = Command::new("git");
-        cmd.arg("apply");
-        if staged {
-            cmd.arg("--cached");
-        }
-        cmd.stdin(std::process::Stdio::piped());
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-        match cmd.spawn() {
-            Ok(mut child) => {
-                if let Some(stdin) = child.stdin.as_mut() {
-                    use std::io::Write;
-                    let _ = stdin.write_all(diff_content.as_bytes());
-                }
-                match child.wait() {
-                    Ok(status) if status.success() => {
-                        let action = if staged { "staged" } else { "applied" };
-                        log::info!("Diff {} successfully", action);
-                        self.notifications.notify("Diff Applied", &format!("Diff {} successfully", action));
-                    }
-                    Ok(status) => {
-                        log::error!("git apply failed with status: {}", status);
-                        self.notifications.notify("Diff Failed", "git apply returned an error");
-                    }
-                    Err(e) => {
-                        log::error!("Failed to wait for git apply: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to spawn git apply: {}", e);
-                self.notifications.notify("Diff Failed", &format!("Failed to run git: {}", e));
-            }
-        }
-    }
-
-    /// Revert a diff via `git apply --reverse`
-    fn revert_diff_via_git(&mut self, diff_content: &str, cwd: Option<&str>) {
-        use std::process::Command;
-        let mut cmd = Command::new("git");
-        cmd.args(["apply", "--reverse"]);
-        cmd.stdin(std::process::Stdio::piped());
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-        match cmd.spawn() {
-            Ok(mut child) => {
-                if let Some(stdin) = child.stdin.as_mut() {
-                    use std::io::Write;
-                    let _ = stdin.write_all(diff_content.as_bytes());
-                }
-                match child.wait() {
-                    Ok(status) if status.success() => {
-                        log::info!("Diff reverted successfully");
-                        self.notifications.notify("Diff Reverted", "Changes have been undone");
-                    }
-                    Ok(status) => {
-                        log::error!("git apply --reverse failed with status: {}", status);
-                        self.notifications.notify("Revert Failed", "git apply --reverse returned an error");
-                    }
-                    Err(e) => {
-                        log::error!("Failed to wait for git apply: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                log::error!("Failed to spawn git apply: {}", e);
-                self.notifications.notify("Revert Failed", &format!("Failed to run git: {}", e));
-            }
-        }
-    }
-
-    /// Toggle transcript recording for the active plugin session
-    fn toggle_transcript(&mut self) {
-        self.execute_plugin_actions(vec![crate::plugin::PluginAction::ToggleTranscript]);
-    }
-
-    /// Inject context text into the active plugin tab
-    fn inject_context_to_plugin(&mut self, text: &str) {
-        if let Some(tabs) = &mut self.tabs {
-            let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
-            tabs.write_to_plugin_tab("claude-code", injected.as_bytes());
-            log::info!("Injected {} chars of context into Claude Code", injected.len());
-        }
-    }
-
     /// Change font size by delta
     fn change_font_size(&mut self, delta: f32) {
         let Some(renderer) = &mut self.renderer else { return };
@@ -2166,6 +2052,7 @@ impl App {
     }
 
     fn apply_theme(&mut self, theme: Theme) {
+        self.settings_panel.set_theme_meta(theme.meta.clone());
         self.theme = theme;
         if let Some(renderer) = &mut self.renderer {
             renderer.set_theme(&self.theme);
@@ -2235,9 +2122,11 @@ impl App {
             }
             SettingsAction::SetVisualBell(enabled) => {
                 self.config.bell.visual = enabled;
+                self.bell.set_visual(enabled);
             }
             SettingsAction::SetAudioBell(enabled) => {
                 self.config.bell.audio = enabled;
+                self.bell.set_audio(enabled);
             }
             SettingsAction::SetLineHeight(height) => {
                 self.config.font.line_height = height;
@@ -2248,6 +2137,12 @@ impl App {
             }
             SettingsAction::SetBellDuration(ms) => {
                 self.config.bell.visual_duration_ms = ms;
+                self.bell.set_config(BellConfig {
+                    visual: self.config.bell.visual,
+                    audio: self.config.bell.audio,
+                    visual_duration_ms: ms,
+                    ..Default::default()
+                });
             }
             SettingsAction::SetSplashMode(mode) => {
                 self.config.splash.mode = mode;
@@ -2700,7 +2595,6 @@ impl App {
                 title: pc.name.clone(),
                 category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
                 shortcut,
-                icon: None,
                 source: CommandSource::Plugin(plugin_source),
                 destructive: false,
             }
@@ -3003,12 +2897,14 @@ impl App {
                                                 Ok(id) => {
                                                     log::info!("Created new tab {} via mouse", id);
                                                     self.maybe_show_splash(true);
+                                                    self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated);
                                                 }
                                                 Err(e) => log::error!("Failed to create new tab: {}", e),
                                             }
                                         }
                                     }
                                     TabBarClick::CloseTab(idx) => {
+                                        let tab_id = self.tabs.as_ref().and_then(|t| t.iter().find(|(i, _)| *i == idx).map(|(_, tab)| tab.id));
                                         if let Some(tabs) = &mut self.tabs {
                                             tabs.close_tab(idx);
                                             if tabs.is_empty() {
@@ -3016,10 +2912,17 @@ impl App {
                                                 self.should_exit = true;
                                             }
                                         }
+                                        if tab_id.is_some() {
+                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed);
+                                        }
                                     }
                                     TabBarClick::Tab(idx) => {
+                                        let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                                         if let Some(tabs) = &mut self.tabs {
                                             tabs.switch_to(idx);
+                                        }
+                                        if from != idx {
+                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
                                         }
                                     }
                                     TabBarClick::SessionDropdown => {

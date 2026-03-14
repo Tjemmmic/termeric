@@ -169,13 +169,6 @@ impl TranscriptRecorder {
         })));
     }
 
-    /// Record a detected command
-    pub fn record_command(&mut self, command: &str, exit_code: Option<i32>) {
-        self.write_entry(EntryKind::Command, command, Some(serde_json::json!({
-            "exit_code": exit_code,
-        })));
-    }
-
     /// Get the path to the transcript file
     pub fn path(&self) -> &Path {
         &self.path
@@ -212,6 +205,15 @@ impl TranscriptRecorder {
             let _ = self.writer.flush();
             self.entry_count += 1;
         }
+    }
+}
+
+#[cfg(test)]
+impl TranscriptRecorder {
+    fn record_command(&mut self, command: &str, exit_code: Option<i32>) {
+        self.write_entry(EntryKind::Command, command, Some(serde_json::json!({
+            "exit_code": exit_code,
+        })));
     }
 }
 

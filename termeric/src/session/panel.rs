@@ -37,8 +37,6 @@ pub struct SessionPanelInfo {
     pub animation: f32,
     /// List of sessions to display
     pub sessions: Vec<SessionEntry>,
-    /// Index of the highlighted/hovered session
-    pub selected_index: usize,
     /// Mouse-hovered session index (None if not hovering any session)
     pub hovered_index: Option<usize>,
 }
@@ -159,7 +157,6 @@ impl SessionPanel {
         SessionPanelInfo {
             animation: self.animation_progress(),
             sessions: self.sessions.clone(),
-            selected_index: self.selected_index,
             hovered_index: self.hovered_index,
         }
     }
