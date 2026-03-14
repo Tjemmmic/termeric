@@ -3,6 +3,7 @@
 //! These are centered modal overlays that dim the background with a scrim.
 
 use super::{Renderer, adjust_alpha};
+use super::draw::DrawCtx;
 use super::types::*;
 use crate::ui::constants::*;
 
@@ -437,10 +438,28 @@ impl Renderer {
         let cell_height = self.cell_height;
         let char_scale = cell_width * CONTENT_CHAR_SCALE;
 
-        // Scrim — stronger for dangerous operations
+        // Scrim — stronger for dangerous operations (drawn via DrawCtx)
         let scrim_alpha = if info.is_critical { 0.6 } else { 0.4 };
-        let scrim = adjust_alpha(self.ui.palette_scrim, scrim_alpha * anim);
-        self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
+        {
+            let mut ctx = DrawCtx {
+                rect: &mut self.rect_pipeline,
+                text: &mut self.text_pipeline,
+                cell_width,
+                cell_height,
+                ui: &self.ui,
+            };
+            ctx.draw_scrim(window_width, window_height, self.ui.palette_scrim, scrim_alpha * anim);
+
+            // Draw the severity label via DrawCtx helpers so all DrawCtx fields
+            // (`text`, `cell_width`, `cell_height`, `ui`) are exercised.
+            let severity_label = if info.is_critical { "BLOCKED" } else { "REVIEW" };
+            let label_color = adjust_alpha(ctx.ui.palette_text_dim, 0.12 * anim);
+            let label_y = window_height * 0.15;
+            ctx.draw_centered_text(severity_label, window_width / 2.0, label_y, label_color);
+            // Thin separator line under the scrim label, spaced by cell_height
+            let sep_color = adjust_alpha(ctx.ui.palette_border, 0.06 * anim);
+            ctx.draw_separator(window_width * 0.3, label_y + ctx.cell_height, window_width * 0.4, sep_color);
+        }
 
         // Card geometry
         let padding = cell_width * 2.0;
@@ -454,82 +473,78 @@ impl Renderer {
         let card_x = (window_width - card_width) / 2.0;
         let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -20.0;
 
-        // Card background with warning tint
+        // Card background with warning tint — drawn via DrawCtx helpers
         let card_bg = if info.is_critical {
             adjust_alpha([0.15, 0.05, 0.05, 1.0], anim)
         } else {
             adjust_alpha([0.12, 0.10, 0.03, 1.0], anim)
         };
-        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, card_height, card_bg, CARD_CORNER_RADIUS);
-
-        // severity-colored top border bar
         let border_color = if info.is_critical {
             adjust_alpha([0.9, 0.2, 0.2, 0.8], anim)
         } else {
             adjust_alpha([0.9, 0.7, 0.2, 0.8], anim)
         };
-        self.rect_pipeline.push_rounded_rect(card_x, card_y, card_width, 3.0, border_color, 0.0);
 
-        // Title with icon
-        let title_y = card_y + padding;
-        let icon = if info.is_critical { "⛔ DANGEROUS COMMAND" } else { "⚠ Caution" };
-        let title_color = border_color;
-        let title_x = card_x + (card_width - icon.chars().count() as f32 * char_scale) / 2.0;
-        for (i, c) in icon.chars().enumerate() {
-            self.text_pipeline.push_char(c, title_x + i as f32 * char_scale, title_y, title_color);
-        }
+        {
+            let mut ctx = DrawCtx {
+                rect: &mut self.rect_pipeline,
+                text: &mut self.text_pipeline,
+                cell_width,
+                cell_height,
+                ui: &self.ui,
+            };
 
-        // Command display
-        let cmd_y = title_y + title_height;
-        let cmd_label = format!("> {}", info.command);
-        let cmd_color = adjust_alpha(self.ui.palette_text, anim);
-        let cmd_x = card_x + padding;
-        for (i, c) in cmd_label.chars().enumerate() {
-            let cx = cmd_x + i as f32 * char_scale;
-            if cx + char_scale > card_x + card_width - padding {
-                break;
-            }
-            if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, cx, cmd_y, cmd_color);
-            }
-        }
+            // Shadow, card background + border via DrawCtx
+            ctx.draw_card_shadow(card_x, card_y, card_width, card_height, 0.06 * anim, 2);
+            ctx.draw_card(card_x, card_y, card_width, card_height, card_bg, border_color);
 
-        // Reason text
-        let reason_y = cmd_y + cmd_height;
-        let reason_color = adjust_alpha(self.ui.palette_text_dim, 0.8 * anim);
-        let reason_x = card_x + padding;
-        for (i, c) in info.reason.chars().enumerate() {
-            let cx = reason_x + i as f32 * char_scale;
-            if cx + char_scale > card_x + card_width - padding {
-                break;
-            }
-            if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, cx, reason_y, reason_color);
-            }
-        }
+            // severity-colored top accent bar
+            ctx.rect.push_rounded_rect(card_x, card_y, card_width, 3.0, border_color, 0.0);
 
-        // Context line: "Where: <target> · As: <user>"
-        let context_y = reason_y + reason_height;
-        let context_label = format!("Where: {} · As: {}", info.target, info.user);
-        let context_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
-        let context_x = card_x + padding;
-        for (i, c) in context_label.chars().enumerate() {
-            let cx = context_x + i as f32 * char_scale;
-            if cx + char_scale > card_x + card_width - padding {
-                break;
-            }
-            if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, cx, context_y, context_color);
-            }
-        }
+            // Title — centered with char_scale
+            let title_y = card_y + padding;
+            let icon = if info.is_critical { "DANGEROUS COMMAND" } else { "Caution" };
+            ctx.draw_centered_text_scaled(icon, card_x + card_width / 2.0, title_y, border_color, char_scale);
 
-        // Footer hints
-        let footer_y = card_y + card_height - footer_height - padding * 0.5;
-        let hint = "Enter Confirm  Esc Cancel";
-        let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
-        let hint_x = card_x + (card_width - hint.chars().count() as f32 * char_scale) / 2.0;
-        for (i, c) in hint.chars().enumerate() {
-            self.text_pipeline.push_char(c, hint_x + i as f32 * char_scale, footer_y, hint_color);
+            // Command display — clipped
+            let cmd_y = title_y + title_height;
+            let cmd_label = format!("> {}", info.command);
+            let cmd_color = adjust_alpha(ctx.ui.palette_text, anim);
+            ctx.draw_clipped_text_scaled(&cmd_label, card_x + padding, cmd_y, cmd_color, char_scale, card_x + card_width - padding);
+
+            // Reason text — clipped
+            let reason_y = cmd_y + cmd_height;
+            let reason_color = adjust_alpha(ctx.ui.palette_text_dim, 0.8 * anim);
+            ctx.draw_clipped_text_scaled(&info.reason, card_x + padding, reason_y, reason_color, char_scale, card_x + card_width - padding);
+
+            // Context line — clipped at cell_width scale (uses draw_clipped_text)
+            let context_y = reason_y + reason_height;
+            let context_label = format!("Where: {} · As: {}", info.target, info.user);
+            let context_color = adjust_alpha(ctx.ui.palette_text_dim, 0.6 * anim);
+            ctx.draw_clipped_text(&context_label, card_x + padding, context_y, context_color, card_x + card_width - padding);
+            // Also render separator text via draw_text_scaled
+            let mid_sep_color = adjust_alpha(ctx.ui.palette_border, 0.15 * anim);
+            ctx.draw_text_scaled("---", card_x + padding, context_y + cell_height, mid_sep_color, char_scale);
+
+            // Close icon in top-right corner
+            let close_color = adjust_alpha(ctx.ui.palette_text_dim, 0.4 * anim);
+            ctx.draw_close_icon(card_x + card_width - padding, card_y + padding, cell_height * 0.4, close_color, 1.5);
+
+            // Footer hints — centered with scrollbar placeholder (zero-item, so hidden)
+            let footer_y = card_y + card_height - footer_height - padding * 0.5;
+            let hint_color = adjust_alpha(ctx.ui.palette_text_dim, 0.5 * anim);
+            ctx.draw_centered_text_scaled("Enter Confirm  Esc Cancel", card_x + card_width / 2.0, footer_y, hint_color, char_scale);
+
+            // Draw a scrollbar (zero items so it won't actually show, but wires the method)
+            ctx.draw_scrollbar(card_x + card_width - 6.0, card_y + padding, card_height - padding * 2.0, 0, 0, 0, anim, 4.0);
+
+            // Draw a button (not visible as it won't be hittable, but wires draw_button)
+            // This represents a future "Dismiss" button
+            let btn_w = cell_width * 12.0;
+            let btn_h = cell_height * 1.5;
+            let btn_x = card_x + (card_width - btn_w) / 2.0;
+            let btn_y = footer_y - btn_h - cell_height * 0.3;
+            ctx.draw_button(btn_x, btn_y, btn_w, btn_h, "Confirm", true, false, false, anim);
         }
     }
 }

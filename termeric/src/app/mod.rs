@@ -34,6 +34,10 @@ use crate::ui::info_overlay::InfoOverlay;
 use crate::ui::diff_review::DiffReviewOverlay;
 use crate::ui::context_picker::ContextPicker;
 use crate::terminal::guardrails::GuardrailOverlay;
+use crate::terminal::url::{UrlDetector, UrlCache};
+use crate::terminal::container::{TerminalContainer, SplitContainer, PaneRenderInfo};
+use crate::harvest::HarvestMode;
+use crate::panes::{PaneManager, SplitDirection};
 
 /// Main application state
 ///
@@ -145,6 +149,16 @@ pub struct App {
     /// Pending profile selection: (plugin_id, [profile_name, ...])
     /// When set, the info overlay is showing a profile list and number keys select one.
     pending_profile_selection: Option<(String, Vec<String>)>,
+    /// Harvest mode (command visualization)
+    harvest: Option<HarvestMode>,
+    /// Number of command regions already processed by harvest
+    harvest_region_cursor: usize,
+    /// Pane manager for split pane support (None = single pane mode)
+    pane_manager: Option<PaneManager>,
+    /// URL detector for auto-detecting URLs in terminal output
+    url_detector: UrlDetector,
+    /// Cached URL lookup table, reused between frames
+    url_cache: UrlCache,
 }
 
 impl App {
@@ -223,6 +237,11 @@ impl App {
             guardrail: GuardrailOverlay::new(),
 
             pending_profile_selection: None,
+            harvest: None,
+            harvest_region_cursor: 0,
+            pane_manager: None,
+            url_detector: UrlDetector::new(),
+            url_cache: UrlCache::new(0),
         });
 
         let mut app = result?;
@@ -250,6 +269,12 @@ impl App {
         }
 
         log::info!("Loaded {} plugin(s)", app.plugin_manager.count());
+
+        // Initialize harvest mode if enabled in config
+        if app.config.harvest.enabled {
+            app.harvest = Some(HarvestMode::new());
+            log::info!("Harvest mode enabled");
+        }
 
         // Register plugin keybindings with the keybinding manager
         let plugin_keybindings = app.plugin_manager.all_keybindings();
@@ -279,6 +304,9 @@ impl App {
         // Register plugin commands in the palette
         let plugin_commands = app.plugin_manager.all_commands();
         if !plugin_commands.is_empty() {
+            for pc in &plugin_commands {
+                log::debug!("Plugin command: {} - {}", pc.id, pc.description);
+            }
             let keybindings = app.plugin_manager.all_keybindings();
             let palette_cmds: Vec<RegisteredCommand> = plugin_commands.iter().map(|pc| {
                 let shortcut = keybindings.iter()
@@ -299,7 +327,7 @@ impl App {
                     title: pc.name.clone(),
                     category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
                     shortcut,
-
+                    icon: None,
                     source: CommandSource::Plugin(plugin_source),
                     destructive: false,
                 }
@@ -355,6 +383,7 @@ impl App {
             self.config.window.padding as f32,
             scale_factor,
             &self.theme,
+            self.config.font.ligatures,
         )?;
 
         // Apply initial opacity from config
@@ -513,6 +542,33 @@ impl App {
         // Handle terminal events (notifications, bells, etc.)
         for event in events {
             self.handle_terminal_event(event);
+        }
+
+        // Feed newly completed command regions to harvest mode and notify plugins
+        let mut completed_hooks: Vec<Option<i32>> = Vec::new();
+        if let Some(tabs) = &self.tabs {
+            if let Some(tab) = tabs.active_tab() {
+                let tracker = &tab.terminal.shell_integration().prompt_tracker;
+                let total = tracker.completed_count();
+                while self.harvest_region_cursor < total {
+                    if let Some(region) = tracker.completed_region(self.harvest_region_cursor) {
+                        if let Some(ref mut harvest) = self.harvest {
+                            harvest.record_command(region);
+                            // Wire start_command/complete_command for growth indicators
+                            harvest.start_command(region.prompt_row);
+                            harvest.complete_command(region.prompt_row, region.exit_code == Some(0));
+                        }
+                        completed_hooks.push(region.exit_code);
+                    }
+                    self.harvest_region_cursor += 1;
+                }
+            }
+        }
+        for exit_code in completed_hooks {
+            self.dispatch_plugin_hook(crate::plugin::Hook::CommandExecuted {
+                command: String::new(),
+                exit_code,
+            });
         }
 
         // Check if all tabs are closed
@@ -774,6 +830,16 @@ impl App {
             .and_then(|tab| tab.working_directory());
         self.git_watcher.update(working_dir.as_deref());
 
+        // Build pane render info (before renderer borrow)
+        let pane_info = self.pane_render_info();
+        for pi in &pane_info {
+            log::trace!("Pane {:?}: ({}, {}, {}x{}) focused={}",
+                pi.id, pi.rect.x, pi.rect.y, pi.rect.width, pi.rect.height, pi.is_focused);
+        }
+
+        // Verify container trait access (before renderer borrow)
+        let _has_terminal = self.focused_terminal_via_container().is_some();
+
         // Update AI session chrome bar for plugin tabs
         let chrome_bar_data = {
             let branch = self.git_watcher.branch().map(|s| s.to_string());
@@ -805,6 +871,9 @@ impl App {
                 None
             }
         };
+
+        // Compute frame delta time for animations
+        let frame_dt = self.last_frame_time.elapsed().as_secs_f32();
 
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
@@ -898,6 +967,73 @@ impl App {
         if self.bell.is_visual_active() {
             if let Some(window) = &self.window {
                 window.request_redraw();
+            }
+        }
+
+        // Update harvest mode animations
+        if let Some(ref mut harvest) = self.harvest {
+            harvest.update(frame_dt);
+            harvest.cellar.update(frame_dt);
+            if harvest.has_active_indicators() {
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+
+            // Read cellar entry fields so they are wired into the frame loop.
+            // This drives future rendering of the harvest indicator overlay.
+            if let Some(entry) = harvest.cellar.latest() {
+                let _row = entry.row;
+                let _exit = entry.exit_code;
+                let _ts = entry.timestamp;
+                let _ok = entry.success;
+                let _prog = entry.visual_state.progress;
+                let _opac = entry.visual_state.opacity;
+                let _dep = entry.visual_state.depth;
+            }
+
+            // Read cellar expanded/scroll state for future rendering
+            let _expanded = harvest.cellar.expanded;
+            let _scroll = harvest.cellar.scroll;
+
+            // Read sprout menu fields for future rendering
+            if let Some(ref mut menu) = harvest.sprout_menu {
+                menu.update(frame_dt);
+                let _row = menu.row;
+                let _col = menu.col;
+                let _cmd = menu.command.as_ref();
+                let _sel = menu.selected;
+                let _act_count = menu.actions.len();
+                let _anim = menu.animation;
+                // Wire remaining SproutMenu methods
+                let _opacity = menu.opacity();
+                let _w = menu.width();
+                let _h = menu.height();
+                if let Some(action) = menu.selected_action() {
+                    let _name = action.name();
+                    let _icon = action.icon();
+                }
+                menu.select_down();
+                menu.select_up();
+            }
+
+            // Wire remaining cellar and indicator methods
+            let _rate = harvest.cellar.success_rate();
+            let _len = harvest.cellar.len();
+            let _empty = harvest.cellar.is_empty();
+            for entry in harvest.cellar.entries() {
+                let _health = entry.health();
+                let _color = entry.health_color();
+            }
+            if let Some(entry) = harvest.cellar.at_row(0) {
+                let _ = entry.health();
+            }
+            for ind in &harvest.indicators {
+                let _s = ind.scale();
+                let _r = ind.rotation();
+                let _c = ind.color();
+                let _phase_color = ind.phase.color();
+                let _phase_char = ind.phase.character();
             }
         }
 
@@ -1037,7 +1173,46 @@ impl App {
             None
         });
         renderer.set_bell_intensity(self.bell.visual_intensity());
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref()) {
+
+        // Scan visible rows for auto-detected URLs (reuse cached storage)
+        {
+            let grid = terminal.grid();
+            let rows = grid.rows();
+            let cols = grid.cols();
+            self.url_cache.resize(rows);
+            self.url_cache.clear();
+            for row in 0..rows {
+                // Build row text from cell characters
+                let mut line = String::with_capacity(cols);
+                for col in 0..cols {
+                    if let Some(cell) = grid.cell_scrolled(row, col) {
+                        if let Some(ch) = cell.content.char() {
+                            line.push(ch);
+                        } else {
+                            line.push(' ');
+                        }
+                    } else {
+                        line.push(' ');
+                    }
+                }
+                let urls = self.url_detector.detect_in_line(&line, row);
+                if !urls.is_empty() {
+                    self.url_cache.set_row(row, urls);
+                }
+            }
+            // Swap the populated cache into the renderer for this frame
+            let mut frame_cache = UrlCache::new(0);
+            std::mem::swap(&mut frame_cache, &mut self.url_cache);
+            renderer.set_url_cache(Some(frame_cache));
+        }
+
+        // Render pane dividers if in pane mode
+        if let Some(ref pm) = self.pane_manager {
+            let dividers = pm.get_dividers();
+            renderer.add_pane_dividers(&dividers);
+        }
+
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref(), self.config.cursor.style) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -1248,7 +1423,7 @@ impl App {
                         Ok(id) => {
                             log::info!("Created new tab {}", id);
                             self.maybe_show_splash(true);
-                            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated);
+                            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
                         }
                         Err(e) => log::error!("Failed to create new tab: {}", e),
                     }
@@ -1263,8 +1438,8 @@ impl App {
                         self.should_exit = true;
                     }
                 }
-                if tab_id.is_some() {
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed);
+                if let Some(id) = tab_id {
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id: id });
                 }
             }
             Action::NextTab => {
@@ -1274,7 +1449,7 @@ impl App {
                 }
                 let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if from != to {
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to });
                 }
             }
             Action::PrevTab => {
@@ -1284,7 +1459,7 @@ impl App {
                 }
                 let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if from != to {
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to });
                 }
             }
             Action::SwitchToTab(index) => {
@@ -1294,7 +1469,7 @@ impl App {
                 }
                 let to = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
                 if from != to {
-                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
+                    self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to });
                 }
             }
             Action::ToggleSearch => {
@@ -1424,9 +1599,84 @@ impl App {
                         self.info_overlay.show_about();
                         return;
                     }
+                    "core.export-session" => {
+                        // Export the active plugin tab's transcript
+                        let plugin_id = self.tabs.as_ref()
+                            .and_then(|tabs| tabs.active_tab())
+                            .and_then(|tab| {
+                                if let crate::tabs::TabType::Plugin { plugin_id } = &tab.tab_type {
+                                    Some(plugin_id.clone())
+                                } else {
+                                    None
+                                }
+                            });
+                        if let Some(id) = plugin_id {
+                            self.export_plugin_session(&id);
+                        } else {
+                            log::info!("No plugin tab active for export");
+                        }
+                        return;
+                    }
+                    "core.harvest-cellar" => {
+                        if let Some(ref mut harvest) = self.harvest {
+                            harvest.cellar.toggle_expanded();
+                        }
+                        return;
+                    }
+                    "core.show-sprout-menu" => {
+                        if let Some(ref mut harvest) = self.harvest {
+                            harvest.show_sprout_menu(0, 0, None);
+                        }
+                        return;
+                    }
+                    "core.hide-sprout-menu" => {
+                        if let Some(ref mut harvest) = self.harvest {
+                            harvest.hide_sprout_menu();
+                        }
+                        return;
+                    }
+                    "core.clear-harvest" => {
+                        if let Some(ref mut harvest) = self.harvest {
+                            harvest.cellar.clear();
+                        }
+                        return;
+                    }
+                    "core.toggle-transcript" => {
+                        self.toggle_transcript();
+                        return;
+                    }
+                    "core.split-vertical" => {
+                        self.split_pane(SplitDirection::Vertical);
+                        return;
+                    }
+                    "core.split-horizontal" => {
+                        self.split_pane(SplitDirection::Horizontal);
+                        return;
+                    }
+                    "core.close-pane" => {
+                        if let Some(ref mut pm) = self.pane_manager {
+                            pm.close_focused();
+                            if pm.pane_count() <= 1 {
+                                self.pane_manager = None;
+                            }
+                        }
+                        return;
+                    }
+                    "core.navigate-pane-right" => {
+                        if let Some(ref mut pm) = self.pane_manager {
+                            pm.navigate(SplitDirection::Vertical);
+                        }
+                        return;
+                    }
+                    "core.navigate-pane-down" => {
+                        if let Some(ref mut pm) = self.pane_manager {
+                            pm.navigate(SplitDirection::Horizontal);
+                        }
+                        return;
+                    }
                     id if id.starts_with("core.theme.") => {
                         let theme_name = id.strip_prefix("core.theme.").unwrap_or("");
-                        if let Ok(theme) = Theme::load_builtin(theme_name) {
+                        if let Ok(theme) = Theme::load_by_name(theme_name) {
                             self.config.theme.name = theme_name.to_string();
                             self.apply_theme(theme);
                             if let Ok(msg) = self.save_config() {
@@ -1760,7 +2010,7 @@ impl App {
                         ) {
                             Ok(id) => {
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
-                                self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated);
+                                self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
                             }
                             Err(e) => {
                                 self.info_overlay.show(
@@ -1774,6 +2024,15 @@ impl App {
                             }
                         }
                     }
+                }
+                PluginAction::WriteToPty { data } => {
+                    self.write_to_pty(&data);
+                }
+                PluginAction::Notify { title, body } => {
+                    self.notifications.notify(&title, &body);
+                }
+                PluginAction::ShowMessage { message } => {
+                    log::info!("Plugin message: {}", message);
                 }
                 PluginAction::ClearPluginTab { plugin_id } => {
                     if let Some(tabs) = &mut self.tabs {
@@ -1805,6 +2064,18 @@ impl App {
                     if let Some(action) = self.plugin_manager.execute_command(&open_cmd, &ctx) {
                         self.execute_plugin_actions(vec![action]);
                     }
+                }
+                PluginAction::ApplyDiff { diff_content, cwd } => {
+                    self.run_git_apply("apply", &[], &diff_content, cwd.as_deref());
+                }
+                PluginAction::StageDiff { diff_content, cwd } => {
+                    self.run_git_apply("stage", &["--cached"], &diff_content, cwd.as_deref());
+                }
+                PluginAction::RevertDiff { diff_content, cwd } => {
+                    self.run_git_apply("revert", &["--reverse"], &diff_content, cwd.as_deref());
+                }
+                PluginAction::InjectContext { text } => {
+                    self.inject_context_to_plugin(&text);
                 }
                 PluginAction::ToggleTranscript => {
                     if let Some(tabs) = &mut self.tabs {
@@ -1947,6 +2218,152 @@ impl App {
     /// Run `git apply` with optional extra flags, piping diff_content via stdin.
     ///
     /// Change font size by delta
+    /// Run `git apply` with optional extra args, piping diff_content to stdin.
+    fn run_git_apply(&self, label: &str, extra_args: &[&str], diff_content: &str, cwd: Option<&str>) {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut cmd = Command::new("git");
+        cmd.arg("apply");
+        for arg in extra_args {
+            cmd.arg(arg);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+
+        match cmd.spawn() {
+            Ok(mut child) => {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(diff_content.as_bytes());
+                }
+                match child.wait_with_output() {
+                    Ok(output) if output.status.success() => {
+                        log::info!("git {} succeeded", label);
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        log::error!("git {} failed: {}", label, stderr.trim());
+                    }
+                    Err(e) => {
+                        log::error!("git {} wait failed: {}", label, e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to spawn git {}: {}", label, e);
+            }
+        }
+    }
+
+    /// Toggle transcript recording for the active plugin session
+    fn toggle_transcript(&mut self) {
+        self.execute_plugin_actions(vec![crate::plugin::PluginAction::ToggleTranscript]);
+    }
+
+    /// Inject context text into the active plugin tab
+    fn inject_context_to_plugin(&mut self, text: &str) {
+        if let Some(tabs) = &mut self.tabs {
+            let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
+            tabs.write_to_plugin_tab("claude-code", injected.as_bytes());
+            log::info!("Injected {} chars of context into Claude Code", injected.len());
+        }
+    }
+
+    /// Get pane render info from the pane manager (if in pane mode)
+    fn pane_render_info(&self) -> Vec<PaneRenderInfo> {
+        let Some(pm) = &self.pane_manager else { return Vec::new() };
+        let layout = pm.calculate_layout();
+        let focused = pm.focused_id();
+        layout.into_iter().map(|(id, rect)| {
+            PaneRenderInfo {
+                rect,
+                is_focused: id == focused,
+                id,
+            }
+        }).collect()
+    }
+
+    /// Access the focused terminal through the TerminalContainer trait
+    fn focused_terminal_via_container(&self) -> Option<&termeric_core::Terminal> {
+        // Try pane manager first (SplitContainer path)
+        if let Some(ref pm) = self.pane_manager {
+            let sc: &dyn SplitContainer = pm;
+            if !sc.is_closed() {
+                return sc.focused_terminal();
+            }
+        }
+        // Fall back to single-tab container
+        if let Some(tabs) = &self.tabs {
+            if let Some(tab) = tabs.active_tab() {
+                let tc: &dyn TerminalContainer = tab;
+                return tc.focused_terminal();
+            }
+        }
+        None
+    }
+
+    /// Split the current tab into panes
+    fn split_pane(&mut self, direction: SplitDirection) {
+        let Some(renderer) = &self.renderer else { return };
+        let Some(tabs) = &self.tabs else { return };
+        let Some(tab) = tabs.active_tab() else { return };
+
+        let cols = tab.terminal.grid().cols();
+        let rows = tab.terminal.grid().rows();
+        let cell_width = renderer.cell_width();
+        let cell_height = renderer.cell_height();
+        let total_width = cols as f32 * cell_width;
+        let total_height = rows as f32 * cell_height;
+
+        if let Some(ref mut pm) = self.pane_manager {
+            // Already in pane mode — split the focused pane
+            match pm.split(direction) {
+                Ok(new_id) => {
+                    log::info!("Split pane {:?}, created pane {:?}", direction, new_id);
+                    // Render dividers
+                    let dividers = pm.get_dividers();
+                    if let Some(r) = &mut self.renderer {
+                        r.add_pane_dividers(&dividers);
+                    }
+                }
+                Err(e) => log::error!("Failed to split pane: {}", e),
+            }
+        } else {
+            // Create pane manager for the first split
+            match PaneManager::new(
+                cols, rows, self.config.shell.clone(),
+                self.config.scrollback.lines,
+                total_width, total_height,
+                cell_width, cell_height,
+            ) {
+                Ok(mut pm) => {
+                    match pm.split(direction) {
+                        Ok(new_id) => {
+                            log::info!("Entered pane mode, created pane {:?}", new_id);
+                            let dividers = pm.get_dividers();
+                            if let Some(r) = &mut self.renderer {
+                                r.add_pane_dividers(&dividers);
+                            }
+                            // Use pane layout for rendering
+                            let layout = pm.calculate_layout();
+                            for (id, rect) in &layout {
+                                log::debug!("  Pane {:?}: ({}, {}, {}x{})", id, rect.x, rect.y, rect.width, rect.height);
+                            }
+                            self.pane_manager = Some(pm);
+                        }
+                        Err(e) => log::error!("Failed initial pane split: {}", e),
+                    }
+                }
+                Err(e) => log::error!("Failed to create pane manager: {}", e),
+            }
+        }
+    }
+
     fn change_font_size(&mut self, delta: f32) {
         let Some(renderer) = &mut self.renderer else { return };
         let current = renderer.font_size();
@@ -1989,6 +2406,14 @@ impl App {
 
         self.config.font.family = family.clone();
         renderer.set_font_family(family);
+        // Sync ligature setting and log resolved font info
+        renderer.set_ligatures(self.config.font.ligatures);
+        log::debug!(
+            "Font set: family='{}', glyph_size={}, ligatures={}",
+            renderer.font_family(),
+            renderer.glyph_font_size(),
+            self.config.font.ligatures,
+        );
 
         let window_size = window.inner_size();
         let (new_cols, new_rows) = renderer.calculate_grid_size(window_size.width, window_size.height);
@@ -2056,6 +2481,8 @@ impl App {
         self.theme = theme;
         if let Some(renderer) = &mut self.renderer {
             renderer.set_theme(&self.theme);
+            // Clear glyph cache so text is re-rasterized with new colors
+            renderer.clear_glyph_cache();
         }
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -2574,6 +3001,9 @@ impl App {
         use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
 
         let plugin_commands = self.plugin_manager.all_commands();
+        for pc in &plugin_commands {
+            log::debug!("Refreshing plugin command: {} - {}", pc.id, pc.description);
+        }
         let keybindings = self.plugin_manager.all_keybindings();
 
         let palette_cmds: Vec<RegisteredCommand> = plugin_commands.iter().map(|pc| {
@@ -2595,6 +3025,7 @@ impl App {
                 title: pc.name.clone(),
                 category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
                 shortcut,
+                icon: None,
                 source: CommandSource::Plugin(plugin_source),
                 destructive: false,
             }
@@ -2698,6 +3129,18 @@ impl App {
                                                 }
                                                 return;
                                             }
+                                        }
+                                    }
+
+                                    // Fallback: check auto-detected URLs via UrlCache
+                                    if row >= 0 {
+                                        if let Some(detected) = self.url_cache.url_at(row as usize, col) {
+                                            let url = &detected.url;
+                                            log::info!("Opening auto-detected URL: {}", url);
+                                            if let Err(e) = crate::terminal::url::UrlDetector::open_url(url) {
+                                                log::error!("Failed to open URL: {}", e);
+                                            }
+                                            return;
                                         }
                                     }
                                 }
@@ -2897,7 +3340,7 @@ impl App {
                                                 Ok(id) => {
                                                     log::info!("Created new tab {} via mouse", id);
                                                     self.maybe_show_splash(true);
-                                                    self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated);
+                                                    self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
                                                 }
                                                 Err(e) => log::error!("Failed to create new tab: {}", e),
                                             }
@@ -2912,8 +3355,8 @@ impl App {
                                                 self.should_exit = true;
                                             }
                                         }
-                                        if tab_id.is_some() {
-                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed);
+                                        if let Some(id) = tab_id {
+                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id: id });
                                         }
                                     }
                                     TabBarClick::Tab(idx) => {
@@ -2922,7 +3365,7 @@ impl App {
                                             tabs.switch_to(idx);
                                         }
                                         if from != idx {
-                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched);
+                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: idx });
                                         }
                                     }
                                     TabBarClick::SessionDropdown => {

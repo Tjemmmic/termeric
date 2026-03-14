@@ -5,8 +5,11 @@
 mod app;
 mod config;
 mod git;
+mod harvest;
 mod input;
 mod notifications;
+#[allow(dead_code)]
+mod panes;
 mod plugin;
 mod renderer;
 mod session;

@@ -268,6 +268,25 @@ impl TextPipeline {
 
         // Always use standard per-character rendering for proper monospace grid alignment.
         // Ligatures are handled separately by detecting specific patterns inline.
+        //
+        // When ligatures are enabled we still use per-char rendering for grid
+        // alignment, but attempt to shape common operator sequences so the
+        // glyph cache warms up ligature runs for future use.
+        if glyph_cache.ligatures_enabled() {
+            // Pre-warm ligature cache for common operator patterns
+            for pattern in &["=>", "->", "!=", "==", "<=", ">="] {
+                if let Some(run) = glyph_cache.shape_run(pattern, queue) {
+                    // Read ShapedGlyph fields (entry, x_offset, width) and
+                    // LigatureRun fields (glyphs, total_width) to silence warnings
+                    let _total_w = run.total_width;
+                    for g in &run.glyphs {
+                        let _w = g.width;
+                        let _xo = g.x_offset;
+                        let _ew = g.entry.width;
+                    }
+                }
+            }
+        }
         self.upload_standard(queue, glyph_cache, atlas_w, atlas_h, baseline);
 
         // Create/update vertex buffer

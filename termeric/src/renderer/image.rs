@@ -21,7 +21,11 @@ pub struct ImageVertex {
 struct GpuImage {
     #[allow(dead_code)]
     texture: Texture,
+    #[allow(dead_code)]
+    view: TextureView,
     bind_group: BindGroup,
+    width: u32,
+    height: u32,
 }
 
 /// Image rendering pipeline
@@ -245,7 +249,10 @@ impl ImagePipeline {
 
         self.images.insert(image.id, GpuImage {
             texture,
+            view,
             bind_group,
+            width: image.width,
+            height: image.height,
         });
     }
 
@@ -303,6 +310,34 @@ impl ImagePipeline {
             contents: bytemuck::cast_slice(&indices),
             usage: BufferUsages::INDEX,
         }));
+    }
+
+    /// Remove an image from the GPU
+    pub fn remove_image(&mut self, id: ImageId) {
+        self.images.remove(&id);
+    }
+
+    /// Check if an image is loaded
+    pub fn has_image(&self, id: ImageId) -> bool {
+        self.images.contains_key(&id)
+    }
+
+    /// Get the pixel dimensions of a loaded image, or `None` if not uploaded.
+    pub fn image_dimensions(&self, id: ImageId) -> Option<(u32, u32)> {
+        self.images.get(&id).map(|img| (img.width, img.height))
+    }
+
+    /// Remove images that are no longer referenced by any active placement.
+    ///
+    /// `active_ids` is the set of image IDs that are still in use.
+    pub fn gc_images(&mut self, active_ids: &[ImageId]) {
+        let stale: Vec<ImageId> = self.images.keys()
+            .filter(|id| !active_ids.contains(id))
+            .copied()
+            .collect();
+        for id in stale {
+            self.remove_image(id);
+        }
     }
 
     /// Draw all queued images

@@ -28,6 +28,8 @@ pub struct RegisteredCommand {
     pub category: String,
     /// Human-readable shortcut (e.g., "Ctrl+T")
     pub shortcut: Option<String>,
+    /// Unicode icon character
+    pub icon: Option<char>,
     /// Where this command came from
     pub source: CommandSource,
     /// Whether this command is destructive (amber highlight)
@@ -83,6 +85,7 @@ pub struct PaletteEntryInfo {
     pub title: String,
     pub category: String,
     pub shortcut: Option<String>,
+    pub icon: Option<char>,
     pub destructive: bool,
     pub match_positions: Vec<usize>,
 }
@@ -260,6 +263,7 @@ impl CommandPalette {
                     title: cmd.title.clone(),
                     category: cmd.category.clone(),
                     shortcut: cmd.shortcut.clone(),
+                    icon: cmd.icon,
                     destructive: cmd.destructive,
                     match_positions: e.match_positions.clone(),
                 }
@@ -375,7 +379,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "New Tab".into(),
             category: "Core".into(),
             shortcut: Some("Ctrl+Shift+T".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -384,7 +388,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Close Tab".into(),
             category: "Core".into(),
             shortcut: Some("Ctrl+Shift+W".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: true,
         },
@@ -393,7 +397,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Next Tab".into(),
             category: "Core".into(),
             shortcut: Some("Ctrl+Tab".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -402,7 +406,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Previous Tab".into(),
             category: "Core".into(),
             shortcut: Some("Ctrl+Shift+Tab".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -412,7 +416,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Find".into(),
             category: "Search".into(),
             shortcut: Some("Ctrl+Shift+F".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -422,7 +426,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Open Settings".into(),
             category: "Config".into(),
             shortcut: Some("Ctrl+,".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -431,7 +435,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Save Configuration".into(),
             category: "Config".into(),
             shortcut: None,
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -440,7 +444,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Reload Configuration".into(),
             category: "Config".into(),
             shortcut: None,
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -449,7 +453,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Reset Configuration to Defaults".into(),
             category: "Config".into(),
             shortcut: None,
-
+            icon: None,
             source: CommandSource::Core,
             destructive: true,
         },
@@ -459,7 +463,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Session Manager".into(),
             category: "Sessions".into(),
             shortcut: None,
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -469,7 +473,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Configure Plugins".into(),
             category: "Config".into(),
             shortcut: None,
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -479,7 +483,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Show Version".into(),
             category: "Help".into(),
             shortcut: None,
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -488,7 +492,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "About Termeric".into(),
             category: "Help".into(),
             shortcut: None,
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -498,7 +502,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Increase Font Size".into(),
             category: "Font".into(),
             shortcut: Some("Ctrl+=".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -507,7 +511,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Decrease Font Size".into(),
             category: "Font".into(),
             shortcut: Some("Ctrl+-".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -516,7 +520,17 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Reset Font Size".into(),
             category: "Font".into(),
             shortcut: Some("Ctrl+0".into()),
-
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        // ── Export ──
+        RegisteredCommand {
+            id: "core.export-session".into(),
+            title: "Export Session".into(),
+            category: "Sessions".into(),
+            shortcut: None,
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -526,7 +540,7 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Copy Selection".into(),
             category: "Core".into(),
             shortcut: Some("Ctrl+Shift+C".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
@@ -535,11 +549,106 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: "Paste from Clipboard".into(),
             category: "Core".into(),
             shortcut: Some("Ctrl+Shift+V".into()),
-
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         },
     ];
+
+    // ── Harvest ──
+    commands.push(RegisteredCommand {
+        id: "core.harvest-cellar".into(),
+        title: "Show Harvest Cellar".into(),
+        category: "Harvest".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+    commands.push(RegisteredCommand {
+        id: "core.show-sprout-menu".into(),
+        title: "Show Sprout Menu".into(),
+        category: "Harvest".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+    commands.push(RegisteredCommand {
+        id: "core.hide-sprout-menu".into(),
+        title: "Hide Sprout Menu".into(),
+        category: "Harvest".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+    commands.push(RegisteredCommand {
+        id: "core.clear-harvest".into(),
+        title: "Clear Harvest History".into(),
+        category: "Harvest".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: true,
+    });
+    // ── Transcript ──
+    commands.push(RegisteredCommand {
+        id: "core.toggle-transcript".into(),
+        title: "Toggle Transcript Recording".into(),
+        category: "Sessions".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+
+    // ── Panes ──
+    commands.push(RegisteredCommand {
+        id: "core.split-vertical".into(),
+        title: "Split Pane Right".into(),
+        category: "Panes".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+    commands.push(RegisteredCommand {
+        id: "core.split-horizontal".into(),
+        title: "Split Pane Down".into(),
+        category: "Panes".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+    commands.push(RegisteredCommand {
+        id: "core.close-pane".into(),
+        title: "Close Pane".into(),
+        category: "Panes".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+    commands.push(RegisteredCommand {
+        id: "core.navigate-pane-right".into(),
+        title: "Navigate Pane Right".into(),
+        category: "Panes".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
+    commands.push(RegisteredCommand {
+        id: "core.navigate-pane-down".into(),
+        title: "Navigate Pane Down".into(),
+        category: "Panes".into(),
+        shortcut: None,
+        icon: None,
+        source: CommandSource::Core,
+        destructive: false,
+    });
 
     // ── Theme commands — generated dynamically from all available themes ──
     for name in crate::config::theme::Theme::list_available() {
@@ -549,7 +658,21 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             title: format!("Theme: {}", display),
             category: "Theme".into(),
             shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        });
+    }
 
+    // ── Custom themes from user's themes directory ──
+    for name in crate::config::theme::Theme::list_custom() {
+        let display = theme_display_name(&name);
+        commands.push(RegisteredCommand {
+            id: format!("core.theme.{}", name),
+            title: format!("Theme: {} (Custom)", display),
+            category: "Theme".into(),
+            shortcut: None,
+            icon: None,
             source: CommandSource::Core,
             destructive: false,
         });
@@ -695,7 +818,7 @@ mod tests {
                 title: "Open Claude Code".into(),
                 category: "AI".into(),
                 shortcut: Some("Ctrl+Shift+I".into()),
-
+                icon: None,
                 source: CommandSource::Plugin("claude-code".into()),
                 destructive: false,
             },
@@ -719,7 +842,7 @@ mod tests {
                 title: "Test Action".into(),
                 category: "Test".into(),
                 shortcut: None,
-    
+                icon: None,
                 source: CommandSource::Plugin("test".into()),
                 destructive: false,
             },

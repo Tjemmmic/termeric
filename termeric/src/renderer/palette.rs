@@ -162,6 +162,11 @@ impl Renderer {
             let highlight_color = adjust_alpha(self.ui.palette_match_highlight, anim);
 
             let mut tx = title_x;
+            // Draw icon character before label if present
+            if let Some(icon) = entry.icon {
+                self.text_pipeline.push_char(icon, tx, entry_text_y, title_color);
+                tx += cell_width * 1.5;
+            }
             for (char_idx, c) in entry.title.chars().enumerate() {
                 let color = if entry.match_positions.contains(&char_idx) {
                     highlight_color

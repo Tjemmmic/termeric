@@ -24,11 +24,16 @@ pub enum Hook {
     /// App has fully initialized (window, renderer, tabs ready)
     AppReady,
     /// A new tab was created
-    TabCreated,
+    TabCreated { tab_id: usize },
     /// A tab was closed
-    TabClosed,
+    TabClosed { tab_id: usize },
     /// The active tab changed
-    TabSwitched,
+    TabSwitched { from: usize, to: usize },
+    /// A command was executed in the terminal (from shell integration)
+    CommandExecuted {
+        command: String,
+        exit_code: Option<i32>,
+    },
     /// A plugin command was invoked (from command palette or keybinding)
     CommandInvoked { command_id: String },
 }
@@ -46,6 +51,7 @@ pub enum HookResponse {
 
 /// Actions a plugin can request the app to perform.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum PluginAction {
     /// Open a new tab running a specific program (no shell echo)
     OpenTab {
@@ -62,14 +68,28 @@ pub enum PluginAction {
         /// Additional environment variables to set for the spawned process
         env: HashMap<String, String>,
     },
+    /// Write data to the active PTY
+    WriteToPty { data: Vec<u8> },
+    /// Show a desktop notification
+    Notify { title: String, body: String },
+    /// Show a message in the command palette area
+    ShowMessage { message: String },
     /// Clear a plugin-owned tab (send Ctrl+C + clear)
     ClearPluginTab { plugin_id: String },
     /// Close all tabs of a plugin and reopen fresh
     RestartPlugin { plugin_id: String },
     /// Copy N lines from a plugin tab to clipboard
     CopyFromPluginTab { plugin_id: String, lines: usize },
+    /// Apply a detected diff to the filesystem via `git apply`
+    ApplyDiff { diff_content: String, cwd: Option<String> },
+    /// Stage a detected diff via `git apply --cached`
+    StageDiff { diff_content: String, cwd: Option<String> },
+    /// Revert a detected diff via `git apply --reverse`
+    RevertDiff { diff_content: String, cwd: Option<String> },
     /// Toggle transcript recording for the active Claude session
     ToggleTranscript,
+    /// Inject context text into the active plugin tab
+    InjectContext { text: String },
     /// List available profiles for a plugin (shows selection overlay)
     ListProfiles { plugin_id: String },
     /// Apply a named profile to the active plugin session
@@ -83,6 +103,8 @@ pub struct PluginCommand {
     pub id: String,
     /// Display name in command palette (e.g., "Open Claude Code")
     pub name: String,
+    /// Description shown in command palette
+    pub description: String,
     /// Category for grouping (e.g., "AI")
     pub category: Option<String>,
 }
@@ -184,15 +206,19 @@ mod tests {
     fn test_hook_variants() {
         let hooks = vec![
             Hook::AppReady,
-            Hook::TabCreated,
-            Hook::TabClosed,
-            Hook::TabSwitched,
+            Hook::TabCreated { tab_id: 1 },
+            Hook::TabClosed { tab_id: 1 },
+            Hook::TabSwitched { from: 0, to: 1 },
+            Hook::CommandExecuted {
+                command: "ls".to_string(),
+                exit_code: Some(0),
+            },
             Hook::CommandInvoked {
                 command_id: "test.cmd".to_string(),
             },
         ];
         // All variants should be constructible (compile-time check)
-        assert_eq!(hooks.len(), 5);
+        assert_eq!(hooks.len(), 6);
     }
 
     #[test]
@@ -206,7 +232,17 @@ mod tests {
                 plugin_id: None,
                 env: HashMap::new(),
             },
+            PluginAction::WriteToPty {
+                data: b"hello".to_vec(),
+            },
+            PluginAction::Notify {
+                title: "Title".to_string(),
+                body: "Body".to_string(),
+            },
+            PluginAction::ShowMessage {
+                message: "msg".to_string(),
+            },
         ];
-        assert_eq!(actions.len(), 1);
+        assert_eq!(actions.len(), 4);
     }
 }

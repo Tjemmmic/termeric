@@ -11,6 +11,7 @@ pub struct TextInput {
     cursor: usize,
 }
 
+#[allow(dead_code)]
 impl TextInput {
     /// Create an empty text input.
     pub fn new() -> Self {
@@ -59,7 +60,6 @@ impl TextInput {
     }
 
     /// Move cursor to the beginning.
-    #[cfg(test)]
     pub fn cursor_home(&mut self) {
         self.cursor = 0;
     }
@@ -69,20 +69,70 @@ impl TextInput {
         self.cursor = self.buffer.len();
     }
 
-}
+    /// Move cursor one character to the left.
+    /// Returns false if already at the beginning.
+    pub fn cursor_left(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        let prev = self.buffer[..self.cursor]
+            .char_indices()
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        self.cursor = prev;
+        true
+    }
 
-#[cfg(test)]
-impl TextInput {
-    fn push(&mut self, c: char) {
+    /// Move cursor one character to the right.
+    /// Returns false if already at the end.
+    pub fn cursor_right(&mut self) -> bool {
+        if self.cursor >= self.buffer.len() {
+            return false;
+        }
+        let next = self.buffer[self.cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| self.cursor + i)
+            .unwrap_or(self.buffer.len());
+        self.cursor = next;
+        true
+    }
+
+    /// Delete the character at the cursor position (forward delete).
+    /// Returns true if a character was deleted.
+    pub fn delete(&mut self) -> bool {
+        if self.cursor >= self.buffer.len() {
+            return false;
+        }
+        let next = self.buffer[self.cursor..]
+            .char_indices()
+            .nth(1)
+            .map(|(i, _)| self.cursor + i)
+            .unwrap_or(self.buffer.len());
+        self.buffer.drain(self.cursor..next);
+        true
+    }
+
+    /// Push a character to the end of the buffer.
+    pub fn push(&mut self, c: char) {
         self.buffer.push(c);
     }
 
-    fn pop(&mut self) -> Option<char> {
+    /// Pop the last character from the buffer.
+    pub fn pop(&mut self) -> Option<char> {
         let c = self.buffer.pop();
         if self.cursor > self.buffer.len() {
             self.cursor = self.buffer.len();
         }
         c
+    }
+
+    /// Take the buffer contents, leaving the input empty.
+    pub fn take(&mut self) -> String {
+        let s = std::mem::take(&mut self.buffer);
+        self.cursor = 0;
+        s
     }
 }
 
@@ -104,51 +154,6 @@ impl TextInput {
 
     fn len(&self) -> usize {
         self.buffer.len()
-    }
-
-    fn take(&mut self) -> String {
-        let s = std::mem::take(&mut self.buffer);
-        self.cursor = 0;
-        s
-    }
-
-    fn delete(&mut self) -> bool {
-        if self.cursor >= self.buffer.len() {
-            return false;
-        }
-        let next = self.buffer[self.cursor..]
-            .char_indices()
-            .nth(1)
-            .map(|(i, _)| self.cursor + i)
-            .unwrap_or(self.buffer.len());
-        self.buffer.drain(self.cursor..next);
-        true
-    }
-
-    fn cursor_left(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
-        }
-        let prev = self.buffer[..self.cursor]
-            .char_indices()
-            .last()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.cursor = prev;
-        true
-    }
-
-    fn cursor_right(&mut self) -> bool {
-        if self.cursor >= self.buffer.len() {
-            return false;
-        }
-        let next = self.buffer[self.cursor..]
-            .char_indices()
-            .nth(1)
-            .map(|(i, _)| self.cursor + i)
-            .unwrap_or(self.buffer.len());
-        self.cursor = next;
-        true
     }
 }
 

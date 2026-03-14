@@ -52,62 +52,73 @@ pub fn standard_ai_commands(prefix: &str, display_name: &str) -> Vec<PluginComma
         PluginCommand {
             id: format!("{}.open", prefix),
             name: format!("Open {}", display_name),
-
+            description: format!("Launch {} AI assistant in a new tab", display_name),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.resume", prefix),
             name: format!("{}: Resume", display_name),
+            description: format!("Resume the last {} conversation", display_name),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.copy-last", prefix),
             name: format!("{}: Copy Last Response", display_name),
+            description: format!("Copy the last lines from the {} tab", display_name),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.clear", prefix),
             name: format!("{}: Clear Session", display_name),
+            description: format!("Send Ctrl+C and clear the {} tab", display_name),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.restart", prefix),
             name: format!("{}: Restart", display_name),
+            description: format!("Close and reopen {} in the same directory", display_name),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.review-diff", prefix),
             name: format!("{}: Review Diff", display_name),
+            description: "Open the diff review overlay for detected changes".to_string(),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.copy-diff", prefix),
             name: format!("{}: Copy Diff", display_name),
+            description: "Copy the latest detected diff to clipboard".to_string(),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.insert-context", prefix),
             name: format!("{}: Insert Context...", display_name),
+            description: format!("Open context picker to assemble and inject context into {}", display_name),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.toggle-transcript", prefix),
             name: format!("{}: Toggle Transcript", display_name),
+            description: "Start or stop recording the session transcript".to_string(),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.export-session", prefix),
             name: format!("{}: Export Session", display_name),
+            description: "Export the current session as Markdown or JSONL".to_string(),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.jump-to-error", prefix),
             name: format!("{}: Jump to Last Error", display_name),
+            description: "Scroll to the last detected error in terminal output".to_string(),
             category: Some("AI".to_string()),
         },
         PluginCommand {
             id: format!("{}.select-profile", prefix),
             name: format!("{}: Select Profile", display_name),
+            description: format!("Choose a {} configuration profile", display_name),
             category: Some("AI".to_string()),
         },
     ]

@@ -11,6 +11,7 @@ mod text;
 mod rect;
 mod image;
 
+pub(crate) mod draw;
 mod chrome;
 mod git;
 mod overlays;
@@ -34,8 +35,10 @@ use wgpu::*;
 use winit::window::Window;
 use termeric_core::{Grid, Selection, Color as TermColor, CellAttrs, CellFlags};
 use crate::config::theme::Theme;
+use crate::config::CursorStyle;
 use crate::ui::settings::SettingsPanelInfo;
 use crate::terminal::search::{Search, SearchBarInfo};
+use crate::terminal::url::UrlCache;
 
 use text::TextPipeline;
 use rect::RectPipeline;
@@ -241,11 +244,13 @@ pub struct Renderer {
     chrome_bar: Option<crate::ui::claude_chrome::ChromeBarInfo>,
     /// Visual bell intensity (0.0 = off, 1.0 = full flash)
     bell_intensity: f32,
+    /// URL cache for detected URLs (auto-detected, not OSC 8)
+    url_cache: Option<UrlCache>,
 }
 
 impl Renderer {
     /// Create a new renderer for the given window
-    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme) -> Result<Self> {
+    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme, ligatures: bool) -> Result<Self> {
         let size = window.inner_size();
 
         // Create wgpu instance
@@ -305,7 +310,7 @@ impl Renderer {
 
         // Create glyph cache
         let scaled_font_size = (font_size * scale_factor).max(1.0);
-        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family)?;
+        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family, ligatures)?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
@@ -343,6 +348,7 @@ impl Renderer {
             guardrail: None,
             chrome_bar: None,
             bell_intensity: 0.0,
+            url_cache: None,
         })
     }
 
@@ -408,6 +414,26 @@ impl Renderer {
     /// Get all installed monospace font families
     pub fn get_monospace_fonts(&self) -> Vec<String> {
         self.glyph_cache.get_monospace_fonts()
+    }
+
+    /// Get current font family from the glyph cache
+    pub fn font_family(&self) -> &str {
+        self.glyph_cache.font_family()
+    }
+
+    /// Get the unscaled font size from the glyph cache
+    pub fn glyph_font_size(&self) -> f32 {
+        self.glyph_cache.font_size()
+    }
+
+    /// Enable or disable ligature rendering
+    pub fn set_ligatures(&mut self, enabled: bool) {
+        self.glyph_cache.set_ligatures(enabled);
+    }
+
+    /// Clear the glyph cache (e.g., after font changes)
+    pub fn clear_glyph_cache(&mut self) {
+        self.glyph_cache.clear(&self.queue);
     }
 
     /// Get current padding
@@ -489,8 +515,35 @@ impl Renderer {
         self.chrome_bar = info;
     }
 
+    /// Render pane dividers between split panes.
+    ///
+    /// Each divider is drawn as a thin line at the specified position.
+    pub fn add_pane_dividers(&mut self, dividers: &[crate::panes::Divider]) {
+        let divider_color = self.ui.tab_border;
+        for div in dividers {
+            if div.vertical {
+                self.rect_pipeline.push_rect(
+                    div.position, div.start,
+                    2.0, div.end - div.start,
+                    divider_color,
+                );
+            } else {
+                self.rect_pipeline.push_rect(
+                    div.start, div.position,
+                    div.end - div.start, 2.0,
+                    divider_color,
+                );
+            }
+        }
+    }
+
     pub fn set_bell_intensity(&mut self, intensity: f32) {
         self.bell_intensity = intensity;
+    }
+
+    /// Set the URL cache for auto-detected URL underlining
+    pub fn set_url_cache(&mut self, cache: Option<UrlCache>) {
+        self.url_cache = cache;
     }
 
     /// Height of the chrome bar (0 if no chrome bar is active)
@@ -510,7 +563,7 @@ impl Renderer {
     /// search_bar: optional search bar info when searching
     /// search: search state for match highlighting
     /// images: optional list of image placements and their data for Kitty graphics
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -519,7 +572,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs (inserts layer boundaries)
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette, cursor_style);
 
         // Build image render data if any
         self.build_image_data(images);
@@ -579,16 +632,32 @@ impl Renderer {
     fn build_image_data(&mut self, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>) {
         self.image_pipeline.clear();
 
-        let Some(images) = images else { return };
+        let Some(images) = images else {
+            // No active images — garbage-collect stale GPU textures
+            let empty: Vec<termeric_core::ImageId> = Vec::new();
+            self.image_pipeline.gc_images(&empty);
+            return;
+        };
 
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
         let padding = self.padding;
         let tab_bar_height = self.tab_bar_height();
 
+        // Collect active image IDs for GC
+        let active_ids: Vec<_> = images.iter().map(|(_, img)| img.id).collect();
+        self.image_pipeline.gc_images(&active_ids);
+
         for (placement, image) in images {
-            // Ensure image is uploaded to GPU
-            self.image_pipeline.upload_image(&self.device, &self.queue, image);
+            // Skip upload if already on GPU
+            if self.image_pipeline.has_image(image.id) {
+                // Use cached GPU dimensions for size calculation
+                if let Some((_gw, _gh)) = self.image_pipeline.image_dimensions(image.id) {
+                    // dimensions available — proceed with placement below
+                }
+            } else {
+                self.image_pipeline.upload_image(&self.device, &self.queue, image);
+            }
 
             // Calculate position
             let x = padding + (placement.col as f32) * cell_width + placement.x_offset as f32;
@@ -607,7 +676,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
 
@@ -807,7 +876,10 @@ impl Renderer {
                 }
 
                 // Draw hyperlink underline (only if no other underline is already drawn)
-                if cell.flags.contains(CellFlags::HYPERLINK) && !cell.attrs.has_underline() {
+                // Check both OSC 8 hyperlinks and auto-detected URLs
+                let is_hyperlink = cell.flags.contains(CellFlags::HYPERLINK);
+                let is_detected_url = self.url_cache.as_ref().map_or(false, |c| c.is_url(visual_row, col));
+                if (is_hyperlink || is_detected_url) && !cell.attrs.has_underline() {
                     // Use URL color from theme for hyperlinks
                     let link_color = apply_brightness(self.ui.url, brightness);
                     let underline_y = y + cell_height - 2.0;
@@ -827,25 +899,47 @@ impl Renderer {
 
                 // Only draw cursor if it won't overlap with command bar
                 if y + cell_height <= max_grid_y {
-                    // Bright orange cursor (turmeric core) with animated opacity and focus dimming
+                    // Cursor color with animated opacity and focus dimming
                     let cursor_color = apply_brightness(self.ui.cursor, brightness);
-                    self.rect_pipeline.push_rounded_rect(
-                        x, y,
-                        cell_width, cell_height,
-                        [cursor_color[0], cursor_color[1], cursor_color[2], cursor_opacity],
-                        2.0,
-                    );
+                    let cc = [cursor_color[0], cursor_color[1], cursor_color[2], cursor_opacity];
 
-                    // Re-render the character under cursor with cursor_text color
-                    let cursor_row = cursor.row as usize;
-                    let cursor_col = cursor.col as usize;
-                    if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
-                        if let Some(c) = cell.content.char() {
-                            if !c.is_whitespace() {
-                                let ct = apply_brightness(self.ui.cursor_text, brightness);
-                                self.text_pipeline.push_char(c, x, y,
-                                    [ct[0], ct[1], ct[2], cursor_opacity]);
+                    match cursor_style {
+                        CursorStyle::Block => {
+                            self.rect_pipeline.push_rounded_rect(
+                                x, y,
+                                cell_width, cell_height,
+                                cc,
+                                2.0,
+                            );
+
+                            // Re-render the character under cursor with cursor_text color
+                            let cursor_row = cursor.row as usize;
+                            let cursor_col = cursor.col as usize;
+                            if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
+                                if let Some(c) = cell.content.char() {
+                                    if !c.is_whitespace() {
+                                        let ct = apply_brightness(self.ui.cursor_text, brightness);
+                                        self.text_pipeline.push_char(c, x, y,
+                                            [ct[0], ct[1], ct[2], cursor_opacity]);
+                                    }
+                                }
                             }
+                        }
+                        CursorStyle::Underline => {
+                            let underline_height = 2.0_f32.max(cell_height * 0.1);
+                            self.rect_pipeline.push_rect(
+                                x, y + cell_height - underline_height,
+                                cell_width, underline_height,
+                                cc,
+                            );
+                        }
+                        CursorStyle::Beam => {
+                            let beam_width = 2.0_f32.max(cell_width * 0.1);
+                            self.rect_pipeline.push_rect(
+                                x, y,
+                                beam_width, cell_height,
+                                cc,
+                            );
                         }
                     }
                 }

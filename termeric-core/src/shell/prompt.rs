@@ -204,6 +204,16 @@ impl PromptTracker {
         })
     }
 
+    /// Get the number of completed command regions
+    pub fn completed_count(&self) -> usize {
+        self.regions.len()
+    }
+
+    /// Get a completed region by index
+    pub fn completed_region(&self, index: usize) -> Option<&CommandRegion> {
+        self.regions.get(index)
+    }
+
     /// Clear all tracking data
     pub fn clear(&mut self) {
         self.marks.clear();

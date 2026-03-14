@@ -8,6 +8,7 @@ use std::time::Instant;
 use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
+use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
 use crate::ui::claude_chrome::AiSessionState;
 use crate::session::Session;
@@ -432,6 +433,33 @@ impl Tab {
     /// Check if close animation is complete and tab should be removed
     pub fn is_close_complete(&self) -> bool {
         self.close_progress() >= 1.0
+    }
+}
+
+/// Single-terminal tab implements TerminalContainer for uniform access.
+impl TerminalContainer for Tab {
+    fn focused_terminal(&self) -> Option<&Terminal> {
+        Some(&self.terminal)
+    }
+
+    fn focused_terminal_mut(&mut self) -> Option<&mut Terminal> {
+        Some(&mut self.terminal)
+    }
+
+    fn write_input(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.write(data)
+    }
+
+    fn process_events(&mut self) -> (bool, Vec<TerminalEvent>) {
+        Tab::process_events(self)
+    }
+
+    fn resize(&mut self, cols: usize, rows: usize) -> anyhow::Result<()> {
+        Tab::resize(self, cols, rows)
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed
     }
 }
 

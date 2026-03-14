@@ -61,6 +61,16 @@ impl PluginManager {
     /// Plugins are called in registration order. Each plugin can return
     /// a [`PluginAction`] which the caller (App) should execute.
     pub fn dispatch(&mut self, hook: &Hook, ctx: &PluginContext) -> Vec<PluginAction> {
+        // Log hook-specific details for debugging
+        match hook {
+            Hook::TabCreated { tab_id } => log::trace!("Dispatching TabCreated(tab_id={})", tab_id),
+            Hook::TabClosed { tab_id } => log::trace!("Dispatching TabClosed(tab_id={})", tab_id),
+            Hook::TabSwitched { from, to } => log::trace!("Dispatching TabSwitched(from={}, to={})", from, to),
+            Hook::CommandExecuted { command, exit_code } => {
+                log::trace!("Dispatching CommandExecuted(cmd={:?}, exit={:?})", command, exit_code);
+            }
+            _ => {}
+        }
         let mut actions = Vec::new();
 
         for plugin in &mut self.plugins {
@@ -176,6 +186,7 @@ mod tests {
             vec![PluginCommand {
                 id: "tracking.test".to_string(),
                 name: "Test Command".to_string(),
+                description: "A test command".to_string(),
                 category: None,
             }]
         }
@@ -213,6 +224,7 @@ mod tests {
             vec![PluginCommand {
                 id: "action.open".to_string(),
                 name: "Open Test".to_string(),
+                description: "Open a test tab".to_string(),
                 category: Some("Test".to_string()),
             }]
         }

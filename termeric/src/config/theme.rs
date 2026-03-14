@@ -90,6 +90,39 @@ impl Theme {
         ]
     }
 
+    /// List custom theme names found in the user's themes directory.
+    ///
+    /// Scans `Config::themes_dir()` for `.toml` files and returns their
+    /// stem names (e.g., `my-theme.toml` -> `"my-theme"`).
+    pub fn list_custom() -> Vec<String> {
+        let dir = super::Config::themes_dir();
+        let mut names = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        names.push(stem.to_string());
+                    }
+                }
+            }
+        }
+        names.sort();
+        names
+    }
+
+    /// Try to load a theme by name: first check the user's custom themes
+    /// directory (`Config::themes_dir()`), then fall back to built-in themes.
+    pub fn load_by_name(name: &str) -> Result<Self> {
+        // Check custom themes directory first
+        let custom_path = super::Config::themes_dir().join(format!("{}.toml", name));
+        if custom_path.exists() {
+            return Self::load(&custom_path);
+        }
+        // Fall back to built-in
+        Self::load_builtin(name)
+    }
+
     /// Get ANSI color by index (0-15)
     pub fn ansi_color(&self, index: u8) -> Color {
         match index {

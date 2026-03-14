@@ -43,6 +43,9 @@ pub struct Config {
     /// Plugin configuration
     #[serde(default)]
     pub plugins: PluginsConfig,
+    /// Harvest mode configuration
+    #[serde(default)]
+    pub harvest: HarvestConfig,
 }
 
 /// A user-defined custom command (e.g. SSH into a box)
@@ -72,6 +75,7 @@ impl Default for Config {
             splash: SplashConfig::default(),
             commands: Vec::new(),
             plugins: PluginsConfig::default(),
+            harvest: HarvestConfig::default(),
         }
     }
 }
@@ -99,6 +103,36 @@ impl Config {
         }
     }
 
+    /// Get the themes directory path
+    pub fn themes_dir() -> PathBuf {
+        if let Some(dirs) = directories::ProjectDirs::from("", "", "termeric") {
+            dirs.config_dir().join("themes")
+        } else {
+            PathBuf::from("themes")
+        }
+    }
+}
+
+/// Harvest mode configuration
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HarvestConfig {
+    /// Enable harvest mode (command visualization)
+    pub enabled: bool,
+    /// Show growth indicators for running commands
+    pub show_indicators: bool,
+    /// Maximum number of commands to keep in history
+    pub max_history: usize,
+}
+
+impl Default for HarvestConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            show_indicators: true,
+            max_history: 100,
+        }
+    }
 }
 
 /// Shell configuration
