@@ -21,6 +21,7 @@ mod panels;
 mod search_bar;
 mod sessions;
 mod settings_render;
+mod shortcuts_render;
 mod tab_bar;
 pub mod types;
 
@@ -46,6 +47,7 @@ use rect::RectPipeline;
 
 use crate::tabs::TabInfo;
 use crate::ui::command_palette::PaletteInfo;
+use crate::ui::shortcuts_panel::ShortcutsPanelInfo;
 
 #[derive(Clone)]
 pub(crate) struct UiPalette {
@@ -583,7 +585,7 @@ impl Renderer {
     /// images: optional list of image placements and their data for Kitty graphics
     /// panes: multi-pane render data (empty = single-grid mode)
     /// harvest: optional harvest mode render info
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) -> Result<(), SurfaceError> {
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, shortcuts_panel: Option<&ShortcutsPanelInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -592,7 +594,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs (inserts layer boundaries)
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette, cursor_style, panes, harvest);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette, shortcuts_panel, cursor_style, panes, harvest);
 
         // Build image render data if any
         self.build_image_data(images);
@@ -696,7 +698,7 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, shortcuts_panel: Option<&ShortcutsPanelInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
         self.pane_dividers.clear();
@@ -902,7 +904,16 @@ impl Renderer {
             }
         }
 
-        // ── LAYER 12: Info overlay (above everything) ──
+        // ── LAYER 12: Shortcuts panel (centered modal, same tier as palette) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(sp) = shortcuts_panel {
+            if sp.animation > 0.001 {
+                self.build_shortcuts_panel(sp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 13: Info overlay (above everything) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
         if let Some(ref info) = self.info_overlay.clone() {

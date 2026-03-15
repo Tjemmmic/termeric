@@ -431,6 +431,15 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
             destructive: false,
         },
         RegisteredCommand {
+            id: "core.shortcuts".into(),
+            title: "Keyboard Shortcuts".into(),
+            category: "Config".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
             id: "core.save-config".into(),
             title: "Save Configuration".into(),
             category: "Config".into(),

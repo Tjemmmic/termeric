@@ -17,3 +17,4 @@ pub mod context_picker;
 pub mod diff_review;
 pub mod info_overlay;
 pub mod settings;
+pub mod shortcuts_panel;

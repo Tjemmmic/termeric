@@ -16,11 +16,12 @@ use termeric_core::TerminalEvent;
 
 use crate::notifications::{Bell, BellConfig, Notifications};
 use crate::config::{Config, SplashMode};
-use crate::input::{Action, MouseState, screen_to_grid};
+use crate::input::{Action, MouseState, ShortcutRegistry, screen_to_grid};
 use crate::input::keybindings::{KeyAction, KeyBindingManager};
 use crate::renderer::Renderer;
 use crate::terminal::search::Search;
 use crate::ui::settings::{SettingsPanel, SettingsAction};
+use crate::ui::shortcuts_panel::{ShortcutsPanel, ShortcutsAction};
 use crate::terminal::splash::show_splash;
 use self::state::AppState;
 use crate::tabs::TabManager;
@@ -109,7 +110,9 @@ pub struct App {
     notifications: Notifications,
     /// Bell handler (visual/audio bell)
     bell: Bell,
-    /// Custom keybinding manager
+    /// Unified shortcut registry (all bindable actions)
+    shortcut_registry: ShortcutRegistry,
+    /// Plugin/custom keybinding manager (SendText, RunCommand, PluginCommand)
     keybinding_manager: KeyBindingManager,
     /// Application runtime state (for first boot tracking, etc.)
     app_state: AppState,
@@ -141,6 +144,8 @@ pub struct App {
     plugin_manager: PluginManager,
     /// Command palette
     command_palette: CommandPalette,
+    /// Shortcuts panel (standalone centered modal)
+    shortcuts_panel: ShortcutsPanel,
     /// Info overlay (About/Version)
     info_overlay: InfoOverlay,
     /// Diff review overlay
@@ -180,7 +185,11 @@ impl App {
         // Initialize clipboard (may fail on some systems)
         let clipboard = arboard::Clipboard::new().ok();
 
-        // Initialize keybinding manager with custom bindings from config
+        // Initialize unified shortcut registry with defaults + user overrides
+        let mut shortcut_registry = ShortcutRegistry::new();
+        shortcut_registry.apply_overrides(&config.shortcuts);
+
+        // Initialize plugin/custom keybinding manager
         let mut keybinding_manager = KeyBindingManager::new();
         keybinding_manager.load(config.keybindings.clone());
 
@@ -217,6 +226,7 @@ impl App {
             search_cursor_pos: 0,
             notifications: Notifications::new(),
             bell,
+            shortcut_registry,
             keybinding_manager,
             app_state: AppState::load(),
             session_dropdown_open: false,
@@ -233,6 +243,7 @@ impl App {
             tab_bar_hover_progress: 0.0,
             plugin_manager: PluginManager::new(),
             command_palette: CommandPalette::new(),
+            shortcuts_panel: ShortcutsPanel::new(),
             info_overlay: InfoOverlay::new(),
             diff_review: DiffReviewOverlay::new(),
             context_picker: ContextPicker::new(),
@@ -946,7 +957,7 @@ impl App {
 
         // Build settings panel info if visible
         let settings_info = if self.settings_panel.is_visible() {
-            Some(self.settings_panel.build_info(&self.config))
+            Some(self.settings_panel.build_info(&self.config, &self.shortcut_registry))
         } else {
             None
         };
@@ -1041,6 +1052,19 @@ impl App {
         // Build palette info if active or animating
         let palette_info = if self.command_palette.is_active() {
             Some(self.command_palette.build_info())
+        } else {
+            None
+        };
+
+        // Update shortcuts panel animation
+        if self.shortcuts_panel.update_animation() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        // Build shortcuts panel info if visible
+        let shortcuts_info = if self.shortcuts_panel.is_visible() {
+            Some(self.shortcuts_panel.build_info(&self.shortcut_registry))
         } else {
             None
         };
@@ -1277,7 +1301,7 @@ impl App {
             }
         });
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref(), self.config.cursor.style, &pane_render_data, harvest_render_info.as_ref()) {
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref(), shortcuts_info.as_ref(), self.config.cursor.style, &pane_render_data, harvest_render_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -1401,39 +1425,24 @@ impl App {
         (self.cursor_display_col, self.cursor_display_row)
     }
 
-    /// Handle a custom keybinding action
-    /// Returns true if the action was handled
+    /// Handle a plugin/custom keybinding action (SendText, RunCommand, PluginCommand).
+    /// Returns true if the action was handled.
     fn handle_key_action(&mut self, key_action: KeyAction) -> bool {
-        // Try to convert to internal Action first
+        // Try to convert to internal Action first (PluginCommand)
         if let Some(action) = key_action.to_action() {
             self.handle_action(action);
             return true;
         }
 
-        // Handle special actions that don't map to Action
         match key_action {
             KeyAction::SendText { text } => {
                 self.write_to_pty(text.as_bytes());
                 true
             }
-            KeyAction::CommandPalette => {
-                // Command palette removed — no-op
-                false
-            }
             KeyAction::RunCommand { command } => {
-                // TODO: Implement running command in new pane when split panes are ready
                 log::info!("Run command requested: {}", command);
                 false
             }
-            // Split pane actions - will be handled when implemented
-            KeyAction::SplitVertical
-            | KeyAction::SplitHorizontal
-            | KeyAction::NavigatePane { .. }
-            | KeyAction::ClosePane => {
-                log::debug!("Split pane action not yet implemented");
-                false
-            }
-            // These should have been handled by to_action()
             _ => false,
         }
     }
@@ -1605,6 +1614,19 @@ impl App {
                     window.request_redraw();
                 }
             }
+            Action::SplitVertical | Action::SplitHorizontal | Action::NavigatePane(_) | Action::ClosePane => {
+                log::debug!("Split pane action not yet implemented");
+            }
+            Action::ClearScrollback => {
+                if let Some(terminal) = self.active_terminal_mut() {
+                    terminal.grid_mut().clear_scrollback();
+                }
+            }
+            Action::ResetTerminal => {
+                if let Some(terminal) = self.active_terminal_mut() {
+                    terminal.reset();
+                }
+            }
         }
         true
     }
@@ -1620,6 +1642,13 @@ impl App {
                     "core.prev-tab" => Action::PrevTab,
                     "core.find" => Action::ToggleSearch,
                     "core.settings" => Action::ToggleSettings,
+                    "core.shortcuts" => {
+                        self.shortcuts_panel.toggle();
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
                     "core.save-config" => {
                         if let Ok(msg) = self.save_config() {
                             log::info!("{}", msg);
@@ -2860,6 +2889,16 @@ impl App {
         }
     }
 
+    /// Apply a shortcuts panel action
+    fn apply_shortcuts_action(&mut self, action: ShortcutsAction) {
+        match action {
+            ShortcutsAction::SetShortcut { action, chord } => {
+                self.shortcut_registry.set_binding(action, chord);
+            }
+            ShortcutsAction::None => {}
+        }
+    }
+
     /// Copy selection to clipboard
     fn copy_selection(&mut self) {
         let Some(tabs) = &self.tabs else { return };
@@ -3204,6 +3243,7 @@ impl App {
         if let Some(renderer) = &self.renderer {
             config.font.size = renderer.font_size();
         }
+        config.shortcuts = self.shortcut_registry.user_overrides();
 
         let config_content = toml::to_string_pretty(&config)?;
 
@@ -3627,6 +3667,7 @@ impl App {
                                 position.0 as f32,
                                 position.1 as f32,
                                 &self.config,
+                                &self.shortcut_registry,
                                 size.width as f32,
                                 size.height as f32,
                                 cell_width,
@@ -3819,7 +3860,7 @@ impl App {
                         cell_height,
                         self.settings_panel.animation_progress(),
                     );
-                    let items = self.settings_panel.items_for_section(&self.config);
+                    let items = self.settings_panel.items_for_section(&self.config, &self.shortcut_registry);
                     let is_dropdown = self.settings_panel.is_dropdown_open();
                     // When dropdown is open, suppress background content hover
                     let hovered_item = if !is_dropdown && layout.is_in_content(px, py) {
@@ -3827,7 +3868,7 @@ impl App {
                     } else {
                         None
                     };
-                    let section_count = crate::ui::settings::SettingsSection::ALL.len();
+                    let section_count = crate::ui::settings::SettingsSection::all().len();
                     let hovered_section = if layout.is_in_sidebar(px, py) {
                         layout.section_at_y(py, section_count)
                     } else {
@@ -3837,7 +3878,7 @@ impl App {
 
                     // Also detect hover within open dropdown overlay
                     if self.settings_panel.is_dropdown_open() {
-                        let items = self.settings_panel.items_for_section(&self.config);
+                        let items = self.settings_panel.items_for_section(&self.config, &self.shortcut_registry);
                         let selected_item = self.settings_panel.selected_item_index();
                         if let Some(item) = items.get(selected_item) {
                             let (options_text, option_count): (Vec<String>, usize) = match &item.kind {

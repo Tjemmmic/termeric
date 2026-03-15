@@ -6,7 +6,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::input::keybindings::KeyBinding;
+use crate::input::keybindings::{KeyBinding, ShortcutOverride};
 use crate::plugin::claude_code::ClaudeCodeConfig;
 use crate::plugin::codex::CodexConfig;
 
@@ -28,9 +28,12 @@ pub struct Config {
     pub cursor: CursorConfig,
     /// Bell configuration
     pub bell: BellConfigFile,
-    /// Custom keybindings
+    /// Custom keybindings (plugin/custom: SendText, RunCommand, PluginCommand)
     #[serde(default)]
     pub keybindings: Vec<KeyBinding>,
+    /// Keyboard shortcut overrides (unified shortcut system)
+    #[serde(default)]
+    pub shortcuts: Vec<ShortcutOverride>,
     /// Session save/restore configuration
     #[serde(default)]
     pub session: SessionConfig,
@@ -71,6 +74,7 @@ impl Default for Config {
             cursor: CursorConfig::default(),
             bell: BellConfigFile::default(),
             keybindings: Vec::new(),
+            shortcuts: Vec::new(),
             session: SessionConfig::default(),
             splash: SplashConfig::default(),
             commands: Vec::new(),

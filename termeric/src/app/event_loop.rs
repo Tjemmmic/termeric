@@ -12,7 +12,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::input::{check_keybinding, key_to_bytes_with_modifiers};
+use crate::input::key_to_bytes_with_modifiers;
+use crate::input::keybindings::KeyChord;
 use crate::ui::settings::SettingsKey;
 
 use super::App;
@@ -333,10 +334,68 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Handle settings panel input first (highest priority when open)
+                // Handle shortcuts panel input (centered modal)
+                if self.shortcuts_panel.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        use crate::ui::shortcuts_panel::ShortcutsKey;
+
+                        // In recording mode, capture the raw key
+                        if self.shortcuts_panel.is_recording() {
+                            let shortcuts_key = match &event.logical_key {
+                                Key::Named(NamedKey::Escape) => Some(ShortcutsKey::Escape),
+                                Key::Named(NamedKey::Backspace) | Key::Named(NamedKey::Delete) => {
+                                    Some(ShortcutsKey::Delete)
+                                }
+                                _ => {
+                                    match &event.logical_key {
+                                        Key::Named(NamedKey::Control | NamedKey::Shift | NamedKey::Alt | NamedKey::Super) => None,
+                                        _ => {
+                                            KeyChord::from_key_event(&event.logical_key, self.modifiers)
+                                                .map(ShortcutsKey::RecordedChord)
+                                        }
+                                    }
+                                }
+                            };
+                            if let Some(key) = shortcuts_key {
+                                let action = self.shortcuts_panel.handle_key(key, &self.shortcut_registry);
+                                self.apply_shortcuts_action(action);
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                            }
+                            return;
+                        }
+
+                        let shortcuts_key = match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => Some(ShortcutsKey::Escape),
+                            Key::Named(NamedKey::ArrowUp) => Some(ShortcutsKey::Up),
+                            Key::Named(NamedKey::ArrowDown) => Some(ShortcutsKey::Down),
+                            Key::Named(NamedKey::Enter) => Some(ShortcutsKey::Enter),
+                            Key::Named(NamedKey::Backspace) => Some(ShortcutsKey::Backspace),
+                            Key::Named(NamedKey::Delete) => Some(ShortcutsKey::Delete),
+                            Key::Character(c) if !self.modifiers.control_key() && !self.modifiers.alt_key() => {
+                                c.chars().next().map(ShortcutsKey::Char)
+                            }
+                            _ => None,
+                        };
+
+                        if let Some(key) = shortcuts_key {
+                            let action = self.shortcuts_panel.handle_key(key, &self.shortcut_registry);
+                            self.apply_shortcuts_action(action);
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // Handle settings panel input (highest priority when open)
                 if self.settings_panel.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
+
                         let settings_key = match &event.logical_key {
                             Key::Named(NamedKey::Escape) => Some(SettingsKey::Escape),
                             Key::Named(NamedKey::ArrowUp) => Some(SettingsKey::Up),
@@ -345,6 +404,8 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::ArrowRight) => Some(SettingsKey::Right),
                             Key::Named(NamedKey::Enter) => Some(SettingsKey::Enter),
                             Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
+                            Key::Named(NamedKey::Backspace) => Some(SettingsKey::FilterBackspace),
+                            Key::Named(NamedKey::Delete) => Some(SettingsKey::Delete),
                             Key::Character(c) if self.modifiers.control_key() => {
                                 match c.as_str() {
                                     "s" | "S" => Some(SettingsKey::Save),
@@ -352,11 +413,14 @@ impl ApplicationHandler for App {
                                     _ => None,
                                 }
                             }
+                            Key::Character(c) if !self.modifiers.control_key() && !self.modifiers.alt_key() => {
+                                c.chars().next().map(SettingsKey::FilterChar)
+                            }
                             _ => None,
                         };
 
                         if let Some(key) = settings_key {
-                            let action = self.settings_panel.handle_key(key, &self.config);
+                            let action = self.settings_panel.handle_key(key, &self.config, &self.shortcut_registry);
                             self.apply_settings_action(action);
                             if let Some(window) = &self.window {
                                 window.request_redraw();
@@ -485,19 +549,22 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                // Check custom keybindings first (highest priority after modal UI)
+                // Check unified shortcut registry (replaces hardcoded check_keybinding)
                 if event.state == winit::event::ElementState::Pressed {
-                    if let Some(key_action) = self.keybinding_manager.check(&event.logical_key, self.modifiers) {
-                        if self.handle_key_action(key_action.clone()) {
+                    if let Some(bindable) = self.shortcut_registry.check(&event.logical_key, self.modifiers) {
+                        let action = bindable.to_action();
+                        if self.handle_action(action) {
                             return;
                         }
                     }
                 }
 
-                // Check for default keybindings
-                if let Some(action) = check_keybinding(&event, self.modifiers) {
-                    if self.handle_action(action) {
-                        return;
+                // Check plugin/custom keybindings (SendText, RunCommand, PluginCommand)
+                if event.state == winit::event::ElementState::Pressed {
+                    if let Some(key_action) = self.keybinding_manager.check(&event.logical_key, self.modifiers) {
+                        if self.handle_key_action(key_action.clone()) {
+                            return;
+                        }
                     }
                 }
 
@@ -617,6 +684,35 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // When shortcuts panel is open, dismiss on outside clicks
+                if self.shortcuts_panel.is_active() {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                    {
+                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
+                            let cw = renderer.cell_width();
+                            let (sw, sh) = renderer.window_size();
+                            let (ww, wh) = (sw as f32, sh as f32);
+                            // Must match build_shortcuts_panel geometry
+                            let panel_width = (cw * 60.0_f32).max(500.0).min(ww * 0.7);
+                            let panel_x = (ww - panel_width) / 2.0;
+                            let panel_y = wh * 0.10;
+                            let panel_height = wh * 0.75;
+                            let (mx, my) = (pos.0 as f32, pos.1 as f32);
+                            if mx < panel_x || mx > panel_x + panel_width
+                                || my < panel_y || my > panel_y + panel_height
+                            {
+                                self.shortcuts_panel.close();
+                            }
+                        } else {
+                            self.shortcuts_panel.close();
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 // Use tracked cursor position
                 if let Some(pos) = self.last_cursor_pos {
                     self.handle_mouse_input(button, state, pos);
@@ -635,6 +731,22 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
+                // Scroll shortcuts panel when active
+                if self.shortcuts_panel.is_active() {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if lines > 0.0 {
+                        self.shortcuts_panel.scroll_up(lines.ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.shortcuts_panel.scroll_down((-lines).ceil() as usize, &self.shortcut_registry);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 // Scroll palette list when palette is active
                 if self.command_palette.is_active() {
                     let lines = match delta {

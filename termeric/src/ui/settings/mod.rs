@@ -1,5 +1,6 @@
 use crate::config::{Config, SplashMode};
 use crate::config::theme::Theme;
+use crate::input::keybindings::ShortcutRegistry;
 
 /// Layout geometry for the settings panel.
 /// This struct ensures consistent layout between rendering and hit testing.
@@ -163,21 +164,24 @@ impl SettingsSection {
         }
     }
 
-    pub const ALL: &[SettingsSection] = &[
-        Self::Font,
-        Self::Theme,
-        Self::Window,
-        Self::Cursor,
-        Self::Bell,
-        Self::Scrollback,
-        Self::Startup,
-        Self::Shell,
-        Self::Sessions,
-        Self::Plugins,
-    ];
+    pub fn all() -> &'static [SettingsSection] {
+        static ALL: [SettingsSection; 10] = [
+            SettingsSection::Font,
+            SettingsSection::Theme,
+            SettingsSection::Window,
+            SettingsSection::Cursor,
+            SettingsSection::Bell,
+            SettingsSection::Scrollback,
+            SettingsSection::Startup,
+            SettingsSection::Shell,
+            SettingsSection::Sessions,
+            SettingsSection::Plugins,
+        ];
+        ALL.as_slice()
+    }
 
     pub fn index(&self) -> usize {
-        Self::ALL.iter().position(|s| s == self).unwrap_or(0)
+        Self::all().iter().position(|s| s == self).unwrap_or(0)
     }
 }
 
@@ -369,7 +373,7 @@ impl SettingsPanel {
     }
 
     /// Build the list of items for the current section from config
-    pub fn items_for_section(&self, config: &Config) -> Vec<SettingItem> {
+    pub fn items_for_section(&self, config: &Config, _registry: &ShortcutRegistry) -> Vec<SettingItem> {
         match self.section {
             SettingsSection::Font => {
                 let font_options = self.available_fonts.clone();
@@ -663,10 +667,10 @@ impl SettingsPanel {
     }
 
     /// Handle a key press. Returns a SettingsAction if a config change should be applied.
-    pub fn handle_key(&mut self, key: SettingsKey, config: &Config) -> SettingsAction {
+    pub fn handle_key(&mut self, key: SettingsKey, config: &Config, registry: &ShortcutRegistry) -> SettingsAction {
         // If a dropdown is open, handle keys within it
         if self.dropdown_open {
-            return self.handle_dropdown_key(key, config);
+            return self.handle_dropdown_key(key, config, registry);
         }
 
         match key {
@@ -678,34 +682,31 @@ impl SettingsPanel {
                 if self.selected_item > 0 {
                     self.selected_item -= 1;
                 } else {
-                    // Move to previous section
                     let idx = self.section.index();
                     if idx > 0 {
-                        self.section = SettingsSection::ALL[idx - 1];
-                        let items = self.items_for_section(config);
+                        self.section = SettingsSection::all()[idx - 1];
+                        let items = self.items_for_section(config, registry);
                         self.selected_item = items.len().saturating_sub(1);
                     }
                 }
                 SettingsAction::None
             }
             SettingsKey::Down => {
-                let items = self.items_for_section(config);
+                let items = self.items_for_section(config, registry);
                 if self.selected_item + 1 < items.len() {
                     self.selected_item += 1;
                 } else {
-                    // Move to next section
                     let idx = self.section.index();
-                    if idx + 1 < SettingsSection::ALL.len() {
-                        self.section = SettingsSection::ALL[idx + 1];
+                    if idx + 1 < SettingsSection::all().len() {
+                        self.section = SettingsSection::all()[idx + 1];
                         self.selected_item = 0;
                     }
                 }
                 SettingsAction::None
             }
-            SettingsKey::Left => self.adjust_value(config, -1),
+            SettingsKey::Left => self.adjust_value(config, registry, -1),
             SettingsKey::Right | SettingsKey::Enter => {
-                // For dropdown items, open the dropdown overlay
-                let items = self.items_for_section(config);
+                let items = self.items_for_section(config, registry);
                 if let Some(item) = items.get(self.selected_item) {
                     match &item.kind {
                         SettingKind::Dropdown { selected, .. } | SettingKind::SteppedList { selected, .. } => {
@@ -716,24 +717,28 @@ impl SettingsPanel {
                         _ => {}
                     }
                 }
-                self.adjust_value(config, 1)
+                self.adjust_value(config, registry, 1)
             }
+            SettingsKey::Delete => SettingsAction::None,
             SettingsKey::Tab => {
-                // Cycle to next section
                 self.dropdown_open = false;
                 let idx = self.section.index();
-                self.section = SettingsSection::ALL[(idx + 1) % SettingsSection::ALL.len()];
+                let sections = SettingsSection::all();
+                self.section = sections[(idx + 1) % sections.len()];
                 self.selected_item = 0;
                 SettingsAction::None
             }
             SettingsKey::Save => SettingsAction::SaveConfig,
             SettingsKey::Reset => SettingsAction::ResetConfig,
+            SettingsKey::FilterChar(_) | SettingsKey::FilterBackspace => {
+                SettingsAction::None
+            }
         }
     }
 
     /// Handle keys when a dropdown overlay is open
-    fn handle_dropdown_key(&mut self, key: SettingsKey, config: &Config) -> SettingsAction {
-        let items = self.items_for_section(config);
+    fn handle_dropdown_key(&mut self, key: SettingsKey, config: &Config, registry: &ShortcutRegistry) -> SettingsAction {
+        let items = self.items_for_section(config, registry);
         let Some(item) = items.get(self.selected_item) else {
             self.dropdown_open = false;
             return SettingsAction::None;
@@ -764,15 +769,15 @@ impl SettingsPanel {
             }
             SettingsKey::Enter | SettingsKey::Right => {
                 self.dropdown_open = false;
-                self.select_dropdown_option(config, self.dropdown_highlight)
+                self.select_dropdown_option(config, registry, self.dropdown_highlight)
             }
             _ => SettingsAction::None,
         }
     }
 
     /// Select a specific option index from the current dropdown
-    fn select_dropdown_option(&self, config: &Config, option_idx: usize) -> SettingsAction {
-        let items = self.items_for_section(config);
+    fn select_dropdown_option(&self, config: &Config, registry: &ShortcutRegistry, option_idx: usize) -> SettingsAction {
+        let items = self.items_for_section(config, registry);
         let Some(item) = items.get(self.selected_item) else {
             return SettingsAction::None;
         };
@@ -841,8 +846,8 @@ impl SettingsPanel {
     }
 
     /// Adjust the currently selected value
-    fn adjust_value(&self, config: &Config, direction: i32) -> SettingsAction {
-        let items = self.items_for_section(config);
+    fn adjust_value(&self, config: &Config, registry: &ShortcutRegistry, direction: i32) -> SettingsAction {
+        let items = self.items_for_section(config, registry);
         let Some(item) = items.get(self.selected_item) else {
             return SettingsAction::None;
         };
@@ -909,7 +914,9 @@ impl SettingsPanel {
                     _ => SettingsAction::None,
                 }
             }
-            SettingKind::ReadOnly => SettingsAction::None,
+            SettingKind::ReadOnly => {
+                SettingsAction::None
+            }
         }
     }
 
@@ -920,6 +927,7 @@ impl SettingsPanel {
         x: f32,
         y: f32,
         config: &Config,
+        registry: &ShortcutRegistry,
         window_width: f32,
         window_height: f32,
         cell_width: f32,
@@ -947,8 +955,8 @@ impl SettingsPanel {
         // ── Sidebar section click ──
         if layout.is_in_sidebar(x, y) {
             self.dropdown_open = false;
-            if let Some(idx) = layout.section_at_y(y, SettingsSection::ALL.len()) {
-                if let Some(section) = SettingsSection::ALL.get(idx) {
+            if let Some(idx) = layout.section_at_y(y, SettingsSection::all().len()) {
+                if let Some(section) = SettingsSection::all().get(idx) {
                     self.section = *section;
                     self.selected_item = 0;
                 }
@@ -958,7 +966,7 @@ impl SettingsPanel {
 
         // ── Dropdown overlay click ──
         if self.dropdown_open {
-            let items = self.items_for_section(config);
+            let items = self.items_for_section(config, registry);
             if let Some(item) = items.get(self.selected_item) {
                 let (options_text, option_count) = match &item.kind {
                     SettingKind::Dropdown { options, .. } => (options.clone(), options.len()),
@@ -1003,7 +1011,7 @@ impl SettingsPanel {
                         let clicked_idx = ((y - anchor_y - 4.0) / option_h) as usize;
                         if clicked_idx < option_count {
                             self.dropdown_open = false;
-                            return self.select_dropdown_option(config, clicked_idx);
+                            return self.select_dropdown_option(config, registry, clicked_idx);
                         }
                     }
                 }
@@ -1014,7 +1022,7 @@ impl SettingsPanel {
         }
 
         // ── Content area click ──
-        let items = self.items_for_section(config);
+        let items = self.items_for_section(config, registry);
 
         // Calculate value_area_x the same way as the renderer
         let max_label_len = items.iter().map(|i| i.label.len()).max().unwrap_or(0);
@@ -1048,14 +1056,14 @@ impl SettingsPanel {
                         // ◀ button area (left of value)
                         let left_arrow_x = actual_value_area_x;
                         if x >= left_arrow_x && x < left_arrow_x + layout.cell_width * 2.0 {
-                            return self.adjust_value(config, -1);
+                            return self.adjust_value(config, registry, -1);
                         }
                         // ▶ button area (right of value)
                         let val_x = actual_value_area_x + layout.cell_width * 2.0;
                         let val_end = val_x + item.value.len() as f32 * layout.cell_width;
                         let right_arrow_x = val_end + layout.cell_width;
                         if x >= right_arrow_x {
-                            return self.adjust_value(config, 1);
+                            return self.adjust_value(config, registry, 1);
                         }
                     }
                     _ => {}
@@ -1068,7 +1076,7 @@ impl SettingsPanel {
 }
 
 /// Simplified key events for the settings panel
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum SettingsKey {
     Up,
     Down,
@@ -1079,6 +1087,12 @@ pub enum SettingsKey {
     Tab,
     Save,
     Reset,
+    /// Character typed for filter
+    FilterChar(char),
+    /// Backspace in filter
+    FilterBackspace,
+    /// Delete key
+    Delete,
 }
 
 /// Display info passed from the settings panel to the renderer
@@ -1107,9 +1121,9 @@ pub struct SettingsPanelInfo {
 
 impl SettingsPanel {
     /// Build display info for the renderer
-    pub fn build_info(&self, config: &Config) -> SettingsPanelInfo {
-        let items = self.items_for_section(config);
-        let sections = SettingsSection::ALL
+    pub fn build_info(&self, config: &Config, registry: &ShortcutRegistry) -> SettingsPanelInfo {
+        let items = self.items_for_section(config, registry);
+        let sections = SettingsSection::all()
             .iter()
             .map(|s| (*s, *s == self.section))
             .collect();
@@ -1153,6 +1167,10 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    fn default_registry() -> ShortcutRegistry {
+        ShortcutRegistry::new()
+    }
+
     #[test]
     fn test_toggle_open_close() {
         let mut panel = SettingsPanel::new();
@@ -1178,37 +1196,37 @@ mod tests {
     fn test_navigation() {
         let mut panel = SettingsPanel::new();
         panel.open();
-        // Wait for animation to complete so panel is active
         thread::sleep(Duration::from_millis(250));
         panel.update_animation();
 
         let config = Config::default();
+        let registry = default_registry();
 
         // Start at Font section, item 0
         assert_eq!(panel.section, SettingsSection::Font);
         assert_eq!(panel.selected_item, 0);
 
         // Move down within Font section (Size -> Family)
-        panel.handle_key(SettingsKey::Down, &config);
+        panel.handle_key(SettingsKey::Down, &config, &registry);
         assert_eq!(panel.selected_item, 1);
 
         // Move down again within Font section (Family -> Line Height)
-        panel.handle_key(SettingsKey::Down, &config);
+        panel.handle_key(SettingsKey::Down, &config, &registry);
         assert_eq!(panel.section, SettingsSection::Font);
         assert_eq!(panel.selected_item, 2);
 
         // Move down again should go to Theme section
-        panel.handle_key(SettingsKey::Down, &config);
+        panel.handle_key(SettingsKey::Down, &config, &registry);
         assert_eq!(panel.section, SettingsSection::Theme);
         assert_eq!(panel.selected_item, 0);
 
         // Move up should go back to Font, last item (Line Height)
-        panel.handle_key(SettingsKey::Up, &config);
+        panel.handle_key(SettingsKey::Up, &config, &registry);
         assert_eq!(panel.section, SettingsSection::Font);
         assert_eq!(panel.selected_item, 2);
 
         // Tab should cycle sections
-        panel.handle_key(SettingsKey::Tab, &config);
+        panel.handle_key(SettingsKey::Tab, &config, &registry);
         assert_eq!(panel.section, SettingsSection::Theme);
         assert_eq!(panel.selected_item, 0);
     }
@@ -1221,15 +1239,16 @@ mod tests {
         panel.update_animation();
 
         let config = Config::default();
+        let registry = default_registry();
 
         // Font size is item 0 in Font section, default is 14.0
-        let action = panel.handle_key(SettingsKey::Right, &config);
+        let action = panel.handle_key(SettingsKey::Right, &config, &registry);
         match action {
             SettingsAction::SetFontSize(size) => assert_eq!(size, 15.0),
             _ => panic!("Expected SetFontSize"),
         }
 
-        let action = panel.handle_key(SettingsKey::Left, &config);
+        let action = panel.handle_key(SettingsKey::Left, &config, &registry);
         match action {
             SettingsAction::SetFontSize(size) => assert_eq!(size, 13.0),
             _ => panic!("Expected SetFontSize"),
@@ -1246,21 +1265,22 @@ mod tests {
         panel.selected_item = 0;
 
         let config = Config::default();
+        let registry = default_registry();
         let themes = Theme::list_available();
         let expected_next = themes.get(1).expect("at least 2 themes");
 
         // Right opens the dropdown (does NOT cycle)
-        let action = panel.handle_key(SettingsKey::Right, &config);
+        let action = panel.handle_key(SettingsKey::Right, &config, &registry);
         assert!(matches!(action, SettingsAction::None));
         assert!(panel.dropdown_open);
 
         // Down moves to next option
-        let action = panel.handle_key(SettingsKey::Down, &config);
+        let action = panel.handle_key(SettingsKey::Down, &config, &registry);
         assert!(matches!(action, SettingsAction::None));
         assert_eq!(panel.dropdown_highlight, 1);
 
         // Enter selects and closes dropdown
-        let action = panel.handle_key(SettingsKey::Enter, &config);
+        let action = panel.handle_key(SettingsKey::Enter, &config, &registry);
         assert!(!panel.dropdown_open);
         match action {
             SettingsAction::SetTheme(name) => assert_eq!(name, *expected_next),

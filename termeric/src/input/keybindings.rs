@@ -1,20 +1,808 @@
-//! Custom keybinding system
+//! Unified keyboard shortcut system
 //!
-//! Allows users to define custom key bindings in their configuration.
+//! Single registry for all bindable actions with defaults, user overrides,
+//! and O(1) key-chord lookup. Also retains the plugin/custom `KeyBindingManager`
+//! for dynamic bindings (SendText, RunCommand, PluginCommand).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-/// A key binding definition
+// ── BindableAction ──────────────────────────────────────────────────────────
+
+/// Every operation that can be bound to a keyboard shortcut.
+///
+/// Parameterized actions are expanded to concrete variants so each has
+/// exactly one binding slot (e.g. `SwitchToTab1` through `SwitchToTab9`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BindableAction {
+    // General
+    Copy,
+    Paste,
+    ToggleSearch,
+    ToggleCommandPalette,
+    ToggleSettings,
+    ClearSelection,
+
+    // Font
+    IncreaseFontSize,
+    DecreaseFontSize,
+    ResetFontSize,
+
+    // Tabs
+    NewTab,
+    CloseTab,
+    NextTab,
+    PrevTab,
+    SwitchToTab1,
+    SwitchToTab2,
+    SwitchToTab3,
+    SwitchToTab4,
+    SwitchToTab5,
+    SwitchToTab6,
+    SwitchToTab7,
+    SwitchToTab8,
+    SwitchToTab9,
+
+    // Panes
+    SplitVertical,
+    SplitHorizontal,
+    NavigatePaneUp,
+    NavigatePaneDown,
+    NavigatePaneLeft,
+    NavigatePaneRight,
+    ClosePane,
+
+    // Scrolling
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollToTop,
+    ScrollToBottom,
+
+    // Navigation
+    PreviousPrompt,
+    NextPrompt,
+
+    // Terminal
+    ClearScrollback,
+    ResetTerminal,
+}
+
+impl BindableAction {
+    /// Every variant, in display order.
+    pub fn all() -> &'static [BindableAction] {
+        use BindableAction::*;
+        static ALL: [BindableAction; 37] = [
+            // General
+            Copy,
+            Paste,
+            ToggleSearch,
+            ToggleCommandPalette,
+            ToggleSettings,
+            ClearSelection,
+            // Font
+            IncreaseFontSize,
+            DecreaseFontSize,
+            ResetFontSize,
+            // Tabs
+            NewTab,
+            CloseTab,
+            NextTab,
+            PrevTab,
+            SwitchToTab1,
+            SwitchToTab2,
+            SwitchToTab3,
+            SwitchToTab4,
+            SwitchToTab5,
+            SwitchToTab6,
+            SwitchToTab7,
+            SwitchToTab8,
+            SwitchToTab9,
+            // Panes
+            SplitVertical,
+            SplitHorizontal,
+            NavigatePaneUp,
+            NavigatePaneDown,
+            NavigatePaneLeft,
+            NavigatePaneRight,
+            ClosePane,
+            // Scrolling
+            ScrollPageUp,
+            ScrollPageDown,
+            ScrollToTop,
+            ScrollToBottom,
+            // Navigation
+            PreviousPrompt,
+            NextPrompt,
+            // Terminal
+            ClearScrollback,
+            ResetTerminal,
+        ];
+        ALL.as_slice()
+    }
+
+    /// Metadata: string id, display label, category, and default binding.
+    pub fn meta(self) -> ActionMeta {
+        use BindableAction::*;
+        use ShortcutCategory::*;
+        match self {
+            // ── General ──
+            Copy => ActionMeta {
+                id: "copy",
+                label: "Copy",
+                category: General,
+                default_binding: Some(KeyChord::new("c", true, false, true, false)),
+            },
+            Paste => ActionMeta {
+                id: "paste",
+                label: "Paste",
+                category: General,
+                default_binding: Some(KeyChord::new("v", true, false, true, false)),
+            },
+            ToggleSearch => ActionMeta {
+                id: "toggle_search",
+                label: "Toggle Search",
+                category: General,
+                default_binding: Some(KeyChord::new("f", true, false, true, false)),
+            },
+            ToggleCommandPalette => ActionMeta {
+                id: "toggle_command_palette",
+                label: "Command Palette",
+                category: General,
+                default_binding: Some(KeyChord::new("p", true, false, true, false)),
+            },
+            ToggleSettings => ActionMeta {
+                id: "toggle_settings",
+                label: "Settings",
+                category: General,
+                default_binding: Some(KeyChord::new(",", true, false, false, false)),
+            },
+            ClearSelection => ActionMeta {
+                id: "clear_selection",
+                label: "Clear Selection",
+                category: General,
+                default_binding: Some(KeyChord::new("Escape", false, false, false, false)),
+            },
+
+            // ── Font ──
+            IncreaseFontSize => ActionMeta {
+                id: "increase_font_size",
+                label: "Increase Font Size",
+                category: Font,
+                default_binding: Some(KeyChord::new("=", true, false, false, false)),
+            },
+            DecreaseFontSize => ActionMeta {
+                id: "decrease_font_size",
+                label: "Decrease Font Size",
+                category: Font,
+                default_binding: Some(KeyChord::new("-", true, false, false, false)),
+            },
+            ResetFontSize => ActionMeta {
+                id: "reset_font_size",
+                label: "Reset Font Size",
+                category: Font,
+                default_binding: Some(KeyChord::new("0", true, false, false, false)),
+            },
+
+            // ── Tabs ──
+            NewTab => ActionMeta {
+                id: "new_tab",
+                label: "New Tab",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("t", true, false, true, false)),
+            },
+            CloseTab => ActionMeta {
+                id: "close_tab",
+                label: "Close Tab",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("w", true, false, true, false)),
+            },
+            NextTab => ActionMeta {
+                id: "next_tab",
+                label: "Next Tab",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("Tab", true, false, false, false)),
+            },
+            PrevTab => ActionMeta {
+                id: "prev_tab",
+                label: "Previous Tab",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("Tab", true, false, true, false)),
+            },
+            SwitchToTab1 => ActionMeta {
+                id: "switch_to_tab_1",
+                label: "Switch to Tab 1",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("1", true, false, false, false)),
+            },
+            SwitchToTab2 => ActionMeta {
+                id: "switch_to_tab_2",
+                label: "Switch to Tab 2",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("2", true, false, false, false)),
+            },
+            SwitchToTab3 => ActionMeta {
+                id: "switch_to_tab_3",
+                label: "Switch to Tab 3",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("3", true, false, false, false)),
+            },
+            SwitchToTab4 => ActionMeta {
+                id: "switch_to_tab_4",
+                label: "Switch to Tab 4",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("4", true, false, false, false)),
+            },
+            SwitchToTab5 => ActionMeta {
+                id: "switch_to_tab_5",
+                label: "Switch to Tab 5",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("5", true, false, false, false)),
+            },
+            SwitchToTab6 => ActionMeta {
+                id: "switch_to_tab_6",
+                label: "Switch to Tab 6",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("6", true, false, false, false)),
+            },
+            SwitchToTab7 => ActionMeta {
+                id: "switch_to_tab_7",
+                label: "Switch to Tab 7",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("7", true, false, false, false)),
+            },
+            SwitchToTab8 => ActionMeta {
+                id: "switch_to_tab_8",
+                label: "Switch to Tab 8",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("8", true, false, false, false)),
+            },
+            SwitchToTab9 => ActionMeta {
+                id: "switch_to_tab_9",
+                label: "Switch to Tab 9",
+                category: Tabs,
+                default_binding: Some(KeyChord::new("9", true, false, false, false)),
+            },
+
+            // ── Panes ──
+            SplitVertical => ActionMeta {
+                id: "split_vertical",
+                label: "Split Vertical",
+                category: Panes,
+                default_binding: None,
+            },
+            SplitHorizontal => ActionMeta {
+                id: "split_horizontal",
+                label: "Split Horizontal",
+                category: Panes,
+                default_binding: None,
+            },
+            NavigatePaneUp => ActionMeta {
+                id: "navigate_pane_up",
+                label: "Navigate Pane Up",
+                category: Panes,
+                default_binding: None,
+            },
+            NavigatePaneDown => ActionMeta {
+                id: "navigate_pane_down",
+                label: "Navigate Pane Down",
+                category: Panes,
+                default_binding: None,
+            },
+            NavigatePaneLeft => ActionMeta {
+                id: "navigate_pane_left",
+                label: "Navigate Pane Left",
+                category: Panes,
+                default_binding: None,
+            },
+            NavigatePaneRight => ActionMeta {
+                id: "navigate_pane_right",
+                label: "Navigate Pane Right",
+                category: Panes,
+                default_binding: None,
+            },
+            ClosePane => ActionMeta {
+                id: "close_pane",
+                label: "Close Pane",
+                category: Panes,
+                default_binding: None,
+            },
+
+            // ── Scrolling ──
+            ScrollPageUp => ActionMeta {
+                id: "scroll_page_up",
+                label: "Scroll Page Up",
+                category: Scrolling,
+                default_binding: Some(KeyChord::new("PageUp", false, false, true, false)),
+            },
+            ScrollPageDown => ActionMeta {
+                id: "scroll_page_down",
+                label: "Scroll Page Down",
+                category: Scrolling,
+                default_binding: Some(KeyChord::new("PageDown", false, false, true, false)),
+            },
+            ScrollToTop => ActionMeta {
+                id: "scroll_to_top",
+                label: "Scroll to Top",
+                category: Scrolling,
+                default_binding: Some(KeyChord::new("Home", true, false, true, false)),
+            },
+            ScrollToBottom => ActionMeta {
+                id: "scroll_to_bottom",
+                label: "Scroll to Bottom",
+                category: Scrolling,
+                default_binding: Some(KeyChord::new("End", true, false, true, false)),
+            },
+
+            // ── Navigation ──
+            PreviousPrompt => ActionMeta {
+                id: "previous_prompt",
+                label: "Previous Prompt",
+                category: Navigation,
+                default_binding: Some(KeyChord::new("Up", true, false, true, false)),
+            },
+            NextPrompt => ActionMeta {
+                id: "next_prompt",
+                label: "Next Prompt",
+                category: Navigation,
+                default_binding: Some(KeyChord::new("Down", true, false, true, false)),
+            },
+
+            // ── Terminal ──
+            ClearScrollback => ActionMeta {
+                id: "clear_scrollback",
+                label: "Clear Scrollback",
+                category: Terminal,
+                default_binding: None,
+            },
+            ResetTerminal => ActionMeta {
+                id: "reset_terminal",
+                label: "Reset Terminal",
+                category: Terminal,
+                default_binding: None,
+            },
+        }
+    }
+
+    /// Convert to the internal `Action` enum used by app dispatch.
+    pub fn to_action(self) -> crate::input::Action {
+        use crate::input::Action;
+        match self {
+            Self::Copy => Action::Copy,
+            Self::Paste => Action::Paste,
+            Self::ToggleSearch => Action::ToggleSearch,
+            Self::ToggleCommandPalette => Action::ToggleCommandPalette,
+            Self::ToggleSettings => Action::ToggleSettings,
+            Self::ClearSelection => Action::ClearSelection,
+            Self::IncreaseFontSize => Action::IncreaseFontSize,
+            Self::DecreaseFontSize => Action::DecreaseFontSize,
+            Self::ResetFontSize => Action::ResetFontSize,
+            Self::NewTab => Action::NewTab,
+            Self::CloseTab => Action::CloseTab,
+            Self::NextTab => Action::NextTab,
+            Self::PrevTab => Action::PrevTab,
+            Self::SwitchToTab1 => Action::SwitchToTab(0),
+            Self::SwitchToTab2 => Action::SwitchToTab(1),
+            Self::SwitchToTab3 => Action::SwitchToTab(2),
+            Self::SwitchToTab4 => Action::SwitchToTab(3),
+            Self::SwitchToTab5 => Action::SwitchToTab(4),
+            Self::SwitchToTab6 => Action::SwitchToTab(5),
+            Self::SwitchToTab7 => Action::SwitchToTab(6),
+            Self::SwitchToTab8 => Action::SwitchToTab(7),
+            Self::SwitchToTab9 => Action::SwitchToTab(8),
+            Self::SplitVertical => Action::SplitVertical,
+            Self::SplitHorizontal => Action::SplitHorizontal,
+            Self::NavigatePaneUp => Action::NavigatePane("up".into()),
+            Self::NavigatePaneDown => Action::NavigatePane("down".into()),
+            Self::NavigatePaneLeft => Action::NavigatePane("left".into()),
+            Self::NavigatePaneRight => Action::NavigatePane("right".into()),
+            Self::ClosePane => Action::ClosePane,
+            Self::ScrollPageUp => Action::ScrollUp(10),
+            Self::ScrollPageDown => Action::ScrollDown(10),
+            Self::ScrollToTop => Action::ScrollToTop,
+            Self::ScrollToBottom => Action::ScrollToBottom,
+            Self::PreviousPrompt => Action::PreviousPrompt,
+            Self::NextPrompt => Action::NextPrompt,
+            Self::ClearScrollback => Action::ClearScrollback,
+            Self::ResetTerminal => Action::ResetTerminal,
+        }
+    }
+
+    /// Look up a `BindableAction` by its config string id.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::all().iter().find(|a| a.meta().id == id).copied()
+    }
+}
+
+// ── ShortcutCategory ────────────────────────────────────────────────────────
+
+/// Grouping for the settings UI sidebar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShortcutCategory {
+    General,
+    Font,
+    Tabs,
+    Panes,
+    Scrolling,
+    Navigation,
+    Terminal,
+}
+
+impl ShortcutCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Font => "Font",
+            Self::Tabs => "Tabs",
+            Self::Panes => "Panes",
+            Self::Scrolling => "Scrolling",
+            Self::Navigation => "Navigation",
+            Self::Terminal => "Terminal",
+        }
+    }
+}
+
+// ── ActionMeta ──────────────────────────────────────────────────────────────
+
+/// Static metadata for a `BindableAction`.
+pub struct ActionMeta {
+    /// String identifier used in config TOML.
+    pub id: &'static str,
+    /// Human-readable label shown in settings.
+    pub label: &'static str,
+    /// Category for UI grouping.
+    pub category: ShortcutCategory,
+    /// Default key chord (None = unset by default).
+    pub default_binding: Option<KeyChord>,
+}
+
+// ── KeyChord ────────────────────────────────────────────────────────────────
+
+/// A key + modifier combination. Used as both the binding value and the
+/// reverse-lookup key in the registry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct KeyChord {
+    /// Lowercased key name: "c", "tab", "pageup", "f1", etc.
+    pub key: String,
+    #[serde(default)]
+    pub ctrl: bool,
+    #[serde(default)]
+    pub alt: bool,
+    #[serde(default)]
+    pub shift: bool,
+    #[serde(default, rename = "super")]
+    pub super_key: bool,
+}
+
+impl KeyChord {
+    /// Construct from parts.
+    pub fn new(key: &str, ctrl: bool, alt: bool, shift: bool, super_key: bool) -> Self {
+        Self {
+            key: key.to_lowercase(),
+            ctrl,
+            alt,
+            shift,
+            super_key,
+        }
+    }
+
+    /// Build from a winit key event + modifier state (used for recording mode).
+    pub fn from_key_event(key: &Key, modifiers: ModifiersState) -> Option<Self> {
+        let key_name = key_to_string(key)?;
+        Some(Self {
+            key: key_name.to_lowercase(),
+            ctrl: modifiers.control_key(),
+            alt: modifiers.alt_key(),
+            shift: modifiers.shift_key(),
+            super_key: modifiers.super_key(),
+        })
+    }
+
+    /// Build from a winit `Key` + current `ModifiersState` for lookup.
+    /// Normalizes `+` to `=` so both physical keys match `IncreaseFontSize`.
+    pub fn from_key_lookup(key: &Key, modifiers: ModifiersState) -> Option<Self> {
+        let mut key_name = key_to_string(key)?;
+        // Normalize: `+` and `=` are the same physical key on most layouts
+        if key_name == "+" {
+            key_name = "=".to_string();
+        }
+        Some(Self {
+            key: key_name.to_lowercase(),
+            ctrl: modifiers.control_key(),
+            alt: modifiers.alt_key(),
+            shift: modifiers.shift_key(),
+            super_key: modifiers.super_key(),
+        })
+    }
+
+    /// Human-readable string for settings UI: "Ctrl+Shift+C"
+    pub fn display_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl {
+            parts.push("Ctrl");
+        }
+        if self.alt {
+            parts.push("Alt");
+        }
+        if self.shift {
+            parts.push("Shift");
+        }
+        if self.super_key {
+            parts.push("Super");
+        }
+        // Capitalize first letter of the key for display
+        let key_display = capitalize_key(&self.key);
+        parts.push(&key_display);
+        parts.join("+")
+    }
+}
+
+impl fmt::Display for KeyChord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.display_string())
+    }
+}
+
+/// Capitalize a key name for display (e.g. "pageup" → "PageUp", "c" → "C")
+fn capitalize_key(key: &str) -> String {
+    match key {
+        "pageup" => "PageUp".to_string(),
+        "pagedown" => "PageDown".to_string(),
+        "escape" => "Esc".to_string(),
+        "backspace" => "Backspace".to_string(),
+        "delete" => "Delete".to_string(),
+        "insert" => "Insert".to_string(),
+        "enter" => "Enter".to_string(),
+        "space" => "Space".to_string(),
+        "tab" => "Tab".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "up" => "Up".to_string(),
+        "down" => "Down".to_string(),
+        "left" => "Left".to_string(),
+        "right" => "Right".to_string(),
+        k if k.starts_with('f') && k.len() <= 3 && k[1..].parse::<u8>().is_ok() => {
+            k.to_uppercase()
+        }
+        k => {
+            let mut c = k.chars();
+            match c.next() {
+                None => String::new(),
+                Some(first) => {
+                    let upper: String = first.to_uppercase().collect();
+                    upper + c.as_str()
+                }
+            }
+        }
+    }
+}
+
+// ── ShortcutOverride (config persistence) ───────────────────────────────────
+
+/// A user override persisted in config.toml.
+/// Only bindings that differ from defaults are saved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutOverride {
+    /// The `BindableAction` string id (e.g. "copy", "new_tab").
+    pub action: String,
+    /// Key name, or absent/null to explicitly unbind.
+    pub key: Option<String>,
+    #[serde(default)]
+    pub ctrl: bool,
+    #[serde(default)]
+    pub alt: bool,
+    #[serde(default)]
+    pub shift: bool,
+    #[serde(default, rename = "super")]
+    pub super_key: bool,
+}
+
+impl ShortcutOverride {
+    /// Convert to a `(BindableAction, Option<KeyChord>)` pair.
+    pub fn to_binding(&self) -> Option<(BindableAction, Option<KeyChord>)> {
+        let action = BindableAction::from_id(&self.action)?;
+        let chord = self.key.as_ref().map(|k| KeyChord {
+            key: k.to_lowercase(),
+            ctrl: self.ctrl,
+            alt: self.alt,
+            shift: self.shift,
+            super_key: self.super_key,
+        });
+        Some((action, chord))
+    }
+}
+
+// ── ShortcutRegistry ────────────────────────────────────────────────────────
+
+/// Unified shortcut registry — the single source of truth for all key bindings.
+///
+/// Holds defaults + user overrides. Provides O(1) lookup on the hot path
+/// (every keypress) and methods for the settings UI to read/write bindings.
+#[derive(Debug)]
+pub struct ShortcutRegistry {
+    /// action → current chord (None = unbound)
+    bindings: HashMap<BindableAction, Option<KeyChord>>,
+    /// chord → action (reverse index for O(1) dispatch)
+    key_map: HashMap<KeyChord, BindableAction>,
+    /// Only user-changed bindings, for minimal config persistence
+    user_overrides: HashMap<BindableAction, Option<KeyChord>>,
+}
+
+impl ShortcutRegistry {
+    /// Create a new registry populated with all default bindings.
+    pub fn new() -> Self {
+        let mut bindings = HashMap::new();
+        let mut key_map = HashMap::new();
+
+        for &action in BindableAction::all() {
+            let meta = action.meta();
+            if let Some(chord) = &meta.default_binding {
+                key_map.insert(chord.clone(), action);
+                bindings.insert(action, Some(chord.clone()));
+            } else {
+                bindings.insert(action, None);
+            }
+        }
+
+        Self {
+            bindings,
+            key_map,
+            user_overrides: HashMap::new(),
+        }
+    }
+
+    /// Apply user overrides from config on top of defaults.
+    pub fn apply_overrides(&mut self, overrides: &[ShortcutOverride]) {
+        for ovr in overrides {
+            if let Some((action, chord)) = ovr.to_binding() {
+                // Remove old chord from reverse map
+                if let Some(Some(old)) = self.bindings.get(&action) {
+                    self.key_map.remove(old);
+                }
+                // If new chord conflicts, clear the conflicting action
+                if let Some(new_chord) = &chord {
+                    if let Some(&conflicting) = self.key_map.get(new_chord) {
+                        if conflicting != action {
+                            self.bindings.insert(conflicting, None);
+                        }
+                    }
+                    self.key_map.insert(new_chord.clone(), action);
+                }
+                self.bindings.insert(action, chord.clone());
+                self.user_overrides.insert(action, chord);
+            }
+        }
+    }
+
+    /// O(1) lookup — the hot path called on every keypress.
+    pub fn check(&self, key: &Key, modifiers: ModifiersState) -> Option<BindableAction> {
+        let chord = KeyChord::from_key_lookup(key, modifiers)?;
+        self.key_map.get(&chord).copied()
+    }
+
+    /// Get the current binding for an action (for settings UI display).
+    pub fn binding_for(&self, action: BindableAction) -> Option<&KeyChord> {
+        self.bindings.get(&action).and_then(|opt| opt.as_ref())
+    }
+
+    /// Set a binding, handling conflicts automatically.
+    /// If `chord` is already bound to a different action, that action is unbound.
+    pub fn set_binding(&mut self, action: BindableAction, chord: Option<KeyChord>) {
+        // Remove old chord from reverse map
+        if let Some(Some(old)) = self.bindings.get(&action) {
+            self.key_map.remove(old);
+        }
+
+        // Handle conflict
+        if let Some(new_chord) = &chord {
+            if let Some(&conflicting) = self.key_map.get(new_chord) {
+                if conflicting != action {
+                    self.bindings.insert(conflicting, None);
+                    self.user_overrides.insert(conflicting, None);
+                }
+            }
+            self.key_map.insert(new_chord.clone(), action);
+        }
+
+        self.bindings.insert(action, chord.clone());
+        self.user_overrides.insert(action, chord);
+    }
+
+    /// Clear a binding (unbind the action).
+    pub fn clear_binding(&mut self, action: BindableAction) {
+        self.set_binding(action, None);
+    }
+
+    /// Reset a single action to its default binding.
+    pub fn reset_binding(&mut self, action: BindableAction) {
+        let default = action.meta().default_binding;
+        // Remove current from reverse map
+        if let Some(Some(old)) = self.bindings.get(&action) {
+            self.key_map.remove(old);
+        }
+        // Handle conflict with default chord
+        if let Some(chord) = &default {
+            if let Some(&conflicting) = self.key_map.get(chord) {
+                if conflicting != action {
+                    self.bindings.insert(conflicting, None);
+                    self.user_overrides.insert(conflicting, None);
+                }
+            }
+            self.key_map.insert(chord.clone(), action);
+        }
+        self.bindings.insert(action, default);
+        self.user_overrides.remove(&action);
+    }
+
+    /// Reset all bindings to defaults.
+    pub fn reset_all(&mut self) {
+        self.key_map.clear();
+        self.user_overrides.clear();
+        for &action in BindableAction::all() {
+            let meta = action.meta();
+            if let Some(chord) = &meta.default_binding {
+                self.key_map.insert(chord.clone(), action);
+                self.bindings.insert(action, Some(chord.clone()));
+            } else {
+                self.bindings.insert(action, None);
+            }
+        }
+    }
+
+    /// Check what action a chord is currently bound to (for conflict detection).
+    pub fn conflict_for(&self, chord: &KeyChord) -> Option<BindableAction> {
+        self.key_map.get(chord).copied()
+    }
+
+    /// Produce the minimal set of overrides for config persistence.
+    pub fn user_overrides(&self) -> Vec<ShortcutOverride> {
+        let mut out = Vec::new();
+        for (&action, chord_opt) in &self.user_overrides {
+            let meta = action.meta();
+            match chord_opt {
+                Some(chord) => {
+                    out.push(ShortcutOverride {
+                        action: meta.id.to_string(),
+                        key: Some(chord.key.clone()),
+                        ctrl: chord.ctrl,
+                        alt: chord.alt,
+                        shift: chord.shift,
+                        super_key: chord.super_key,
+                    });
+                }
+                None => {
+                    // Explicitly unbound
+                    out.push(ShortcutOverride {
+                        action: meta.id.to_string(),
+                        key: None,
+                        ctrl: false,
+                        alt: false,
+                        shift: false,
+                        super_key: false,
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| a.action.cmp(&b.action));
+        out
+    }
+}
+
+impl Default for ShortcutRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Plugin / custom bindings (retained from original) ───────────────────────
+
+/// A key binding definition for plugin/custom actions (SendText, RunCommand, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyBinding {
-    /// Key to trigger the action
     pub key: String,
-    /// Modifiers required (Ctrl, Alt, Shift, Super)
     #[serde(default)]
     pub modifiers: KeyModifiers,
-    /// Action to perform
     pub action: KeyAction,
 }
 
@@ -32,135 +820,52 @@ pub struct KeyModifiers {
 }
 
 impl KeyModifiers {
-    /// Check if modifiers match the given state
     pub fn matches(&self, state: ModifiersState) -> bool {
         self.ctrl == state.control_key()
             && self.alt == state.alt_key()
             && self.shift == state.shift_key()
             && self.super_key == state.super_key()
     }
-
 }
 
-/// Action to perform when a key binding is triggered
+/// Action to perform when a plugin/custom key binding is triggered.
+/// These are dynamic/parameterized and cannot be part of BindableAction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KeyAction {
-    /// Send text/escape sequence to terminal
     SendText { text: String },
-    /// Run a shell command in a new pane
     RunCommand { command: String },
-    /// Open command palette
-    CommandPalette,
-    /// Open settings
-    OpenSettings,
-    /// Create new tab
-    NewTab,
-    /// Close current tab/pane
-    CloseTab,
-    /// Next tab
-    NextTab,
-    /// Previous tab
-    PrevTab,
-    /// Switch to specific tab (1-indexed)
-    SwitchToTab { index: usize },
-    /// Split pane vertically
-    SplitVertical,
-    /// Split pane horizontally
-    SplitHorizontal,
-    /// Navigate to pane in direction
-    NavigatePane { direction: String },
-    /// Close current pane
-    ClosePane,
-    /// Toggle fullscreen
-    ToggleFullscreen,
-    /// Toggle search
-    ToggleSearch,
-    /// Copy selection
-    Copy,
-    /// Paste clipboard
-    Paste,
-    /// Scroll up
-    ScrollUp { lines: usize },
-    /// Scroll down
-    ScrollDown { lines: usize },
-    /// Scroll to top
-    ScrollToTop,
-    /// Scroll to bottom
-    ScrollToBottom,
-    /// Clear scrollback
-    ClearScrollback,
-    /// Reset terminal
-    ResetTerminal,
-    /// Navigate to previous prompt (shell integration)
-    PreviousPrompt,
-    /// Navigate to next prompt (shell integration)
-    NextPrompt,
-    /// Execute a plugin command by its ID
     PluginCommand { command_id: String },
 }
 
 impl KeyAction {
-    /// Convert a KeyAction to an internal Action if possible.
-    /// Returns None for actions that need special handling (SendText, RunCommand, etc.)
     pub fn to_action(&self) -> Option<crate::input::Action> {
-        use crate::input::Action;
-
         match self {
-            KeyAction::Copy => Some(Action::Copy),
-            KeyAction::Paste => Some(Action::Paste),
-            KeyAction::NewTab => Some(Action::NewTab),
-            KeyAction::CloseTab => Some(Action::CloseTab),
-            KeyAction::NextTab => Some(Action::NextTab),
-            KeyAction::PrevTab => Some(Action::PrevTab),
-            KeyAction::SwitchToTab { index } => Some(Action::SwitchToTab(*index)),
-            KeyAction::ToggleFullscreen => None, // Not yet implemented
-            KeyAction::ToggleSearch => Some(Action::ToggleSearch),
-            KeyAction::ScrollUp { lines } => Some(Action::ScrollUp(*lines)),
-            KeyAction::ScrollDown { lines } => Some(Action::ScrollDown(*lines)),
-            KeyAction::ScrollToTop => Some(Action::ScrollToTop),
-            KeyAction::ScrollToBottom => Some(Action::ScrollToBottom),
-            KeyAction::ClearScrollback => None, // Not yet implemented
-            KeyAction::ResetTerminal => None, // Not yet implemented
-            KeyAction::PreviousPrompt => Some(Action::PreviousPrompt),
-            KeyAction::NextPrompt => Some(Action::NextPrompt),
-            // These require special handling in App
-            KeyAction::SendText { .. } => None,
-            KeyAction::RunCommand { .. } => None,
-            KeyAction::CommandPalette => None,
-            KeyAction::OpenSettings => Some(Action::ToggleSettings),
-            KeyAction::SplitVertical => None, // Will be handled when split panes implemented
-            KeyAction::SplitHorizontal => None,
-            KeyAction::NavigatePane { .. } => None,
-            KeyAction::ClosePane => None,
-            KeyAction::PluginCommand { command_id } => Some(Action::PluginCommand(command_id.clone())),
+            KeyAction::PluginCommand { command_id } => {
+                Some(crate::input::Action::PluginCommand(command_id.clone()))
+            }
+            _ => None,
         }
     }
-
 }
 
-/// Keybinding manager
+/// Manager for plugin/custom keybindings (SendText, RunCommand, PluginCommand).
 #[derive(Debug, Default)]
 pub struct KeyBindingManager {
-    /// Custom bindings from config
     bindings: Vec<KeyBinding>,
-    /// Quick lookup by key name
     key_map: HashMap<String, Vec<usize>>,
 }
 
 impl KeyBindingManager {
-    /// Create a new keybinding manager
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Load bindings from config
     pub fn load(&mut self, bindings: Vec<KeyBinding>) {
         self.bindings = bindings;
         self.rebuild_key_map();
     }
 
-    /// Rebuild the key lookup map
     fn rebuild_key_map(&mut self) {
         self.key_map.clear();
         for (idx, binding) in self.bindings.iter().enumerate() {
@@ -171,10 +876,8 @@ impl KeyBindingManager {
         }
     }
 
-    /// Check if a key event matches a binding and return the action
     pub fn check(&self, key: &Key, modifiers: ModifiersState) -> Option<&KeyAction> {
         let key_name = key_to_string(key)?;
-
         if let Some(indices) = self.key_map.get(&key_name.to_lowercase()) {
             for &idx in indices {
                 let binding = &self.bindings[idx];
@@ -183,14 +886,14 @@ impl KeyBindingManager {
                 }
             }
         }
-
         None
     }
-
 }
 
+// ── Key name conversion ─────────────────────────────────────────────────────
+
 /// Convert a winit Key to a string representation
-fn key_to_string(key: &Key) -> Option<String> {
+pub fn key_to_string(key: &Key) -> Option<String> {
     match key {
         Key::Named(named) => Some(named_key_to_string(named)),
         Key::Character(c) => Some(c.to_string()),
@@ -198,7 +901,6 @@ fn key_to_string(key: &Key) -> Option<String> {
     }
 }
 
-/// Convert a named key to string
 fn named_key_to_string(key: &NamedKey) -> String {
     match key {
         NamedKey::Enter => "Enter".to_string(),
@@ -232,47 +934,189 @@ fn named_key_to_string(key: &NamedKey) -> String {
     }
 }
 
+// ── Tests ───────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_modifier_matching() {
-        let mods = KeyModifiers {
-            ctrl: true,
-            alt: false,
-            shift: true,
-            super_key: false,
-        };
+    fn test_registry_defaults() {
+        let reg = ShortcutRegistry::new();
+        // Copy should be Ctrl+Shift+C
+        let chord = reg.binding_for(BindableAction::Copy).unwrap();
+        assert_eq!(chord.key, "c");
+        assert!(chord.ctrl);
+        assert!(chord.shift);
+        assert!(!chord.alt);
 
-        let mut state = ModifiersState::empty();
-        state |= ModifiersState::CONTROL;
-        state |= ModifiersState::SHIFT;
-
-        assert!(mods.matches(state));
+        // SplitVertical should be unset
+        assert!(reg.binding_for(BindableAction::SplitVertical).is_none());
     }
 
     #[test]
-    fn test_keybinding_lookup() {
+    fn test_registry_lookup() {
+        let reg = ShortcutRegistry::new();
+        let key = Key::Character("c".into());
+        let mut mods = ModifiersState::empty();
+        mods |= ModifiersState::CONTROL;
+        mods |= ModifiersState::SHIFT;
+        let result = reg.check(&key, mods);
+        assert_eq!(result, Some(BindableAction::Copy));
+    }
+
+    #[test]
+    fn test_set_binding_with_conflict() {
+        let mut reg = ShortcutRegistry::new();
+        // Rebind Copy's chord (Ctrl+Shift+C) to Paste
+        let chord = KeyChord::new("c", true, false, true, false);
+        reg.set_binding(BindableAction::Paste, Some(chord.clone()));
+
+        // Paste now has Ctrl+Shift+C
+        assert_eq!(reg.binding_for(BindableAction::Paste), Some(&chord));
+        // Copy was auto-unbound due to conflict
+        assert!(reg.binding_for(BindableAction::Copy).is_none());
+    }
+
+    #[test]
+    fn test_clear_binding() {
+        let mut reg = ShortcutRegistry::new();
+        reg.clear_binding(BindableAction::Copy);
+        assert!(reg.binding_for(BindableAction::Copy).is_none());
+        // Lookup should return None
+        let key = Key::Character("c".into());
+        let mut mods = ModifiersState::empty();
+        mods |= ModifiersState::CONTROL;
+        mods |= ModifiersState::SHIFT;
+        assert!(reg.check(&key, mods).is_none());
+    }
+
+    #[test]
+    fn test_reset_binding() {
+        let mut reg = ShortcutRegistry::new();
+        reg.clear_binding(BindableAction::Copy);
+        assert!(reg.binding_for(BindableAction::Copy).is_none());
+        reg.reset_binding(BindableAction::Copy);
+        let chord = reg.binding_for(BindableAction::Copy).unwrap();
+        assert_eq!(chord.key, "c");
+        assert!(chord.ctrl);
+        assert!(chord.shift);
+    }
+
+    #[test]
+    fn test_user_overrides_persistence() {
+        let mut reg = ShortcutRegistry::new();
+        reg.set_binding(
+            BindableAction::Copy,
+            Some(KeyChord::new("k", true, false, false, false)),
+        );
+        reg.clear_binding(BindableAction::Paste);
+
+        let overrides = reg.user_overrides();
+        assert_eq!(overrides.len(), 2); // Copy rebind + Paste cleared
+
+        let copy_ovr = overrides.iter().find(|o| o.action == "copy").unwrap();
+        assert_eq!(copy_ovr.key.as_deref(), Some("k"));
+        assert!(copy_ovr.ctrl);
+
+        let paste_ovr = overrides.iter().find(|o| o.action == "paste").unwrap();
+        assert!(paste_ovr.key.is_none());
+    }
+
+    #[test]
+    fn test_apply_overrides() {
+        let mut reg = ShortcutRegistry::new();
+        reg.apply_overrides(&[ShortcutOverride {
+            action: "copy".into(),
+            key: Some("k".into()),
+            ctrl: true,
+            alt: false,
+            shift: false,
+            super_key: false,
+        }]);
+        let chord = reg.binding_for(BindableAction::Copy).unwrap();
+        assert_eq!(chord.key, "k");
+        assert!(chord.ctrl);
+    }
+
+    #[test]
+    fn test_from_id_roundtrip() {
+        for &action in BindableAction::all() {
+            let id = action.meta().id;
+            assert_eq!(BindableAction::from_id(id), Some(action), "roundtrip failed for {id}");
+        }
+    }
+
+    #[test]
+    fn test_display_string() {
+        let chord = KeyChord::new("c", true, false, true, false);
+        assert_eq!(chord.display_string(), "Ctrl+Shift+C");
+
+        let chord2 = KeyChord::new("pageup", false, false, true, false);
+        assert_eq!(chord2.display_string(), "Shift+PageUp");
+
+        let chord3 = KeyChord::new("f1", false, false, false, false);
+        assert_eq!(chord3.display_string(), "F1");
+    }
+
+    #[test]
+    fn test_plus_equals_normalization() {
+        let reg = ShortcutRegistry::new();
+        // IncreaseFontSize is bound to Ctrl+=
+        // Pressing Ctrl++ should also match
+        let key_plus = Key::Character("+".into());
+        let mut mods = ModifiersState::empty();
+        mods |= ModifiersState::CONTROL;
+        assert_eq!(
+            reg.check(&key_plus, mods),
+            Some(BindableAction::IncreaseFontSize)
+        );
+    }
+
+    #[test]
+    fn test_keybinding_manager_plugin() {
         let mut manager = KeyBindingManager::new();
-        manager.load(vec![
-            KeyBinding {
-                key: "t".to_string(),
-                modifiers: KeyModifiers {
-                    ctrl: true,
-                    shift: true,
-                    ..Default::default()
-                },
-                action: KeyAction::NewTab,
+        manager.load(vec![KeyBinding {
+            key: "t".to_string(),
+            modifiers: KeyModifiers {
+                ctrl: true,
+                shift: true,
+                ..Default::default()
             },
-        ]);
+            action: KeyAction::PluginCommand {
+                command_id: "test_plugin".into(),
+            },
+        }]);
 
         let mut mods = ModifiersState::empty();
         mods |= ModifiersState::CONTROL;
         mods |= ModifiersState::SHIFT;
-
         let key = Key::Character("t".into());
         let action = manager.check(&key, mods);
-        assert!(matches!(action, Some(KeyAction::NewTab)));
+        assert!(matches!(
+            action,
+            Some(KeyAction::PluginCommand { command_id }) if command_id == "test_plugin"
+        ));
+    }
+
+    #[test]
+    fn test_reset_all() {
+        let mut reg = ShortcutRegistry::new();
+        reg.set_binding(
+            BindableAction::Copy,
+            Some(KeyChord::new("x", false, false, false, false)),
+        );
+        reg.clear_binding(BindableAction::NewTab);
+        reg.reset_all();
+
+        // Everything back to defaults
+        let chord = reg.binding_for(BindableAction::Copy).unwrap();
+        assert_eq!(chord.key, "c");
+        assert!(chord.ctrl && chord.shift);
+
+        let tab_chord = reg.binding_for(BindableAction::NewTab).unwrap();
+        assert_eq!(tab_chord.key, "t");
+
+        assert!(reg.user_overrides().is_empty());
     }
 }

@@ -126,7 +126,7 @@ impl Renderer {
         }
 
         // ── Keyboard hints at bottom of sidebar ──
-        let hints = ["↑↓ Navigate", "←→ Adjust", "Tab Section", "Esc Close"];
+        let hints: &[&str] = &["↑↓ Navigate", "←→ Adjust", "Tab Section", "Esc Close"];
         let hint_start_y = window_height - (hints.len() as f32 * self.cell_height * 1.6) - self.cell_height;
         for (idx, hint) in hints.iter().enumerate() {
             let hy = hint_start_y + idx as f32 * self.cell_height * 1.6;
