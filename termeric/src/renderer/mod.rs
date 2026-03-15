@@ -13,6 +13,7 @@ mod image;
 
 pub(crate) mod draw;
 mod chrome;
+mod harvest;
 mod git;
 mod overlays;
 mod palette;
@@ -242,6 +243,8 @@ pub struct Renderer {
     context_picker: Option<ContextPickerInfo>,
     guardrail: Option<GuardrailInfo>,
     chrome_bar: Option<crate::ui::claude_chrome::ChromeBarInfo>,
+    /// Pane dividers for the current frame
+    pane_dividers: Vec<crate::panes::Divider>,
     /// Visual bell intensity (0.0 = off, 1.0 = full flash)
     bell_intensity: f32,
     /// URL cache for detected URLs (auto-detected, not OSC 8)
@@ -347,6 +350,7 @@ impl Renderer {
             context_picker: None,
             guardrail: None,
             chrome_bar: None,
+            pane_dividers: Vec::new(),
             bell_intensity: 0.0,
             url_cache: None,
         })
@@ -515,24 +519,38 @@ impl Renderer {
         self.chrome_bar = info;
     }
 
-    /// Render pane dividers between split panes.
-    ///
-    /// Each divider is drawn as a thin line at the specified position.
+    /// Store pane dividers for rendering in the next frame.
     pub fn add_pane_dividers(&mut self, dividers: &[crate::panes::Divider]) {
-        let divider_color = self.ui.tab_border;
-        for div in dividers {
+        self.pane_dividers = dividers.to_vec();
+    }
+
+    /// Draw stored pane dividers. Called from within build_render_data().
+    fn draw_pane_dividers(&mut self, content_top: f32) {
+        let padding = self.padding;
+
+        // Dark groove + light edge for a subtle 3D divider
+        let groove_color = [0.15, 0.15, 0.18, 0.9];
+        let edge_color = [0.35, 0.35, 0.40, 0.4];
+
+        for div in self.pane_dividers.clone() {
             if div.vertical {
-                self.rect_pipeline.push_rect(
-                    div.position, div.start,
-                    2.0, div.end - div.start,
-                    divider_color,
-                );
+                let x = padding + div.position;
+                let y0 = content_top + div.start;
+                let y1 = content_top + div.end;
+                let len = y1 - y0;
+                // Main groove (3px)
+                self.rect_pipeline.push_rect(x, y0, 3.0, len, groove_color);
+                // Light edge on the right (1px)
+                self.rect_pipeline.push_rect(x + 3.0, y0, 1.0, len, edge_color);
             } else {
-                self.rect_pipeline.push_rect(
-                    div.start, div.position,
-                    div.end - div.start, 2.0,
-                    divider_color,
-                );
+                let x0 = padding + div.start;
+                let x1 = padding + div.end;
+                let y = content_top + div.position;
+                let len = x1 - x0;
+                // Main groove (3px)
+                self.rect_pipeline.push_rect(x0, y, len, 3.0, groove_color);
+                // Light edge on bottom (1px)
+                self.rect_pipeline.push_rect(x0, y + 3.0, len, 1.0, edge_color);
             }
         }
     }
@@ -563,7 +581,9 @@ impl Renderer {
     /// search_bar: optional search bar info when searching
     /// search: search state for match highlighting
     /// images: optional list of image placements and their data for Kitty graphics
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle) -> Result<(), SurfaceError> {
+    /// panes: multi-pane render data (empty = single-grid mode)
+    /// harvest: optional harvest mode render info
+    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output.texture.create_view(&TextureViewDescriptor::default());
 
@@ -572,7 +592,7 @@ impl Renderer {
         });
 
         // Build render data from grid and tabs (inserts layer boundaries)
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette, cursor_style);
+        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette, cursor_style, panes, harvest);
 
         // Build image render data if any
         self.build_image_data(images);
@@ -676,9 +696,10 @@ impl Renderer {
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle) {
+    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
+        self.pane_dividers.clear();
 
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
@@ -710,119 +731,317 @@ impl Renderer {
             self.build_chrome_bar(info, window_width, tab_bar_height, chrome_height);
         }
 
-        // Selection highlight color - earthy yellow (inner layer) with transparency
-        // When copy_flash > 0, brighten the selection to white for a flash effect
+        // ── Render terminal grid(s) ──
+        // Multi-pane mode: render each pane's grid in its own viewport
+        // Single-grid mode: render one grid filling the content area
+        if !panes.is_empty() {
+            for pane in panes {
+                let pane_x = padding + pane.rect.x;
+                let pane_y = content_top + pane.rect.y;
+                let pane_cols = (pane.rect.width / cell_width).floor() as usize;
+                let pane_rows = (pane.rect.height / cell_height).floor() as usize;
+
+                // Use pre-computed cursor position (animated for focused, raw for unfocused)
+                let pane_cursor_pos = pane.cursor_pos;
+
+                self.build_pane_grid(
+                    pane.grid,
+                    pane.selection,
+                    pane_x, pane_y,
+                    pane_cols.max(1), pane_rows.max(1),
+                    pane.is_focused,
+                    cursor_style,
+                    cursor_opacity,
+                    pane_cursor_pos,
+                    copy_flash,
+                    brightness,
+                    search,
+                    window_height,
+                    pane.rect.width,
+                );
+
+                // Draw focus indicator for the focused pane (subtle accent border)
+                if panes.len() > 1 && pane.is_focused {
+                    let border_color = adjust_alpha(self.ui.cursor, 0.5);
+                    let bw = 2.0_f32;
+                    // Top
+                    self.rect_pipeline.push_rect(pane_x, pane_y, pane.rect.width, bw, border_color);
+                    // Bottom
+                    self.rect_pipeline.push_rect(pane_x, pane_y + pane.rect.height - bw, pane.rect.width, bw, border_color);
+                    // Left
+                    self.rect_pipeline.push_rect(pane_x, pane_y, bw, pane.rect.height, border_color);
+                    // Right
+                    self.rect_pipeline.push_rect(pane_x + pane.rect.width - bw, pane_y, bw, pane.rect.height, border_color);
+                }
+            }
+        } else {
+            // Single grid mode — full content area
+            let grid_x = padding;
+            let grid_y = content_top + padding;
+            let grid_cols = grid.cols();
+            let grid_rows = grid.rows();
+            let grid_width = window_width - padding * 2.0;
+
+            self.build_pane_grid(
+                grid,
+                selection,
+                grid_x, grid_y,
+                grid_cols, grid_rows,
+                true, // always focused in single mode
+                cursor_style,
+                cursor_opacity,
+                cursor_pos,
+                copy_flash,
+                brightness,
+                search,
+                window_height,
+                grid_width,
+            );
+        }
+
+        // Draw pane dividers (stored from add_pane_dividers call)
+        if !self.pane_dividers.is_empty() {
+            self.draw_pane_dividers(content_top);
+        }
+
+        // Visual bell flash — subtle screen-edge glow
+        if self.bell_intensity > 0.0 {
+            let alpha = self.bell_intensity * 0.15;
+            let flash_color = [1.0, 1.0, 1.0, alpha];
+            self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, flash_color);
+        }
+
+        // ── LAYER 1: Harvest indicators (in gutter, alongside grid) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(harvest_info) = harvest {
+            self.build_harvest_indicators(&harvest_info.indicators, content_top + padding);
+        }
+
+        // ── LAYER 2: Harvest cellar panel (slide-in overlay) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(harvest_info) = harvest {
+            if let Some(ref cellar) = harvest_info.cellar {
+                self.build_root_cellar(cellar, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 3: Harvest sprout menu (context menu overlay) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(harvest_info) = harvest {
+            if let Some(ref menu) = harvest_info.sprout_menu {
+                self.build_sprout_menu(menu);
+            }
+        }
+
+        // ── LAYER 4: Search bar (overlays grid content) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(search_info) = search_bar {
+            self.build_search_bar(search_info, window_width, tab_bar_height);
+        }
+
+        // ── LAYER 5: Git completion dropdown (overlays grid) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.git_completions.clone() {
+            self.build_git_completions(info, cursor_pos, window_width, window_height);
+        }
+
+        // ── LAYER 6: Settings panel + settings dropdown (overlays everything below) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(sp) = settings_panel {
+            if sp.animation > 0.001 {
+                self.build_settings_panel(sp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 7: Settings dropdown overlay (on top of settings panel) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(sp) = settings_panel {
+            if sp.animation > 0.001 && sp.dropdown_open {
+                self.build_dropdown_overlay(sp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 8: Session dropdown (on top of everything) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(sd) = session_dropdown {
+            self.build_session_dropdown(sd, window_width);
+        }
+
+        // ── LAYER 9: Session management panel (topmost overlay) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(sp) = session_panel {
+            if sp.animation > 0.001 {
+                self.build_session_management_panel(sp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 10: Commands panel ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(cp) = commands_panel {
+            if cp.animation > 0.001 {
+                self.build_commands_panel(cp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 11: Command palette (topmost overlay) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(palette) = command_palette {
+            if palette.animation > 0.001 {
+                self.build_command_palette(palette, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 12: Info overlay (above everything) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.info_overlay.clone() {
+            if info.animation > 0.001 {
+                self.build_info_overlay(info, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 13: Diff review overlay (topmost) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.diff_review.clone() {
+            if info.animation > 0.001 {
+                self.build_diff_review(info, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 14: Context picker overlay ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.context_picker.clone() {
+            if info.animation > 0.001 {
+                self.build_context_picker(info, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 15: Guardrail confirmation overlay (absolute topmost) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(ref info) = self.guardrail.clone() {
+            if info.animation > 0.001 {
+                self.build_guardrail_confirmation(info, window_width, window_height);
+            }
+        }
+    }
+
+    /// Render a single terminal grid within a pane viewport.
+    ///
+    /// This method handles cell rendering, cursor, scrollbar, selection, search
+    /// highlights, underlines, and URL detection for one grid. It is called once
+    /// in single-grid mode or once per pane in multi-pane mode.
+    #[allow(clippy::too_many_arguments)]
+    fn build_pane_grid(
+        &mut self,
+        grid: &Grid,
+        selection: Option<&Selection>,
+        offset_x: f32,
+        offset_y: f32,
+        pane_cols: usize,
+        pane_rows: usize,
+        is_focused: bool,
+        cursor_style: CursorStyle,
+        cursor_opacity: f32,
+        cursor_pos: (f32, f32),
+        copy_flash: f32,
+        brightness: f32,
+        search: &Search,
+        window_height: f32,
+        pane_width: f32,
+    ) {
+        let cell_width = self.cell_width;
+        let cell_height = self.cell_height;
+
+        // Selection highlight color
         let selection_base = self.ui.selection;
         let selection_flash = self.ui.selection_flash;
         let selection_color = apply_brightness(mix(selection_base, selection_flash, copy_flash), brightness);
 
-        // Get scroll offset to determine if cursor should be shown
         let scroll_offset = grid.scroll_offset();
         let scroll_offset_i32 = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
         let default_bg = TermColor::default_bg();
 
-        let max_grid_y = window_height - padding;
+        let max_grid_y = window_height - self.padding;
 
         // Determine which rows to render based on filter mode
         let filter_mode = search.is_filter_mode() && !search.matching_rows().is_empty();
         let matching_rows = search.matching_rows();
 
-        // Iterate over grid cells (offset by tab bar height and search bar if visible)
-        // In filter mode, only show rows that contain matches
-        // rows_to_render: Vec of (visual_row_index, grid_row_offset)
-        // grid_row_offset: 0+ for visible grid, negative for scrollback
         let rows_to_render: Vec<(usize, i32)> = if filter_mode {
-            // In filter mode, render only matching rows (both visible and scrollback)
-            // Each matching row is rendered at a visual position starting from 0
             matching_rows.iter()
                 .enumerate()
                 .map(|(visual_row, &grid_row)| (visual_row, grid_row))
                 .collect()
         } else {
-            // Normal mode: render all visible rows
-            (0..grid.rows()).map(|row| (row, row as i32 - scroll_offset_i32)).collect()
+            (0..pane_rows.min(grid.rows())).map(|row| (row, row as i32 - scroll_offset_i32)).collect()
         };
 
         for (visual_row, grid_row) in rows_to_render {
-            // Get the row data - use row_at_offset which handles both visible and scrollback
             let row_data = if filter_mode {
-                // In filter mode, use row_at_offset to access any row (visible or scrollback)
                 grid.row_at_offset(grid_row)
             } else {
-                // In normal mode, use cell_scrolled access pattern
-                // For this we need to handle row-by-row below
                 None
             };
 
-            for col in 0..grid.cols() {
-                // Get cell based on mode
+            for col in 0..pane_cols.min(grid.cols()) {
                 let cell = if filter_mode {
-                    // Access cell from the row_data we fetched
                     row_data.and_then(|r| r.get(col))
                 } else {
                     grid.cell_scrolled(visual_row, col)
                 };
                 let Some(cell) = cell else { continue };
 
-                let x = padding + col as f32 * cell_width;
-                let y = content_top + padding + visual_row as f32 * cell_height;
+                let x = offset_x + col as f32 * cell_width;
+                let y = offset_y + visual_row as f32 * cell_height;
 
-                // Skip rendering if this row would overlap with command bar
                 if y + cell_height > max_grid_y {
                     break;
                 }
 
-                // Check if cell is selected (use grid_row for selection check)
-                let is_selected = selection
+                let is_selected = is_focused && selection
                     .map(|s| s.contains(grid_row, col))
                     .unwrap_or(false);
 
-                // Check if cell is part of a search match
-                // The row index in search is relative to the grid: negative for scrollback, 0+ for visible
                 let is_search_match = search.is_match(grid_row, col);
                 let is_current_match = search.is_current_match(grid_row, col);
 
-                // Apply inverse attribute if set (swap fg/bg)
                 let (fg, bg) = cell.apply_inverse();
 
-                // Draw background if not default or if selected/matched
+                // Draw background
                 if is_selected {
-                    self.rect_pipeline.push_rect(
-                        x, y,
-                        cell_width, cell_height,
-                        selection_color,
-                    );
+                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height, selection_color);
                 } else if is_current_match {
-                    // Current search match - brighter gold
-                    self.rect_pipeline.push_rect(
-                        x, y,
-                        cell_width, cell_height,
-                        apply_brightness(self.ui.search_match_current, brightness),
-                    );
+                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height,
+                        apply_brightness(self.ui.search_match_current, brightness));
                 } else if is_search_match {
-                    // Other search matches - subtle gold
-                    self.rect_pipeline.push_rect(
-                        x, y,
-                        cell_width, cell_height,
-                        apply_brightness(self.ui.search_match, brightness),
-                    );
+                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height,
+                        apply_brightness(self.ui.search_match, brightness));
                 } else if bg != default_bg {
-                    self.rect_pipeline.push_rect(
-                        x, y,
-                        cell_width, cell_height,
-                        [
-                            bg.r as f32 / 255.0 * brightness,
-                            bg.g as f32 / 255.0 * brightness,
-                            bg.b as f32 / 255.0 * brightness,
-                            1.0
-                        ],
-                    );
+                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height, [
+                        bg.r as f32 / 255.0 * brightness,
+                        bg.g as f32 / 255.0 * brightness,
+                        bg.b as f32 / 255.0 * brightness,
+                        1.0,
+                    ]);
                 }
 
-                // Draw character with focus dimming applied
+                // Draw character
                 if let Some(c) = cell.content.char() {
                     if !c.is_whitespace() {
-                        // Use selection_text color for selected cells if theme provides one
                         let text_color = if is_selected {
                             if let Some(sel_text) = self.ui.selection_text {
                                 apply_brightness(sel_text, brightness)
@@ -836,110 +1055,76 @@ impl Renderer {
                     }
                 }
 
-                // Draw underline if any underline style is active
+                // Draw underline styles
                 if cell.attrs.has_underline() {
-                    // Get underline color (use custom color or fg)
                     let underline_color = cell.underline_color.unwrap_or(cell.fg);
-                    let ul_color = apply_brightness(
-                        [
-                            underline_color.r as f32 / 255.0,
-                            underline_color.g as f32 / 255.0,
-                            underline_color.b as f32 / 255.0,
-                            1.0
-                        ],
-                        brightness
-                    );
+                    let ul_color = apply_brightness([
+                        underline_color.r as f32 / 255.0,
+                        underline_color.g as f32 / 255.0,
+                        underline_color.b as f32 / 255.0,
+                        1.0,
+                    ], brightness);
 
-                    // Position underline at bottom of cell
                     let underline_y = y + cell_height - 2.0;
                     let underline_thickness = 1.0;
 
                     if cell.attrs.contains(CellAttrs::CURLY_UNDERLINE) {
-                        // Curly/wavy underline - draw as a series of small arcs
-                        // For simplicity, we approximate with a thicker line
-                        // A proper implementation would use a shader
                         self.draw_wavy_underline(x, underline_y, cell_width, ul_color);
                     } else if cell.attrs.contains(CellAttrs::DOUBLE_UNDERLINE) {
-                        // Double underline - two lines
                         self.rect_pipeline.push_rect(x, underline_y - 2.0, cell_width, underline_thickness, ul_color);
                         self.rect_pipeline.push_rect(x, underline_y, cell_width, underline_thickness, ul_color);
                     } else if cell.attrs.contains(CellAttrs::DOTTED_UNDERLINE) {
-                        // Dotted underline - series of small dots
                         self.draw_dotted_underline(x, underline_y, cell_width, ul_color);
                     } else if cell.attrs.contains(CellAttrs::DASHED_UNDERLINE) {
-                        // Dashed underline - series of dashes
                         self.draw_dashed_underline(x, underline_y, cell_width, ul_color);
                     } else {
-                        // Single underline (default)
                         self.rect_pipeline.push_rect(x, underline_y, cell_width, underline_thickness, ul_color);
                     }
                 }
 
-                // Draw hyperlink underline (only if no other underline is already drawn)
-                // Check both OSC 8 hyperlinks and auto-detected URLs
+                // Draw hyperlink underline
                 let is_hyperlink = cell.flags.contains(CellFlags::HYPERLINK);
                 let is_detected_url = self.url_cache.as_ref().map_or(false, |c| c.is_url(visual_row, col));
                 if (is_hyperlink || is_detected_url) && !cell.attrs.has_underline() {
-                    // Use URL color from theme for hyperlinks
                     let link_color = apply_brightness(self.ui.url, brightness);
                     let underline_y = y + cell_height - 2.0;
-                    // Draw a dotted underline for hyperlinks
                     self.draw_dotted_underline(x, underline_y, cell_width, link_color);
                 }
             }
         }
 
-        // Draw cursor (only when not scrolled back into history and not in filter mode)
-        if cursor_opacity > 0.0 && scroll_offset == 0 && !filter_mode {
+        // Draw cursor (only for focused pane, not scrolled back, not in filter mode)
+        if is_focused && cursor_opacity > 0.0 && scroll_offset == 0 && !filter_mode {
             let cursor = grid.cursor();
             if cursor.visible {
-                // Use animated cursor position for smooth movement
-                let x = padding + cursor_pos.0 * cell_width;
-                let y = content_top + padding + cursor_pos.1 * cell_height;
+                let x = offset_x + cursor_pos.0 * cell_width;
+                let y = offset_y + cursor_pos.1 * cell_height;
 
-                // Only draw cursor if it won't overlap with command bar
                 if y + cell_height <= max_grid_y {
-                    // Cursor color with animated opacity and focus dimming
                     let cursor_color = apply_brightness(self.ui.cursor, brightness);
                     let cc = [cursor_color[0], cursor_color[1], cursor_color[2], cursor_opacity];
 
                     match cursor_style {
                         CursorStyle::Block => {
-                            self.rect_pipeline.push_rounded_rect(
-                                x, y,
-                                cell_width, cell_height,
-                                cc,
-                                2.0,
-                            );
-
-                            // Re-render the character under cursor with cursor_text color
+                            self.rect_pipeline.push_rounded_rect(x, y, cell_width, cell_height, cc, 2.0);
                             let cursor_row = cursor.row as usize;
                             let cursor_col = cursor.col as usize;
                             if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
                                 if let Some(c) = cell.content.char() {
                                     if !c.is_whitespace() {
                                         let ct = apply_brightness(self.ui.cursor_text, brightness);
-                                        self.text_pipeline.push_char(c, x, y,
-                                            [ct[0], ct[1], ct[2], cursor_opacity]);
+                                        self.text_pipeline.push_char(c, x, y, [ct[0], ct[1], ct[2], cursor_opacity]);
                                     }
                                 }
                             }
                         }
                         CursorStyle::Underline => {
                             let underline_height = 2.0_f32.max(cell_height * 0.1);
-                            self.rect_pipeline.push_rect(
-                                x, y + cell_height - underline_height,
-                                cell_width, underline_height,
-                                cc,
-                            );
+                            self.rect_pipeline.push_rect(x, y + cell_height - underline_height, cell_width, underline_height, cc);
                         }
                         CursorStyle::Beam => {
                             let beam_width = 2.0_f32.max(cell_width * 0.1);
-                            self.rect_pipeline.push_rect(
-                                x, y,
-                                beam_width, cell_height,
-                                cc,
-                            );
+                            self.rect_pipeline.push_rect(x, y, beam_width, cell_height, cc);
                         }
                     }
                 }
@@ -949,161 +1134,37 @@ impl Renderer {
         // Draw scrollbar (only when there is scrollback content)
         let scrollback_len = grid.scrollback_len();
         if scrollback_len > 0 {
-            let visible_rows = grid.rows();
+            let visible_rows = pane_rows.min(grid.rows());
             let total_rows = scrollback_len + visible_rows;
 
-            // Scrollbar geometry
             let scrollbar_width = 6.0_f32;
             let scrollbar_margin = 2.0_f32;
-            let scrollbar_x = window_width - scrollbar_width - scrollbar_margin;
-            let scrollbar_top = content_top + padding;
-            let scrollbar_bottom = window_height - padding;
+            let scrollbar_x = offset_x + pane_width - scrollbar_width - scrollbar_margin;
+            let scrollbar_top = offset_y;
+            let scrollbar_bottom = offset_y + pane_rows as f32 * cell_height;
             let scrollbar_height = scrollbar_bottom - scrollbar_top;
 
             if scrollbar_height > 20.0 {
-                // Draw track (subtle background)
                 let track_color = [1.0_f32, 1.0, 1.0, 0.05];
                 self.rect_pipeline.push_rounded_rect(
-                    scrollbar_x, scrollbar_top,
-                    scrollbar_width, scrollbar_height,
-                    track_color,
-                    3.0,
+                    scrollbar_x, scrollbar_top, scrollbar_width, scrollbar_height, track_color, 3.0,
                 );
 
-                // Calculate thumb size and position
                 let thumb_ratio = (visible_rows as f32) / (total_rows as f32);
                 let thumb_height = (scrollbar_height * thumb_ratio).max(20.0).min(scrollbar_height);
-
-                // scroll_offset=0 means at bottom (current), max means scrolled to top
                 let max_offset = scrollback_len;
                 let scroll_fraction = if max_offset > 0 {
                     scroll_offset as f32 / max_offset as f32
                 } else {
                     0.0
                 };
-
-                // When scroll_offset is 0 (at bottom), thumb should be at the bottom
-                // When scroll_offset is max (at top), thumb should be at the top
                 let thumb_travel = scrollbar_height - thumb_height;
                 let thumb_y = scrollbar_top + thumb_travel * (1.0 - scroll_fraction);
 
-                // Draw thumb
                 let thumb_color = [1.0_f32, 1.0, 1.0, 0.25];
                 self.rect_pipeline.push_rounded_rect(
-                    scrollbar_x, thumb_y,
-                    scrollbar_width, thumb_height,
-                    thumb_color,
-                    3.0,
+                    scrollbar_x, thumb_y, scrollbar_width, thumb_height, thumb_color, 3.0,
                 );
-            }
-        }
-
-        // Visual bell flash — subtle screen-edge glow
-        if self.bell_intensity > 0.0 {
-            let alpha = self.bell_intensity * 0.15;
-            let flash_color = [1.0, 1.0, 1.0, alpha];
-            self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, flash_color);
-        }
-
-        // ── LAYER 1: Search bar (overlays grid content) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(search_info) = search_bar {
-            self.build_search_bar(search_info, window_width, tab_bar_height);
-        }
-
-        // ── LAYER 2: Git completion dropdown (overlays grid) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.git_completions.clone() {
-            self.build_git_completions(info, cursor_pos, window_width, window_height);
-        }
-
-        // ── LAYER 3: Settings panel + settings dropdown (overlays everything below) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = settings_panel {
-            if sp.animation > 0.001 {
-                self.build_settings_panel(sp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 4: Settings dropdown overlay (on top of settings panel) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = settings_panel {
-            if sp.animation > 0.001 && sp.dropdown_open {
-                self.build_dropdown_overlay(sp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 5: Session dropdown (on top of everything) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sd) = session_dropdown {
-            self.build_session_dropdown(sd, window_width);
-        }
-
-        // ── LAYER 6: Session management panel (topmost overlay) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = session_panel {
-            if sp.animation > 0.001 {
-                self.build_session_management_panel(sp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 7: Commands panel ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(cp) = commands_panel {
-            if cp.animation > 0.001 {
-                self.build_commands_panel(cp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 8: Command palette (topmost overlay) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(palette) = command_palette {
-            if palette.animation > 0.001 {
-                self.build_command_palette(palette, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 9: Info overlay (above everything) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.info_overlay.clone() {
-            if info.animation > 0.001 {
-                self.build_info_overlay(info, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 10: Diff review overlay (topmost) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.diff_review.clone() {
-            if info.animation > 0.001 {
-                self.build_diff_review(info, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 11: Context picker overlay ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.context_picker.clone() {
-            if info.animation > 0.001 {
-                self.build_context_picker(info, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 12: Guardrail confirmation overlay (absolute topmost) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(ref info) = self.guardrail.clone() {
-            if info.animation > 0.001 {
-                self.build_guardrail_confirmation(info, window_width, window_height);
             }
         }
     }

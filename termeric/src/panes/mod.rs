@@ -353,9 +353,49 @@ impl PaneManager {
         })
     }
 
+    /// Resize a split divider at the given position (in content-local coordinates).
+    ///
+    /// `threshold` controls how close the mouse must be to match a divider.
+    /// Use a small value for click detection, or `f32::MAX` during active drag.
+    /// Returns true if a divider was hit and resized.
+    pub fn resize_divider_at(&mut self, pos_x: f32, pos_y: f32, threshold: f32) -> bool {
+        let rect = PaneRect {
+            x: 0.0, y: 0.0,
+            width: self.total_width, height: self.total_height,
+        };
+        if self.tree.resize_at(rect, pos_x, pos_y, threshold) {
+            // Recalculate pane sizes after ratio change
+            self.recalculate_sizes();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Hit-test dividers. Returns Some(is_vertical) if near a divider.
+    pub fn hit_test_divider(&self, pos_x: f32, pos_y: f32) -> Option<bool> {
+        let rect = PaneRect {
+            x: 0.0, y: 0.0,
+            width: self.total_width, height: self.total_height,
+        };
+        self.tree.hit_test_divider(rect, pos_x, pos_y)
+    }
+
     /// Get number of panes
     pub fn pane_count(&self) -> usize {
         self.panes.len()
+    }
+
+    /// Take the last remaining pane out of the manager.
+    ///
+    /// Returns `Some(pane)` if exactly one pane remains, consuming it from the
+    /// internal map. Used when dissolving pane mode back to single-terminal tab.
+    pub fn take_remaining_pane(&mut self) -> Option<Pane> {
+        if self.panes.len() != 1 {
+            return None;
+        }
+        let id = *self.panes.keys().next()?;
+        self.panes.remove(&id)
     }
 
     /// Iterate over all panes with their layouts

@@ -12,6 +12,7 @@ const MAX_COMMANDS: usize = 100;
 
 /// A command entry in the root cellar
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CommandEntry {
     /// Row where the command started
     pub row: usize,
@@ -85,6 +86,7 @@ pub struct RootCellar {
     pub scroll: f32,
 }
 
+#[allow(dead_code)]
 impl RootCellar {
     /// Create a new root cellar
     pub fn new() -> Self {

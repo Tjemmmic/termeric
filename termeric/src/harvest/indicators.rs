@@ -69,6 +69,7 @@ pub struct GrowthIndicator {
     pub fade_timer: f32,
 }
 
+#[allow(dead_code)]
 impl GrowthIndicator {
     /// Create a new growth indicator
     pub fn new(prompt_row: usize) -> Self {

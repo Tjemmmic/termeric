@@ -157,6 +157,11 @@ impl TabManager {
         self.tabs.get_mut(self.active)
     }
 
+    /// Get mutable access to all tabs (for resize propagation)
+    pub fn all_tabs_mut(&mut self) -> &mut [Tab] {
+        &mut self.tabs
+    }
+
     /// Switch to a specific tab
     pub fn switch_to(&mut self, index: usize) {
         if index < self.tabs.len() {
@@ -203,23 +208,56 @@ impl TabManager {
         let mut all_events = Vec::new();
 
         for (i, tab) in self.tabs.iter_mut().enumerate() {
-            let (had_output, events) = tab.process_events();
-            if had_output && i != self.active {
-                tab.has_activity = true;
+            // Process pane manager events if tab has split panes
+            if let Some(ref mut pm) = tab.pane_manager {
+                let pane_output = pm.process_all_events();
+                if pane_output {
+                    if i != self.active {
+                        tab.has_activity = true;
+                    }
+                    any_output = true;
+                }
+                pm.cleanup_closed();
+                if pm.all_closed() {
+                    // Transplant remaining pane back onto the tab
+                    if let Some(remaining) = pm.take_remaining_pane() {
+                        tab.terminal = remaining.terminal;
+                        tab.pty = remaining.pty;
+                        tab.pty_rx = remaining.pty_rx;
+                    }
+                    tab.pane_manager = None;
+                    // Resize the transplanted terminal/PTY back to full tab dimensions
+                    if let Err(e) = tab.resize(self.cols, self.rows) {
+                        log::error!("Failed to resize tab {} after pane close: {}", tab.id, e);
+                    }
+                    log::info!("Tab {} all panes closed, exiting pane mode", tab.id);
+                }
+            } else {
+                // Only process the tab's own terminal when NOT in pane mode
+                let (had_output, events) = tab.process_events();
+                if had_output && i != self.active {
+                    tab.has_activity = true;
+                }
+                any_output = any_output || had_output;
+                all_events.extend(events);
             }
-            any_output = any_output || had_output;
-            all_events.extend(events);
         }
 
         (any_output, all_events)
     }
 
     /// Resize all tabs
+    ///
+    /// Skips tabs with active pane managers — those terminals are at pane
+    /// dimensions and are managed by PaneManager::resize() instead.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.cols = cols;
         self.rows = rows;
 
         for tab in &mut self.tabs {
+            if tab.pane_manager.is_some() {
+                continue; // Pane terminals are resized via PaneManager::resize()
+            }
             if let Err(e) = tab.resize(cols, rows) {
                 log::error!("Failed to resize tab {}: {}", tab.id, e);
             }

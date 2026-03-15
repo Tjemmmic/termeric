@@ -37,7 +37,8 @@ use crate::terminal::guardrails::GuardrailOverlay;
 use crate::terminal::url::{UrlDetector, UrlCache};
 use crate::terminal::container::{TerminalContainer, SplitContainer, PaneRenderInfo};
 use crate::harvest::HarvestMode;
-use crate::panes::{PaneManager, SplitDirection};
+use crate::panes::{PaneId, PaneManager, SplitDirection};
+use crate::renderer::types::{PaneRenderData, HarvestRenderInfo, IndicatorRenderInfo, CellarRenderInfo, CellarEntryInfo, SproutMenuRenderInfo};
 
 /// Main application state
 ///
@@ -86,6 +87,8 @@ pub struct App {
     mouse_pressed: bool,
     /// Whether we're dragging the scrollbar
     scrollbar_dragging: bool,
+    /// Whether we're dragging a pane divider
+    divider_dragging: bool,
     /// Default font size (for reset)
     default_font_size: f32,
     /// When copy flash started (for animation), None if not flashing
@@ -153,8 +156,6 @@ pub struct App {
     harvest: Option<HarvestMode>,
     /// Number of command regions already processed by harvest
     harvest_region_cursor: usize,
-    /// Pane manager for split pane support (None = single pane mode)
-    pane_manager: Option<PaneManager>,
     /// URL detector for auto-detecting URLs in terminal output
     url_detector: UrlDetector,
     /// Cached URL lookup table, reused between frames
@@ -205,6 +206,7 @@ impl App {
             last_cursor_pos: None,
             mouse_pressed: false,
             scrollbar_dragging: false,
+            divider_dragging: false,
             default_font_size,
             copy_flash_start: None,
             window_focused: true,
@@ -239,7 +241,6 @@ impl App {
             pending_profile_selection: None,
             harvest: None,
             harvest_region_cursor: 0,
-            pane_manager: None,
             url_detector: UrlDetector::new(),
             url_cache: UrlCache::new(0),
         });
@@ -487,7 +488,7 @@ impl App {
         log::info!("Sessions saved");
     }
 
-    /// Process PTY events for all tabs
+    /// Process PTY events for all tabs and panes
     fn process_pty_events(&mut self) {
         // Process events and collect results
         let (events, quick_exits, should_exit) = {
@@ -749,13 +750,22 @@ impl App {
             self.git_completion_index = None;
         }
 
+        // Route keyboard input to the active tab — through pane manager if split,
+        // otherwise directly to the tab's PTY
         if let Some(tabs) = &mut self.tabs {
             if let Some(tab) = tabs.active_tab_mut() {
-                // Jump to bottom when user types while scrolled up
-                tab.terminal.grid_mut().set_scroll_offset(0);
-
-                if let Err(e) = tab.write(data) {
-                    log::error!("Failed to write to PTY: {}", e);
+                if let Some(ref mut pm) = tab.pane_manager {
+                    if let Some(pane) = pm.focused_pane_mut() {
+                        pane.terminal.grid_mut().set_scroll_offset(0);
+                        if let Err(e) = pane.write(data) {
+                            log::error!("Failed to write to pane PTY: {}", e);
+                        }
+                    }
+                } else {
+                    tab.terminal.grid_mut().set_scroll_offset(0);
+                    if let Err(e) = tab.write(data) {
+                        log::error!("Failed to write to PTY: {}", e);
+                    }
                 }
             }
         }
@@ -774,9 +784,19 @@ impl App {
                 self.cols = new_cols;
                 self.rows = new_rows;
 
-                // Resize all tabs
+                // Resize all tabs and their pane managers
                 if let Some(tabs) = &mut self.tabs {
                     tabs.resize(self.cols, self.rows);
+
+                    let cell_width = renderer.cell_width();
+                    let cell_height = renderer.cell_height();
+                    let content_width = new_cols as f32 * cell_width;
+                    let content_height = new_rows as f32 * cell_height;
+                    for tab in tabs.all_tabs_mut() {
+                        if let Some(ref mut pm) = tab.pane_manager {
+                            pm.resize(content_width, content_height, cell_width, cell_height);
+                        }
+                    }
                 }
 
                 log::debug!("Resized to {}x{}", self.cols, self.rows);
@@ -796,6 +816,17 @@ impl App {
 
                 if let Some(tabs) = &mut self.tabs {
                     tabs.resize(self.cols, self.rows);
+
+                    // Resize pane managers — cell dimensions changed with scale factor
+                    let cell_width = renderer.cell_width();
+                    let cell_height = renderer.cell_height();
+                    let content_width = new_cols as f32 * cell_width;
+                    let content_height = new_rows as f32 * cell_height;
+                    for tab in tabs.all_tabs_mut() {
+                        if let Some(ref mut pm) = tab.pane_manager {
+                            pm.resize(content_width, content_height, cell_width, cell_height);
+                        }
+                    }
                 }
             }
         }
@@ -881,12 +912,20 @@ impl App {
         let focus_dim = self.focus_dim();
 
         // Get cursor target position and active tab ID from grid
+        // When tab has pane_manager, read cursor from the focused pane's terminal
         let cursor_info = self.tabs
             .as_ref()
-            .and_then(|tabs| tabs.active_tab().map(|tab| (tab, tabs)))
-            .map(|(tab, _tabs)| {
-                let cursor = tab.terminal.grid().cursor();
-                (cursor.col, cursor.row, cursor.visible, tab.id)
+            .and_then(|tabs| tabs.active_tab())
+            .and_then(|tab| {
+                if let Some(ref pm) = tab.pane_manager {
+                    pm.focused_pane().map(|pane| {
+                        let cursor = pane.terminal.grid().cursor();
+                        (cursor.col, cursor.row, cursor.visible, tab.id)
+                    })
+                } else {
+                    let cursor = tab.terminal.grid().cursor();
+                    Some((cursor.col, cursor.row, cursor.visible, tab.id))
+                }
             });
 
         // Update cursor animation if we have a target
@@ -974,66 +1013,15 @@ impl App {
         if let Some(ref mut harvest) = self.harvest {
             harvest.update(frame_dt);
             harvest.cellar.update(frame_dt);
-            if harvest.has_active_indicators() {
+            if harvest.has_active_indicators() || harvest.cellar.expanded || harvest.sprout_menu.is_some() {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
 
-            // Read cellar entry fields so they are wired into the frame loop.
-            // This drives future rendering of the harvest indicator overlay.
-            if let Some(entry) = harvest.cellar.latest() {
-                let _row = entry.row;
-                let _exit = entry.exit_code;
-                let _ts = entry.timestamp;
-                let _ok = entry.success;
-                let _prog = entry.visual_state.progress;
-                let _opac = entry.visual_state.opacity;
-                let _dep = entry.visual_state.depth;
-            }
-
-            // Read cellar expanded/scroll state for future rendering
-            let _expanded = harvest.cellar.expanded;
-            let _scroll = harvest.cellar.scroll;
-
-            // Read sprout menu fields for future rendering
+            // Update sprout menu animation
             if let Some(ref mut menu) = harvest.sprout_menu {
                 menu.update(frame_dt);
-                let _row = menu.row;
-                let _col = menu.col;
-                let _cmd = menu.command.as_ref();
-                let _sel = menu.selected;
-                let _act_count = menu.actions.len();
-                let _anim = menu.animation;
-                // Wire remaining SproutMenu methods
-                let _opacity = menu.opacity();
-                let _w = menu.width();
-                let _h = menu.height();
-                if let Some(action) = menu.selected_action() {
-                    let _name = action.name();
-                    let _icon = action.icon();
-                }
-                menu.select_down();
-                menu.select_up();
-            }
-
-            // Wire remaining cellar and indicator methods
-            let _rate = harvest.cellar.success_rate();
-            let _len = harvest.cellar.len();
-            let _empty = harvest.cellar.is_empty();
-            for entry in harvest.cellar.entries() {
-                let _health = entry.health();
-                let _color = entry.health_color();
-            }
-            if let Some(entry) = harvest.cellar.at_row(0) {
-                let _ = entry.health();
-            }
-            for ind in &harvest.indicators {
-                let _s = ind.scale();
-                let _r = ind.rotation();
-                let _c = ind.color();
-                let _phase_color = ind.phase.color();
-                let _phase_char = ind.phase.character();
             }
         }
 
@@ -1206,13 +1194,90 @@ impl App {
             renderer.set_url_cache(Some(frame_cache));
         }
 
-        // Render pane dividers if in pane mode
-        if let Some(ref pm) = self.pane_manager {
+        // Build pane render data for multi-pane mode (per-tab)
+        let pane_render_data: Vec<PaneRenderData> = if let Some(ref pm) = tab.pane_manager {
+            // Render pane dividers
             let dividers = pm.get_dividers();
             renderer.add_pane_dividers(&dividers);
-        }
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref(), self.config.cursor.style) {
+            // Build per-pane render data with animated cursor for focused pane
+            pm.iter_panes().iter().map(|(term, rect, focused)| {
+                let cpos = if *focused {
+                    cursor_display_pos
+                } else {
+                    let c = term.grid().cursor();
+                    (c.col as f32, c.row as f32)
+                };
+                PaneRenderData {
+                    grid: term.grid(),
+                    selection: term.selection(),
+                    rect: *rect,
+                    is_focused: *focused,
+                    cursor_pos: cpos,
+                }
+            }).collect()
+        } else {
+            Vec::new()
+        };
+
+        // Build harvest render info
+        let harvest_render_info = self.harvest.as_ref().map(|harvest| {
+            // Growth indicators
+            let indicators: Vec<IndicatorRenderInfo> = harvest.indicators.iter()
+                .filter(|ind| !ind.is_finished())
+                .map(|ind| IndicatorRenderInfo {
+                    row: ind.prompt_row,
+                    character: ind.phase.character(),
+                    color: ind.color(),
+                    scale: ind.scale(),
+                    opacity: if ind.is_finished() { 0.0 } else { 1.0 },
+                })
+                .collect();
+
+            // Cellar panel (if expanded)
+            let cellar = if harvest.cellar.expanded {
+                Some(CellarRenderInfo {
+                    entries: harvest.cellar.entries().map(|e| CellarEntryInfo {
+                        row: e.row,
+                        exit_code: e.exit_code,
+                        success: e.success,
+                        health: e.health(),
+                        health_color: e.health_color(),
+                        opacity: e.visual_state.opacity,
+                        depth: e.visual_state.depth,
+                    }).collect(),
+                    animation_progress: 1.0, // TODO: wire PanelAnimation
+                    success_rate: harvest.cellar.success_rate(),
+                    scroll: harvest.cellar.scroll as usize,
+                })
+            } else {
+                None
+            };
+
+            // Sprout menu (if visible)
+            let sprout_menu = harvest.sprout_menu.as_ref().map(|menu| {
+                let cell_width = renderer.cell_width();
+                let cell_height = renderer.cell_height();
+                let content_top = renderer.tab_bar_height() + renderer.chrome_bar_height();
+                SproutMenuRenderInfo {
+                    x: renderer.padding() + menu.col as f32 * cell_width,
+                    y: content_top + renderer.padding() + menu.row as f32 * cell_height,
+                    actions: menu.actions.iter().map(|a| (a.name().to_string(), a.icon())).collect(),
+                    selected: menu.selected,
+                    opacity: menu.opacity(),
+                    width: menu.width() as f32 * cell_width,
+                    height: menu.height() as f32 * cell_height,
+                }
+            });
+
+            HarvestRenderInfo {
+                indicators,
+                cellar,
+                sprout_menu,
+            }
+        });
+
+        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref(), self.config.cursor.style, &pane_render_data, harvest_render_info.as_ref()) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -1231,8 +1296,16 @@ impl App {
     }
 
     /// Get active terminal mutably (helper)
+    ///
+    /// Routes through the pane manager's focused pane when in split mode,
+    /// falls back to the tab's own terminal in single-terminal mode.
     fn active_terminal_mut(&mut self) -> Option<&mut termeric_core::Terminal> {
-        self.tabs.as_mut()?.active_tab_mut().map(|t| &mut t.terminal)
+        let tab = self.tabs.as_mut()?.active_tab_mut()?;
+        if let Some(ref mut pm) = tab.pane_manager {
+            pm.focused_pane_mut().map(|p| &mut p.terminal)
+        } else {
+            Some(&mut tab.terminal)
+        }
     }
 
     /// Calculate cursor opacity for smooth blink animation
@@ -1654,23 +1727,56 @@ impl App {
                         return;
                     }
                     "core.close-pane" => {
-                        if let Some(ref mut pm) = self.pane_manager {
-                            pm.close_focused();
-                            if pm.pane_count() <= 1 {
-                                self.pane_manager = None;
+                        if let Some(tabs) = &mut self.tabs {
+                            if let Some(tab) = tabs.active_tab_mut() {
+                                if let Some(ref mut pm) = tab.pane_manager {
+                                    pm.close_focused();
+                                    if pm.pane_count() <= 1 {
+                                        // Transplant the remaining pane's terminal/pty
+                                        // back onto the tab so the user keeps their session
+                                        if let Some(remaining) = pm.take_remaining_pane() {
+                                            tab.terminal = remaining.terminal;
+                                            tab.pty = remaining.pty;
+                                            tab.pty_rx = remaining.pty_rx;
+                                        }
+                                        tab.pane_manager = None;
+                                        // Resize the transplanted terminal/PTY back to
+                                        // full tab dimensions
+                                        if let Err(e) = tab.resize(self.cols, self.rows) {
+                                            log::error!("Failed to resize tab after pane close: {}", e);
+                                        }
+                                    }
+                                }
                             }
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
                         }
                         return;
                     }
                     "core.navigate-pane-right" => {
-                        if let Some(ref mut pm) = self.pane_manager {
-                            pm.navigate(SplitDirection::Vertical);
+                        if let Some(tabs) = &mut self.tabs {
+                            if let Some(tab) = tabs.active_tab_mut() {
+                                if let Some(ref mut pm) = tab.pane_manager {
+                                    pm.navigate(SplitDirection::Vertical);
+                                }
+                            }
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
                         }
                         return;
                     }
                     "core.navigate-pane-down" => {
-                        if let Some(ref mut pm) = self.pane_manager {
-                            pm.navigate(SplitDirection::Horizontal);
+                        if let Some(tabs) = &mut self.tabs {
+                            if let Some(tab) = tabs.active_tab_mut() {
+                                if let Some(ref mut pm) = tab.pane_manager {
+                                    pm.navigate(SplitDirection::Horizontal);
+                                }
+                            }
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
                         }
                         return;
                     }
@@ -2274,9 +2380,11 @@ impl App {
         }
     }
 
-    /// Get pane render info from the pane manager (if in pane mode)
+    /// Get pane render info from the active tab's pane manager (if in pane mode)
     fn pane_render_info(&self) -> Vec<PaneRenderInfo> {
-        let Some(pm) = &self.pane_manager else { return Vec::new() };
+        let Some(tabs) = &self.tabs else { return Vec::new() };
+        let Some(tab) = tabs.active_tab() else { return Vec::new() };
+        let Some(ref pm) = tab.pane_manager else { return Vec::new() };
         let layout = pm.calculate_layout();
         let focused = pm.focused_id();
         layout.into_iter().map(|(id, rect)| {
@@ -2290,28 +2398,25 @@ impl App {
 
     /// Access the focused terminal through the TerminalContainer trait
     fn focused_terminal_via_container(&self) -> Option<&termeric_core::Terminal> {
+        let tabs = self.tabs.as_ref()?;
+        let tab = tabs.active_tab()?;
         // Try pane manager first (SplitContainer path)
-        if let Some(ref pm) = self.pane_manager {
+        if let Some(ref pm) = tab.pane_manager {
             let sc: &dyn SplitContainer = pm;
             if !sc.is_closed() {
                 return sc.focused_terminal();
             }
         }
         // Fall back to single-tab container
-        if let Some(tabs) = &self.tabs {
-            if let Some(tab) = tabs.active_tab() {
-                let tc: &dyn TerminalContainer = tab;
-                return tc.focused_terminal();
-            }
-        }
-        None
+        let tc: &dyn TerminalContainer = tab;
+        tc.focused_terminal()
     }
 
     /// Split the current tab into panes
     fn split_pane(&mut self, direction: SplitDirection) {
         let Some(renderer) = &self.renderer else { return };
-        let Some(tabs) = &self.tabs else { return };
-        let Some(tab) = tabs.active_tab() else { return };
+        let Some(tabs) = &mut self.tabs else { return };
+        let Some(tab) = tabs.active_tab_mut() else { return };
 
         let cols = tab.terminal.grid().cols();
         let rows = tab.terminal.grid().rows();
@@ -2320,16 +2425,11 @@ impl App {
         let total_width = cols as f32 * cell_width;
         let total_height = rows as f32 * cell_height;
 
-        if let Some(ref mut pm) = self.pane_manager {
+        if let Some(ref mut pm) = tab.pane_manager {
             // Already in pane mode — split the focused pane
             match pm.split(direction) {
                 Ok(new_id) => {
                     log::info!("Split pane {:?}, created pane {:?}", direction, new_id);
-                    // Render dividers
-                    let dividers = pm.get_dividers();
-                    if let Some(r) = &mut self.renderer {
-                        r.add_pane_dividers(&dividers);
-                    }
                 }
                 Err(e) => log::error!("Failed to split pane: {}", e),
             }
@@ -2342,25 +2442,29 @@ impl App {
                 cell_width, cell_height,
             ) {
                 Ok(mut pm) => {
+                    // Swap pane 0's fresh terminal/pty with the tab's existing ones,
+                    // so pane 0 inherits the tab's live session and content.
+                    // The tab gets the fresh placeholder (dormant while in pane mode).
+                    if let Some(pane0) = pm.get_pane_mut(PaneId(0)) {
+                        std::mem::swap(&mut tab.terminal, &mut pane0.terminal);
+                        std::mem::swap(&mut tab.pty, &mut pane0.pty);
+                        std::mem::swap(&mut tab.pty_rx, &mut pane0.pty_rx);
+                    }
                     match pm.split(direction) {
                         Ok(new_id) => {
                             log::info!("Entered pane mode, created pane {:?}", new_id);
-                            let dividers = pm.get_dividers();
-                            if let Some(r) = &mut self.renderer {
-                                r.add_pane_dividers(&dividers);
-                            }
-                            // Use pane layout for rendering
-                            let layout = pm.calculate_layout();
-                            for (id, rect) in &layout {
-                                log::debug!("  Pane {:?}: ({}, {}, {}x{})", id, rect.x, rect.y, rect.width, rect.height);
-                            }
-                            self.pane_manager = Some(pm);
+                            tab.pane_manager = Some(pm);
                         }
                         Err(e) => log::error!("Failed initial pane split: {}", e),
                     }
                 }
                 Err(e) => log::error!("Failed to create pane manager: {}", e),
             }
+        }
+
+        // Request redraw to show new pane layout
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
 
@@ -2393,6 +2497,20 @@ impl App {
             }
 
             log::info!("Font size set to {}, grid resized to {}x{}", size, self.cols, self.rows);
+        }
+
+        // Always resize pane managers when font changes — cell dimensions
+        // changed even if cols/rows stayed the same.
+        let cell_width = renderer.cell_width();
+        let cell_height = renderer.cell_height();
+        let content_width = self.cols as f32 * cell_width;
+        let content_height = self.rows as f32 * cell_height;
+        if let Some(tabs) = &mut self.tabs {
+            for tab in tabs.all_tabs_mut() {
+                if let Some(ref mut pm) = tab.pane_manager {
+                    pm.resize(content_width, content_height, cell_width, cell_height);
+                }
+            }
         }
 
         // Request redraw
@@ -2429,6 +2547,19 @@ impl App {
             log::info!("Font family updated, grid resized to {}x{}", self.cols, self.rows);
         }
 
+        // Always resize pane managers — cell dimensions changed
+        let cell_width = renderer.cell_width();
+        let cell_height = renderer.cell_height();
+        let content_width = self.cols as f32 * cell_width;
+        let content_height = self.rows as f32 * cell_height;
+        if let Some(tabs) = &mut self.tabs {
+            for tab in tabs.all_tabs_mut() {
+                if let Some(ref mut pm) = tab.pane_manager {
+                    pm.resize(content_width, content_height, cell_width, cell_height);
+                }
+            }
+        }
+
         window.request_redraw();
     }
 
@@ -2452,6 +2583,19 @@ impl App {
             }
 
             log::info!("Padding updated, grid resized to {}x{}", self.cols, self.rows);
+        }
+
+        // Resize pane managers — content area changed
+        let cell_width = renderer.cell_width();
+        let cell_height = renderer.cell_height();
+        let content_width = self.cols as f32 * cell_width;
+        let content_height = self.rows as f32 * cell_height;
+        if let Some(tabs) = &mut self.tabs {
+            for tab in tabs.all_tabs_mut() {
+                if let Some(ref mut pm) = tab.pane_manager {
+                    pm.resize(content_width, content_height, cell_width, cell_height);
+                }
+            }
         }
 
         window.request_redraw();
@@ -3072,6 +3216,7 @@ impl App {
         let Some(renderer) = &self.renderer else { return };
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
+        let chrome_bar_height = renderer.chrome_bar_height();
         let padding = renderer.padding();
         // Account for search bar height if visible
         let search_bar_height = if self.search.is_active() || self.search.has_results() {
@@ -3079,7 +3224,7 @@ impl App {
         } else {
             0.0
         };
-        let content_top = tab_bar_height + search_bar_height;
+        let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
         let scroll_offset = self.tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
@@ -3106,6 +3251,23 @@ impl App {
                             window.request_redraw();
                         }
                         return;
+                    }
+
+                    // Check if click is on a pane divider (for drag-to-resize)
+                    if let Some(tabs) = &self.tabs {
+                        if let Some(tab) = tabs.active_tab() {
+                            if let Some(ref pm) = tab.pane_manager {
+                                let local_x = position.0 as f32 - padding;
+                                let local_y = position.1 as f32 - content_top;
+                                if pm.hit_test_divider(local_x, local_y).is_some() {
+                                    self.divider_dragging = true;
+                                    if let Some(window) = &self.window {
+                                        window.request_redraw();
+                                    }
+                                    return;
+                                }
+                            }
+                        }
                     }
 
                     // Ctrl+Click to open hyperlinks
@@ -3478,6 +3640,31 @@ impl App {
                         }
                     }
                 }
+                // Focus pane under click in multi-pane mode
+                if let Some(tabs) = &mut self.tabs {
+                    if let Some(tab) = tabs.active_tab_mut() {
+                        if let Some(ref mut pm) = tab.pane_manager {
+                            if let Some(renderer) = &self.renderer {
+                                let px = position.0 as f32;
+                                let py = position.1 as f32;
+                                let content_top = renderer.tab_bar_height() + renderer.chrome_bar_height();
+                                let padding = renderer.padding();
+                                let rel_x = px - padding;
+                                let rel_y = py - content_top;
+                                let layout = pm.calculate_layout();
+                                for (id, rect) in &layout {
+                                    if rel_x >= rect.x && rel_x < rect.x + rect.width
+                                        && rel_y >= rect.y && rel_y < rect.y + rect.height
+                                    {
+                                        pm.focus(*id);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if let Some(selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
                     self.mouse_pressed = true;
                     if let Some(terminal) = self.active_terminal_mut() {
@@ -3489,6 +3676,7 @@ impl App {
                 if button == MouseButton::Left {
                     self.mouse_pressed = false;
                     self.scrollbar_dragging = false;
+                    self.divider_dragging = false;
                 }
                 // Finalize selection on release
                 let _ = self.mouse_state.handle_release(button);
@@ -3508,6 +3696,7 @@ impl App {
         let Some(renderer) = &self.renderer else { return };
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
+        let chrome_bar_height = renderer.chrome_bar_height();
         let padding = renderer.padding();
         // Account for search bar height if visible
         let search_bar_height = if self.search.is_active() || self.search.has_results() {
@@ -3515,7 +3704,7 @@ impl App {
         } else {
             0.0
         };
-        let content_top = tab_bar_height + search_bar_height;
+        let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
         let scroll_offset = self.tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
@@ -3570,6 +3759,47 @@ impl App {
                 window.request_redraw();
             }
             return;
+        }
+
+        // Handle pane divider dragging
+        if self.divider_dragging {
+            if let Some(tabs) = &mut self.tabs {
+                if let Some(tab) = tabs.active_tab_mut() {
+                    if let Some(ref mut pm) = tab.pane_manager {
+                        let local_x = position.0 as f32 - padding;
+                        let local_y = position.1 as f32 - content_top;
+                        if pm.resize_divider_at(local_x, local_y, f32::MAX) {
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // Set resize cursor when hovering over pane dividers
+        if let Some(tabs) = &self.tabs {
+            if let Some(tab) = tabs.active_tab() {
+                if let Some(ref pm) = tab.pane_manager {
+                    let local_x = position.0 as f32 - padding;
+                    let local_y = position.1 as f32 - content_top;
+                    if let Some(is_vertical) = pm.hit_test_divider(local_x, local_y) {
+                        if let Some(window) = &self.window {
+                            let cursor = if is_vertical {
+                                winit::window::CursorIcon::EwResize
+                            } else {
+                                winit::window::CursorIcon::NsResize
+                            };
+                            window.set_cursor(cursor);
+                        }
+                        return;
+                    } else if let Some(window) = &self.window {
+                        window.set_cursor(winit::window::CursorIcon::Default);
+                    }
+                }
+            }
         }
 
         // Don't update selection when an overlay panel is open,

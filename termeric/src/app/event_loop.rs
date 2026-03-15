@@ -250,6 +250,44 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // Handle harvest sprout menu input
+                if let Some(ref mut harvest) = self.harvest {
+                    if harvest.sprout_menu.is_some() {
+                        if event.state == winit::event::ElementState::Pressed {
+                            use winit::keyboard::{Key, NamedKey};
+                            match &event.logical_key {
+                                Key::Named(NamedKey::Escape) => {
+                                    harvest.hide_sprout_menu();
+                                }
+                                Key::Named(NamedKey::ArrowUp) => {
+                                    if let Some(ref mut menu) = harvest.sprout_menu {
+                                        menu.select_up();
+                                    }
+                                }
+                                Key::Named(NamedKey::ArrowDown) => {
+                                    if let Some(ref mut menu) = harvest.sprout_menu {
+                                        menu.select_down();
+                                    }
+                                }
+                                Key::Named(NamedKey::Enter) => {
+                                    let action = harvest.sprout_menu.as_ref()
+                                        .and_then(|m| m.selected_action().cloned());
+                                    harvest.hide_sprout_menu();
+                                    if let Some(_action) = action {
+                                        // TODO: Execute sprout action (copy, rerun, etc.)
+                                        log::info!("Sprout action selected: {}", _action.name());
+                                    }
+                                }
+                                _ => {}
+                            }
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+                }
+
                 // Handle command palette input first (highest priority when open)
                 if self.command_palette.is_active() {
                     if event.state == winit::event::ElementState::Pressed {

@@ -196,14 +196,20 @@ impl Terminal {
         let cursor = self.grid().cursor();
         let cols = self.cols;
 
-        // Handle line wrap
-        if cursor.col >= cols {
+        // Handle pending line wrap: if the previous character was written to
+        // the last column, wrap_pending is set. Now that a new printable char
+        // arrives, perform the actual wrap (mark the row as soft-wrapped,
+        // carriage-return, and linefeed).
+        if cursor.wrap_pending {
             if self.mode.contains(TerminalMode::AUTOWRAP) {
+                // Mark the row we're leaving as soft-wrapped
+                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                    row.set_wrapped(true);
+                }
                 self.grid_mut().set_cursor(cursor.row, 0);
                 self.linefeed();
-            } else {
-                self.grid_mut().set_cursor(cursor.row, cols - 1);
             }
+            // If not autowrap, cursor stays at last column (overwrite mode)
         }
 
         let cursor = self.grid().cursor();
@@ -239,13 +245,24 @@ impl Terminal {
             }
         }
 
-        // Move cursor forward
-        self.grid_mut().set_cursor(cursor.row, cursor.col + 1);
+        // Advance cursor. If we just wrote to the last column, set
+        // wrap_pending instead of advancing past the edge (which would
+        // be clamped by set_cursor anyway).
+        if cursor.col + 1 >= cols {
+            // Stay at last column but flag that a wrap is pending
+            self.grid_mut().set_wrap_pending(true);
+        } else {
+            self.grid_mut().set_cursor(cursor.row, cursor.col + 1);
+        }
     }
 
     /// Perform a carriage return (move cursor to column 0)
     pub fn carriage_return(&mut self) {
         let cursor = self.grid().cursor();
+        // Clear wrapped flag — explicit CR means this row ends here
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            row.set_wrapped(false);
+        }
         self.grid_mut().set_cursor(cursor.row, 0);
     }
 
@@ -256,6 +273,8 @@ impl Terminal {
         if cursor.row + 1 >= self.scroll_bottom {
             // At bottom of scroll region, scroll up
             self.scroll_up(1);
+            // Clear wrap_pending — we've moved to a new logical position
+            self.grid_mut().set_wrap_pending(false);
         } else {
             self.grid_mut().set_cursor(cursor.row + 1, cursor.col);
         }
@@ -789,5 +808,192 @@ mod tests {
         assert!(term.grid().cell(0, 0).unwrap().is_empty());
         term.exit_alt_screen();
         assert_eq!(term.grid().cell(0, 0).unwrap().content.char(), Some('A'));
+    }
+
+    /// Helper: collect all non-empty characters from scrollback + visible area.
+    /// This is a content-only check — ignores line boundaries.
+    fn extract_all_chars(term: &Terminal) -> String {
+        let grid = term.grid();
+        let mut chars = String::new();
+
+        // Scrollback
+        for row in grid.scrollback_rows() {
+            for cell in row.iter() {
+                if let Some(c) = cell.content.char() {
+                    chars.push(c);
+                }
+            }
+        }
+
+        // Visible area
+        for r in 0..grid.rows() {
+            if let Some(row) = grid.row(r) {
+                for cell in row.iter() {
+                    if let Some(c) = cell.content.char() {
+                        chars.push(c);
+                    }
+                }
+            }
+        }
+
+        chars
+    }
+
+    #[test]
+    fn test_process_and_resize_preserves_content() {
+        // Process a few lines of text at 40 cols, then shrink to 10 cols.
+        // All characters must still be present.
+        let mut term = Terminal::new(40, 24);
+        term.process(b"Hello World\r\n");
+        term.process(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\n");
+        term.process(b"1234567890\r\n");
+
+        let before = extract_all_chars(&term);
+
+        // Shrink to 10 columns
+        term.resize(10, 24);
+
+        let after = extract_all_chars(&term);
+        assert_eq!(before, after, "Characters lost after shrink to 10 cols");
+
+        // Grow back to 40 columns
+        term.resize(40, 24);
+
+        let after_grow = extract_all_chars(&term);
+        assert_eq!(before, after_grow, "Characters lost after grow back to 40 cols");
+    }
+
+    #[test]
+    fn test_process_long_line_reflow_to_small_width() {
+        // Write a 50-char line in a 50-col terminal, then shrink to 5 cols.
+        // All 50 characters must be preserved.
+        let mut term = Terminal::new(50, 24);
+        let text = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv";
+        term.process(text.as_bytes());
+        term.process(b"\r\n");
+
+        let before = extract_all_chars(&term);
+        assert_eq!(before.len(), text.len());
+
+        term.resize(5, 24);
+
+        let after = extract_all_chars(&term);
+        assert_eq!(before, after, "Characters lost after shrink to 5 cols");
+    }
+
+    #[test]
+    fn test_process_resize_to_very_small_height() {
+        // Write multiple lines, then shrink to 3 rows.
+        // Content should go to scrollback, not be lost.
+        let mut term = Terminal::new(20, 10);
+        for i in 0..8 {
+            term.process(format!("Line {}\r\n", i).as_bytes());
+        }
+
+        let before = extract_all_chars(&term);
+
+        term.resize(20, 3);
+
+        let after = extract_all_chars(&term);
+        assert_eq!(before, after, "Characters lost after shrink to 3 rows");
+    }
+
+    #[test]
+    fn test_process_resize_both_dimensions_small() {
+        // Start at 40x10, write content, shrink to 5x3.
+        // This is the scenario the user reported as corrupting text.
+        let mut term = Terminal::new(40, 10);
+        term.process(b"Hello World\r\n");
+        term.process(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\r\n");
+        term.process(b"$ ");
+
+        let before = extract_all_chars(&term);
+
+        term.resize(5, 3);
+
+        let after = extract_all_chars(&term);
+        assert_eq!(before, after, "Characters lost after shrink to 5x3");
+    }
+
+    #[test]
+    fn test_autowrap_sets_wrapped_flag() {
+        // Write enough chars to fill exactly one row and trigger autowrap.
+        // The first row should be marked as wrapped.
+        let mut term = Terminal::new(10, 5);
+        // Write exactly 10 chars to fill row 0
+        term.process(b"ABCDEFGHIJ");
+        // The cursor is now at col 10 (past end). Write one more char to trigger autowrap.
+        term.process(b"K");
+
+        // Row 0 should be wrapped
+        assert!(
+            term.grid().row(0).unwrap().is_wrapped(),
+            "Row 0 should be marked as wrapped after autowrap"
+        );
+        // Row 1 should have 'K'
+        assert_eq!(
+            term.grid().cell(1, 0).unwrap().content.char(),
+            Some('K'),
+            "Character after autowrap should be on row 1"
+        );
+    }
+
+    #[test]
+    fn test_autowrap_reflow_round_trip() {
+        // Write 20 chars in a 10-col terminal (autowrap creates 2 rows).
+        // Grow to 20 cols — should merge back to 1 row.
+        // Shrink back to 10 cols — should split to 2 rows again.
+        let mut term = Terminal::new(10, 5);
+        term.process(b"ABCDEFGHIJKLMNOPQRST"); // 20 chars, fills 2 rows
+
+        assert!(term.grid().row(0).unwrap().is_wrapped());
+
+        let original_chars = extract_all_chars(&term);
+        assert_eq!(original_chars.len(), 20);
+
+        // Grow to 20 cols — should merge into 1 row
+        term.resize(20, 5);
+        let after_grow = extract_all_chars(&term);
+        assert_eq!(original_chars, after_grow, "Chars lost on grow");
+
+        let row0_text = term.grid().row(0).unwrap().to_string();
+        assert_eq!(row0_text, "ABCDEFGHIJKLMNOPQRST");
+
+        // Shrink back to 10
+        term.resize(10, 5);
+        let after_shrink = extract_all_chars(&term);
+        assert_eq!(original_chars, after_shrink, "Chars lost on shrink back");
+    }
+
+    #[test]
+    fn test_initial_small_terminal_no_corruption() {
+        // Create a very small terminal and write text that exceeds its width.
+        // This tests the scenario where the pane is "too small to begin with."
+        let mut term = Terminal::new(5, 3);
+        term.process(b"Hello World!\r\n");
+        term.process(b"ABCDEFGHIJ\r\n");
+
+        let chars = extract_all_chars(&term);
+        // "Hello World!" is 12 chars, "ABCDEFGHIJ" is 10 chars — total 22
+        assert_eq!(chars.len(), 22, "Expected 22 chars, got: '{}'", chars);
+        assert!(chars.contains("Hello"), "Missing 'Hello' in output");
+        assert!(chars.contains("World"), "Missing 'World' in output");
+        assert!(chars.contains("ABCDEFGHIJ"), "Missing 'ABCDEFGHIJ' in output");
+    }
+
+    #[test]
+    fn test_small_terminal_then_grow() {
+        // Write into a 5x3 terminal, then grow to 40x24.
+        // All content must be preserved (in scrollback or visible).
+        let mut term = Terminal::new(5, 3);
+        term.process(b"ABCDEFGHIJKLMNO\r\n"); // 15 chars
+        term.process(b"XYZ\r\n");
+
+        let before = extract_all_chars(&term);
+
+        term.resize(40, 24);
+
+        let after = extract_all_chars(&term);
+        assert_eq!(before, after, "Characters lost after growing from 5x3 to 40x24");
     }
 }

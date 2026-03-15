@@ -65,6 +65,7 @@ impl SproutAction {
 
 /// Sprout menu - context menu for commands
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct SproutMenu {
     /// Row position
     pub row: usize,

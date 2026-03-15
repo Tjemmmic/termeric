@@ -25,6 +25,13 @@ pub struct Cursor {
     pub visible: bool,
     /// Whether the cursor should blink
     pub blinking: bool,
+    /// Whether the next character should trigger a line wrap.
+    ///
+    /// Set when writing to the last column — the cursor stays at `cols-1`
+    /// but the next printable character will wrap to the beginning of the
+    /// next line before being placed. Cleared by any explicit cursor
+    /// movement (CR, CUP, CUF, etc.).
+    pub wrap_pending: bool,
 }
 
 /// The terminal grid
@@ -60,15 +67,17 @@ impl Grid {
         }
     }
 
-    /// Resize the grid to new dimensions
+    /// Resize the grid to new dimensions, reflowing text when columns change
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        self.storage.resize(cols, rows);
+        let (new_row, new_col) = self.storage.resize(cols, rows, self.cursor.row, self.cursor.col);
         self.cols = cols;
         self.rows = rows;
+        self.cursor.row = new_row;
+        self.cursor.col = new_col;
+        self.cursor.wrap_pending = false;
 
-        // Clamp cursor position
-        self.cursor.col = self.cursor.col.min(cols.saturating_sub(1));
-        self.cursor.row = self.cursor.row.min(rows.saturating_sub(1));
+        // Clamp scroll offset
+        self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
     }
 
     /// Get the number of columns
@@ -147,9 +156,17 @@ impl Grid {
     }
 
     /// Set the cursor position
+    ///
+    /// Any explicit cursor movement clears the pending-wrap state.
     pub fn set_cursor(&mut self, row: usize, col: usize) {
         self.cursor.row = row.min(self.rows.saturating_sub(1));
         self.cursor.col = col.min(self.cols.saturating_sub(1));
+        self.cursor.wrap_pending = false;
+    }
+
+    /// Set the wrap-pending flag on the cursor
+    pub fn set_wrap_pending(&mut self, pending: bool) {
+        self.cursor.wrap_pending = pending;
     }
 
     /// Set cursor visibility

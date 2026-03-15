@@ -136,3 +136,93 @@ pub enum SessionDropdownClick {
 
 /// Maximum items shown in session dropdown before scrolling
 pub const SESSION_DROPDOWN_MAX_ITEMS: usize = 5;
+
+/// Render data for a single pane in multi-pane mode.
+///
+/// Each pane holds a reference to its terminal grid and its pixel-space
+/// rectangle within the content area.
+pub struct PaneRenderData<'a> {
+    /// The terminal grid to render
+    pub grid: &'a termeric_core::Grid,
+    /// Selection state for this pane (if any)
+    pub selection: Option<&'a termeric_core::Selection>,
+    /// Pixel rectangle within the content area (relative to content_top)
+    pub rect: crate::panes::PaneRect,
+    /// Whether this pane currently has focus
+    pub is_focused: bool,
+    /// Cursor position in grid coordinates (animated for focused pane, raw for unfocused)
+    pub cursor_pos: (f32, f32),
+}
+
+/// Info for rendering harvest mode indicators in the gutter
+pub struct HarvestRenderInfo {
+    /// Growth indicators to draw in the left gutter
+    pub indicators: Vec<IndicatorRenderInfo>,
+    /// Root cellar panel (command history), if visible
+    pub cellar: Option<CellarRenderInfo>,
+    /// Sprout context menu, if visible
+    pub sprout_menu: Option<SproutMenuRenderInfo>,
+}
+
+/// A single growth indicator in the gutter
+pub struct IndicatorRenderInfo {
+    /// Terminal row where this indicator sits
+    pub row: usize,
+    /// Character to render (from GrowthPhase::character())
+    pub character: char,
+    /// RGBA color (from GrowthPhase::color())
+    pub color: [f32; 4],
+    /// Scale factor for the indicator (pulse animation)
+    pub scale: f32,
+    /// Opacity (fades during Finished phase)
+    pub opacity: f32,
+}
+
+/// Root cellar panel render info
+pub struct CellarRenderInfo {
+    /// Command entries to display
+    pub entries: Vec<CellarEntryInfo>,
+    /// Slide-in animation progress (0.0 = hidden, 1.0 = fully visible)
+    pub animation_progress: f32,
+    /// Overall success rate (0.0 - 1.0)
+    pub success_rate: f32,
+    /// Current scroll offset
+    pub scroll: usize,
+}
+
+/// A single entry in the root cellar
+#[allow(dead_code)]
+pub struct CellarEntryInfo {
+    /// Terminal row of the command
+    pub row: usize,
+    /// Exit code (None if still running)
+    pub exit_code: Option<i32>,
+    /// Whether the command succeeded
+    pub success: bool,
+    /// Health level (0 = healthy, 1 = warning, 2 = sick)
+    pub health: u8,
+    /// Health color (RGBA)
+    pub health_color: [f32; 4],
+    /// Visual opacity
+    pub opacity: f32,
+    /// Depth/age value
+    pub depth: f32,
+}
+
+/// Sprout context menu render info
+pub struct SproutMenuRenderInfo {
+    /// Pixel X position of the menu
+    pub x: f32,
+    /// Pixel Y position of the menu
+    pub y: f32,
+    /// Actions with (name, icon_char) pairs
+    pub actions: Vec<(String, char)>,
+    /// Currently selected action index
+    pub selected: usize,
+    /// Menu opacity (for fade animation)
+    pub opacity: f32,
+    /// Menu width in pixels
+    pub width: f32,
+    /// Menu height in pixels
+    pub height: f32,
+}

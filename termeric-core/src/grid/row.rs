@@ -9,6 +9,8 @@ pub struct Row {
     cells: Vec<Cell>,
     /// Whether this row has been modified since last render
     dirty: bool,
+    /// True if this row was soft-wrapped (content continues on next row)
+    wrapped: bool,
 }
 
 impl Row {
@@ -17,6 +19,16 @@ impl Row {
         Self {
             cells: vec![Cell::default(); cols],
             dirty: true,
+            wrapped: false,
+        }
+    }
+
+    /// Create a row from a vec of cells
+    pub fn from_cells(cells: Vec<Cell>, wrapped: bool) -> Self {
+        Self {
+            cells,
+            dirty: true,
+            wrapped,
         }
     }
 
@@ -47,6 +59,7 @@ impl Row {
             cell.clear();
         }
         self.dirty = true;
+        self.wrapped = false;
     }
 
     /// Resize the row to a new number of columns
@@ -68,6 +81,21 @@ impl Row {
     /// Mark the row as dirty
     pub fn set_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    /// Check if this row was soft-wrapped (content continues on next row)
+    pub fn is_wrapped(&self) -> bool {
+        self.wrapped
+    }
+
+    /// Set the soft-wrap flag
+    pub fn set_wrapped(&mut self, wrapped: bool) {
+        self.wrapped = wrapped;
+    }
+
+    /// Consume the row and return its cells
+    pub fn into_cells(self) -> Vec<Cell> {
+        self.cells
     }
 
     /// Iterate over all cells in the row

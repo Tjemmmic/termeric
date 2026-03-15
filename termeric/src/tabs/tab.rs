@@ -63,6 +63,8 @@ pub struct Tab {
     pub ai_session: Option<AiSessionState>,
     /// Active transcript recorder (writes JSONL to disk while recording)
     pub transcript: Option<TranscriptRecorder>,
+    /// Pane manager for split panes (None = single terminal, no splits)
+    pub pane_manager: Option<crate::panes::PaneManager>,
 }
 
 impl Tab {
@@ -101,6 +103,7 @@ impl Tab {
             diff_detector: DiffDetector::new(),
             ai_session: None,
             transcript: None,
+            pane_manager: None,
         })
     }
 
@@ -166,6 +169,7 @@ impl Tab {
                 None
             },
             transcript: None,
+            pane_manager: None,
         })
     }
 
@@ -221,6 +225,14 @@ impl Tab {
                     }
                 }
             }
+        }
+
+        // Fallback: detect child process exit even if the reader thread
+        // didn't send PtyEvent::Closed (can happen with dup'd master fds
+        // or when a dead pane is transplanted back onto the tab).
+        if !self.closed && !self.pty.is_running() {
+            log::info!("Tab {} child process exited (detected via wait)", self.id);
+            self.closed = true;
         }
 
         // Drain any terminal events that were emitted during processing
@@ -327,6 +339,7 @@ impl Tab {
             diff_detector: DiffDetector::new(),
             ai_session: None,
             transcript: None,
+            pane_manager: None,
         })
     }
 
