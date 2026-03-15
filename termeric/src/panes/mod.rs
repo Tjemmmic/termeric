@@ -406,7 +406,9 @@ impl PaneManager {
         })
     }
 
-    /// Remove closed panes
+    /// Remove closed panes and resize remaining panes to fill the space.
+    ///
+    /// Returns true if panes remain, false if the map is now empty.
     pub fn cleanup_closed(&mut self) -> bool {
         let closed: Vec<PaneId> = self.panes
             .iter()
@@ -414,6 +416,7 @@ impl PaneManager {
             .map(|(&id, _)| id)
             .collect();
 
+        let mut removed_any = false;
         for id in closed {
             if self.panes.len() > 1 {
                 if id == self.focused {
@@ -424,7 +427,13 @@ impl PaneManager {
                 }
                 self.tree.remove(id);
                 self.panes.remove(&id);
+                removed_any = true;
             }
+        }
+
+        // Resize remaining panes to fill the space vacated by closed panes
+        if removed_any {
+            self.recalculate_sizes();
         }
 
         !self.panes.is_empty()

@@ -218,7 +218,11 @@ impl TabManager {
                     any_output = true;
                 }
                 pm.cleanup_closed();
-                if pm.all_closed() {
+                // Dissolve pane mode when all panes are closed OR only
+                // one pane remains (no reason to keep the PaneManager for
+                // a single pane — transplant it back to the tab so text
+                // reflows to full tab width).
+                if pm.all_closed() || pm.pane_count() <= 1 {
                     // Transplant remaining pane back onto the tab
                     if let Some(remaining) = pm.take_remaining_pane() {
                         tab.terminal = remaining.terminal;

@@ -996,4 +996,84 @@ mod tests {
         let after = extract_all_chars(&term);
         assert_eq!(before, after, "Characters lost after growing from 5x3 to 40x24");
     }
+
+    #[test]
+    fn test_pane_close_reflow_simulation() {
+        // Simulate the pane lifecycle: start at full width, shrink to pane width,
+        // write text that wraps, then grow back to full width.
+        // This mirrors what happens when a pane is created and then closed.
+        let mut term = Terminal::new(80, 24);
+
+        // Phase 1: Resize to pane width (simulating split)
+        term.resize(40, 24);
+        assert_eq!(term.cols(), 40);
+
+        // Phase 2: Write text that wraps at 40 cols
+        // A 60-char line will wrap: 40 chars on row 0 (wrapped), 20 chars on row 1
+        let long_line = "ABCDEFGHIJ" .repeat(6); // 60 chars
+        term.process(long_line.as_bytes());
+        term.process(b"\r\n");
+        term.process(b"Short line\r\n");
+        term.process(b"$ "); // prompt
+
+        let before = extract_all_chars(&term);
+        assert!(before.contains(&long_line), "Long line should be fully present");
+
+        // Phase 3: Resize back to full width (simulating pane close)
+        term.resize(80, 24);
+
+        let after = extract_all_chars(&term);
+        assert_eq!(before, after, "Characters lost after expanding from 40 to 80 cols");
+
+        // The 60-char line should now fit on a single row (no wrapping needed at 80 cols)
+        // Check that row 0 has the full content (either in scrollback or visible)
+        let grid = term.grid();
+        let mut found_full_line = false;
+        for r in 0..grid.rows() {
+            if let Some(row) = grid.row(r) {
+                let text = row.to_string();
+                if text == long_line {
+                    found_full_line = true;
+                    assert!(!row.is_wrapped(), "60-char line should not be wrapped at 80 cols");
+                    break;
+                }
+            }
+        }
+        // Also check scrollback
+        for row in grid.scrollback_rows() {
+            let text = row.to_string();
+            if text == long_line {
+                found_full_line = true;
+                assert!(!row.is_wrapped(), "60-char line in scrollback should not be wrapped at 80 cols");
+                break;
+            }
+        }
+        assert!(found_full_line, "Should find the full 60-char line on a single row after resize to 80 cols");
+    }
+
+    #[test]
+    fn test_pane_reflow_multiple_wrapped_lines() {
+        // Multiple auto-wrapped lines should all reflow when growing.
+        let mut term = Terminal::new(20, 24);
+
+        // Write 3 lines that wrap at 20 cols
+        let line1 = "A".repeat(30); // wraps to 2 rows
+        let line2 = "B".repeat(25); // wraps to 2 rows
+        let line3 = "C".repeat(40); // wraps to 2 rows
+
+        term.process(line1.as_bytes());
+        term.process(b"\r\n");
+        term.process(line2.as_bytes());
+        term.process(b"\r\n");
+        term.process(line3.as_bytes());
+        term.process(b"\r\n");
+
+        let before = extract_all_chars(&term);
+
+        // Grow to 80 cols — all lines should unwrap
+        term.resize(80, 24);
+
+        let after = extract_all_chars(&term);
+        assert_eq!(before, after, "Characters lost after expanding from 20 to 80 cols");
+    }
 }
