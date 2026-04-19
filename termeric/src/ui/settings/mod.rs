@@ -2,138 +2,181 @@ use crate::config::{Config, SplashMode};
 use crate::config::theme::Theme;
 use crate::input::keybindings::ShortcutRegistry;
 
-/// Layout geometry for the settings panel.
-/// This struct ensures consistent layout between rendering and hit testing.
+/// Default fallback font (always available)
+const DEFAULT_FONT: &str = "monospace";
+
+/// Geometry for the centered settings modal — single source of truth shared
+/// by the renderer, hit-testing, scroll, and hover code paths.
 #[derive(Debug, Clone, Copy)]
-pub struct SettingsPanelLayout {
-    /// Panel x position (left edge)
+pub struct SettingsModalLayout {
     pub panel_x: f32,
-    /// Total panel width
+    pub panel_y: f32,
     pub panel_width: f32,
-    /// Content area x position
-    pub content_x: f32,
-    /// Content area width
-    pub content_width: f32,
-    /// Height of each row/item
+    pub panel_height: f32,
+    pub padding: f32,
+    pub gap: f32,
+    pub separator_height: f32,
     pub row_height: f32,
-    /// Horizontal padding
-    pub padding_x: f32,
-    /// Y position where items start
-    pub items_start_y: f32,
-    /// Y position where sidebar sections start
-    pub sections_start_y: f32,
-    /// Cell width used for calculations
+    pub input_height: f32,
+    pub scrollbar_width: f32,
+    pub footer_area: f32,
+    pub list_y: f32,
+    pub list_height: f32,
+    pub rows_that_fit: usize,
+    pub visible_count: usize,
+    pub value_x: f32,
     pub cell_width: f32,
 }
 
-impl SettingsPanelLayout {
-    /// Calculate layout for the settings panel.
-    ///
-    /// This is the single source of truth for all layout calculations.
-    /// Both the renderer and click handler must use this.
+impl SettingsModalLayout {
+    /// Compute the modal geometry. `entry_count` is the length of
+    /// `SettingsPanelInfo::entries`; it controls `visible_count` and the
+    /// final `panel_height` so a short list doesn't render a giant empty
+    /// panel.
     pub fn calculate(
         window_width: f32,
-        _window_height: f32,
+        window_height: f32,
         cell_width: f32,
         cell_height: f32,
         animation: f32,
+        entry_count: usize,
     ) -> Self {
-        // UI character width — use actual cell width from font metrics
-        let ui_cw = cell_width;
+        let panel_width = (cell_width * 60.0).max(500.0).min(window_width * 0.7);
+        let panel_x = (window_width - panel_width) / 2.0;
+        let padding = cell_width * 1.5;
+        let row_height = cell_height * 2.0;
+        let input_height = cell_height * 2.0;
+        let footer_height = cell_height * 1.6;
+        let gap = 6.0;
+        let separator_height = 1.0;
+        let scrollbar_width = 4.0;
 
-        // Padding derived from cell size
-        let padding_x = ui_cw * 1.5;
-        let padding_y = cell_height * 0.5;
+        let header_area =
+            padding + cell_height * 1.4 + gap + input_height + gap + separator_height + gap;
+        let footer_area = footer_height + padding * 0.5;
 
-        // Sidebar: padding + longest label("Scrollback"=10) + padding
-        let sidebar_width = padding_x + ui_cw * 10.0 + padding_x;
-
-        // Content needs room for labels + values
-        let min_content_width = ui_cw * 30.0;
-
-        // Panel width: at least sidebar + content, between 35% and 55% of window
-        let panel_width = ((sidebar_width + min_content_width).max(window_width * 0.35)).min(window_width * 0.55);
-
-        // Panel slides in from right edge
-        let panel_x = window_width - panel_width * animation;
-
-        // Content area is whatever remains after sidebar
-        let content_x = panel_x + sidebar_width;
-        let content_width = panel_width - sidebar_width;
-
-        // Row height derived from cell height
-        let row_height = (cell_height * 2.2).max(32.0);
-
-        // Vertical positions
-        let header_y = cell_height * 1.5;
-        let separator_y = header_y + cell_height * 1.8;
-        let items_start_y = separator_y + padding_y + cell_height * 0.5;
-        let sections_start_y = header_y + cell_height * 2.5;
+        let max_panel_height = window_height * 0.75;
+        let max_list_height = (max_panel_height - header_area - footer_area).max(row_height);
+        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
+        let visible_count = entry_count.min(rows_that_fit);
+        let list_height = visible_count as f32 * row_height;
+        let panel_height = header_area + list_height + footer_area;
+        let panel_y = (window_height * 0.10) + (1.0 - animation) * -30.0;
+        let list_y = panel_y + header_area;
+        let value_x = panel_x + panel_width * 0.50;
 
         Self {
             panel_x,
+            panel_y,
             panel_width,
-            content_x,
-            content_width,
+            panel_height,
+            padding,
+            gap,
+            separator_height,
             row_height,
-            padding_x,
-            items_start_y,
-            sections_start_y,
+            input_height,
+            scrollbar_width,
+            footer_area,
+            list_y,
+            list_height,
+            rows_that_fit,
+            visible_count,
+            value_x,
             cell_width,
         }
     }
 
-    /// Get the Y position for a specific item index
-    pub fn item_y(&self, index: usize) -> f32 {
-        self.items_start_y + index as f32 * self.row_height
-    }
-
-    /// Check if a point is within the panel bounds
-    pub fn is_in_panel(&self, x: f32, _y: f32) -> bool {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.panel_x
+            && x <= self.panel_x + self.panel_width
+            && y >= self.panel_y
+            && y <= self.panel_y + self.panel_height
     }
 
-    /// Check if a point is in the sidebar
-    pub fn is_in_sidebar(&self, x: f32, _y: f32) -> bool {
-        x >= self.panel_x && x < self.content_x
-    }
-
-    /// Check if a point is in the content area
-    pub fn is_in_content(&self, x: f32, _y: f32) -> bool {
-        x >= self.content_x
-    }
-
-    /// Find which item index a y coordinate falls into, if any
-    pub fn item_at_y(&self, y: f32, item_count: usize) -> Option<usize> {
-        if y < self.items_start_y {
+    /// Map a y-coordinate to a 0-based row within the visible window, if any.
+    pub fn visible_row_at(&self, y: f32) -> Option<usize> {
+        if y < self.list_y || y >= self.list_y + self.list_height {
             return None;
         }
-        let idx = ((y - self.items_start_y) / self.row_height) as usize;
-        if idx < item_count {
-            Some(idx)
+        let row = ((y - self.list_y) / self.row_height) as usize;
+        if row < self.visible_count {
+            Some(row)
         } else {
             None
         }
     }
 
-    /// Find which section index a y coordinate falls into, if any
-    pub fn section_at_y(&self, y: f32, section_count: usize) -> Option<usize> {
-        if y < self.sections_start_y {
+    /// Geometry of the dropdown overlay anchored below the selected entry.
+    /// Returns None if the selected entry is scrolled out of view.
+    pub fn dropdown_rect(
+        &self,
+        entry_abs_idx: usize,
+        scroll_offset: usize,
+        option_count: usize,
+        max_option_len: usize,
+    ) -> Option<DropdownRect> {
+        if option_count == 0 || entry_abs_idx < scroll_offset {
             return None;
         }
-        let idx = ((y - self.sections_start_y) / self.row_height) as usize;
-        if idx < section_count {
-            Some(idx)
-        } else {
-            None
+        let visible_row = entry_abs_idx - scroll_offset;
+        if visible_row >= self.visible_count {
+            return None;
         }
+
+        let anchor_y = self.list_y + visible_row as f32 * self.row_height + self.row_height;
+        let option_h = self.row_height * 0.85;
+        let max_visible_options = 8usize;
+        let visible_options = option_count.min(max_visible_options);
+        let dd_height = visible_options as f32 * option_h + 8.0;
+
+        let min_dd_width = (max_option_len as f32 + 4.0) * self.cell_width;
+        let remaining = self.panel_x + self.panel_width - self.padding - self.value_x;
+        let dd_width = min_dd_width.max(remaining).min(self.panel_width * 0.4);
+        let dd_x = self.value_x;
+
+        Some(DropdownRect {
+            x: dd_x,
+            y: anchor_y,
+            width: dd_width,
+            height: dd_height,
+            option_height: option_h,
+            visible_options,
+        })
     }
 }
 
-/// Default fallback font (always available)
-const DEFAULT_FONT: &str = "monospace";
+/// Dropdown overlay rectangle derived from `SettingsModalLayout`.
+#[derive(Debug, Clone, Copy)]
+pub struct DropdownRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub option_height: f32,
+    pub visible_options: usize,
+}
 
-/// Sections in the settings panel
+impl DropdownRect {
+    /// Which option index does a y-coordinate fall into, if any.
+    pub fn option_at(&self, y: f32) -> Option<usize> {
+        let inner_y = y - self.y - 4.0;
+        if inner_y < 0.0 {
+            return None;
+        }
+        let idx = (inner_y / self.option_height) as usize;
+        if idx < self.visible_options {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
+    }
+}
+
+/// Sections in the settings panel — used for categorizing items
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     Font,
@@ -179,10 +222,6 @@ impl SettingsSection {
         ];
         ALL.as_slice()
     }
-
-    pub fn index(&self) -> usize {
-        Self::all().iter().position(|s| s == self).unwrap_or(0)
-    }
 }
 
 /// A single setting item for display
@@ -204,6 +243,21 @@ pub enum SettingKind {
     SteppedList { values: Vec<usize>, selected: usize },
     /// Read-only display value
     ReadOnly,
+}
+
+/// A flat entry for the settings modal list (item or category header)
+#[derive(Debug, Clone)]
+pub struct SettingEntry {
+    /// Label text (setting name or category header)
+    pub label: &'static str,
+    /// Current value as a display string (empty for headers)
+    pub value: String,
+    /// Setting kind for interaction (ReadOnly for headers)
+    pub kind: SettingKind,
+    /// Whether this is a category header (not selectable)
+    pub is_header: bool,
+    /// Which section this belongs to
+    pub section: SettingsSection,
 }
 
 /// Result of a user action in the settings panel
@@ -261,46 +315,55 @@ pub enum SettingsAction {
     None,
 }
 
-/// The settings panel state
+/// The settings panel state — now a centered modal overlay
 pub struct SettingsPanel {
-    /// Animation state
-    animation: super::animation::PanelAnimation,
-    /// Currently active section
-    section: SettingsSection,
-    /// Currently selected item index within the section
-    selected_item: usize,
-    /// Scroll offset for sections that don't fit
+    /// Animation state (overlay = centered modal with scrim)
+    animation: super::animation::OverlayAnimation,
+    /// Search filter text
+    filter: String,
+    /// Cursor position in filter text (byte offset)
+    filter_cursor: usize,
+    /// Currently selected entry index (selectable entries only, not headers)
+    selected: usize,
+    /// Scroll offset in absolute entry units (headers count)
     scroll_offset: usize,
+    /// Max visible rows the list can show (updated each frame from the layout)
+    max_visible: usize,
     /// Whether a dropdown overlay is currently open
     dropdown_open: bool,
     /// Which option is highlighted in the open dropdown
     dropdown_highlight: usize,
     /// Available monospace fonts (discovered from system)
     available_fonts: Vec<String>,
-    /// Mouse-hovered content item index (None if not hovering any item)
+    /// Mouse-hovered entry index (None if not hovering any item)
     hovered_item: Option<usize>,
-    /// Mouse-hovered sidebar section index (None if not hovering any section)
-    hovered_section: Option<usize>,
     /// Mouse-hovered dropdown option index (None if not hovering any dropdown option)
     dropdown_hovered: Option<usize>,
     /// Current theme metadata (name, author, description)
     theme_meta: Option<crate::config::theme::ThemeMeta>,
+    /// A pending `open_to_section` request to resolve on the next frame
+    /// (resolution needs access to `Config`/`ShortcutRegistry`).
+    pending_section_jump: Option<SettingsSection>,
 }
 
 impl SettingsPanel {
     pub fn new() -> Self {
         Self {
-            animation: super::animation::PanelAnimation::new(),
-            section: SettingsSection::Font,
-            selected_item: 0,
+            animation: super::animation::OverlayAnimation::with_duration(
+                super::animation::DEFAULT_PANEL_DURATION,
+            ),
+            filter: String::new(),
+            filter_cursor: 0,
+            selected: 0,
             scroll_offset: 0,
+            max_visible: 12,
             dropdown_open: false,
             dropdown_highlight: 0,
             available_fonts: vec![DEFAULT_FONT.to_string()],
             hovered_item: None,
-            hovered_section: None,
             dropdown_hovered: None,
             theme_meta: None,
+            pending_section_jump: None,
         }
     }
 
@@ -320,21 +383,35 @@ impl SettingsPanel {
 
     /// Toggle the panel open/closed
     pub fn toggle(&mut self) {
-        if !self.animation.is_open() {
+        if !self.animation.is_active() {
             // Reset state when opening
-            self.section = SettingsSection::Font;
-            self.selected_item = 0;
+            self.filter.clear();
+            self.filter_cursor = 0;
+            self.selected = 0;
             self.scroll_offset = 0;
+            self.dropdown_open = false;
+            self.animation.open();
+        } else {
+            self.animation.close();
         }
-        self.animation.toggle();
     }
 
-    /// Open the panel directly to a specific section
+    /// Open the panel and jump selection to the first item in `section`.
+    /// Does not filter — the full list is still browsable.
     pub fn open_to_section(&mut self, section: SettingsSection) {
-        self.animation.open();
-        self.section = section;
-        self.selected_item = 0;
+        self.filter.clear();
+        self.filter_cursor = 0;
         self.scroll_offset = 0;
+        self.dropdown_open = false;
+        self.animation.open();
+        // Find the first selectable entry in the target section.
+        self.selected = 0;
+        self.pending_section_jump = Some(section);
+    }
+
+    /// Update the max visible rows (called by the renderer each frame).
+    pub fn set_max_visible(&mut self, rows: usize) {
+        self.max_visible = rows.max(1);
     }
 
     /// Close the panel
@@ -342,24 +419,24 @@ impl SettingsPanel {
         self.animation.close();
     }
 
-    /// Whether the panel is open or animating
+    /// Whether the overlay is visible (active or still animating out)
     pub fn is_visible(&self) -> bool {
         self.animation.is_visible()
     }
 
-    /// Whether the panel is fully open and accepting input
+    /// Whether the overlay is logically active (accepting input)
     pub fn is_active(&self) -> bool {
         self.animation.is_active()
     }
 
-    /// Check if animation is still in progress and update open state. Returns true if redraw needed.
+    /// Update animation state. Returns true if still animating (needs redraw).
     pub fn update_animation(&mut self) -> bool {
         self.animation.update()
     }
 
-    /// Get current animation progress with ease-out (0.0 = closed, 1.0 = fully open)
+    /// Get current animation progress with ease-out
     pub fn animation_progress(&self) -> f32 {
-        self.animation.progress()
+        self.animation.eased()
     }
 
     /// Whether the dropdown overlay is currently open
@@ -367,303 +444,314 @@ impl SettingsPanel {
         self.dropdown_open
     }
 
-    /// Alias for selected_item used by hover detection
-    pub fn selected_item_index(&self) -> usize {
-        self.selected_item
+    /// Build the flat list of all settings grouped by section from config
+    fn all_items(&self, config: &Config, _registry: &ShortcutRegistry) -> Vec<(SettingsSection, Vec<SettingItem>)> {
+        let mut result = Vec::new();
+
+        // Font
+        {
+            let font_options = self.available_fonts.clone();
+            let font_selected = font_options.iter().position(|n| n == &config.font.family).unwrap_or(0);
+            result.push((SettingsSection::Font, vec![
+                SettingItem {
+                    label: "Size",
+                    value: format!("{:.1}", config.font.size),
+                    kind: SettingKind::Numeric { min: 8.0, max: 72.0, step: 1.0 },
+                },
+                SettingItem {
+                    label: "Family",
+                    value: config.font.family.clone(),
+                    kind: SettingKind::Dropdown { options: font_options, selected: font_selected },
+                },
+                SettingItem {
+                    label: "Line Height",
+                    value: format!("{:.2}", config.font.line_height),
+                    kind: SettingKind::Numeric { min: 0.8, max: 2.0, step: 0.05 },
+                },
+            ]));
+        }
+
+        // Theme
+        {
+            let options: Vec<String> = Theme::list_available().iter().map(|s| s.to_string()).collect();
+            let selected = options.iter().position(|n| n == &config.theme.name).unwrap_or(0);
+            let mut items = vec![
+                SettingItem {
+                    label: "Theme",
+                    value: config.theme.name.clone(),
+                    kind: SettingKind::Dropdown { options, selected },
+                },
+            ];
+            if let Some(meta) = &self.theme_meta {
+                if !meta.name.is_empty() {
+                    items.push(SettingItem { label: "Name", value: meta.name.clone(), kind: SettingKind::ReadOnly });
+                }
+                if !meta.author.is_empty() {
+                    items.push(SettingItem { label: "Author", value: meta.author.clone(), kind: SettingKind::ReadOnly });
+                }
+                if !meta.description.is_empty() {
+                    items.push(SettingItem { label: "Description", value: meta.description.clone(), kind: SettingKind::ReadOnly });
+                }
+            }
+            result.push((SettingsSection::Theme, items));
+        }
+
+        // Window
+        result.push((SettingsSection::Window, vec![
+            SettingItem {
+                label: "Padding",
+                value: format!("{}", config.window.padding),
+                kind: SettingKind::Numeric { min: 0.0, max: 64.0, step: 2.0 },
+            },
+            SettingItem {
+                label: "Opacity",
+                value: format!("{:.2}", config.window.opacity),
+                kind: SettingKind::Numeric { min: 0.1, max: 1.0, step: 0.05 },
+            },
+            SettingItem {
+                label: "Decorations",
+                value: if config.window.decorations { "On".into() } else { "Off".into() },
+                kind: SettingKind::Dropdown {
+                    options: vec!["On".into(), "Off".into()],
+                    selected: if config.window.decorations { 0 } else { 1 },
+                },
+            },
+        ]));
+
+        // Cursor
+        {
+            use crate::config::CursorStyle;
+            let style_options: Vec<String> = CursorStyle::ALL.iter().map(|s| s.label().to_string()).collect();
+            let style_selected = CursorStyle::ALL.iter().position(|s| *s == config.cursor.style).unwrap_or(0);
+            result.push((SettingsSection::Cursor, vec![
+                SettingItem {
+                    label: "Style",
+                    value: config.cursor.style.label().into(),
+                    kind: SettingKind::Dropdown { options: style_options, selected: style_selected },
+                },
+                SettingItem {
+                    label: "Blink",
+                    value: if config.cursor.blink { "On".into() } else { "Off".into() },
+                    kind: SettingKind::Dropdown {
+                        options: vec!["On".into(), "Off".into()],
+                        selected: if config.cursor.blink { 0 } else { 1 },
+                    },
+                },
+                SettingItem {
+                    label: "Blink Rate",
+                    value: format!("{}ms", config.cursor.blink_rate),
+                    kind: SettingKind::Numeric { min: 100.0, max: 2000.0, step: 50.0 },
+                },
+            ]));
+        }
+
+        // Bell
+        result.push((SettingsSection::Bell, vec![
+            SettingItem {
+                label: "Visual",
+                value: if config.bell.visual { "On".into() } else { "Off".into() },
+                kind: SettingKind::Dropdown {
+                    options: vec!["On".into(), "Off".into()],
+                    selected: if config.bell.visual { 0 } else { 1 },
+                },
+            },
+            SettingItem {
+                label: "Audio",
+                value: if config.bell.audio { "On".into() } else { "Off".into() },
+                kind: SettingKind::Dropdown {
+                    options: vec!["On".into(), "Off".into()],
+                    selected: if config.bell.audio { 0 } else { 1 },
+                },
+            },
+            SettingItem {
+                label: "Flash Duration",
+                value: format!("{}ms", config.bell.visual_duration_ms),
+                kind: SettingKind::Numeric { min: 50.0, max: 1000.0, step: 50.0 },
+            },
+        ]));
+
+        // Scrollback
+        {
+            let steps: Vec<usize> = vec![100, 500, 1_000, 2_000, 5_000, 10_000, 25_000, 50_000, 100_000];
+            let selected = steps.iter().position(|&v| v >= config.scrollback.lines).unwrap_or(steps.len() - 1);
+            let speed_steps: Vec<usize> = vec![1, 2, 3, 4, 6, 8, 10, 15, 20];
+            let speed_selected = speed_steps.iter().position(|&v| v >= config.scrollback.scroll_speed as usize).unwrap_or(speed_steps.len() - 1);
+            result.push((SettingsSection::Scrollback, vec![
+                SettingItem {
+                    label: "Lines",
+                    value: format!("{}", config.scrollback.lines),
+                    kind: SettingKind::SteppedList { values: steps, selected },
+                },
+                SettingItem {
+                    label: "Scroll Speed",
+                    value: format!("{}", config.scrollback.scroll_speed as usize),
+                    kind: SettingKind::SteppedList { values: speed_steps, selected: speed_selected },
+                },
+            ]));
+        }
+
+        // Startup
+        {
+            let splash_options: Vec<String> = SplashMode::ALL.iter().map(|m| m.label().to_string()).collect();
+            let splash_selected = SplashMode::ALL.iter().position(|m| *m == config.splash.mode).unwrap_or(0);
+            result.push((SettingsSection::Startup, vec![
+                SettingItem {
+                    label: "Splash",
+                    value: config.splash.mode.label().to_string(),
+                    kind: SettingKind::Dropdown { options: splash_options, selected: splash_selected },
+                },
+            ]));
+        }
+
+        // Shell
+        {
+            let program = config.shell.program.clone().unwrap_or_else(|| "(default)".into());
+            let args_str = if config.shell.args.is_empty() { "(none)".into() } else { config.shell.args.join(" ") };
+            result.push((SettingsSection::Shell, vec![
+                SettingItem { label: "Program", value: program, kind: SettingKind::ReadOnly },
+                SettingItem { label: "Args", value: args_str, kind: SettingKind::ReadOnly },
+            ]));
+        }
+
+        // Sessions
+        {
+            let on_off = vec!["On".into(), "Off".into()];
+            result.push((SettingsSection::Sessions, vec![
+                SettingItem {
+                    label: "Auto Save",
+                    value: if config.session.auto_save { "On".into() } else { "Off".into() },
+                    kind: SettingKind::Dropdown { options: on_off.clone(), selected: if config.session.auto_save { 0 } else { 1 } },
+                },
+                SettingItem {
+                    label: "Auto Restore",
+                    value: if config.session.auto_restore { "On".into() } else { "Off".into() },
+                    kind: SettingKind::Dropdown { options: on_off.clone(), selected: if config.session.auto_restore { 0 } else { 1 } },
+                },
+                SettingItem {
+                    label: "Save Scrollback",
+                    value: if config.session.save_scrollback { "On".into() } else { "Off".into() },
+                    kind: SettingKind::Dropdown { options: on_off, selected: if config.session.save_scrollback { 0 } else { 1 } },
+                },
+            ]));
+        }
+
+        // Plugins
+        {
+            let en_dis: Vec<String> = vec!["Enabled".into(), "Disabled".into()];
+            let claude_model_opts: Vec<String> = vec!["(default)".into(), "sonnet".into(), "opus".into(), "haiku".into()];
+            let claude_model_val = config.plugins.claude_code.model.clone().unwrap_or_else(|| "(default)".into());
+            let claude_model_sel = claude_model_opts.iter().position(|m| m == &claude_model_val).unwrap_or(0);
+            let codex_model_opts: Vec<String> = vec!["(default)".into(), "o3-mini".into(), "o4-mini".into(), "gpt-4.1".into()];
+            let codex_model_val = config.plugins.codex.model.clone().unwrap_or_else(|| "(default)".into());
+            let codex_model_sel = codex_model_opts.iter().position(|m| m == &codex_model_val).unwrap_or(0);
+            let codex_approval_opts: Vec<String> = vec!["suggest".into(), "auto-edit".into(), "full-auto".into()];
+            let codex_approval_sel = codex_approval_opts.iter().position(|m| m == &config.plugins.codex.approval_mode).unwrap_or(0);
+            let claude_approval_opts: Vec<String> = vec!["(interactive)".into(), "auto-accept".into()];
+            let claude_approval_val = config.plugins.claude_code.approval_mode.clone().unwrap_or_else(|| "(interactive)".into());
+            let claude_approval_sel = claude_approval_opts.iter().position(|m| m == &claude_approval_val).unwrap_or(0);
+
+            result.push((SettingsSection::Plugins, vec![
+                SettingItem {
+                    label: "Claude Code",
+                    value: if config.plugins.claude_code.enabled { "Enabled".into() } else { "Disabled".into() },
+                    kind: SettingKind::Dropdown { options: en_dis.clone(), selected: if config.plugins.claude_code.enabled { 0 } else { 1 } },
+                },
+                SettingItem { label: "Claude Binary", value: config.plugins.claude_code.binary.clone(), kind: SettingKind::ReadOnly },
+                SettingItem {
+                    label: "Claude Model",
+                    value: claude_model_val,
+                    kind: SettingKind::Dropdown { options: claude_model_opts, selected: claude_model_sel },
+                },
+                SettingItem {
+                    label: "Claude Approval",
+                    value: claude_approval_val,
+                    kind: SettingKind::Dropdown { options: claude_approval_opts, selected: claude_approval_sel },
+                },
+                SettingItem {
+                    label: "Codex",
+                    value: if config.plugins.codex.enabled { "Enabled".into() } else { "Disabled".into() },
+                    kind: SettingKind::Dropdown { options: en_dis, selected: if config.plugins.codex.enabled { 0 } else { 1 } },
+                },
+                SettingItem { label: "Codex Binary", value: config.plugins.codex.binary.clone(), kind: SettingKind::ReadOnly },
+                SettingItem {
+                    label: "Codex Model",
+                    value: codex_model_val,
+                    kind: SettingKind::Dropdown { options: codex_model_opts, selected: codex_model_sel },
+                },
+                SettingItem {
+                    label: "Codex Approval",
+                    value: config.plugins.codex.approval_mode.clone(),
+                    kind: SettingKind::Dropdown { options: codex_approval_opts, selected: codex_approval_sel },
+                },
+            ]));
+        }
+
+        result
     }
 
-    /// Build the list of items for the current section from config
-    pub fn items_for_section(&self, config: &Config, _registry: &ShortcutRegistry) -> Vec<SettingItem> {
-        match self.section {
-            SettingsSection::Font => {
-                let font_options = self.available_fonts.clone();
-                let font_selected = font_options.iter().position(|n| n == &config.font.family).unwrap_or(0);
-                vec![
-                    SettingItem {
-                        label: "Size",
-                        value: format!("{:.1}", config.font.size),
-                        kind: SettingKind::Numeric { min: 8.0, max: 72.0, step: 1.0 },
-                    },
-                    SettingItem {
-                        label: "Family",
-                        value: config.font.family.clone(),
-                        kind: SettingKind::Dropdown { options: font_options, selected: font_selected },
-                    },
-                    SettingItem {
-                        label: "Line Height",
-                        value: format!("{:.2}", config.font.line_height),
-                        kind: SettingKind::Numeric { min: 0.8, max: 2.0, step: 0.05 },
-                    },
-                ]
-            },
-            SettingsSection::Theme => {
-                let options: Vec<String> = Theme::list_available().iter().map(|s| s.to_string()).collect();
-                let selected = options.iter().position(|n| n == &config.theme.name).unwrap_or(0);
-                let mut items = vec![
-                    SettingItem {
-                        label: "Theme",
-                        value: config.theme.name.clone(),
-                        kind: SettingKind::Dropdown { options, selected },
-                    },
-                ];
-                if let Some(meta) = &self.theme_meta {
-                    if !meta.name.is_empty() {
-                        items.push(SettingItem {
-                            label: "Name",
-                            value: meta.name.clone(),
-                            kind: SettingKind::ReadOnly,
-                        });
-                    }
-                    if !meta.author.is_empty() {
-                        items.push(SettingItem {
-                            label: "Author",
-                            value: meta.author.clone(),
-                            kind: SettingKind::ReadOnly,
-                        });
-                    }
-                    if !meta.description.is_empty() {
-                        items.push(SettingItem {
-                            label: "Description",
-                            value: meta.description.clone(),
-                            kind: SettingKind::ReadOnly,
-                        });
-                    }
+    /// Build filtered flat entries from all settings, with category headers
+    pub fn build_entries(&self, config: &Config, registry: &ShortcutRegistry) -> Vec<SettingEntry> {
+        let all = self.all_items(config, registry);
+        let filter_lower = self.filter.to_lowercase();
+        let has_filter = !filter_lower.is_empty();
+
+        let mut entries = Vec::new();
+        for (section, items) in &all {
+            // Collect matching items in this section
+            let matching: Vec<(usize, &SettingItem)> = items.iter().enumerate().filter(|(_, item)| {
+                if !has_filter {
+                    return true;
                 }
-                items
-            }
-            SettingsSection::Window => vec![
-                SettingItem {
-                    label: "Padding",
-                    value: format!("{}", config.window.padding),
-                    kind: SettingKind::Numeric { min: 0.0, max: 64.0, step: 2.0 },
-                },
-                SettingItem {
-                    label: "Opacity",
-                    value: format!("{:.2}", config.window.opacity),
-                    kind: SettingKind::Numeric { min: 0.1, max: 1.0, step: 0.05 },
-                },
-                SettingItem {
-                    label: "Decorations",
-                    value: if config.window.decorations { "On".into() } else { "Off".into() },
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.window.decorations { 0 } else { 1 },
-                    },
-                },
-            ],
-            SettingsSection::Cursor => {
-                use crate::config::CursorStyle;
-                let style_options: Vec<String> = CursorStyle::ALL.iter().map(|s| s.label().to_string()).collect();
-                let style_selected = CursorStyle::ALL.iter().position(|s| *s == config.cursor.style).unwrap_or(0);
-                vec![
-                    SettingItem {
-                        label: "Style",
-                        value: config.cursor.style.label().into(),
-                        kind: SettingKind::Dropdown { options: style_options, selected: style_selected },
-                    },
-                    SettingItem {
-                        label: "Blink",
-                        value: if config.cursor.blink { "On".into() } else { "Off".into() },
-                        kind: SettingKind::Dropdown {
-                            options: vec!["On".into(), "Off".into()],
-                            selected: if config.cursor.blink { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "Blink Rate",
-                        value: format!("{}ms", config.cursor.blink_rate),
-                        kind: SettingKind::Numeric { min: 100.0, max: 2000.0, step: 50.0 },
-                    },
-                ]
-            }
-            SettingsSection::Bell => vec![
-                SettingItem {
-                    label: "Visual",
-                    value: if config.bell.visual { "On".into() } else { "Off".into() },
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.bell.visual { 0 } else { 1 },
-                    },
-                },
-                SettingItem {
-                    label: "Audio",
-                    value: if config.bell.audio { "On".into() } else { "Off".into() },
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.bell.audio { 0 } else { 1 },
-                    },
-                },
-                SettingItem {
-                    label: "Flash Duration",
-                    value: format!("{}ms", config.bell.visual_duration_ms),
-                    kind: SettingKind::Numeric { min: 50.0, max: 1000.0, step: 50.0 },
-                },
-            ],
-            SettingsSection::Scrollback => {
-                let steps: Vec<usize> = vec![
-                    100, 500, 1_000, 2_000, 5_000,
-                    10_000, 25_000, 50_000, 100_000,
-                ];
-                let selected = steps.iter().position(|&v| v >= config.scrollback.lines)
-                    .unwrap_or(steps.len() - 1);
+                // Match against label, value, or section name
+                item.label.to_lowercase().contains(&filter_lower)
+                    || item.value.to_lowercase().contains(&filter_lower)
+                    || section.label().to_lowercase().contains(&filter_lower)
+            }).collect();
 
-                let speed_steps: Vec<usize> = vec![1, 2, 3, 4, 6, 8, 10, 15, 20];
-                let speed_selected = speed_steps.iter().position(|&v| v >= config.scrollback.scroll_speed as usize)
-                    .unwrap_or(speed_steps.len() - 1);
-                vec![
-                    SettingItem {
-                        label: "Lines",
-                        value: format!("{}", config.scrollback.lines),
-                        kind: SettingKind::SteppedList { values: steps, selected },
-                    },
-                    SettingItem {
-                        label: "Scroll Speed",
-                        value: format!("{}", config.scrollback.scroll_speed as usize),
-                        kind: SettingKind::SteppedList { values: speed_steps, selected: speed_selected },
-                    },
-                ]
+            if matching.is_empty() {
+                continue;
             }
-            SettingsSection::Startup => {
-                let splash_options: Vec<String> = SplashMode::ALL.iter().map(|m| m.label().to_string()).collect();
-                let splash_selected = SplashMode::ALL.iter().position(|m| *m == config.splash.mode).unwrap_or(0);
-                vec![
-                    SettingItem {
-                        label: "Splash",
-                        value: config.splash.mode.label().to_string(),
-                        kind: SettingKind::Dropdown { options: splash_options, selected: splash_selected },
-                    },
-                ]
-            }
-            SettingsSection::Shell => {
-                let program = config.shell.program.clone().unwrap_or_else(|| "(default)".into());
-                let args_str = if config.shell.args.is_empty() {
-                    "(none)".into()
-                } else {
-                    config.shell.args.join(" ")
-                };
-                vec![
-                    SettingItem {
-                        label: "Program",
-                        value: program,
-                        kind: SettingKind::ReadOnly,
-                    },
-                    SettingItem {
-                        label: "Args",
-                        value: args_str,
-                        kind: SettingKind::ReadOnly,
-                    },
-                ]
-            }
-            SettingsSection::Sessions => {
-                let on_off = vec!["On".into(), "Off".into()];
-                vec![
-                    SettingItem {
-                        label: "Auto Save",
-                        value: if config.session.auto_save { "On".into() } else { "Off".into() },
-                        kind: SettingKind::Dropdown {
-                            options: on_off.clone(),
-                            selected: if config.session.auto_save { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "Auto Restore",
-                        value: if config.session.auto_restore { "On".into() } else { "Off".into() },
-                        kind: SettingKind::Dropdown {
-                            options: on_off.clone(),
-                            selected: if config.session.auto_restore { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "Save Scrollback",
-                        value: if config.session.save_scrollback { "On".into() } else { "Off".into() },
-                        kind: SettingKind::Dropdown {
-                            options: on_off,
-                            selected: if config.session.save_scrollback { 0 } else { 1 },
-                        },
-                    },
-                ]
-            }
-            SettingsSection::Plugins => {
-                let en_dis: Vec<String> = vec!["Enabled".into(), "Disabled".into()];
-                let claude_model_opts: Vec<String> = vec![
-                    "(default)".into(), "sonnet".into(), "opus".into(), "haiku".into(),
-                ];
-                let claude_model_val = config.plugins.claude_code.model.clone().unwrap_or_else(|| "(default)".into());
-                let claude_model_sel = claude_model_opts.iter().position(|m| m == &claude_model_val).unwrap_or(0);
 
-                let codex_model_opts: Vec<String> = vec![
-                    "(default)".into(), "o3-mini".into(), "o4-mini".into(), "gpt-4.1".into(),
-                ];
-                let codex_model_val = config.plugins.codex.model.clone().unwrap_or_else(|| "(default)".into());
-                let codex_model_sel = codex_model_opts.iter().position(|m| m == &codex_model_val).unwrap_or(0);
+            // Add category header
+            entries.push(SettingEntry {
+                label: section.label(),
+                value: String::new(),
+                kind: SettingKind::ReadOnly,
+                is_header: true,
+                section: *section,
+            });
 
-                let codex_approval_opts: Vec<String> = vec![
-                    "suggest".into(), "auto-edit".into(), "full-auto".into(),
-                ];
-                let codex_approval_sel = codex_approval_opts.iter()
-                    .position(|m| m == &config.plugins.codex.approval_mode)
-                    .unwrap_or(0);
-
-                let claude_approval_opts: Vec<String> = vec![
-                    "(interactive)".into(), "auto-accept".into(),
-                ];
-                let claude_approval_val = config.plugins.claude_code.approval_mode.clone().unwrap_or_else(|| "(interactive)".into());
-                let claude_approval_sel = claude_approval_opts.iter()
-                    .position(|m| m == &claude_approval_val)
-                    .unwrap_or(0);
-
-                vec![
-                    // ── Claude Code ──
-                    SettingItem {
-                        label: "Claude Code",
-                        value: if config.plugins.claude_code.enabled { "Enabled".into() } else { "Disabled".into() },
-                        kind: SettingKind::Dropdown {
-                            options: en_dis.clone(),
-                            selected: if config.plugins.claude_code.enabled { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "  Binary",
-                        value: config.plugins.claude_code.binary.clone(),
-                        kind: SettingKind::ReadOnly,
-                    },
-                    SettingItem {
-                        label: "  Model",
-                        value: claude_model_val,
-                        kind: SettingKind::Dropdown { options: claude_model_opts, selected: claude_model_sel },
-                    },
-                    SettingItem {
-                        label: "  Approval",
-                        value: claude_approval_val,
-                        kind: SettingKind::Dropdown { options: claude_approval_opts, selected: claude_approval_sel },
-                    },
-                    // ── Codex ──
-                    SettingItem {
-                        label: "Codex",
-                        value: if config.plugins.codex.enabled { "Enabled".into() } else { "Disabled".into() },
-                        kind: SettingKind::Dropdown {
-                            options: en_dis,
-                            selected: if config.plugins.codex.enabled { 0 } else { 1 },
-                        },
-                    },
-                    SettingItem {
-                        label: "  Binary",
-                        value: config.plugins.codex.binary.clone(),
-                        kind: SettingKind::ReadOnly,
-                    },
-                    SettingItem {
-                        label: "  Model",
-                        value: codex_model_val,
-                        kind: SettingKind::Dropdown { options: codex_model_opts, selected: codex_model_sel },
-                    },
-                    SettingItem {
-                        label: "  Approval",
-                        value: config.plugins.codex.approval_mode.clone(),
-                        kind: SettingKind::Dropdown { options: codex_approval_opts, selected: codex_approval_sel },
-                    },
-                ]
+            // Add matching items
+            for (_, item) in matching {
+                entries.push(SettingEntry {
+                    label: item.label,
+                    value: item.value.clone(),
+                    kind: item.kind.clone(),
+                    is_header: false,
+                    section: *section,
+                });
             }
         }
+
+        entries
+    }
+
+    /// Count selectable (non-header) entries
+    fn count_selectable(entries: &[SettingEntry]) -> usize {
+        entries.iter().filter(|e| !e.is_header).count()
+    }
+
+    /// Get the nth selectable entry (0-indexed)
+    fn nth_selectable(entries: &[SettingEntry], n: usize) -> Option<&SettingEntry> {
+        entries.iter().filter(|e| !e.is_header).nth(n)
+    }
+
+    /// Get the nth selectable entry's absolute index in the entries vec
+    fn nth_selectable_abs_index(entries: &[SettingEntry], n: usize) -> Option<usize> {
+        entries.iter().enumerate()
+            .filter(|(_, e)| !e.is_header)
+            .nth(n)
+            .map(|(i, _)| i)
     }
 
     /// Handle a key press. Returns a SettingsAction if a config change should be applied.
@@ -673,78 +761,142 @@ impl SettingsPanel {
             return self.handle_dropdown_key(key, config, registry);
         }
 
-        match key {
+        let entries = self.build_entries(config, registry);
+        let selectable_count = Self::count_selectable(&entries);
+
+        let action = match key {
             SettingsKey::Escape => {
-                self.close();
+                if !self.filter.is_empty() {
+                    // First Escape clears filter
+                    self.filter.clear();
+                    self.filter_cursor = 0;
+                    self.selected = 0;
+                    self.scroll_offset = 0;
+                } else {
+                    self.close();
+                }
                 SettingsAction::None
             }
             SettingsKey::Up => {
-                if self.selected_item > 0 {
-                    self.selected_item -= 1;
-                } else {
-                    let idx = self.section.index();
-                    if idx > 0 {
-                        self.section = SettingsSection::all()[idx - 1];
-                        let items = self.items_for_section(config, registry);
-                        self.selected_item = items.len().saturating_sub(1);
-                    }
+                if self.selected > 0 {
+                    self.selected -= 1;
                 }
                 SettingsAction::None
             }
             SettingsKey::Down => {
-                let items = self.items_for_section(config, registry);
-                if self.selected_item + 1 < items.len() {
-                    self.selected_item += 1;
-                } else {
-                    let idx = self.section.index();
-                    if idx + 1 < SettingsSection::all().len() {
-                        self.section = SettingsSection::all()[idx + 1];
-                        self.selected_item = 0;
-                    }
+                if selectable_count > 0 && self.selected + 1 < selectable_count {
+                    self.selected += 1;
                 }
                 SettingsAction::None
             }
-            SettingsKey::Left => self.adjust_value(config, registry, -1),
+            SettingsKey::Left => self.adjust_selected_value(&entries, -1),
             SettingsKey::Right | SettingsKey::Enter => {
-                let items = self.items_for_section(config, registry);
-                if let Some(item) = items.get(self.selected_item) {
-                    match &item.kind {
+                if let Some(entry) = Self::nth_selectable(&entries, self.selected) {
+                    match &entry.kind {
                         SettingKind::Dropdown { selected, .. } | SettingKind::SteppedList { selected, .. } => {
                             self.dropdown_open = true;
                             self.dropdown_highlight = *selected;
-                            return SettingsAction::None;
+                            SettingsAction::None
                         }
-                        _ => {}
+                        _ => self.adjust_selected_value(&entries, 1),
+                    }
+                } else {
+                    SettingsAction::None
+                }
+            }
+            SettingsKey::Tab => {
+                if let Some(current) = Self::nth_selectable(&entries, self.selected) {
+                    let sections = SettingsSection::all();
+                    let current_idx = sections.iter().position(|s| *s == current.section).unwrap_or(0);
+                    let next_section = sections[(current_idx + 1) % sections.len()];
+                    if let Some(idx) = Self::first_selectable_in_section(&entries, next_section) {
+                        self.selected = idx;
                     }
                 }
-                self.adjust_value(config, registry, 1)
-            }
-            SettingsKey::Delete => SettingsAction::None,
-            SettingsKey::Tab => {
-                self.dropdown_open = false;
-                let idx = self.section.index();
-                let sections = SettingsSection::all();
-                self.section = sections[(idx + 1) % sections.len()];
-                self.selected_item = 0;
                 SettingsAction::None
             }
             SettingsKey::Save => SettingsAction::SaveConfig,
             SettingsKey::Reset => SettingsAction::ResetConfig,
-            SettingsKey::FilterChar(_) | SettingsKey::FilterBackspace => {
+            SettingsKey::Delete => SettingsAction::None,
+            SettingsKey::FilterChar(ch) => {
+                self.filter.insert(self.filter_cursor, ch);
+                self.filter_cursor += ch.len_utf8();
+                self.selected = 0;
+                self.scroll_offset = 0;
                 SettingsAction::None
             }
+            SettingsKey::FilterBackspace => {
+                if self.filter_cursor > 0 {
+                    let prev = self.filter[..self.filter_cursor]
+                        .char_indices()
+                        .last()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.filter.drain(prev..self.filter_cursor);
+                    self.filter_cursor = prev;
+                    self.selected = 0;
+                    self.scroll_offset = 0;
+                }
+                SettingsAction::None
+            }
+        };
+
+        // Keep the selected entry visible after any navigation.
+        self.ensure_selection_visible(&entries);
+        action
+    }
+
+    /// Find the selectable index of the first item in `section`.
+    fn first_selectable_in_section(entries: &[SettingEntry], section: SettingsSection) -> Option<usize> {
+        entries
+            .iter()
+            .filter(|e| !e.is_header)
+            .enumerate()
+            .find(|(_, e)| e.section == section)
+            .map(|(i, _)| i)
+    }
+
+    /// After selection changes, adjust `scroll_offset` so the selected entry
+    /// (plus its section header for context) is visible within `max_visible`.
+    fn ensure_selection_visible(&mut self, entries: &[SettingEntry]) {
+        let Some(abs) = Self::nth_selectable_abs_index(entries, self.selected) else {
+            return;
+        };
+        // Prefer keeping the section header visible above the selected row.
+        let desired_top = if abs > 0 && entries.get(abs - 1).map_or(false, |e| e.is_header) {
+            abs - 1
+        } else {
+            abs
+        };
+        if desired_top < self.scroll_offset {
+            self.scroll_offset = desired_top;
+        } else if abs >= self.scroll_offset + self.max_visible {
+            self.scroll_offset = abs + 1 - self.max_visible;
+        }
+        self.clamp_scroll(entries.len());
+    }
+
+    fn clamp_scroll(&mut self, total: usize) {
+        let max = total.saturating_sub(self.max_visible);
+        if self.scroll_offset > max {
+            self.scroll_offset = max;
         }
     }
 
     /// Handle keys when a dropdown overlay is open
     fn handle_dropdown_key(&mut self, key: SettingsKey, config: &Config, registry: &ShortcutRegistry) -> SettingsAction {
-        let items = self.items_for_section(config, registry);
-        let Some(item) = items.get(self.selected_item) else {
+        let entries = self.build_entries(config, registry);
+        let entry = Self::nth_selectable(&entries, self.selected);
+        let Some(entry) = entry else {
             self.dropdown_open = false;
             return SettingsAction::None;
         };
+        // Clone what we need before the mutable borrow
+        let entry_section = entry.section;
+        let entry_label = entry.label;
+        let entry_kind = entry.kind.clone();
 
-        let option_count = match &item.kind {
+        let option_count = match &entry_kind {
             SettingKind::Dropdown { options, .. } => options.len(),
             SettingKind::SteppedList { values, .. } => values.len(),
             _ => { self.dropdown_open = false; return SettingsAction::None; }
@@ -769,26 +921,19 @@ impl SettingsPanel {
             }
             SettingsKey::Enter | SettingsKey::Right => {
                 self.dropdown_open = false;
-                self.select_dropdown_option(config, registry, self.dropdown_highlight)
+                self.map_dropdown_action(entry_section, entry_label, &entry_kind, self.dropdown_highlight)
             }
             _ => SettingsAction::None,
         }
     }
 
-    /// Select a specific option index from the current dropdown
-    fn select_dropdown_option(&self, config: &Config, registry: &ShortcutRegistry, option_idx: usize) -> SettingsAction {
-        let items = self.items_for_section(config, registry);
-        let Some(item) = items.get(self.selected_item) else {
-            return SettingsAction::None;
-        };
-
-        match &item.kind {
+    /// Map a dropdown option selection to a SettingsAction
+    fn map_dropdown_action(&self, section: SettingsSection, label: &str, kind: &SettingKind, option_idx: usize) -> SettingsAction {
+        match kind {
             SettingKind::Dropdown { options, .. } => {
-                let Some(new_val) = options.get(option_idx) else {
-                    return SettingsAction::None;
-                };
+                let Some(new_val) = options.get(option_idx) else { return SettingsAction::None; };
                 let new_val = new_val.clone();
-                match (self.section, item.label) {
+                match (section, label) {
                     (SettingsSection::Theme, _) => SettingsAction::SetTheme(new_val),
                     (SettingsSection::Font, "Family") => SettingsAction::SetFontFamily(new_val),
                     (SettingsSection::Window, "Decorations") => SettingsAction::SetDecorations(new_val == "On"),
@@ -797,45 +942,24 @@ impl SettingsPanel {
                     (SettingsSection::Bell, "Visual") => SettingsAction::SetVisualBell(new_val == "On"),
                     (SettingsSection::Bell, "Audio") => SettingsAction::SetAudioBell(new_val == "On"),
                     (SettingsSection::Startup, "Splash") => {
-                        // Convert index to SplashMode
                         let mode = SplashMode::ALL.get(option_idx).copied().unwrap_or(SplashMode::FirstBoot);
                         SettingsAction::SetSplashMode(mode)
                     }
                     (SettingsSection::Sessions, "Auto Save") => SettingsAction::SetSessionAutoSave(new_val == "On"),
                     (SettingsSection::Sessions, "Auto Restore") => SettingsAction::SetSessionAutoRestore(new_val == "On"),
                     (SettingsSection::Sessions, "Save Scrollback") => SettingsAction::SetSessionSaveScrollback(new_val == "On"),
-                    (SettingsSection::Plugins, "Claude Code") => SettingsAction::SetPluginEnabled {
-                        plugin_id: "claude-code".into(),
-                        enabled: new_val == "Enabled",
-                    },
-                    (SettingsSection::Plugins, "  Model") if self.selected_item < 4 => SettingsAction::SetPluginModel {
-                        plugin_id: "claude-code".into(),
-                        model: new_val,
-                    },
-                    (SettingsSection::Plugins, "  Approval") if self.selected_item < 4 => SettingsAction::SetPluginApprovalMode {
-                        plugin_id: "claude-code".into(),
-                        mode: new_val,
-                    },
-                    (SettingsSection::Plugins, "Codex") => SettingsAction::SetPluginEnabled {
-                        plugin_id: "codex".into(),
-                        enabled: new_val == "Enabled",
-                    },
-                    (SettingsSection::Plugins, "  Model") => SettingsAction::SetPluginModel {
-                        plugin_id: "codex".into(),
-                        model: new_val,
-                    },
-                    (SettingsSection::Plugins, "  Approval") => SettingsAction::SetPluginApprovalMode {
-                        plugin_id: "codex".into(),
-                        mode: new_val,
-                    },
+                    (SettingsSection::Plugins, "Claude Code") => SettingsAction::SetPluginEnabled { plugin_id: "claude-code".into(), enabled: new_val == "Enabled" },
+                    (SettingsSection::Plugins, "Claude Model") => SettingsAction::SetPluginModel { plugin_id: "claude-code".into(), model: new_val },
+                    (SettingsSection::Plugins, "Claude Approval") => SettingsAction::SetPluginApprovalMode { plugin_id: "claude-code".into(), mode: new_val },
+                    (SettingsSection::Plugins, "Codex") => SettingsAction::SetPluginEnabled { plugin_id: "codex".into(), enabled: new_val == "Enabled" },
+                    (SettingsSection::Plugins, "Codex Model") => SettingsAction::SetPluginModel { plugin_id: "codex".into(), model: new_val },
+                    (SettingsSection::Plugins, "Codex Approval") => SettingsAction::SetPluginApprovalMode { plugin_id: "codex".into(), mode: new_val },
                     _ => SettingsAction::None,
                 }
             }
             SettingKind::SteppedList { values, .. } => {
-                let Some(&new_val) = values.get(option_idx) else {
-                    return SettingsAction::None;
-                };
-                match (self.section, item.label) {
+                let Some(&new_val) = values.get(option_idx) else { return SettingsAction::None; };
+                match (section, label) {
                     (SettingsSection::Scrollback, "Lines") => SettingsAction::SetScrollback(new_val),
                     (SettingsSection::Scrollback, "Scroll Speed") => SettingsAction::SetScrollSpeed(new_val as f64),
                     _ => SettingsAction::None,
@@ -845,20 +969,19 @@ impl SettingsPanel {
         }
     }
 
-    /// Adjust the currently selected value
-    fn adjust_value(&self, config: &Config, registry: &ShortcutRegistry, direction: i32) -> SettingsAction {
-        let items = self.items_for_section(config, registry);
-        let Some(item) = items.get(self.selected_item) else {
+    /// Adjust the currently selected value via ←/→ using pre-built entries.
+    fn adjust_selected_value(&self, entries: &[SettingEntry], direction: i32) -> SettingsAction {
+        let Some(entry) = Self::nth_selectable(entries, self.selected) else {
             return SettingsAction::None;
         };
 
-        match &item.kind {
+        match &entry.kind {
             SettingKind::Numeric { min, max, step } => {
-                let clean_val = item.value.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
+                let clean_val = entry.value.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
                 let current: f32 = clean_val.parse().unwrap_or(0.0);
                 let new_val = (current + step * direction as f32).clamp(*min, *max);
 
-                match (self.section, item.label) {
+                match (entry.section, entry.label) {
                     (SettingsSection::Font, "Size") => SettingsAction::SetFontSize(new_val),
                     (SettingsSection::Font, "Line Height") => SettingsAction::SetLineHeight(new_val),
                     (SettingsSection::Window, "Padding") => SettingsAction::SetPadding(new_val as u32),
@@ -869,59 +992,28 @@ impl SettingsPanel {
                 }
             }
             SettingKind::Dropdown { options, selected } => {
-                if options.is_empty() {
-                    return SettingsAction::None;
-                }
+                if options.is_empty() { return SettingsAction::None; }
                 let new_idx = if direction > 0 {
                     (selected + 1) % options.len()
                 } else {
                     selected.checked_sub(1).unwrap_or(options.len() - 1)
                 };
-                let new_val = options[new_idx].clone();
-
-                match (self.section, item.label) {
-                    (SettingsSection::Theme, _) => SettingsAction::SetTheme(new_val),
-                    (SettingsSection::Font, "Family") => SettingsAction::SetFontFamily(new_val),
-                    (SettingsSection::Window, "Decorations") => SettingsAction::SetDecorations(new_val == "On"),
-                    (SettingsSection::Cursor, "Style") => SettingsAction::SetCursorStyle(new_val),
-                    (SettingsSection::Cursor, "Blink") => SettingsAction::SetCursorBlink(new_val == "On"),
-                    (SettingsSection::Bell, "Visual") => SettingsAction::SetVisualBell(new_val == "On"),
-                    (SettingsSection::Bell, "Audio") => SettingsAction::SetAudioBell(new_val == "On"),
-                    (SettingsSection::Startup, "Splash") => {
-                        let mode = SplashMode::ALL.get(new_idx).copied().unwrap_or(SplashMode::FirstBoot);
-                        SettingsAction::SetSplashMode(mode)
-                    }
-                    (SettingsSection::Sessions, "Auto Save") => SettingsAction::SetSessionAutoSave(new_val == "On"),
-                    (SettingsSection::Sessions, "Auto Restore") => SettingsAction::SetSessionAutoRestore(new_val == "On"),
-                    (SettingsSection::Sessions, "Save Scrollback") => SettingsAction::SetSessionSaveScrollback(new_val == "On"),
-                    _ => SettingsAction::None,
-                }
+                self.map_dropdown_action(entry.section, entry.label, &entry.kind, new_idx)
             }
             SettingKind::SteppedList { values, selected } => {
-                if values.is_empty() {
-                    return SettingsAction::None;
-                }
+                if values.is_empty() { return SettingsAction::None; }
                 let new_idx = if direction > 0 {
                     (*selected + 1).min(values.len() - 1)
                 } else {
                     selected.saturating_sub(1)
                 };
-                let new_val = values[new_idx];
-
-                match (self.section, item.label) {
-                    (SettingsSection::Scrollback, "Lines") => SettingsAction::SetScrollback(new_val),
-                    (SettingsSection::Scrollback, "Scroll Speed") => SettingsAction::SetScrollSpeed(new_val as f64),
-                    _ => SettingsAction::None,
-                }
+                self.map_dropdown_action(entry.section, entry.label, &entry.kind, new_idx)
             }
-            SettingKind::ReadOnly => {
-                SettingsAction::None
-            }
+            SettingKind::ReadOnly => SettingsAction::None,
         }
     }
 
-    /// Handle a mouse click at the given window coordinates.
-    /// Uses SettingsPanelLayout to ensure consistent hit testing with rendering.
+    /// Handle a mouse click at the given window coordinates (centered modal geometry).
     pub fn handle_click(
         &mut self,
         x: f32,
@@ -937,141 +1029,121 @@ impl SettingsPanel {
             return SettingsAction::None;
         }
 
-        // Use the centralized layout calculation
-        let layout = SettingsPanelLayout::calculate(
+        let entries = self.build_entries(config, registry);
+        let layout = SettingsModalLayout::calculate(
             window_width,
             window_height,
             cell_width,
             cell_height,
             self.animation_progress(),
+            entries.len(),
         );
 
         // Click outside panel = close
-        if !layout.is_in_panel(x, y) {
+        if !layout.contains(x, y) {
             self.close();
             return SettingsAction::None;
         }
 
-        // ── Sidebar section click ──
-        if layout.is_in_sidebar(x, y) {
-            self.dropdown_open = false;
-            if let Some(idx) = layout.section_at_y(y, SettingsSection::all().len()) {
-                if let Some(section) = SettingsSection::all().get(idx) {
-                    self.section = *section;
-                    self.selected_item = 0;
-                }
-            }
-            return SettingsAction::None;
-        }
-
-        // ── Dropdown overlay click ──
+        // If a dropdown is open, resolve clicks against it first.
         if self.dropdown_open {
-            let items = self.items_for_section(config, registry);
-            if let Some(item) = items.get(self.selected_item) {
-                let (options_text, option_count) = match &item.kind {
-                    SettingKind::Dropdown { options, .. } => (options.clone(), options.len()),
-                    SettingKind::SteppedList { values, .. } => {
-                        (values.iter().map(|v| v.to_string()).collect::<Vec<_>>(), values.len())
-                    }
-                    _ => (vec![], 0),
-                };
-
-                if option_count > 0 {
-                    // Calculate value_area_x the same way as the renderer:
-                    // Based on actual label lengths, not a fixed percentage
-                    let max_label_len = items.iter().map(|i| i.label.len()).max().unwrap_or(0);
-                    let label_end = layout.padding_x + max_label_len as f32 * layout.cell_width;
-                    let min_gap = layout.cell_width * 2.0;
-                    let max_value_area = layout.content_width * 0.65;
-                    let value_area_offset = (label_end + min_gap).min(max_value_area);
-                    let actual_value_area_x = layout.content_x + value_area_offset;
-
-                    // Match the exact dropdown position calculation from renderer
-                    let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
-                    let min_dd_width = (max_option_len as f32 + 4.0) * layout.cell_width;
-                    let remaining_space = layout.content_width - value_area_offset;
-                    let dd_width = min_dd_width.max(remaining_space).min(layout.content_width - layout.cell_width * 2.0);
-
-                    // Shift dropdown left if it would exceed panel bounds
-                    let dd_x = if actual_value_area_x + dd_width > layout.panel_x + layout.panel_width - layout.cell_width {
-                        (layout.panel_x + layout.panel_width - dd_width - layout.cell_width).max(layout.content_x + layout.cell_width)
-                    } else {
-                        actual_value_area_x
-                    };
-
-                    // Dropdown appears below the selected item
-                    let anchor_y = layout.item_y(self.selected_item) + layout.row_height;
-                    let option_h = layout.row_height * 0.85;
-                    let max_visible = 8usize;
-                    let visible_count = option_count.min(max_visible);
-                    let dd_height = visible_count as f32 * option_h + 8.0;
-
-                    // Click inside dropdown?
-                    if x >= dd_x && x < dd_x + dd_width && y >= anchor_y && y < anchor_y + dd_height {
-                        let clicked_idx = ((y - anchor_y - 4.0) / option_h) as usize;
-                        if clicked_idx < option_count {
-                            self.dropdown_open = false;
-                            return self.select_dropdown_option(config, registry, clicked_idx);
+            if let Some((rect, option_count)) = self.dropdown_layout(&layout, &entries) {
+                if rect.contains(x, y) {
+                    if let Some(opt_idx) = rect.option_at(y) {
+                        self.dropdown_open = false;
+                        if opt_idx < option_count {
+                            if let Some(entry) = Self::nth_selectable(&entries, self.selected) {
+                                return self.map_dropdown_action(
+                                    entry.section,
+                                    entry.label,
+                                    &entry.kind,
+                                    opt_idx,
+                                );
+                            }
                         }
+                        return SettingsAction::None;
                     }
                 }
             }
-            // Click outside dropdown closes it
+            // Click anywhere else inside the panel closes the dropdown.
             self.dropdown_open = false;
             return SettingsAction::None;
         }
 
-        // ── Content area click ──
-        let items = self.items_for_section(config, registry);
-
-        // Calculate value_area_x the same way as the renderer
-        let max_label_len = items.iter().map(|i| i.label.len()).max().unwrap_or(0);
-        let label_end = layout.padding_x + max_label_len as f32 * layout.cell_width;
-        let min_gap = layout.cell_width * 2.0;
-        let max_value_area = layout.content_width * 0.65;
-        let value_area_offset = (label_end + min_gap).min(max_value_area);
-        let actual_value_area_x = layout.content_x + value_area_offset;
-
-        if let Some(idx) = layout.item_at_y(y, items.len()) {
-            self.selected_item = idx;
-
-            if let Some(item) = items.get(idx) {
-                // For dropdown/stepped items, clicking the value area opens the dropdown
-                match &item.kind {
-                    SettingKind::Dropdown { selected, .. } => {
-                        if x >= actual_value_area_x {
-                            self.dropdown_open = true;
-                            self.dropdown_highlight = *selected;
-                            return SettingsAction::None;
-                        }
-                    }
-                    SettingKind::SteppedList { selected, .. } => {
-                        if x >= actual_value_area_x {
-                            self.dropdown_open = true;
-                            self.dropdown_highlight = *selected;
-                            return SettingsAction::None;
-                        }
-                    }
-                    SettingKind::Numeric { .. } => {
-                        // ◀ button area (left of value)
-                        let left_arrow_x = actual_value_area_x;
-                        if x >= left_arrow_x && x < left_arrow_x + layout.cell_width * 2.0 {
-                            return self.adjust_value(config, registry, -1);
-                        }
-                        // ▶ button area (right of value)
-                        let val_x = actual_value_area_x + layout.cell_width * 2.0;
-                        let val_end = val_x + item.value.len() as f32 * layout.cell_width;
-                        let right_arrow_x = val_end + layout.cell_width;
-                        if x >= right_arrow_x {
-                            return self.adjust_value(config, registry, 1);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        // Click on an entry row (respecting scroll).
+        let Some(visible_row) = layout.visible_row_at(y) else {
+            return SettingsAction::None;
+        };
+        let abs_idx = self.scroll_offset + visible_row;
+        let Some(entry) = entries.get(abs_idx) else {
+            return SettingsAction::None;
+        };
+        if entry.is_header {
+            return SettingsAction::None;
         }
 
-        SettingsAction::None
+        // Update selection to the clicked entry.
+        let sel_idx = entries[..abs_idx].iter().filter(|e| !e.is_header).count();
+        self.selected = sel_idx;
+
+        match &entry.kind {
+            SettingKind::Dropdown { selected, .. } | SettingKind::SteppedList { selected, .. } => {
+                self.dropdown_open = true;
+                self.dropdown_highlight = *selected;
+                SettingsAction::None
+            }
+            SettingKind::Numeric { .. } => {
+                // Clicking left half = decrease, right half = increase
+                let mid = layout.panel_x + layout.panel_width / 2.0;
+                let direction = if x < mid { -1 } else { 1 };
+                self.adjust_selected_value(&entries, direction)
+            }
+            SettingKind::ReadOnly => SettingsAction::None,
+        }
+    }
+
+    /// Resolve the current dropdown's geometry plus its option count.
+    pub fn dropdown_layout(
+        &self,
+        layout: &SettingsModalLayout,
+        entries: &[SettingEntry],
+    ) -> Option<(DropdownRect, usize)> {
+        let abs_idx = Self::nth_selectable_abs_index(entries, self.selected)?;
+        let entry = entries.get(abs_idx)?;
+        let (option_count, max_len) = match &entry.kind {
+            SettingKind::Dropdown { options, .. } => (
+                options.len(),
+                options.iter().map(|s| s.len()).max().unwrap_or(10),
+            ),
+            SettingKind::SteppedList { values, .. } => (
+                values.len(),
+                values.iter().map(|v| v.to_string().len()).max().unwrap_or(10),
+            ),
+            _ => return None,
+        };
+        let rect = layout.dropdown_rect(abs_idx, self.scroll_offset, option_count, max_len)?;
+        Some((rect, option_count))
+    }
+
+    /// Scroll up by n rows
+    pub fn scroll_up(&mut self, n: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(n);
+    }
+
+    /// Scroll down by n rows (bounded so the list still fills the viewport).
+    pub fn scroll_down(&mut self, n: usize, total_entries: usize) {
+        let max = total_entries.saturating_sub(self.max_visible);
+        self.scroll_offset = (self.scroll_offset + n).min(max);
+    }
+
+    /// Update hover state from mouse position
+    pub fn set_hover(&mut self, item: Option<usize>) {
+        self.hovered_item = item;
+    }
+
+    /// Update dropdown hover state from mouse position
+    pub fn set_dropdown_hover(&mut self, index: Option<usize>) {
+        self.dropdown_hovered = index;
     }
 }
 
@@ -1099,65 +1171,65 @@ pub enum SettingsKey {
 pub struct SettingsPanelInfo {
     /// Animation progress (0.0 = hidden, 1.0 = fully visible)
     pub animation: f32,
-    /// Current section
-    pub section: SettingsSection,
-    /// All sections for the sidebar
-    pub sections: Vec<(SettingsSection, bool)>, // (section, is_active)
-    /// Items in the current section
-    pub items: Vec<SettingItem>,
-    /// Index of the selected item
-    pub selected_item: usize,
+    /// Flat list of entries (headers + items)
+    pub entries: Vec<SettingEntry>,
+    /// Index of the selected selectable entry
+    pub selected: usize,
+    /// Scroll offset
+    pub scroll_offset: usize,
     /// Whether a dropdown overlay is currently open
     pub dropdown_open: bool,
     /// Which option is highlighted in the dropdown
     pub dropdown_highlight: usize,
-    /// Mouse-hovered content item index
+    /// Mouse-hovered entry index
     pub hovered_item: Option<usize>,
-    /// Mouse-hovered sidebar section index
-    pub hovered_section: Option<usize>,
     /// Mouse-hovered dropdown option index
     pub dropdown_hovered: Option<usize>,
+    /// Filter text
+    pub filter: String,
+    /// Cursor position in filter
+    pub filter_cursor: usize,
 }
 
 impl SettingsPanel {
-    /// Build display info for the renderer
-    pub fn build_info(&self, config: &Config, registry: &ShortcutRegistry) -> SettingsPanelInfo {
-        let items = self.items_for_section(config, registry);
-        let sections = SettingsSection::all()
-            .iter()
-            .map(|s| (*s, *s == self.section))
-            .collect();
+    /// Build display info for the renderer. Resolves any pending section jump
+    /// and keeps the selected entry within the visible scroll window.
+    pub fn build_info(&mut self, config: &Config, registry: &ShortcutRegistry) -> SettingsPanelInfo {
+        let entries = self.build_entries(config, registry);
+
+        if let Some(section) = self.pending_section_jump.take() {
+            if let Some(idx) = Self::first_selectable_in_section(&entries, section) {
+                self.selected = idx;
+            }
+        }
+
+        self.ensure_selection_visible(&entries);
+        self.clamp_scroll(entries.len());
 
         SettingsPanelInfo {
             animation: self.animation_progress(),
-            section: self.section,
-            sections,
-            items,
-            selected_item: self.selected_item,
+            entries,
+            selected: self.selected,
+            scroll_offset: self.scroll_offset,
             dropdown_open: self.dropdown_open,
             dropdown_highlight: self.dropdown_highlight,
             hovered_item: self.hovered_item,
-            hovered_section: self.hovered_section,
             dropdown_hovered: self.dropdown_hovered,
+            filter: self.filter.clone(),
+            filter_cursor: self.filter_cursor,
         }
-    }
-
-    /// Update hover state from mouse position
-    pub fn set_hover(&mut self, item: Option<usize>, section: Option<usize>) {
-        self.hovered_item = item;
-        self.hovered_section = section;
-    }
-
-    /// Update dropdown hover state from mouse position
-    pub fn set_dropdown_hover(&mut self, index: Option<usize>) {
-        self.dropdown_hovered = index;
     }
 }
 
 #[cfg(test)]
 impl SettingsPanel {
     fn open(&mut self) {
-        self.open_to_section(SettingsSection::Font);
+        self.filter.clear();
+        self.filter_cursor = 0;
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.dropdown_open = false;
+        self.animation.open();
     }
 }
 
@@ -1202,33 +1274,24 @@ mod tests {
         let config = Config::default();
         let registry = default_registry();
 
-        // Start at Font section, item 0
-        assert_eq!(panel.section, SettingsSection::Font);
-        assert_eq!(panel.selected_item, 0);
+        // Start at first selectable entry (Font > Size)
+        assert_eq!(panel.selected, 0);
 
-        // Move down within Font section (Size -> Family)
+        // Move down (Font > Size -> Font > Family)
         panel.handle_key(SettingsKey::Down, &config, &registry);
-        assert_eq!(panel.selected_item, 1);
+        assert_eq!(panel.selected, 1);
 
-        // Move down again within Font section (Family -> Line Height)
+        // Move down again (Font > Family -> Font > Line Height)
         panel.handle_key(SettingsKey::Down, &config, &registry);
-        assert_eq!(panel.section, SettingsSection::Font);
-        assert_eq!(panel.selected_item, 2);
+        assert_eq!(panel.selected, 2);
 
-        // Move down again should go to Theme section
+        // Move down again should go to Theme section's first item
         panel.handle_key(SettingsKey::Down, &config, &registry);
-        assert_eq!(panel.section, SettingsSection::Theme);
-        assert_eq!(panel.selected_item, 0);
+        assert_eq!(panel.selected, 3);
 
-        // Move up should go back to Font, last item (Line Height)
+        // Move up should go back
         panel.handle_key(SettingsKey::Up, &config, &registry);
-        assert_eq!(panel.section, SettingsSection::Font);
-        assert_eq!(panel.selected_item, 2);
-
-        // Tab should cycle sections
-        panel.handle_key(SettingsKey::Tab, &config, &registry);
-        assert_eq!(panel.section, SettingsSection::Theme);
-        assert_eq!(panel.selected_item, 0);
+        assert_eq!(panel.selected, 2);
     }
 
     #[test]
@@ -1241,7 +1304,8 @@ mod tests {
         let config = Config::default();
         let registry = default_registry();
 
-        // Font size is item 0 in Font section, default is 14.0
+        // Font size is first selectable entry (selected = 0), default 14.0.
+        // Right on a Numeric adjusts (Right on a Dropdown would open it).
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);
         match action {
             SettingsAction::SetFontSize(size) => assert_eq!(size, 15.0),
@@ -1261,15 +1325,17 @@ mod tests {
         panel.open();
         thread::sleep(Duration::from_millis(250));
         panel.update_animation();
-        panel.section = SettingsSection::Theme;
-        panel.selected_item = 0;
 
         let config = Config::default();
         let registry = default_registry();
         let themes = Theme::list_available();
         let expected_next = themes.get(1).expect("at least 2 themes");
 
-        // Right opens the dropdown (does NOT cycle)
+        // Entries: [Font header, Size, Family, Line Height, Theme header, Theme, ...]
+        // Selectables: [Size(0), Family(1), Line Height(2), Theme(3), ...]
+        panel.selected = 3;
+
+        // Right opens the dropdown for Dropdown kind
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);
         assert!(matches!(action, SettingsAction::None));
         assert!(panel.dropdown_open);
@@ -1286,5 +1352,114 @@ mod tests {
             SettingsAction::SetTheme(name) => assert_eq!(name, *expected_next),
             _ => panic!("Expected SetTheme"),
         }
+    }
+
+    #[test]
+    fn test_search_filter() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
+
+        let config = Config::default();
+        let registry = default_registry();
+
+        // Type "opacity" to filter
+        for ch in "opacity".chars() {
+            panel.handle_key(SettingsKey::FilterChar(ch), &config, &registry);
+        }
+
+        let entries = panel.build_entries(&config, &registry);
+        // Should have Window header + Opacity item (at minimum)
+        let selectable: Vec<_> = entries.iter().filter(|e| !e.is_header).collect();
+        assert!(selectable.len() >= 1);
+        assert!(selectable.iter().any(|e| e.label == "Opacity"));
+    }
+
+    #[test]
+    fn test_escape_clears_filter_first() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
+
+        let config = Config::default();
+        let registry = default_registry();
+
+        // Type something
+        panel.handle_key(SettingsKey::FilterChar('a'), &config, &registry);
+        assert!(!panel.filter.is_empty());
+
+        // First Escape clears filter, panel stays open
+        panel.handle_key(SettingsKey::Escape, &config, &registry);
+        assert!(panel.filter.is_empty());
+        assert!(panel.is_active());
+
+        // Second Escape closes
+        panel.handle_key(SettingsKey::Escape, &config, &registry);
+        // Panel is now closing
+    }
+
+    #[test]
+    fn test_category_headers_not_selectable() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
+
+        let config = Config::default();
+        let registry = default_registry();
+
+        let entries = panel.build_entries(&config, &registry);
+        let headers: Vec<_> = entries.iter().filter(|e| e.is_header).collect();
+        let selectable: Vec<_> = entries.iter().filter(|e| !e.is_header).collect();
+
+        // Should have at least 10 headers (one per section) and many selectable items
+        assert!(headers.len() >= 10);
+        assert!(selectable.len() > headers.len());
+    }
+
+    #[test]
+    fn test_scroll_follows_selection_down() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
+
+        // Tight viewport so scrolling actually kicks in.
+        panel.set_max_visible(5);
+
+        let config = Config::default();
+        let registry = default_registry();
+        let entries = panel.build_entries(&config, &registry);
+
+        // Move selection down until it would fall outside the viewport.
+        for _ in 0..10 {
+            panel.handle_key(SettingsKey::Down, &config, &registry);
+        }
+
+        // Selected entry must be within the visible window.
+        let abs = SettingsPanel::nth_selectable_abs_index(&entries, panel.selected).unwrap();
+        assert!(abs >= panel.scroll_offset);
+        assert!(abs < panel.scroll_offset + panel.max_visible);
+    }
+
+    #[test]
+    fn test_open_to_section_jumps_without_filter() {
+        let mut panel = SettingsPanel::new();
+        panel.open_to_section(SettingsSection::Sessions);
+        thread::sleep(Duration::from_millis(250));
+        panel.update_animation();
+
+        // Filter must be empty — the full list stays browsable.
+        assert!(panel.filter.is_empty());
+
+        // build_info resolves the pending jump.
+        let config = Config::default();
+        let registry = default_registry();
+        let info = panel.build_info(&config, &registry);
+
+        let selected_entry = SettingsPanel::nth_selectable(&info.entries, info.selected).unwrap();
+        assert_eq!(selected_entry.section, SettingsSection::Sessions);
     }
 }

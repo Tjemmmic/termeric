@@ -852,24 +852,6 @@ impl Renderer {
             self.build_git_completions(info, cursor_pos, window_width, window_height);
         }
 
-        // ── LAYER 6: Settings panel + settings dropdown (overlays everything below) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = settings_panel {
-            if sp.animation > 0.001 {
-                self.build_settings_panel(sp, window_width, window_height);
-            }
-        }
-
-        // ── LAYER 7: Settings dropdown overlay (on top of settings panel) ──
-        self.rect_pipeline.mark_layer();
-        self.text_pipeline.mark_layer();
-        if let Some(sp) = settings_panel {
-            if sp.animation > 0.001 && sp.dropdown_open {
-                self.build_dropdown_overlay(sp, window_width, window_height);
-            }
-        }
-
         // ── LAYER 8: Session dropdown (on top of everything) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
@@ -892,6 +874,24 @@ impl Renderer {
         if let Some(cp) = commands_panel {
             if cp.animation > 0.001 {
                 self.build_commands_panel(cp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 10.5: Settings panel (centered modal) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(sp) = settings_panel {
+            if sp.animation > 0.001 {
+                self.build_settings_panel(sp, window_width, window_height);
+            }
+        }
+
+        // ── LAYER 10.6: Settings dropdown overlay (on top of settings panel) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if let Some(sp) = settings_panel {
+            if sp.animation > 0.001 && sp.dropdown_open {
+                self.build_dropdown_overlay(sp, window_width, window_height);
             }
         }
 

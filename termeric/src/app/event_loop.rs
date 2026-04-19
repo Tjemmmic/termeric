@@ -713,7 +713,8 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                // Use tracked cursor position
+                // Use tracked cursor position — settings_panel handle_click
+                // (called from handle_mouse_input) does outside-click dismiss.
                 if let Some(pos) = self.last_cursor_pos {
                     self.handle_mouse_input(button, state, pos);
                 }
@@ -731,6 +732,26 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
+                // Scroll settings panel when active
+                if self.settings_panel.is_active() {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if lines > 0.0 {
+                        self.settings_panel.scroll_up(lines.ceil() as usize);
+                    } else if lines < 0.0 {
+                        let total = self
+                            .settings_panel
+                            .build_entries(&self.config, &self.shortcut_registry)
+                            .len();
+                        self.settings_panel.scroll_down((-lines).ceil() as usize, total);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 // Scroll shortcuts panel when active
                 if self.shortcuts_panel.is_active() {
                     let lines = match delta {

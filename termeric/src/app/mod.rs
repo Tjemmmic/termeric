@@ -957,6 +957,18 @@ impl App {
 
         // Build settings panel info if visible
         let settings_info = if self.settings_panel.is_visible() {
+            // Tell the panel how many rows it can scroll through so its
+            // scroll/selection logic stays in sync with the rendered viewport.
+            let (sw, sh) = renderer.window_size();
+            let layout = crate::ui::settings::SettingsModalLayout::calculate(
+                sw as f32,
+                sh as f32,
+                renderer.cell_width(),
+                renderer.cell_height(),
+                self.settings_panel.animation_progress(),
+                0,
+            );
+            self.settings_panel.set_max_visible(layout.rows_that_fit);
             Some(self.settings_panel.build_info(&self.config, &self.shortcut_registry))
         } else {
             None
@@ -3522,6 +3534,29 @@ impl App {
                             }
                         }
 
+                        // Settings modal intercepts all clicks (inside: handle;
+                        // outside: dismiss). Must come before tab bar / search bar
+                        // so the modal can't be undercut by chrome under the scrim.
+                        if self.settings_panel.is_active() {
+                            let window_size = self.window.as_ref().map(|w| w.inner_size());
+                            if let Some(size) = window_size {
+                                let action = self.settings_panel.handle_click(
+                                    px, py,
+                                    &self.config,
+                                    &self.shortcut_registry,
+                                    size.width as f32,
+                                    size.height as f32,
+                                    cell_width,
+                                    cell_height,
+                                );
+                                self.apply_settings_action(action);
+                                if let Some(window) = &self.window {
+                                    window.request_redraw();
+                                }
+                                return;
+                            }
+                        }
+
                         if py < renderer.tab_bar_height() {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
@@ -3659,27 +3694,6 @@ impl App {
                         }
                     }
 
-                    // Intercept clicks for settings panel
-                    if self.settings_panel.is_active() {
-                        let window_size = self.window.as_ref().map(|w| w.inner_size());
-                        if let Some(size) = window_size {
-                            let action = self.settings_panel.handle_click(
-                                position.0 as f32,
-                                position.1 as f32,
-                                &self.config,
-                                &self.shortcut_registry,
-                                size.width as f32,
-                                size.height as f32,
-                                cell_width,
-                                cell_height,
-                            );
-                            self.apply_settings_action(action);
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
-                            return;
-                        }
-                    }
                 }
                 // Focus pane under click in multi-pane mode
                 if let Some(tabs) = &mut self.tabs {
@@ -3850,91 +3864,38 @@ impl App {
             let py = position.1 as f32;
             if let Some(renderer) = &self.renderer {
                 let (cell_width, cell_height) = renderer.cell_size();
-                let window_size = self.window.as_ref().map(|w| w.inner_size());
-                if let Some(size) = window_size {
-                    use crate::ui::settings::SettingsPanelLayout;
-                    let layout = SettingsPanelLayout::calculate(
+                if let Some(size) = self.window.as_ref().map(|w| w.inner_size()) {
+                    let entries = self
+                        .settings_panel
+                        .build_entries(&self.config, &self.shortcut_registry);
+                    let layout = crate::ui::settings::SettingsModalLayout::calculate(
                         size.width as f32,
                         size.height as f32,
                         cell_width,
                         cell_height,
                         self.settings_panel.animation_progress(),
+                        entries.len(),
                     );
-                    let items = self.settings_panel.items_for_section(&self.config, &self.shortcut_registry);
-                    let is_dropdown = self.settings_panel.is_dropdown_open();
-                    // When dropdown is open, suppress background content hover
-                    let hovered_item = if !is_dropdown && layout.is_in_content(px, py) {
-                        layout.item_at_y(py, items.len())
-                    } else {
-                        None
-                    };
-                    let section_count = crate::ui::settings::SettingsSection::all().len();
-                    let hovered_section = if layout.is_in_sidebar(px, py) {
-                        layout.section_at_y(py, section_count)
-                    } else {
-                        None
-                    };
-                    self.settings_panel.set_hover(hovered_item, hovered_section);
 
-                    // Also detect hover within open dropdown overlay
+                    // Row hover (suppressed when the dropdown overlay is open
+                    // so we don't hover-highlight rows behind it).
+                    let hovered = if self.settings_panel.is_dropdown_open() {
+                        None
+                    } else {
+                        layout.visible_row_at(py)
+                    };
+                    self.settings_panel.set_hover(hovered);
+
+                    // Dropdown option hover (only when the overlay is open).
                     if self.settings_panel.is_dropdown_open() {
-                        let items = self.settings_panel.items_for_section(&self.config, &self.shortcut_registry);
-                        let selected_item = self.settings_panel.selected_item_index();
-                        if let Some(item) = items.get(selected_item) {
-                            let (options_text, option_count): (Vec<String>, usize) = match &item.kind {
-                                crate::ui::settings::SettingKind::Dropdown { options, .. } => {
-                                    (options.clone(), options.len())
-                                }
-                                crate::ui::settings::SettingKind::SteppedList { values, .. } => {
-                                    (values.iter().map(|v| v.to_string()).collect(), values.len())
-                                }
-                                _ => (vec![], 0),
-                            };
-                            if option_count > 0 {
-                                let max_label_len = items.iter().map(|i| i.label.len()).max().unwrap_or(0);
-                                let label_end = layout.padding_x + max_label_len as f32 * cell_width;
-                                let min_gap = cell_width * 2.0;
-                                let max_value_area = layout.content_width * 0.65;
-                                let value_area_offset = (label_end + min_gap).min(max_value_area);
-                                let dd_value_area_x = layout.content_x + value_area_offset;
-                                let anchor_y = layout.items_start_y + selected_item as f32 * layout.row_height + layout.row_height;
-
-                                let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
-                                let min_dd_width = (max_option_len as f32 + 4.0) * cell_width;
-                                let remaining_space = layout.content_width - value_area_offset;
-                                let dd_width = min_dd_width.max(remaining_space).min(layout.content_width - cell_width * 2.0);
-
-                                let dd_x = if dd_value_area_x + dd_width > layout.panel_x + layout.panel_width - cell_width {
-                                    (layout.panel_x + layout.panel_width - dd_width - cell_width).max(layout.content_x + cell_width)
-                                } else {
-                                    dd_value_area_x
-                                };
-
-                                let option_h = layout.row_height * 0.85;
-                                let max_visible = 8usize;
-                                let visible_count = option_count.min(max_visible);
-                                let dd_height = visible_count as f32 * option_h + 8.0;
-
-                                let dd_hovered = if px >= dd_x && px <= dd_x + dd_width
-                                    && py >= anchor_y && py <= anchor_y + dd_height
-                                {
-                                    let relative_y = py - anchor_y - 4.0;
-                                    if relative_y >= 0.0 {
-                                        let idx = (relative_y / option_h) as usize;
-                                        if idx < visible_count { Some(idx) } else { None }
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                };
-                                self.settings_panel.set_dropdown_hover(dd_hovered);
-                            } else {
-                                self.settings_panel.set_dropdown_hover(None);
-                            }
-                        } else {
-                            self.settings_panel.set_dropdown_hover(None);
-                        }
+                        let dd_hover = self
+                            .settings_panel
+                            .dropdown_layout(&layout, &entries)
+                            .filter(|(rect, _)| rect.contains(px, py))
+                            .and_then(|(rect, option_count)| {
+                                rect.option_at(py).filter(|&i| i < option_count)
+                            });
+                        self.settings_panel.set_dropdown_hover(dd_hover);
                     } else {
                         self.settings_panel.set_dropdown_hover(None);
                     }
