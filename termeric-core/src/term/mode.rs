@@ -83,10 +83,10 @@ impl TerminalMode {
     /// Check if any mouse mode is active
     pub fn has_mouse_mode(&self) -> bool {
         self.intersects(
-            Self::MOUSE_X10 |
-            Self::MOUSE_TRACKING |
-            Self::MOUSE_BUTTON_EVENT |
-            Self::MOUSE_ANY_EVENT
+            Self::MOUSE_X10
+                | Self::MOUSE_TRACKING
+                | Self::MOUSE_BUTTON_EVENT
+                | Self::MOUSE_ANY_EVENT,
         )
     }
 

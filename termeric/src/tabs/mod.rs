@@ -7,9 +7,9 @@ mod title;
 
 pub use tab::{Tab, TabType};
 
-use std::collections::HashMap;
 use crate::config::ShellConfig;
 use crate::session::Session;
+use std::collections::HashMap;
 use termeric_core::TerminalEvent;
 
 /// Manager for multiple tabs
@@ -119,7 +119,8 @@ impl TabManager {
     /// Find the next suitable active tab when the current one is closing
     fn find_next_active_tab(&self, closing_index: usize) -> Option<usize> {
         // Try to find a non-closing tab, preferring ones after the current
-        let non_closing: Vec<usize> = self.tabs
+        let non_closing: Vec<usize> = self
+            .tabs
             .iter()
             .enumerate()
             .filter(|(i, tab)| *i != closing_index && !tab.is_closing())
@@ -332,7 +333,9 @@ impl TabManager {
             if tab.closed || tab.is_close_complete() {
                 if tab.has_content() {
                     match tab.save_as_session(save_scrollback) {
-                        Some(id) => log::info!("Auto-saved closing tab {} as session '{}'", tab.id, id),
+                        Some(id) => {
+                            log::info!("Auto-saved closing tab {} as session '{}'", tab.id, id)
+                        }
                         None => log::error!("Failed to auto-save closing tab {}", tab.id),
                     }
                 } else {
@@ -342,7 +345,8 @@ impl TabManager {
         }
 
         // Now remove them
-        self.tabs.retain(|tab| !tab.closed && !tab.is_close_complete());
+        self.tabs
+            .retain(|tab| !tab.closed && !tab.is_close_complete());
 
         if self.tabs.len() != initial_count {
             if self.active >= self.tabs.len() && !self.tabs.is_empty() {
@@ -361,9 +365,9 @@ impl TabManager {
 
     /// Find the index of the first tab owned by a given plugin
     pub fn find_plugin_tab_index(&self, plugin_id: &str) -> Option<usize> {
-        self.tabs.iter().position(|tab| {
-            matches!(&tab.tab_type, TabType::Plugin { plugin_id: id } if id == plugin_id)
-        })
+        self.tabs.iter().position(
+            |tab| matches!(&tab.tab_type, TabType::Plugin { plugin_id: id } if id == plugin_id),
+        )
     }
 
     /// Write data to a plugin-owned tab's PTY
@@ -442,10 +446,7 @@ impl TabManager {
 
         // Replay scrollback
         if let Some(ref scrollback_file) = session.scrollback_file {
-            let lines = crate::session::restore::load_scrollback_text(
-                &session.id,
-                scrollback_file,
-            );
+            let lines = crate::session::restore::load_scrollback_text(&session.id, scrollback_file);
             if !lines.is_empty() {
                 // Join lines with \r\n and add a trailing \r\n so the shell's
                 // new prompt appears on a fresh line below the scrollback.
@@ -453,7 +454,10 @@ impl TabManager {
                 // scrollback lines, not the visible area (which has the prompt).
                 let text = lines.join("\r\n") + "\r\n";
                 tab.terminal.process(text.as_bytes());
-                log::info!("Replayed {} scrollback lines into restored tab", lines.len());
+                log::info!(
+                    "Replayed {} scrollback lines into restored tab",
+                    lines.len()
+                );
             }
         }
 
@@ -483,7 +487,6 @@ impl TabManager {
         }
     }
 }
-
 
 /// Tab information for display
 #[derive(Debug, Clone)]

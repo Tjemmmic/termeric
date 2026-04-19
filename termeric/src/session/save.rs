@@ -1,16 +1,17 @@
 //! Session saving functionality
 
+use anyhow::Result;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use anyhow::Result;
 
-use super::{Session, session_dir, MAX_SCROLLBACK_FILE_SIZE};
+use super::{MAX_SCROLLBACK_FILE_SIZE, Session, session_dir};
 
 /// Save a session to its directory (determined by session ID)
 pub fn save_session(session: &Session) -> Result<()> {
-    let dir = session_dir(&session.id)
-        .ok_or_else(|| anyhow::anyhow!("Could not determine session directory for '{}'", session.id))?;
+    let dir = session_dir(&session.id).ok_or_else(|| {
+        anyhow::anyhow!("Could not determine session directory for '{}'", session.id)
+    })?;
 
     save_session_to_dir(session, &dir)
 }
@@ -43,10 +44,7 @@ pub fn save_session_to_dir(session: &Session, dir: &Path) -> Result<()> {
 ///
 /// Returns the relative filename (e.g., "scrollback.txt") on success.
 /// Truncates if the text would exceed MAX_SCROLLBACK_FILE_SIZE.
-pub fn save_scrollback_text(
-    session_id: &str,
-    lines: &[String],
-) -> Result<String> {
+pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<String> {
     let dir = session_dir(session_id)
         .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
 
@@ -64,7 +62,9 @@ pub fn save_scrollback_text(
         if bytes_written + line_bytes.len() + 1 > MAX_SCROLLBACK_FILE_SIZE {
             log::warn!(
                 "Scrollback for session '{}' truncated at {} bytes (cap: {} bytes)",
-                session_id, bytes_written, MAX_SCROLLBACK_FILE_SIZE
+                session_id,
+                bytes_written,
+                MAX_SCROLLBACK_FILE_SIZE
             );
             break;
         }
@@ -74,7 +74,12 @@ pub fn save_scrollback_text(
     }
 
     file.flush()?;
-    log::info!("Saved scrollback for session '{}' ({} bytes) to {:?}", session_id, bytes_written, filepath);
+    log::info!(
+        "Saved scrollback for session '{}' ({} bytes) to {:?}",
+        session_id,
+        bytes_written,
+        filepath
+    );
 
     Ok(filename)
 }

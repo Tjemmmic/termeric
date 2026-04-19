@@ -131,10 +131,9 @@ impl CodexPlugin {
         profile_approval_mode: Option<&str>,
         profile_sandbox_mode: Option<&str>,
     ) -> Vec<String> {
-        let effective_approval = profile_approval_mode
-            .unwrap_or(self.config.approval_mode.as_str());
-        let effective_sandbox = profile_sandbox_mode
-            .or(self.config.sandbox_mode.as_deref());
+        let effective_approval =
+            profile_approval_mode.unwrap_or(self.config.approval_mode.as_str());
+        let effective_sandbox = profile_sandbox_mode.or(self.config.sandbox_mode.as_deref());
 
         let mut combined_extra: Vec<String> = Vec::new();
 
@@ -229,7 +228,12 @@ impl CodexPlugin {
         }
         actions.push(PluginAction::OpenTab {
             program: self.config.binary.clone(),
-            args: self.build_args(extra_cli_args, profile_extra_args, profile_approval, profile_sandbox),
+            args: self.build_args(
+                extra_cli_args,
+                profile_extra_args,
+                profile_approval,
+                profile_sandbox,
+            ),
             cwd: cwd.map(|s| s.to_string()),
             title: Some(title.to_string()),
             plugin_id: Some("codex".to_string()),
@@ -251,16 +255,12 @@ impl Plugin for CodexPlugin {
     fn on_hook(&mut self, hook: &Hook, ctx: &PluginContext) -> HookResponse {
         match hook {
             Hook::CommandInvoked { command_id } => match command_id.as_str() {
-                "codex.open" => {
-                    HookResponse::Actions(self.build_launch_actions(ctx, &[], "Codex"))
-                }
-                "codex.resume" => {
-                    HookResponse::Actions(self.build_launch_actions(
-                        ctx,
-                        &["--continue"],
-                        "Codex (resume)",
-                    ))
-                }
+                "codex.open" => HookResponse::Actions(self.build_launch_actions(ctx, &[], "Codex")),
+                "codex.resume" => HookResponse::Actions(self.build_launch_actions(
+                    ctx,
+                    &["--continue"],
+                    "Codex (resume)",
+                )),
                 "codex.copy-last" => HookResponse::Action(PluginAction::CopyFromPluginTab {
                     plugin_id: "codex".to_string(),
                     lines: self.config.copy_lines,
@@ -291,15 +291,13 @@ impl Plugin for CodexPlugin {
     }
 
     fn keybindings(&self) -> Vec<PluginKeybinding> {
-        vec![
-            PluginKeybinding {
-                key: "k".to_string(),
-                ctrl: true,
-                alt: false,
-                shift: true,
-                command_id: "codex.open".to_string(),
-            },
-        ]
+        vec![PluginKeybinding {
+            key: "k".to_string(),
+            ctrl: true,
+            alt: false,
+            shift: true,
+            command_id: "codex.open".to_string(),
+        }]
     }
 }
 
@@ -413,17 +411,26 @@ mod tests {
 
     #[test]
     fn test_approval_mode_suggest() {
-        assert_eq!(CodexPlugin::approval_mode_flag("suggest"), Some("--suggest"));
+        assert_eq!(
+            CodexPlugin::approval_mode_flag("suggest"),
+            Some("--suggest")
+        );
     }
 
     #[test]
     fn test_approval_mode_auto_edit() {
-        assert_eq!(CodexPlugin::approval_mode_flag("auto-edit"), Some("--auto-edit"));
+        assert_eq!(
+            CodexPlugin::approval_mode_flag("auto-edit"),
+            Some("--auto-edit")
+        );
     }
 
     #[test]
     fn test_approval_mode_full_auto() {
-        assert_eq!(CodexPlugin::approval_mode_flag("full-auto"), Some("--full-auto"));
+        assert_eq!(
+            CodexPlugin::approval_mode_flag("full-auto"),
+            Some("--full-auto")
+        );
     }
 
     #[test]
@@ -435,7 +442,10 @@ mod tests {
 
     #[test]
     fn test_sandbox_mode_read_only() {
-        assert_eq!(CodexPlugin::sandbox_mode_args("read-only"), Some(("--sandbox", "read-only")));
+        assert_eq!(
+            CodexPlugin::sandbox_mode_args("read-only"),
+            Some(("--sandbox", "read-only"))
+        );
     }
 
     #[test]
@@ -476,7 +486,16 @@ mod tests {
             ..Default::default()
         });
         let args = plugin.build_args(&[], &[], None, None);
-        assert_eq!(args, vec!["--model", "o4-mini", "--suggest", "--sandbox", "workspace-write"]);
+        assert_eq!(
+            args,
+            vec![
+                "--model",
+                "o4-mini",
+                "--suggest",
+                "--sandbox",
+                "workspace-write"
+            ]
+        );
     }
 
     #[test]
@@ -510,7 +529,13 @@ mod tests {
         let args = plugin.build_args(&["--continue"], &[], None, None);
         assert_eq!(
             args,
-            vec!["--notify", "--suggest", "--sandbox", "workspace-write", "--continue"]
+            vec![
+                "--notify",
+                "--suggest",
+                "--sandbox",
+                "workspace-write",
+                "--continue"
+            ]
         );
     }
 
@@ -702,7 +727,10 @@ mod tests {
             },
             &ctx,
         );
-        assert!(matches!(response, HookResponse::Action(PluginAction::ToggleTranscript)));
+        assert!(matches!(
+            response,
+            HookResponse::Action(PluginAction::ToggleTranscript)
+        ));
     }
 
     #[test]
@@ -829,10 +857,7 @@ mod tests {
         let (profile, name) = plugin.resolve_profile(None);
         assert!(profile.is_some());
         assert_eq!(name, Some("safe".to_string()));
-        assert_eq!(
-            profile.unwrap().approval_mode,
-            Some("suggest".to_string())
-        );
+        assert_eq!(profile.unwrap().approval_mode, Some("suggest".to_string()));
     }
 
     #[test]
@@ -887,9 +912,7 @@ mod tests {
 
         match extract_open_tab(response) {
             Some(PluginAction::OpenTab {
-                args,
-                env: tab_env,
-                ..
+                args, env: tab_env, ..
             }) => {
                 assert_eq!(tab_env.get("OPENAI_API_KEY"), Some(&"test-key".to_string()));
                 assert_eq!(tab_env.get("CUSTOM_VAR"), Some(&"custom-val".to_string()));
@@ -966,9 +989,7 @@ mod tests {
 
         match extract_open_tab(response) {
             Some(PluginAction::OpenTab {
-                args,
-                env: tab_env,
-                ..
+                args, env: tab_env, ..
             }) => {
                 assert_eq!(tab_env.get("MY_VAR"), Some(&"my-val".to_string()));
                 assert!(args.contains(&"--continue".to_string()));

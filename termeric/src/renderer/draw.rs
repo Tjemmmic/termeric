@@ -37,17 +37,10 @@ impl<'a> DrawCtx<'a> {
     // ── Card ───────────────────────────────────────────────────
 
     /// Draw a rounded card background with a 4-side border.
-    pub fn draw_card(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        bg: [f32; 4],
-        border: [f32; 4],
-    ) {
+    pub fn draw_card(&mut self, x: f32, y: f32, w: f32, h: f32, bg: [f32; 4], border: [f32; 4]) {
         // Background
-        self.rect.push_rounded_rect(x, y, w, h, bg, CARD_CORNER_RADIUS);
+        self.rect
+            .push_rounded_rect(x, y, w, h, bg, CARD_CORNER_RADIUS);
         // 4-side border (inset from corners to avoid overlap with rounded edges)
         self.draw_card_border(x, y, w, h, border, CARD_CORNER_RADIUS);
     }
@@ -63,39 +56,29 @@ impl<'a> DrawCtx<'a> {
         radius: f32,
     ) {
         // Top / bottom
+        self.rect
+            .push_rect(x + radius, y, w - radius * 2.0, BORDER_WIDTH, color);
         self.rect.push_rect(
-            x + radius, y,
-            w - radius * 2.0, BORDER_WIDTH,
-            color,
-        );
-        self.rect.push_rect(
-            x + radius, y + h - BORDER_WIDTH,
-            w - radius * 2.0, BORDER_WIDTH,
+            x + radius,
+            y + h - BORDER_WIDTH,
+            w - radius * 2.0,
+            BORDER_WIDTH,
             color,
         );
         // Left / right
+        self.rect
+            .push_rect(x, y + radius, BORDER_WIDTH, h - radius * 2.0, color);
         self.rect.push_rect(
-            x, y + radius,
-            BORDER_WIDTH, h - radius * 2.0,
-            color,
-        );
-        self.rect.push_rect(
-            x + w - BORDER_WIDTH, y + radius,
-            BORDER_WIDTH, h - radius * 2.0,
+            x + w - BORDER_WIDTH,
+            y + radius,
+            BORDER_WIDTH,
+            h - radius * 2.0,
             color,
         );
     }
 
     /// Draw layered shadow behind a card.
-    pub fn draw_card_shadow(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        alpha: f32,
-        layers: u32,
-    ) {
+    pub fn draw_card_shadow(&mut self, x: f32, y: f32, w: f32, h: f32, alpha: f32, layers: u32) {
         for i in 0..layers {
             let spread = (i as f32 + 1.0) * 4.0;
             let a = alpha / (i as f32 + 1.0);
@@ -153,13 +136,7 @@ impl<'a> DrawCtx<'a> {
     }
 
     /// Draw text centered horizontally around `center_x`.
-    pub fn draw_centered_text(
-        &mut self,
-        text: &str,
-        center_x: f32,
-        y: f32,
-        color: [f32; 4],
-    ) {
+    pub fn draw_centered_text(&mut self, text: &str, center_x: f32, y: f32, color: [f32; 4]) {
         let w = text.chars().count() as f32 * self.cell_width;
         self.draw_text(text, center_x - w / 2.0, y, color);
     }
@@ -250,7 +227,8 @@ impl<'a> DrawCtx<'a> {
 
         // Track
         let track_color = adjust_alpha(self.ui.palette_border, 0.15 * anim);
-        self.rect.push_rounded_rect(x, y, width, height, track_color, 2.0);
+        self.rect
+            .push_rounded_rect(x, y, width, height, track_color, 2.0);
 
         // Thumb
         let thumb_frac = visible as f32 / total as f32;
@@ -263,7 +241,8 @@ impl<'a> DrawCtx<'a> {
         };
         let thumb_y = y + scroll_frac * (height - thumb_h);
         let thumb_color = adjust_alpha(self.ui.palette_accent, 0.5 * anim);
-        self.rect.push_rounded_rect(x, thumb_y, width, thumb_h, thumb_color, 2.0);
+        self.rect
+            .push_rounded_rect(x, thumb_y, width, thumb_h, thumb_color, 2.0);
     }
 
     // ── Button ─────────────────────────────────────────────────
@@ -303,7 +282,8 @@ impl<'a> DrawCtx<'a> {
 
         // Background
         let btn_bg = adjust_alpha(self.ui.palette_accent, bg_alpha * anim);
-        self.rect.push_rounded_rect(bx, by, bw, bh, btn_bg, BUTTON_CORNER_RADIUS);
+        self.rect
+            .push_rounded_rect(bx, by, bw, bh, btn_bg, BUTTON_CORNER_RADIUS);
 
         // Border
         let border_alpha = if hovered { 0.65 } else { 0.35 };
@@ -314,9 +294,12 @@ impl<'a> DrawCtx<'a> {
         if hovered && !pressed {
             let glow = adjust_alpha(self.ui.palette_accent, 0.06 * anim);
             self.rect.push_rounded_rect(
-                bx - 2.0, by - 2.0,
-                bw + 4.0, bh + 4.0,
-                glow, BUTTON_CORNER_RADIUS + 2.0,
+                bx - 2.0,
+                by - 2.0,
+                bw + 4.0,
+                bh + 4.0,
+                glow,
+                BUTTON_CORNER_RADIUS + 2.0,
             );
         }
 
@@ -342,15 +325,9 @@ impl<'a> DrawCtx<'a> {
         thickness: f32,
     ) {
         let arm = size / 2.0;
-        self.rect.push_line(
-            cx - arm, cy - arm,
-            cx + arm, cy + arm,
-            thickness, color,
-        );
-        self.rect.push_line(
-            cx + arm, cy - arm,
-            cx - arm, cy + arm,
-            thickness, color,
-        );
+        self.rect
+            .push_line(cx - arm, cy - arm, cx + arm, cy + arm, thickness, color);
+        self.rect
+            .push_line(cx + arm, cy - arm, cx - arm, cy + arm, thickness, color);
     }
 }

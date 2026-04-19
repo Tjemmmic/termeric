@@ -1,13 +1,19 @@
 //! Tab bar rendering and hit-testing
 
-use super::{Renderer, adjust_alpha};
 use super::types::*;
+use super::{Renderer, adjust_alpha};
 use crate::tabs::{TabInfo, TabType};
 
 impl Renderer {
-    pub(super) fn build_tab_bar(&mut self, tabs: &[TabInfo], window_width: f32, tab_bar_height: f32) {
+    pub(super) fn build_tab_bar(
+        &mut self,
+        tabs: &[TabInfo],
+        window_width: f32,
+        tab_bar_height: f32,
+    ) {
         let tab_bar_bg = self.ui.tab_bar_bg;
-        self.rect_pipeline.push_rect(0.0, 0.0, window_width, tab_bar_height, tab_bar_bg);
+        self.rect_pipeline
+            .push_rect(0.0, 0.0, window_width, tab_bar_height, tab_bar_bg);
 
         let active_tab_bg = self.ui.tab_active;
         let inactive_tab_bg = self.ui.tab_inactive;
@@ -76,7 +82,14 @@ impl Renderer {
                     base_bg_color[3] * anim_multiplier,
                 ];
 
-                self.rect_pipeline.push_rounded_rect(x + 1.0, y, tab_width - 2.0, tab_height, bg_color, 4.0);
+                self.rect_pipeline.push_rounded_rect(
+                    x + 1.0,
+                    y,
+                    tab_width - 2.0,
+                    tab_height,
+                    bg_color,
+                    4.0,
+                );
 
                 // Tab text - only render when animation progress is significant
                 if anim_multiplier > 0.3 {
@@ -130,9 +143,8 @@ impl Renderer {
                             self.ui.palette_accent[2],
                             text_alpha,
                         ];
-                        self.rect_pipeline.push_rounded_rect(
-                            bar_x, bar_y, bar_w, bar_h, accent, 1.5,
-                        );
+                        self.rect_pipeline
+                            .push_rounded_rect(bar_x, bar_y, bar_w, bar_h, accent, 1.5);
                         text_x += bar_w + self.cell_width * 0.5;
                     }
 
@@ -161,14 +173,21 @@ impl Renderer {
                                 0.8 * text_alpha,
                             ];
                             self.rect_pipeline.push_rounded_rect(
-                                badge_x, badge_y, badge_w, badge_h, badge_color, 3.0,
+                                badge_x,
+                                badge_y,
+                                badge_w,
+                                badge_h,
+                                badge_color,
+                                3.0,
                             );
                             // Badge text (diff count)
                             let count_str = format!("{}", tab.unreviewed_diff_count);
-                            let count_x = badge_x + (badge_w - count_str.len() as f32 * self.cell_width * 0.85) / 2.0;
+                            let count_x = badge_x
+                                + (badge_w - count_str.len() as f32 * self.cell_width * 0.85) / 2.0;
                             let count_color = [0.0, 0.0, 0.0, text_alpha];
                             for c in count_str.chars() {
-                                self.text_pipeline.push_char(c, count_x, text_y, count_color);
+                                self.text_pipeline
+                                    .push_char(c, count_x, text_y, count_color);
                             }
                         }
                     }
@@ -181,15 +200,22 @@ impl Renderer {
                         // Subtle rounded background for close button
                         let close_bg = adjust_alpha(inactive_tab_bg, 0.4 * text_alpha);
                         self.rect_pipeline.push_rounded_rect(
-                            close_x, close_y,
-                            close_btn_size, close_btn_size,
-                            close_bg, 3.0,
+                            close_x,
+                            close_y,
+                            close_btn_size,
+                            close_btn_size,
+                            close_bg,
+                            3.0,
                         );
 
                         // Draw × close icon — two smooth anti-aliased diagonal lines
                         {
                             let close_hover = matches!(self.tab_bar_hover, Some(TabBarClick::CloseTab(idx)) if idx == i);
-                            let hover_t = if close_hover { self.tab_bar_hover_progress } else { 0.0 };
+                            let hover_t = if close_hover {
+                                self.tab_bar_hover_progress
+                            } else {
+                                0.0
+                            };
                             let scale = 1.0 + hover_t * 0.2;
                             let base_alpha = text_color[3] * (0.5 + hover_t * 0.5);
                             let close_color = [
@@ -204,13 +230,21 @@ impl Renderer {
                             let cy = close_y + close_btn_size / 2.0;
                             // Top-left to bottom-right
                             self.rect_pipeline.push_line(
-                                cx - arm, cy - arm, cx + arm, cy + arm,
-                                line_w, close_color,
+                                cx - arm,
+                                cy - arm,
+                                cx + arm,
+                                cy + arm,
+                                line_w,
+                                close_color,
                             );
                             // Top-right to bottom-left
                             self.rect_pipeline.push_line(
-                                cx + arm, cy - arm, cx - arm, cy + arm,
-                                line_w, close_color,
+                                cx + arm,
+                                cy - arm,
+                                cx - arm,
+                                cy + arm,
+                                line_w,
+                                close_color,
                             );
                         }
                     }
@@ -221,11 +255,16 @@ impl Renderer {
         }
 
         let border_color = adjust_alpha(self.ui.tab_border, 0.7);
-        self.rect_pipeline.push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
+        self.rect_pipeline
+            .push_rect(0.0, tab_bar_height - 1.0, window_width, 1.0, border_color);
 
         // Helper: compute hover animation for a specific button
         let hover_for = |target: TabBarClick| -> f32 {
-            if self.tab_bar_hover == Some(target) { self.tab_bar_hover_progress } else { 0.0 }
+            if self.tab_bar_hover == Some(target) {
+                self.tab_bar_hover_progress
+            } else {
+                0.0
+            }
         };
 
         // ── Add (+) tab button — positioned right after the last tab ──
@@ -238,9 +277,12 @@ impl Renderer {
             let bg_alpha = 0.35 + hover_t * 0.25;
             let add_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
             self.rect_pipeline.push_rounded_rect(
-                add_x + 2.0, add_y + 2.0,
-                add_size - 4.0, tab_bar_height - 6.0,
-                add_bg, 4.0,
+                add_x + 2.0,
+                add_y + 2.0,
+                add_size - 4.0,
+                tab_bar_height - 6.0,
+                add_bg,
+                4.0,
             );
             // Plus icon — two perpendicular lines
             let scale = 1.0 + hover_t * 0.15;
@@ -256,9 +298,11 @@ impl Renderer {
                 self.ui.tab_text_inactive[3],
             ];
             // Horizontal bar
-            self.rect_pipeline.push_line(cx - arm, cy, cx + arm, cy, line_w, color);
+            self.rect_pipeline
+                .push_line(cx - arm, cy, cx + arm, cy, line_w, color);
             // Vertical bar
-            self.rect_pipeline.push_line(cx, cy - arm, cx, cy + arm, line_w, color);
+            self.rect_pipeline
+                .push_line(cx, cy - arm, cx, cy + arm, line_w, color);
         }
 
         // ── Session dropdown button ──
@@ -270,9 +314,12 @@ impl Renderer {
             let bg_alpha = 0.35 + hover_t * 0.25;
             let session_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
             self.rect_pipeline.push_rounded_rect(
-                session_x + 2.0, session_y + 2.0,
-                session_size - 4.0, tab_bar_height - 6.0,
-                session_bg, 4.0,
+                session_x + 2.0,
+                session_y + 2.0,
+                session_size - 4.0,
+                tab_bar_height - 6.0,
+                session_bg,
+                4.0,
             );
             // Chevron (▾) — two angled lines forming a V shape
             let scale = 1.0 + hover_t * 0.15;
@@ -289,9 +336,11 @@ impl Renderer {
             ];
             let half_h = arm * 0.55;
             // Left arm: top-left to center-bottom
-            self.rect_pipeline.push_line(cx - arm, cy - half_h, cx, cy + half_h, line_w, color);
+            self.rect_pipeline
+                .push_line(cx - arm, cy - half_h, cx, cy + half_h, line_w, color);
             // Right arm: center-bottom to top-right
-            self.rect_pipeline.push_line(cx, cy + half_h, cx + arm, cy - half_h, line_w, color);
+            self.rect_pipeline
+                .push_line(cx, cy + half_h, cx + arm, cy - half_h, line_w, color);
         }
 
         // ── Commands button (⚡) ──
@@ -303,9 +352,12 @@ impl Renderer {
             let bg_alpha = 0.35 + hover_t * 0.25;
             let commands_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
             self.rect_pipeline.push_rounded_rect(
-                commands_x + 2.0, commands_y + 2.0,
-                commands_size - 4.0, tab_bar_height - 6.0,
-                commands_bg, 4.0,
+                commands_x + 2.0,
+                commands_y + 2.0,
+                commands_size - 4.0,
+                tab_bar_height - 6.0,
+                commands_bg,
+                4.0,
             );
             // ⚡ lightning bolt icon — drawn as two angled segments
             let scale = 1.0 + hover_t * 0.15;
@@ -322,11 +374,20 @@ impl Renderer {
                 self.ui.tab_text_inactive[3],
             ];
             // Top segment: upper-right to center-left
-            self.rect_pipeline.push_line(cx + w * 0.3, cy - h, cx - w * 0.5, cy, line_w, color);
+            self.rect_pipeline
+                .push_line(cx + w * 0.3, cy - h, cx - w * 0.5, cy, line_w, color);
             // Middle bar: left to right through center
-            self.rect_pipeline.push_line(cx - w * 0.3, cy - line_w * 0.25, cx + w * 0.7, cy - line_w * 0.25, line_w, color);
+            self.rect_pipeline.push_line(
+                cx - w * 0.3,
+                cy - line_w * 0.25,
+                cx + w * 0.7,
+                cy - line_w * 0.25,
+                line_w,
+                color,
+            );
             // Bottom segment: center-right to lower-left
-            self.rect_pipeline.push_line(cx + w * 0.5, cy, cx - w * 0.3, cy + h, line_w, color);
+            self.rect_pipeline
+                .push_line(cx + w * 0.5, cy, cx - w * 0.3, cy + h, line_w, color);
         }
 
         // ── Settings icon button (right side of tab bar) ──
@@ -338,9 +399,12 @@ impl Renderer {
             let bg_alpha = 0.5 + hover_t * 0.2;
             let gear_bg = adjust_alpha(self.ui.tab_inactive, bg_alpha);
             self.rect_pipeline.push_rounded_rect(
-                gear_x + 2.0, gear_y + 2.0,
-                gear_size - 4.0, tab_bar_height - 6.0,
-                gear_bg, 4.0,
+                gear_x + 2.0,
+                gear_y + 2.0,
+                gear_size - 4.0,
+                tab_bar_height - 6.0,
+                gear_bg,
+                4.0,
             );
             // Three horizontal bars (hamburger) with varying widths
             let scale = 1.0 + hover_t * 0.15;
@@ -361,7 +425,8 @@ impl Renderer {
             for i in 0..3 {
                 let y = top_y + i as f32 * gap;
                 let w = widths[i];
-                self.rect_pipeline.push_line(cx - w, y, cx + w, y, line_w, color);
+                self.rect_pipeline
+                    .push_line(cx - w, y, cx + w, y, line_w, color);
             }
         }
     }
@@ -399,7 +464,8 @@ impl Renderer {
         }
 
         // ── Commands (⚡) button (left of session) ──
-        let commands_x = window_width - gear_button_width - session_button_width - commands_button_width;
+        let commands_x =
+            window_width - gear_button_width - session_button_width - commands_button_width;
         if x >= commands_x {
             return TabBarClick::CommandsButton;
         }
@@ -452,8 +518,10 @@ impl Renderer {
                     let close_x = current_x + tab_width - close_btn_size - close_btn_margin - 2.0;
                     let close_y = tab_y + (tab_height - close_btn_size) / 2.0;
 
-                    if x >= close_x && x <= close_x + close_btn_size
-                        && y >= close_y && y <= close_y + close_btn_size
+                    if x >= close_x
+                        && x <= close_x + close_btn_size
+                        && y >= close_y
+                        && y <= close_y + close_btn_size
                     {
                         return TabBarClick::CloseTab(i);
                     }

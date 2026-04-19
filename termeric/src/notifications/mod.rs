@@ -222,7 +222,6 @@ impl Notifications {
 
         log::debug!("Sent notification: {} - {}", title, body);
     }
-
 }
 
 #[cfg(test)]

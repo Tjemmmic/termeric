@@ -14,32 +14,35 @@ use winit::{
 
 use termeric_core::TerminalEvent;
 
-use crate::notifications::{Bell, BellConfig, Notifications};
-use crate::config::{Config, SplashMode};
-use crate::input::{Action, MouseState, ShortcutRegistry, screen_to_grid};
-use crate::input::keybindings::{KeyAction, KeyBindingManager};
-use crate::renderer::Renderer;
-use crate::terminal::search::Search;
-use crate::ui::settings::{SettingsPanel, SettingsAction};
-use crate::ui::shortcuts_panel::{ShortcutsPanel, ShortcutsAction};
-use crate::terminal::splash::show_splash;
 use self::state::AppState;
-use crate::tabs::TabManager;
 use crate::config::theme::Theme;
-use crate::plugin::{PluginManager, PluginContext};
+use crate::config::{Config, SplashMode};
+use crate::harvest::HarvestMode;
+use crate::input::keybindings::{KeyAction, KeyBindingManager};
+use crate::input::{Action, MouseState, ShortcutRegistry, screen_to_grid};
+use crate::notifications::{Bell, BellConfig, Notifications};
+use crate::panes::{PaneId, PaneManager, SplitDirection};
 use crate::plugin::claude_code::ClaudeCodePlugin;
 use crate::plugin::codex::CodexPlugin;
-use crate::ui::command_palette::{CommandPalette, PaletteResult, CommandSource, RegisteredCommand};
-use crate::ui::command_palette::palette::core_commands;
-use crate::ui::info_overlay::InfoOverlay;
-use crate::ui::diff_review::DiffReviewOverlay;
-use crate::ui::context_picker::ContextPicker;
+use crate::plugin::{PluginContext, PluginManager};
+use crate::renderer::Renderer;
+use crate::renderer::types::{
+    CellarEntryInfo, CellarRenderInfo, HarvestRenderInfo, IndicatorRenderInfo, PaneRenderData,
+    SproutMenuRenderInfo,
+};
+use crate::tabs::TabManager;
+use crate::terminal::container::{PaneRenderInfo, SplitContainer, TerminalContainer};
 use crate::terminal::guardrails::GuardrailOverlay;
-use crate::terminal::url::{UrlDetector, UrlCache};
-use crate::terminal::container::{TerminalContainer, SplitContainer, PaneRenderInfo};
-use crate::harvest::HarvestMode;
-use crate::panes::{PaneId, PaneManager, SplitDirection};
-use crate::renderer::types::{PaneRenderData, HarvestRenderInfo, IndicatorRenderInfo, CellarRenderInfo, CellarEntryInfo, SproutMenuRenderInfo};
+use crate::terminal::search::Search;
+use crate::terminal::splash::show_splash;
+use crate::terminal::url::{UrlCache, UrlDetector};
+use crate::ui::command_palette::palette::core_commands;
+use crate::ui::command_palette::{CommandPalette, CommandSource, PaletteResult, RegisteredCommand};
+use crate::ui::context_picker::ContextPicker;
+use crate::ui::diff_review::DiffReviewOverlay;
+use crate::ui::info_overlay::InfoOverlay;
+use crate::ui::settings::{SettingsAction, SettingsPanel};
+use crate::ui::shortcuts_panel::{ShortcutsAction, ShortcutsPanel};
 
 /// Main application state
 ///
@@ -322,7 +325,10 @@ impl App {
                 });
             }
             app.keybinding_manager.load(all_bindings);
-            log::info!("Registered {} plugin keybinding(s)", plugin_keybindings.len());
+            log::info!(
+                "Registered {} plugin keybinding(s)",
+                plugin_keybindings.len()
+            );
         }
 
         // Initialize command palette with core commands
@@ -335,32 +341,44 @@ impl App {
                 log::debug!("Plugin command: {} - {}", pc.id, pc.description);
             }
             let keybindings = app.plugin_manager.all_keybindings();
-            let palette_cmds: Vec<RegisteredCommand> = plugin_commands.iter().map(|pc| {
-                let shortcut = keybindings.iter()
-                    .find(|k| k.command_id == pc.id)
-                    .map(|k| {
+            let palette_cmds: Vec<RegisteredCommand> = plugin_commands
+                .iter()
+                .map(|pc| {
+                    let shortcut = keybindings.iter().find(|k| k.command_id == pc.id).map(|k| {
                         let mut parts = Vec::new();
-                        if k.ctrl { parts.push("Ctrl".to_string()); }
-                        if k.alt { parts.push("Alt".to_string()); }
-                        if k.shift { parts.push("Shift".to_string()); }
+                        if k.ctrl {
+                            parts.push("Ctrl".to_string());
+                        }
+                        if k.alt {
+                            parts.push("Alt".to_string());
+                        }
+                        if k.shift {
+                            parts.push("Shift".to_string());
+                        }
                         parts.push(k.key.to_uppercase());
                         parts.join("+")
                     });
-                let plugin_source = pc.id.split_once('.')
-                    .map(|(prefix, _)| prefix.to_string())
-                    .unwrap_or_else(|| "plugin".to_string());
-                RegisteredCommand {
-                    id: pc.id.clone(),
-                    title: pc.name.clone(),
-                    category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
-                    shortcut,
-                    icon: None,
-                    source: CommandSource::Plugin(plugin_source),
-                    destructive: false,
-                }
-            }).collect();
+                    let plugin_source = pc
+                        .id
+                        .split_once('.')
+                        .map(|(prefix, _)| prefix.to_string())
+                        .unwrap_or_else(|| "plugin".to_string());
+                    RegisteredCommand {
+                        id: pc.id.clone(),
+                        title: pc.name.clone(),
+                        category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
+                        shortcut,
+                        icon: None,
+                        source: CommandSource::Plugin(plugin_source),
+                        destructive: false,
+                    }
+                })
+                .collect();
             app.command_palette.register_commands(palette_cmds);
-            log::info!("Registered {} plugin command(s) in palette", plugin_commands.len());
+            log::info!(
+                "Registered {} plugin command(s) in palette",
+                plugin_commands.len()
+            );
         }
 
         Ok(app)
@@ -489,7 +507,9 @@ impl App {
             }
 
             // Mark first boot as complete if this was a FirstBoot splash
-            if self.config.splash.mode == SplashMode::FirstBoot && !self.app_state.first_boot_complete {
+            if self.config.splash.mode == SplashMode::FirstBoot
+                && !self.app_state.first_boot_complete
+            {
                 if let Err(e) = self.app_state.mark_first_boot_complete() {
                     log::warn!("Failed to save first boot state: {}", e);
                 }
@@ -527,7 +547,8 @@ impl App {
             // Detect plugin tabs that exited too quickly (< 5s) — before cleanup removes them
             let quick_exits = tabs.drain_quick_exit_plugin_info();
 
-            let should_exit = tabs.cleanup_closed(self.config.session.save_scrollback) && tabs.is_empty();
+            let should_exit =
+                tabs.cleanup_closed(self.config.session.save_scrollback) && tabs.is_empty();
             (events, quick_exits, should_exit)
         };
 
@@ -559,10 +580,8 @@ impl App {
                 }
             }
 
-            self.info_overlay.show(
-                format!("{} failed to start", display_name),
-                overlay_lines,
-            );
+            self.info_overlay
+                .show(format!("{} failed to start", display_name), overlay_lines);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -596,7 +615,8 @@ impl App {
                     // `completed_region`, clear it — the shell probably
                     // didn't emit OSC 133;D. Harmless.
                     self.harvest_active_prompt_row = active_row;
-                    if let (Some(row), Some(ref mut harvest)) = (active_row, self.harvest.as_mut()) {
+                    if let (Some(row), Some(ref mut harvest)) = (active_row, self.harvest.as_mut())
+                    {
                         if show_indicators {
                             harvest.start_command(row);
                         }
@@ -715,7 +735,9 @@ impl App {
                 if let Some(idx) = self.git_completion_index {
                     if let Some(branch) = self.git_completions.get(idx).cloned() {
                         // Determine how many chars of partial text to erase
-                        if let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer) {
+                        if let Some(partial) =
+                            crate::git::detect_git_completion(&self.input_line_buffer)
+                        {
                             let partial_len = partial.len();
                             // Send backspaces to erase the partial, then type the branch name
                             if let Some(tabs) = &mut self.tabs {
@@ -742,14 +764,23 @@ impl App {
             }
 
             // Enter pressed — guardrail check for plugin tabs
-            let is_plugin_tab = self.tabs.as_ref()
-                .and_then(|tabs| tabs.active_tab().map(|t| matches!(t.tab_type, crate::tabs::TabType::Plugin { .. })))
+            let is_plugin_tab = self
+                .tabs
+                .as_ref()
+                .and_then(|tabs| {
+                    tabs.active_tab()
+                        .map(|t| matches!(t.tab_type, crate::tabs::TabType::Plugin { .. }))
+                })
                 .unwrap_or(false);
 
             if is_plugin_tab {
                 let input = self.input_line_buffer.trim().to_string();
                 if let Some(matched) = crate::terminal::guardrails::check_command(&input) {
-                    log::warn!("Guardrail triggered: {} — {}", matched.command, matched.reason);
+                    log::warn!(
+                        "Guardrail triggered: {} — {}",
+                        matched.command,
+                        matched.reason
+                    );
                     self.guardrail.show(matched, data.to_vec());
                     self.input_line_buffer.clear();
                     return;
@@ -762,10 +793,12 @@ impl App {
                 Some(pos) => (trimmed[..pos].to_string(), trimmed[pos..].to_string()),
                 None => (trimmed.clone(), String::new()),
             };
-            let matched_command = self.config.commands.iter().find(|cmd| {
-                cmd.name == first_word
-                    || cmd.alias.as_deref() == Some(&first_word)
-            }).map(|cmd| cmd.command.clone());
+            let matched_command = self
+                .config
+                .commands
+                .iter()
+                .find(|cmd| cmd.name == first_word || cmd.alias.as_deref() == Some(&first_word))
+                .map(|cmd| cmd.command.clone());
 
             // If a git command was run, invalidate the watcher to refresh branch state
             if trimmed.starts_with("git ") {
@@ -893,12 +926,17 @@ impl App {
         }
     }
 
-    fn handle_scale_factor_change(&mut self, scale_factor: f64, new_inner_size: winit::dpi::PhysicalSize<u32>) {
+    fn handle_scale_factor_change(
+        &mut self,
+        scale_factor: f64,
+        new_inner_size: winit::dpi::PhysicalSize<u32>,
+    ) {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_scale_factor(scale_factor as f32);
             renderer.resize(new_inner_size.width, new_inner_size.height);
 
-            let (new_cols, new_rows) = renderer.calculate_grid_size(new_inner_size.width, new_inner_size.height);
+            let (new_cols, new_rows) =
+                renderer.calculate_grid_size(new_inner_size.width, new_inner_size.height);
             if new_cols != self.cols || new_rows != self.rows {
                 self.cols = new_cols;
                 self.rows = new_rows;
@@ -945,7 +983,9 @@ impl App {
         }
 
         // Update git watcher with active tab's working directory
-        let working_dir = self.tabs.as_ref()
+        let working_dir = self
+            .tabs
+            .as_ref()
             .and_then(|t| t.active_tab())
             .and_then(|tab| tab.working_directory());
         self.git_watcher.update(working_dir.as_deref());
@@ -953,8 +993,15 @@ impl App {
         // Build pane render info (before renderer borrow)
         let pane_info = self.pane_render_info();
         for pi in &pane_info {
-            log::trace!("Pane {:?}: ({}, {}, {}x{}) focused={}",
-                pi.id, pi.rect.x, pi.rect.y, pi.rect.width, pi.rect.height, pi.is_focused);
+            log::trace!(
+                "Pane {:?}: ({}, {}, {}x{}) focused={}",
+                pi.id,
+                pi.rect.x,
+                pi.rect.y,
+                pi.rect.width,
+                pi.rect.height,
+                pi.is_focused
+            );
         }
 
         // Verify container trait access (before renderer borrow)
@@ -1005,7 +1052,8 @@ impl App {
 
         // Get cursor target position and active tab ID from grid
         // When tab has pane_manager, read cursor from the focused pane's terminal
-        let cursor_info = self.tabs
+        let cursor_info = self
+            .tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab())
             .and_then(|tab| {
@@ -1028,13 +1076,14 @@ impl App {
             self.update_cursor_animation(0, 0, false, None)
         };
 
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         let Some(tabs) = &self.tabs else { return };
         let Some(tab) = tabs.active_tab() else { return };
 
         let terminal = &tab.terminal;
         let tab_info = tabs.tab_info();
-
 
         // Build settings panel info if visible
         let settings_info = if self.settings_panel.is_visible() {
@@ -1050,7 +1099,10 @@ impl App {
                 0,
             );
             self.settings_panel.set_max_visible(layout.rows_that_fit);
-            Some(self.settings_panel.build_info(&self.config, &self.shortcut_registry))
+            Some(
+                self.settings_panel
+                    .build_info(&self.config, &self.shortcut_registry),
+            )
         } else {
             None
         };
@@ -1077,11 +1129,16 @@ impl App {
         }
 
         // Collect image placements for rendering
-        let image_data: Vec<_> = terminal.graphics_placements()
+        let image_data: Vec<_> = terminal
+            .graphics_placements()
             .iter()
             .filter_map(|p| terminal.get_image(p.image_id).map(|img| (p, img)))
             .collect();
-        let images = if image_data.is_empty() { None } else { Some(image_data.as_slice()) };
+        let images = if image_data.is_empty() {
+            None
+        } else {
+            Some(image_data.as_slice())
+        };
 
         // Build session dropdown info if dropdown is open
         let session_dropdown_info = if self.session_dropdown_open {
@@ -1117,7 +1174,10 @@ impl App {
         if let Some(ref mut harvest) = self.harvest {
             harvest.update(frame_dt);
             harvest.cellar.update(frame_dt);
-            if harvest.has_active_indicators() || harvest.cellar.is_visible() || harvest.sprout_menu.is_some() {
+            if harvest.has_active_indicators()
+                || harvest.cellar.is_visible()
+                || harvest.sprout_menu.is_some()
+            {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -1157,7 +1217,8 @@ impl App {
         }
         // Auto-cancel shortcut recording after 15s of no input so users
         // can't get stuck in recording mode.
-        if self.shortcuts_panel
+        if self
+            .shortcuts_panel
             .tick_recording_timeout(std::time::Duration::from_secs(15))
         {
             if let Some(window) = &self.window {
@@ -1210,9 +1271,13 @@ impl App {
                     lines.push(crate::renderer::DiffReviewLine::Header(hunk.header.clone()));
                     for dl in &hunk.lines {
                         lines.push(match dl {
-                            DiffLine::Context(s) => crate::renderer::DiffReviewLine::Context(s.clone()),
+                            DiffLine::Context(s) => {
+                                crate::renderer::DiffReviewLine::Context(s.clone())
+                            }
                             DiffLine::Added(s) => crate::renderer::DiffReviewLine::Added(s.clone()),
-                            DiffLine::Removed(s) => crate::renderer::DiffReviewLine::Removed(s.clone()),
+                            DiffLine::Removed(s) => {
+                                crate::renderer::DiffReviewLine::Removed(s.clone())
+                            }
                         });
                     }
                     lines.push(crate::renderer::DiffReviewLine::Blank);
@@ -1239,13 +1304,16 @@ impl App {
         // Build context picker overlay if visible
         let context_picker_data = if self.context_picker.is_visible() {
             Some(crate::renderer::ContextPickerInfo {
-                sources: self.context_picker.sources.iter().map(|s| {
-                    crate::renderer::ContextPickerSource {
+                sources: self
+                    .context_picker
+                    .sources
+                    .iter()
+                    .map(|s| crate::renderer::ContextPickerSource {
                         label: s.label.clone(),
                         selected: s.selected,
                         available: s.available,
-                    }
-                }).collect(),
+                    })
+                    .collect(),
                 selected_index: self.context_picker.selected_index,
                 animation: self.context_picker.animation(),
             })
@@ -1263,16 +1331,17 @@ impl App {
 
         // Build guardrail overlay if visible
         let guardrail_data = if self.guardrail.is_visible() {
-            self.guardrail.matched.as_ref().map(|m| {
-                crate::renderer::GuardrailInfo {
+            self.guardrail
+                .matched
+                .as_ref()
+                .map(|m| crate::renderer::GuardrailInfo {
                     command: m.command.clone(),
                     reason: m.reason.clone(),
                     is_critical: m.severity == crate::terminal::guardrails::Severity::Critical,
                     animation: self.guardrail.animation(),
                     target: m.target.clone(),
                     user: m.user.clone(),
-                }
-            })
+                })
         } else {
             None
         };
@@ -1286,14 +1355,16 @@ impl App {
         }
 
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
-        renderer.set_git_completions(if self.git_completions_visible && !self.git_completions.is_empty() {
-            Some(crate::renderer::GitCompletionInfo {
-                completions: self.git_completions.clone(),
-                selected_index: self.git_completion_index,
-            })
-        } else {
-            None
-        });
+        renderer.set_git_completions(
+            if self.git_completions_visible && !self.git_completions.is_empty() {
+                Some(crate::renderer::GitCompletionInfo {
+                    completions: self.git_completions.clone(),
+                    selected_index: self.git_completion_index,
+                })
+            } else {
+                None
+            },
+        );
         renderer.set_bell_intensity(self.bell.visual_intensity());
 
         // Scan visible rows for auto-detected URLs (reuse cached storage)
@@ -1335,21 +1406,24 @@ impl App {
             renderer.add_pane_dividers(&dividers);
 
             // Build per-pane render data with animated cursor for focused pane
-            pm.iter_panes().iter().map(|(term, rect, focused)| {
-                let cpos = if *focused {
-                    cursor_display_pos
-                } else {
-                    let c = term.grid().cursor();
-                    (c.col as f32, c.row as f32)
-                };
-                PaneRenderData {
-                    grid: term.grid(),
-                    selection: term.selection(),
-                    rect: *rect,
-                    is_focused: *focused,
-                    cursor_pos: cpos,
-                }
-            }).collect()
+            pm.iter_panes()
+                .iter()
+                .map(|(term, rect, focused)| {
+                    let cpos = if *focused {
+                        cursor_display_pos
+                    } else {
+                        let c = term.grid().cursor();
+                        (c.col as f32, c.row as f32)
+                    };
+                    PaneRenderData {
+                        grid: term.grid(),
+                        selection: term.selection(),
+                        rect: *rect,
+                        is_focused: *focused,
+                        cursor_pos: cpos,
+                    }
+                })
+                .collect()
         } else {
             Vec::new()
         };
@@ -1359,7 +1433,9 @@ impl App {
         let harvest_render_info = self.harvest.as_ref().map(|harvest| {
             // Growth indicators (respect the config toggle)
             let indicators: Vec<IndicatorRenderInfo> = if show_indicators {
-                harvest.indicators.iter()
+                harvest
+                    .indicators
+                    .iter()
                     .filter(|ind| !ind.is_finished())
                     .map(|ind| IndicatorRenderInfo {
                         row: ind.prompt_row,
@@ -1375,15 +1451,19 @@ impl App {
             // Cellar panel (visible while open or animating out)
             let cellar = if harvest.cellar.is_visible() {
                 Some(CellarRenderInfo {
-                    entries: harvest.cellar.entries().map(|e| CellarEntryInfo {
-                        row: e.row,
-                        exit_code: e.exit_code,
-                        success: e.success,
-                        health: e.health(),
-                        health_color: e.health_color(),
-                        opacity: e.visual_state.opacity,
-                        depth: e.visual_state.depth,
-                    }).collect(),
+                    entries: harvest
+                        .cellar
+                        .entries()
+                        .map(|e| CellarEntryInfo {
+                            row: e.row,
+                            exit_code: e.exit_code,
+                            success: e.success,
+                            health: e.health(),
+                            health_color: e.health_color(),
+                            opacity: e.visual_state.opacity,
+                            depth: e.visual_state.depth,
+                        })
+                        .collect(),
                     animation_progress: harvest.cellar.animation.progress(),
                     success_rate: harvest.cellar.success_rate(),
                     scroll: harvest.cellar.scroll as usize,
@@ -1400,7 +1480,11 @@ impl App {
                 SproutMenuRenderInfo {
                     x: renderer.padding() + menu.col as f32 * cell_width,
                     y: content_top + renderer.padding() + menu.row as f32 * cell_height,
-                    actions: menu.actions.iter().map(|a| (a.name().to_string(), a.icon())).collect(),
+                    actions: menu
+                        .actions
+                        .iter()
+                        .map(|a| (a.name().to_string(), a.icon()))
+                        .collect(),
                     selected: menu.selected,
                     opacity: menu.opacity(),
                     width: menu.width() as f32 * cell_width,
@@ -1415,7 +1499,27 @@ impl App {
             }
         });
 
-        match renderer.render(terminal.grid(), terminal.selection(), cursor_opacity, cursor_display_pos, &tab_info, copy_flash, focus_dim, settings_info.as_ref(), search_info.as_ref(), &self.search, images, session_dropdown_info.as_ref(), session_panel_info.as_ref(), commands_panel_info.as_ref(), palette_info.as_ref(), shortcuts_info.as_ref(), self.config.cursor.style, &pane_render_data, harvest_render_info.as_ref()) {
+        match renderer.render(
+            terminal.grid(),
+            terminal.selection(),
+            cursor_opacity,
+            cursor_display_pos,
+            &tab_info,
+            copy_flash,
+            focus_dim,
+            settings_info.as_ref(),
+            search_info.as_ref(),
+            &self.search,
+            images,
+            session_dropdown_info.as_ref(),
+            session_panel_info.as_ref(),
+            commands_panel_info.as_ref(),
+            palette_info.as_ref(),
+            shortcuts_info.as_ref(),
+            self.config.cursor.style,
+            &pane_render_data,
+            harvest_render_info.as_ref(),
+        ) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {
@@ -1507,9 +1611,8 @@ impl App {
         self.last_active_tab_id = active_tab_id;
         // Update max seen tab ID
         if let Some(current) = active_tab_id {
-            self.max_seen_tab_id = Some(
-                self.max_seen_tab_id.map_or(current, |max| max.max(current))
-            );
+            self.max_seen_tab_id =
+                Some(self.max_seen_tab_id.map_or(current, |max| max.max(current)));
         }
 
         // Snap immediately if cursor reappears or it's a truly new tab
@@ -1584,7 +1687,9 @@ impl App {
             Action::ScrollDown(lines) => {
                 if let Some(terminal) = self.active_terminal_mut() {
                     let offset = terminal.grid().scroll_offset();
-                    terminal.grid_mut().set_scroll_offset(offset.saturating_sub(lines));
+                    terminal
+                        .grid_mut()
+                        .set_scroll_offset(offset.saturating_sub(lines));
                 }
             }
             Action::ScrollToTop => {
@@ -1623,14 +1728,19 @@ impl App {
                         Ok(id) => {
                             log::info!("Created new tab {}", id);
                             self.maybe_show_splash(true);
-                            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
+                            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated {
+                                tab_id: id,
+                            });
                         }
                         Err(e) => log::error!("Failed to create new tab: {}", e),
                     }
                 }
             }
             Action::CloseTab => {
-                let tab_id = self.tabs.as_ref().and_then(|t| t.active_tab().map(|tab| tab.id));
+                let tab_id = self
+                    .tabs
+                    .as_ref()
+                    .and_then(|t| t.active_tab().map(|tab| tab.id));
                 if let Some(tabs) = &mut self.tabs {
                     tabs.close_active_tab();
                     if tabs.is_empty() {
@@ -1713,7 +1823,9 @@ impl App {
                         let current_offset = terminal.grid().scroll_offset();
                         if row > cursor_row && current_offset > 0 {
                             let diff = row - cursor_row;
-                            terminal.grid_mut().set_scroll_offset(current_offset.saturating_sub(diff));
+                            terminal
+                                .grid_mut()
+                                .set_scroll_offset(current_offset.saturating_sub(diff));
                         }
                         log::debug!("Navigate to next prompt at row {}", row);
                     }
@@ -1821,7 +1933,8 @@ impl App {
                     }
                     "core.plugins" => {
                         use crate::ui::settings::SettingsSection;
-                        self.settings_panel.open_to_section(SettingsSection::Plugins);
+                        self.settings_panel
+                            .open_to_section(SettingsSection::Plugins);
                         if let Some(window) = &self.window {
                             window.request_redraw();
                         }
@@ -1842,7 +1955,9 @@ impl App {
                     }
                     "core.export-session" => {
                         // Export the active plugin tab's transcript
-                        let plugin_id = self.tabs.as_ref()
+                        let plugin_id = self
+                            .tabs
+                            .as_ref()
                             .and_then(|tabs| tabs.active_tab())
                             .and_then(|tab| {
                                 if let crate::tabs::TabType::Plugin { plugin_id } = &tab.tab_type {
@@ -1954,9 +2069,8 @@ impl App {
                                 }
                             }
                             Err(err) => {
-                                self.toasts.error(format!(
-                                    "Theme '{}' failed: {}", theme_name, err
-                                ));
+                                self.toasts
+                                    .error(format!("Theme '{}' failed: {}", theme_name, err));
                             }
                         }
                         return;
@@ -1980,7 +2094,9 @@ impl App {
 
     /// Build a PluginContext from current app state.
     fn build_plugin_context(&self) -> PluginContext {
-        let cwd = self.tabs.as_ref()
+        let cwd = self
+            .tabs
+            .as_ref()
             .and_then(|t| t.active_tab())
             .and_then(|tab| tab.working_directory());
 
@@ -1998,9 +2114,14 @@ impl App {
     /// Dispatch a plugin hook and execute any returned actions.
     fn dispatch_plugin_hook(&mut self, hook: crate::plugin::Hook) {
         let ctx = self.build_plugin_context();
-        log::debug!("Plugin hook: {:?} (tabs={}, active={}, size={}x{})",
-            hook, ctx.tab_count, ctx.active_tab,
-            ctx.terminal_size.0, ctx.terminal_size.1);
+        log::debug!(
+            "Plugin hook: {:?} (tabs={}, active={}, size={}x{})",
+            hook,
+            ctx.tab_count,
+            ctx.active_tab,
+            ctx.terminal_size.0,
+            ctx.terminal_size.1
+        );
         let actions = self.plugin_manager.dispatch(&hook, &ctx);
         self.execute_plugin_actions(actions);
     }
@@ -2035,9 +2156,9 @@ impl App {
                     return;
                 }
                 "select-profile" => {
-                    self.execute_plugin_actions(vec![
-                        crate::plugin::PluginAction::ListProfiles { plugin_id: plugin_id.to_string() },
-                    ]);
+                    self.execute_plugin_actions(vec![crate::plugin::PluginAction::ListProfiles {
+                        plugin_id: plugin_id.to_string(),
+                    }]);
                     return;
                 }
                 _ => {}
@@ -2085,8 +2206,11 @@ impl App {
     /// Open the context picker modal targeting a specific plugin tab
     fn open_context_picker_for(&mut self, plugin_id: &str) {
         let cwd = if let Some(tabs) = &self.tabs {
-            tabs.plugin_tab_cwd(plugin_id)
-                .or_else(|| tabs.iter().find(|(_, t)| !t.closed).and_then(|(_, t)| t.working_directory()))
+            tabs.plugin_tab_cwd(plugin_id).or_else(|| {
+                tabs.iter()
+                    .find(|(_, t)| !t.closed)
+                    .and_then(|(_, t)| t.working_directory())
+            })
         } else {
             None
         };
@@ -2113,13 +2237,20 @@ impl App {
         let assembled = self.context_picker.gather(terminal_output);
 
         // Inject into the target plugin tab's PTY
-        let target = self.context_picker.target_plugin_id.clone()
+        let target = self
+            .context_picker
+            .target_plugin_id
+            .clone()
             .unwrap_or_else(|| "claude-code".to_string());
         if let Some(tabs) = &mut self.tabs {
             // Wrap in a clear marker so the AI tool can parse it
             let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", assembled);
             tabs.write_to_plugin_tab(&target, injected.as_bytes());
-            log::info!("Injected {} chars of context into {}", injected.len(), target);
+            log::info!(
+                "Injected {} chars of context into {}",
+                injected.len(),
+                target
+            );
         }
 
         self.context_picker.dismiss();
@@ -2140,7 +2271,8 @@ impl App {
         };
 
         // Try JSONL transcript export first (richer structured format)
-        let transcript_path = tabs.iter()
+        let transcript_path = tabs
+            .iter()
             .find(|(i, _)| *i == idx)
             .and_then(|(_, t)| t.transcript.as_ref().map(|tr| tr.path().to_path_buf()));
 
@@ -2164,17 +2296,18 @@ impl App {
                         return;
                     }
                 }
-                Err(e) => log::debug!("Transcript export failed, falling back to scrollback: {}", e),
+                Err(e) => log::debug!(
+                    "Transcript export failed, falling back to scrollback: {}",
+                    e
+                ),
             }
         }
 
         // Fallback: export raw scrollback text
-        let content = tabs.iter()
-            .find(|(i, _)| *i == idx)
-            .map(|(_, t)| {
-                let lines = t.terminal.grid().export_scrollback_text();
-                lines.join("\n")
-            });
+        let content = tabs.iter().find(|(i, _)| *i == idx).map(|(_, t)| {
+            let lines = t.terminal.grid().export_scrollback_text();
+            lines.join("\n")
+        });
 
         if let Some(text) = content {
             if text.trim().is_empty() {
@@ -2186,10 +2319,7 @@ impl App {
                 let id = crate::session::generate_session_id();
                 let filename = format!("{}-{}-export.md", plugin_id, id);
                 let path = base.join(&filename);
-                let md = format!(
-                    "# {} Session Export\n\n```\n{}\n```\n",
-                    plugin_id, text
-                );
+                let md = format!("# {} Session Export\n\n```\n{}\n```\n", plugin_id, text);
                 match std::fs::write(&path, &md) {
                     Ok(()) => {
                         log::info!("Exported session to {}", path.display());
@@ -2244,7 +2374,14 @@ impl App {
 
         for action in actions {
             match action {
-                PluginAction::OpenTab { program, args, cwd, title, plugin_id, env } => {
+                PluginAction::OpenTab {
+                    program,
+                    args,
+                    cwd,
+                    title,
+                    plugin_id,
+                    env,
+                } => {
                     // Proactively check if the binary actually works before spawning a tab.
                     // We try running it with --version; if the binary doesn't exist or
                     // immediately fails, we show an in-app overlay instead of opening
@@ -2271,7 +2408,10 @@ impl App {
                         if let Some(window) = &self.window {
                             window.request_redraw();
                         }
-                        log::warn!("Plugin binary '{}' not available, showing info overlay", program);
+                        log::warn!(
+                            "Plugin binary '{}' not available, showing info overlay",
+                            program
+                        );
                         continue;
                     }
 
@@ -2287,7 +2427,9 @@ impl App {
                         ) {
                             Ok(id) => {
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
-                                self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
+                                self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated {
+                                    tab_id: id,
+                                });
                             }
                             Err(e) => {
                                 self.info_overlay.show(
@@ -2382,7 +2524,10 @@ impl App {
                                             Ok(recorder) => {
                                                 let path = recorder.path().display().to_string();
                                                 tab.transcript = Some(recorder);
-                                                log::info!("Transcript recording started: {}", path);
+                                                log::info!(
+                                                    "Transcript recording started: {}",
+                                                    path
+                                                );
                                                 self.info_overlay.show(
                                                     "Transcript Started".to_string(),
                                                     vec![
@@ -2396,7 +2541,10 @@ impl App {
                                                 log::error!("Failed to start transcript: {}", e);
                                                 self.info_overlay.show(
                                                     "Transcript Error".to_string(),
-                                                    vec![format!("Failed to start recording: {}", e)],
+                                                    vec![format!(
+                                                        "Failed to start recording: {}",
+                                                        e
+                                                    )],
                                                 );
                                             }
                                         }
@@ -2426,12 +2574,15 @@ impl App {
                 PluginAction::ListProfiles { plugin_id } => {
                     // Gather profile names from config
                     let profiles: Vec<String> = match plugin_id.as_str() {
-                        "claude-code" => {
-                            self.config.plugins.claude_code.profiles.keys().cloned().collect()
-                        }
-                        "codex" => {
-                            self.config.plugins.codex.profiles.keys().cloned().collect()
-                        }
+                        "claude-code" => self
+                            .config
+                            .plugins
+                            .claude_code
+                            .profiles
+                            .keys()
+                            .cloned()
+                            .collect(),
+                        "codex" => self.config.plugins.codex.profiles.keys().cloned().collect(),
                         _ => Vec::new(),
                     };
 
@@ -2442,14 +2593,14 @@ impl App {
                                 format!("No profiles found for '{}'.", plugin_id),
                                 String::new(),
                                 "Add profiles in config.toml under:".into(),
-                                format!("  [plugins.{}.profiles.<name>]", plugin_id.replace('-', "_")),
+                                format!(
+                                    "  [plugins.{}.profiles.<name>]",
+                                    plugin_id.replace('-', "_")
+                                ),
                             ],
                         );
                     } else {
-                        let mut lines = vec![
-                            "Press a number key to select:".into(),
-                            String::new(),
-                        ];
+                        let mut lines = vec!["Press a number key to select:".into(), String::new()];
                         for (i, name) in profiles.iter().enumerate() {
                             if i < 9 {
                                 lines.push(format!("  {}  {}", i + 1, name));
@@ -2464,17 +2615,18 @@ impl App {
                                 }
                             }
                         }
-                        self.info_overlay.show(
-                            format!("Select Profile — {}", plugin_id),
-                            lines,
-                        );
+                        self.info_overlay
+                            .show(format!("Select Profile — {}", plugin_id), lines);
                         self.pending_profile_selection = Some((plugin_id, profiles));
                     }
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
                 }
-                PluginAction::ApplyProfile { plugin_id, profile_name } => {
+                PluginAction::ApplyProfile {
+                    plugin_id,
+                    profile_name,
+                } => {
                     if let Some(tabs) = &mut self.tabs {
                         if let Some(tab) = tabs.active_tab_mut() {
                             if let Some(ref mut session) = tab.ai_session {
@@ -2504,7 +2656,13 @@ impl App {
     ///
     /// Change font size by delta
     /// Run `git apply` with optional extra args, piping diff_content to stdin.
-    fn run_git_apply(&self, label: &str, extra_args: &[&str], diff_content: &str, cwd: Option<&str>) {
+    fn run_git_apply(
+        &self,
+        label: &str,
+        extra_args: &[&str],
+        diff_content: &str,
+        cwd: Option<&str>,
+    ) {
         use std::io::Write;
         use std::process::{Command, Stdio};
 
@@ -2555,24 +2713,34 @@ impl App {
         if let Some(tabs) = &mut self.tabs {
             let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
             tabs.write_to_plugin_tab("claude-code", injected.as_bytes());
-            log::info!("Injected {} chars of context into Claude Code", injected.len());
+            log::info!(
+                "Injected {} chars of context into Claude Code",
+                injected.len()
+            );
         }
     }
 
     /// Get pane render info from the active tab's pane manager (if in pane mode)
     fn pane_render_info(&self) -> Vec<PaneRenderInfo> {
-        let Some(tabs) = &self.tabs else { return Vec::new() };
-        let Some(tab) = tabs.active_tab() else { return Vec::new() };
-        let Some(ref pm) = tab.pane_manager else { return Vec::new() };
+        let Some(tabs) = &self.tabs else {
+            return Vec::new();
+        };
+        let Some(tab) = tabs.active_tab() else {
+            return Vec::new();
+        };
+        let Some(ref pm) = tab.pane_manager else {
+            return Vec::new();
+        };
         let layout = pm.calculate_layout();
         let focused = pm.focused_id();
-        layout.into_iter().map(|(id, rect)| {
-            PaneRenderInfo {
+        layout
+            .into_iter()
+            .map(|(id, rect)| PaneRenderInfo {
                 rect,
                 is_focused: id == focused,
                 id,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Access the focused terminal through the TerminalContainer trait
@@ -2593,9 +2761,13 @@ impl App {
 
     /// Split the current tab into panes
     fn split_pane(&mut self, direction: SplitDirection) {
-        let Some(renderer) = &self.renderer else { return };
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
         let Some(tabs) = &mut self.tabs else { return };
-        let Some(tab) = tabs.active_tab_mut() else { return };
+        let Some(tab) = tabs.active_tab_mut() else {
+            return;
+        };
 
         let cols = tab.terminal.grid().cols();
         let rows = tab.terminal.grid().rows();
@@ -2615,10 +2787,14 @@ impl App {
         } else {
             // Create pane manager for the first split
             match PaneManager::new(
-                cols, rows, self.config.shell.clone(),
+                cols,
+                rows,
+                self.config.shell.clone(),
                 self.config.scrollback.lines,
-                total_width, total_height,
-                cell_width, cell_height,
+                total_width,
+                total_height,
+                cell_width,
+                cell_height,
             ) {
                 Ok(mut pm) => {
                     // Swap pane 0's fresh terminal/pty with the tab's existing ones,
@@ -2678,7 +2854,8 @@ impl App {
                 .cloned()
         };
         let Some(region) = region else {
-            self.toasts.warning("No shell-integration data for that command");
+            self.toasts
+                .warning("No shell-integration data for that command");
             return;
         };
 
@@ -2755,9 +2932,9 @@ impl App {
                     cmd.trim(),
                     out.trim(),
                 );
-                self.execute_plugin_actions(vec![
-                    crate::plugin::PluginAction::InjectContext { text: context },
-                ]);
+                self.execute_plugin_actions(vec![crate::plugin::PluginAction::InjectContext {
+                    text: context,
+                }]);
             }
         }
     }
@@ -2783,8 +2960,12 @@ impl App {
     /// Extract just the command line entered by the user (between command
     /// start and output start).
     fn extract_command_text(&self, region: &termeric_core::CommandRegion) -> String {
-        let Some(tabs) = &self.tabs else { return String::new() };
-        let Some(tab) = tabs.active_tab() else { return String::new() };
+        let Some(tabs) = &self.tabs else {
+            return String::new();
+        };
+        let Some(tab) = tabs.active_tab() else {
+            return String::new();
+        };
         let start = region.command_row.unwrap_or(region.prompt_row) as i32;
         // End at the row just before output starts, or the prompt row if
         // output never began.
@@ -2799,9 +2980,15 @@ impl App {
     /// Extract the output block of a command (between output start and
     /// finish).
     fn extract_output_text(&self, region: &termeric_core::CommandRegion) -> String {
-        let Some(tabs) = &self.tabs else { return String::new() };
-        let Some(tab) = tabs.active_tab() else { return String::new() };
-        let Some(start) = region.output_row else { return String::new() };
+        let Some(tabs) = &self.tabs else {
+            return String::new();
+        };
+        let Some(tab) = tabs.active_tab() else {
+            return String::new();
+        };
+        let Some(start) = region.output_row else {
+            return String::new();
+        };
         let end = region
             .finish_row
             .map(|r| r.saturating_sub(1) as i32)
@@ -2869,7 +3056,9 @@ impl App {
     }
 
     fn change_font_size(&mut self, delta: f32) {
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         let current = renderer.font_size();
         let new_size = (current + delta).clamp(8.0, 72.0);
         self.set_font_size(new_size);
@@ -2877,7 +3066,9 @@ impl App {
 
     /// Set font size to a specific value
     fn set_font_size(&mut self, size: f32) {
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         let Some(window) = &self.window else { return };
 
         self.config.font.size = size;
@@ -2885,7 +3076,8 @@ impl App {
 
         // Recalculate grid size after font change
         let window_size = window.inner_size();
-        let (new_cols, new_rows) = renderer.calculate_grid_size(window_size.width, window_size.height);
+        let (new_cols, new_rows) =
+            renderer.calculate_grid_size(window_size.width, window_size.height);
 
         if new_cols != self.cols || new_rows != self.rows {
             self.cols = new_cols;
@@ -2896,7 +3088,12 @@ impl App {
                 tabs.resize(self.cols, self.rows);
             }
 
-            log::info!("Font size set to {}, grid resized to {}x{}", size, self.cols, self.rows);
+            log::info!(
+                "Font size set to {}, grid resized to {}x{}",
+                size,
+                self.cols,
+                self.rows
+            );
         }
 
         // Always resize pane managers when font changes — cell dimensions
@@ -2919,7 +3116,9 @@ impl App {
 
     /// Set font family to a specific value
     fn set_font_family(&mut self, family: String) {
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         let Some(window) = &self.window else { return };
 
         self.config.font.family = family.clone();
@@ -2934,7 +3133,8 @@ impl App {
         );
 
         let window_size = window.inner_size();
-        let (new_cols, new_rows) = renderer.calculate_grid_size(window_size.width, window_size.height);
+        let (new_cols, new_rows) =
+            renderer.calculate_grid_size(window_size.width, window_size.height);
 
         if new_cols != self.cols || new_rows != self.rows {
             self.cols = new_cols;
@@ -2944,7 +3144,11 @@ impl App {
                 tabs.resize(self.cols, self.rows);
             }
 
-            log::info!("Font family updated, grid resized to {}x{}", self.cols, self.rows);
+            log::info!(
+                "Font family updated, grid resized to {}x{}",
+                self.cols,
+                self.rows
+            );
         }
 
         // Always resize pane managers — cell dimensions changed
@@ -2965,14 +3169,17 @@ impl App {
 
     /// Set padding around terminal content
     fn set_padding(&mut self, padding: u32) {
-        let Some(renderer) = &mut self.renderer else { return };
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
         let Some(window) = &self.window else { return };
 
         self.config.window.padding = padding;
         renderer.set_padding(padding as f32);
 
         let window_size = window.inner_size();
-        let (new_cols, new_rows) = renderer.calculate_grid_size(window_size.width, window_size.height);
+        let (new_cols, new_rows) =
+            renderer.calculate_grid_size(window_size.width, window_size.height);
 
         if new_cols != self.cols || new_rows != self.rows {
             self.cols = new_cols;
@@ -2982,7 +3189,11 @@ impl App {
                 tabs.resize(self.cols, self.rows);
             }
 
-            log::info!("Padding updated, grid resized to {}x{}", self.cols, self.rows);
+            log::info!(
+                "Padding updated, grid resized to {}x{}",
+                self.cols,
+                self.rows
+            );
         }
 
         // Resize pane managers — content area changed
@@ -3096,7 +3307,8 @@ impl App {
         if let Some(tabs) = &mut self.tabs {
             tabs.set_scrollback_limit(self.config.scrollback.lines);
         }
-        self.shortcut_registry.apply_overrides(&self.config.shortcuts);
+        self.shortcut_registry
+            .apply_overrides(&self.config.shortcuts);
     }
 
     fn apply_theme(&mut self, theme: Theme) {
@@ -3121,20 +3333,19 @@ impl App {
             SettingsAction::SetFontFamily(family) => {
                 self.set_font_family(family);
             }
-            SettingsAction::SetTheme(name) => {
-                match Theme::load_builtin(&name) {
-                    Ok(theme) => {
-                        let display = name.clone();
-                        self.config.theme.name = name;
-                        self.config.theme.path = None;
-                        self.apply_theme(theme);
-                        self.toasts.info(format!("Theme: {}", display));
-                    }
-                    Err(err) => {
-                        self.toasts.error(format!("Theme '{}' failed: {}", name, err));
-                    }
+            SettingsAction::SetTheme(name) => match Theme::load_builtin(&name) {
+                Ok(theme) => {
+                    let display = name.clone();
+                    self.config.theme.name = name;
+                    self.config.theme.path = None;
+                    self.apply_theme(theme);
+                    self.toasts.info(format!("Theme: {}", display));
                 }
-            }
+                Err(err) => {
+                    self.toasts
+                        .error(format!("Theme '{}' failed: {}", name, err));
+                }
+            },
             SettingsAction::SetPadding(padding) => {
                 self.set_padding(padding);
             }
@@ -3207,12 +3418,10 @@ impl App {
                     window.request_redraw();
                 }
             }
-            SettingsAction::SaveConfig => {
-                match self.save_config() {
-                    Ok(path) => log::info!("Config saved to: {}", path),
-                    Err(e) => log::error!("Failed to save config: {}", e),
-                }
-            }
+            SettingsAction::SaveConfig => match self.save_config() {
+                Ok(path) => log::info!("Config saved to: {}", path),
+                Err(e) => log::error!("Failed to save config: {}", e),
+            },
             SettingsAction::ResetConfig => {
                 self.config = Config::default();
                 self.apply_config_side_effects();
@@ -3314,7 +3523,11 @@ impl App {
                 let _ = self.save_config();
             }
             SettingsAction::SetPluginModel { plugin_id, model } => {
-                let model_val = if model == "(default)" { None } else { Some(model) };
+                let model_val = if model == "(default)" {
+                    None
+                } else {
+                    Some(model)
+                };
                 match plugin_id.as_str() {
                     "claude-code" => self.config.plugins.claude_code.model = model_val,
                     "codex" => self.config.plugins.codex.model = model_val,
@@ -3325,7 +3538,11 @@ impl App {
             SettingsAction::SetPluginApprovalMode { plugin_id, mode } => {
                 match plugin_id.as_str() {
                     "claude-code" => {
-                        self.config.plugins.claude_code.approval_mode = if mode == "(interactive)" { None } else { Some(mode) };
+                        self.config.plugins.claude_code.approval_mode = if mode == "(interactive)" {
+                            None
+                        } else {
+                            Some(mode)
+                        };
                     }
                     "codex" => {
                         self.config.plugins.codex.approval_mode = mode;
@@ -3352,8 +3569,12 @@ impl App {
     /// the caller can decide whether to consume the keybinding.
     fn copy_selection(&mut self) -> bool {
         let Some(tabs) = &self.tabs else { return false };
-        let Some(tab) = tabs.active_tab() else { return false };
-        let Some(text) = tab.terminal.get_selection_text() else { return false };
+        let Some(tab) = tabs.active_tab() else {
+            return false;
+        };
+        let Some(text) = tab.terminal.get_selection_text() else {
+            return false;
+        };
         if text.is_empty() {
             return false;
         }
@@ -3433,8 +3654,6 @@ impl App {
         }
     }
 
-
-
     /// Handle keyboard input when in search mode
     /// Returns true if the input was handled by search mode
     fn handle_search_mode_input(&mut self, event: &winit::event::KeyEvent) -> bool {
@@ -3449,7 +3668,8 @@ impl App {
         }
 
         // Get the grid for updating matches
-        let grid_ref = self.tabs
+        let grid_ref = self
+            .tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid()));
 
@@ -3472,9 +3692,8 @@ impl App {
                     if let Some(grid) = grid_ref {
                         // Find the previous character boundary
                         let query = self.search.query();
-                        if let Some((prev_pos, _)) = query[..self.search_cursor_pos]
-                            .char_indices()
-                            .next_back()
+                        if let Some((prev_pos, _)) =
+                            query[..self.search_cursor_pos].char_indices().next_back()
                         {
                             self.search.pop_char(grid);
                             self.search_cursor_pos = prev_pos;
@@ -3505,9 +3724,8 @@ impl App {
                 // Move to previous character boundary
                 let query = self.search.query();
                 if self.search_cursor_pos > 0 {
-                    if let Some((prev_pos, _)) = query[..self.search_cursor_pos]
-                        .char_indices()
-                        .next_back()
+                    if let Some((prev_pos, _)) =
+                        query[..self.search_cursor_pos].char_indices().next_back()
                     {
                         self.search_cursor_pos = prev_pos;
                     }
@@ -3595,11 +3813,15 @@ impl App {
 
     /// Scroll the terminal view to show the current search match
     fn scroll_to_current_match(&mut self) {
-        let Some(search_match) = self.search.current() else { return };
+        let Some(search_match) = self.search.current() else {
+            return;
+        };
         let match_row = search_match.row;
 
         let Some(tabs) = &mut self.tabs else { return };
-        let Some(tab) = tabs.active_tab_mut() else { return };
+        let Some(tab) = tabs.active_tab_mut() else {
+            return;
+        };
 
         let grid = tab.terminal.grid_mut();
         let visible_rows = grid.rows() as i32;
@@ -3652,41 +3874,52 @@ impl App {
         }
         let keybindings = self.plugin_manager.all_keybindings();
 
-        let palette_cmds: Vec<RegisteredCommand> = plugin_commands.iter().map(|pc| {
-            let shortcut = keybindings.iter()
-                .find(|k| k.command_id == pc.id)
-                .map(|k| {
+        let palette_cmds: Vec<RegisteredCommand> = plugin_commands
+            .iter()
+            .map(|pc| {
+                let shortcut = keybindings.iter().find(|k| k.command_id == pc.id).map(|k| {
                     let mut parts = Vec::new();
-                    if k.ctrl { parts.push("Ctrl".to_string()); }
-                    if k.alt { parts.push("Alt".to_string()); }
-                    if k.shift { parts.push("Shift".to_string()); }
+                    if k.ctrl {
+                        parts.push("Ctrl".to_string());
+                    }
+                    if k.alt {
+                        parts.push("Alt".to_string());
+                    }
+                    if k.shift {
+                        parts.push("Shift".to_string());
+                    }
                     parts.push(k.key.to_uppercase());
                     parts.join("+")
                 });
-            let plugin_source = pc.id.split_once('.')
-                .map(|(prefix, _)| prefix.to_string())
-                .unwrap_or_else(|| "plugin".to_string());
-            RegisteredCommand {
-                id: pc.id.clone(),
-                title: pc.name.clone(),
-                category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
-                shortcut,
-                icon: None,
-                source: CommandSource::Plugin(plugin_source),
-                destructive: false,
-            }
-        }).collect();
+                let plugin_source = pc
+                    .id
+                    .split_once('.')
+                    .map(|(prefix, _)| prefix.to_string())
+                    .unwrap_or_else(|| "plugin".to_string());
+                RegisteredCommand {
+                    id: pc.id.clone(),
+                    title: pc.name.clone(),
+                    category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
+                    shortcut,
+                    icon: None,
+                    source: CommandSource::Plugin(plugin_source),
+                    destructive: false,
+                }
+            })
+            .collect();
 
         // Clear all plugin commands then re-add current ones
         // register_commands replaces from same source, but we need to handle
         // the case where a plugin is fully removed (no commands to re-register).
         // The simplest approach: re-register core commands then plugin commands.
-        self.command_palette.register_commands(crate::ui::command_palette::palette::core_commands());
+        self.command_palette
+            .register_commands(crate::ui::command_palette::palette::core_commands());
         if !palette_cmds.is_empty() {
             self.command_palette.register_commands(palette_cmds);
         }
 
-        log::info!("Refreshed plugin commands: {} plugin(s), {} command(s)",
+        log::info!(
+            "Refreshed plugin commands: {} plugin(s), {} command(s)",
             self.plugin_manager.count(),
             plugin_commands.len(),
         );
@@ -3720,8 +3953,15 @@ impl App {
     }
 
     /// Handle mouse input
-    fn handle_mouse_input(&mut self, button: MouseButton, state: ElementState, position: (f64, f64)) {
-        let Some(renderer) = &self.renderer else { return };
+    fn handle_mouse_input(
+        &mut self,
+        button: MouseButton,
+        state: ElementState,
+        position: (f64, f64),
+    ) {
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
         let chrome_bar_height = renderer.chrome_bar_height();
@@ -3733,9 +3973,13 @@ impl App {
             0.0
         };
         let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
-        let scroll_offset = self.tabs
+        let scroll_offset = self
+            .tabs
             .as_ref()
-            .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
+            .and_then(|tabs| {
+                tabs.active_tab()
+                    .map(|tab| tab.terminal.grid().scroll_offset())
+            })
             .and_then(|offset| i32::try_from(offset).ok())
             .unwrap_or(0);
         let grid_pos = screen_to_grid(
@@ -3792,9 +4036,13 @@ impl App {
                                 if row >= 0 {
                                     if let Some(cell) = grid.cell(row as usize, col) {
                                         if let Some(hyperlink_id) = cell.hyperlink_id {
-                                            if let Some(url) = tab.terminal.get_hyperlink_url(hyperlink_id) {
+                                            if let Some(url) =
+                                                tab.terminal.get_hyperlink_url(hyperlink_id)
+                                            {
                                                 log::info!("Opening hyperlink: {}", url);
-                                                if let Err(e) = crate::terminal::url::UrlDetector::open_url(url) {
+                                                if let Err(e) =
+                                                    crate::terminal::url::UrlDetector::open_url(url)
+                                                {
                                                     log::error!("Failed to open URL: {}", e);
                                                 }
                                                 return;
@@ -3804,10 +4052,14 @@ impl App {
 
                                     // Fallback: check auto-detected URLs via UrlCache
                                     if row >= 0 {
-                                        if let Some(detected) = self.url_cache.url_at(row as usize, col) {
+                                        if let Some(detected) =
+                                            self.url_cache.url_at(row as usize, col)
+                                        {
                                             let url = &detected.url;
                                             log::info!("Opening auto-detected URL: {}", url);
-                                            if let Err(e) = crate::terminal::url::UrlDetector::open_url(url) {
+                                            if let Err(e) =
+                                                crate::terminal::url::UrlDetector::open_url(url)
+                                            {
                                                 log::error!("Failed to open URL: {}", e);
                                             }
                                             return;
@@ -3830,7 +4082,8 @@ impl App {
                                 use crate::ui::commands::panel::CommandsPanelAction;
                                 let info = self.commands_panel.build_info(&self.config.commands);
                                 let action = renderer.commands_panel_hit_test(
-                                    px, py,
+                                    px,
+                                    py,
                                     &self.config.commands,
                                     size.width as f32,
                                     size.height as f32,
@@ -3854,17 +4107,18 @@ impl App {
                                                 Ok(msg) => {
                                                     log::info!("{}", msg);
                                                     self.toasts.success(format!(
-                                                        "Deleted command '{}'", name
+                                                        "Deleted command '{}'",
+                                                        name
                                                     ));
                                                 }
                                                 Err(e) => {
                                                     log::error!(
                                                         "Deleted '{}' but save failed: {}",
-                                                        name, e
+                                                        name,
+                                                        e
                                                     );
-                                                    self.toasts.error(format!(
-                                                        "Save failed: {}", e
-                                                    ));
+                                                    self.toasts
+                                                        .error(format!("Save failed: {}", e));
                                                 }
                                             }
                                         }
@@ -3879,34 +4133,36 @@ impl App {
                                                     Ok(msg) => {
                                                         log::info!("{}", msg);
                                                         self.toasts.success(format!(
-                                                            "Saved command '{}'", cmd_name
+                                                            "Saved command '{}'",
+                                                            cmd_name
                                                         ));
                                                     }
                                                     Err(e) => {
                                                         log::error!(
-                                                            "Failed to save custom command: {}", e
+                                                            "Failed to save custom command: {}",
+                                                            e
                                                         );
-                                                        self.toasts.error(format!(
-                                                            "Save failed: {}", e
-                                                        ));
+                                                        self.toasts
+                                                            .error(format!("Save failed: {}", e));
                                                     }
                                                 }
                                             } else {
                                                 // Form was incomplete — give feedback.
-                                                self.toasts.warning(
-                                                    "Both name and command are required",
-                                                );
+                                                self.toasts
+                                                    .warning("Both name and command are required");
                                             }
                                         } else if name.is_empty() && command.is_empty() {
                                             // Click on "+ New Command" button => start editing
                                             self.commands_panel.start_add();
                                         } else {
                                             // Actually add the command
-                                            self.config.commands.push(crate::config::CustomCommand {
-                                                name,
-                                                command,
-                                                alias: None,
-                                            });
+                                            self.config.commands.push(
+                                                crate::config::CustomCommand {
+                                                    name,
+                                                    command,
+                                                    alias: None,
+                                                },
+                                            );
                                             if let Ok(msg) = self.save_config() {
                                                 log::info!("{}", msg);
                                             }
@@ -3936,7 +4192,8 @@ impl App {
                             if let Some(size) = window_size {
                                 use crate::session::panel::SessionPanelAction;
                                 let action = renderer.session_panel_hit_test(
-                                    px, py,
+                                    px,
+                                    py,
                                     self.session_panel.sessions(),
                                     size.width as f32,
                                     size.height as f32,
@@ -3949,22 +4206,27 @@ impl App {
                                             Ok(Some(session)) => {
                                                 if let Some(tabs) = &mut self.tabs {
                                                     match tabs.new_tab_from_session(&session) {
-                                                        Ok(_) => log::info!("Loaded session '{}' from panel", name),
-                                                        Err(e) => log::error!("Failed to restore session: {}", e),
+                                                        Ok(_) => log::info!(
+                                                            "Loaded session '{}' from panel",
+                                                            name
+                                                        ),
+                                                        Err(e) => log::error!(
+                                                            "Failed to restore session: {}",
+                                                            e
+                                                        ),
                                                     }
                                                 }
                                             }
                                             Ok(None) => {
                                                 log::warn!("Session '{}' not found", name);
                                                 self.toasts.warning(format!(
-                                                    "Session '{}' not found", name
+                                                    "Session '{}' not found",
+                                                    name
                                                 ));
                                             }
                                             Err(e) => {
                                                 log::error!("Failed to load session: {}", e);
-                                                self.toasts.error(format!(
-                                                    "Load failed: {}", e
-                                                ));
+                                                self.toasts.error(format!("Load failed: {}", e));
                                             }
                                         }
                                         self.session_panel.close();
@@ -3973,18 +4235,16 @@ impl App {
                                         match crate::session::delete_session(&name) {
                                             Ok(()) => {
                                                 log::info!("Deleted session '{}'", name);
-                                                self.toasts.success(format!(
-                                                    "Deleted session '{}'", name
-                                                ));
+                                                self.toasts
+                                                    .success(format!("Deleted session '{}'", name));
                                             }
                                             Err(e) => {
                                                 log::error!(
                                                     "Failed to delete session '{}': {}",
-                                                    name, e
+                                                    name,
+                                                    e
                                                 );
-                                                self.toasts.error(format!(
-                                                    "Delete failed: {}", e
-                                                ));
+                                                self.toasts.error(format!("Delete failed: {}", e));
                                             }
                                         }
                                         // Refresh the list
@@ -4009,7 +4269,10 @@ impl App {
                             if let Some(size) = window_size {
                                 use crate::renderer::SessionDropdownClick;
                                 let click = renderer.session_dropdown_hit_test(
-                                    px, py, &self.session_dropdown_items, size.width as f32,
+                                    px,
+                                    py,
+                                    &self.session_dropdown_items,
+                                    size.width as f32,
                                 );
                                 match click {
                                     SessionDropdownClick::LoadSession(name) => {
@@ -4018,8 +4281,13 @@ impl App {
                                             Ok(Some(session)) => {
                                                 if let Some(tabs) = &mut self.tabs {
                                                     match tabs.new_tab_from_session(&session) {
-                                                        Ok(_) => log::info!("Loaded session '{}'", name),
-                                                        Err(e) => log::error!("Failed to restore session: {}", e),
+                                                        Ok(_) => {
+                                                            log::info!("Loaded session '{}'", name)
+                                                        }
+                                                        Err(e) => log::error!(
+                                                            "Failed to restore session: {}",
+                                                            e
+                                                        ),
                                                     }
                                                 }
                                             }
@@ -4052,7 +4320,8 @@ impl App {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
                                 let action = self.settings_panel.handle_click(
-                                    px, py,
+                                    px,
+                                    py,
                                     &self.config,
                                     &self.shortcut_registry,
                                     size.width as f32,
@@ -4072,11 +4341,13 @@ impl App {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
                                 use crate::renderer::TabBarClick;
-                                let tab_infos = self.tabs.as_ref()
-                                    .map(|t| t.tab_info())
-                                    .unwrap_or_default();
+                                let tab_infos =
+                                    self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
                                 let click = renderer.tab_bar_hit_test(
-                                    px, py, &tab_infos, size.width as f32,
+                                    px,
+                                    py,
+                                    &tab_infos,
+                                    size.width as f32,
                                 );
                                 match click {
                                     TabBarClick::Gear => {
@@ -4088,14 +4359,22 @@ impl App {
                                                 Ok(id) => {
                                                     log::info!("Created new tab {} via mouse", id);
                                                     self.maybe_show_splash(true);
-                                                    self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
+                                                    self.dispatch_plugin_hook(
+                                                        crate::plugin::Hook::TabCreated {
+                                                            tab_id: id,
+                                                        },
+                                                    );
                                                 }
-                                                Err(e) => log::error!("Failed to create new tab: {}", e),
+                                                Err(e) => {
+                                                    log::error!("Failed to create new tab: {}", e)
+                                                }
                                             }
                                         }
                                     }
                                     TabBarClick::CloseTab(idx) => {
-                                        let tab_id = self.tabs.as_ref().and_then(|t| t.iter().find(|(i, _)| *i == idx).map(|(_, tab)| tab.id));
+                                        let tab_id = self.tabs.as_ref().and_then(|t| {
+                                            t.iter().find(|(i, _)| *i == idx).map(|(_, tab)| tab.id)
+                                        });
                                         if let Some(tabs) = &mut self.tabs {
                                             tabs.close_tab(idx);
                                             if tabs.is_empty() {
@@ -4104,22 +4383,31 @@ impl App {
                                             }
                                         }
                                         if let Some(id) = tab_id {
-                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id: id });
+                                            self.dispatch_plugin_hook(
+                                                crate::plugin::Hook::TabClosed { tab_id: id },
+                                            );
                                         }
                                     }
                                     TabBarClick::Tab(idx) => {
-                                        let from = self.tabs.as_ref().map(|t| t.active_index()).unwrap_or(0);
+                                        let from = self
+                                            .tabs
+                                            .as_ref()
+                                            .map(|t| t.active_index())
+                                            .unwrap_or(0);
                                         if let Some(tabs) = &mut self.tabs {
                                             tabs.switch_to(idx);
                                         }
                                         if from != idx {
-                                            self.dispatch_plugin_hook(crate::plugin::Hook::TabSwitched { from, to: idx });
+                                            self.dispatch_plugin_hook(
+                                                crate::plugin::Hook::TabSwitched { from, to: idx },
+                                            );
                                         }
                                     }
                                     TabBarClick::SessionDropdown => {
                                         self.session_dropdown_open = !self.session_dropdown_open;
                                         if self.session_dropdown_open {
-                                            self.session_dropdown_items = crate::session::list_sessions_with_titles();
+                                            self.session_dropdown_items =
+                                                crate::session::list_sessions_with_titles();
                                         }
                                     }
                                     TabBarClick::CommandsButton => {
@@ -4153,9 +4441,9 @@ impl App {
                                     self.search.is_filter_mode(),
                                     self.search.matching_line_count(),
                                 );
-                                let grid_ref = self.tabs
-                                    .as_ref()
-                                    .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid()));
+                                let grid_ref = self.tabs.as_ref().and_then(|tabs| {
+                                    tabs.active_tab().map(|tab| tab.terminal.grid())
+                                });
 
                                 match click {
                                     SearchBarClick::ToggleCaseSensitive => {
@@ -4204,7 +4492,6 @@ impl App {
                             }
                         }
                     }
-
                 }
                 // Focus pane under click in multi-pane mode
                 if let Some(tabs) = &mut self.tabs {
@@ -4213,14 +4500,17 @@ impl App {
                             if let Some(renderer) = &self.renderer {
                                 let px = position.0 as f32;
                                 let py = position.1 as f32;
-                                let content_top = renderer.tab_bar_height() + renderer.chrome_bar_height();
+                                let content_top =
+                                    renderer.tab_bar_height() + renderer.chrome_bar_height();
                                 let padding = renderer.padding();
                                 let rel_x = px - padding;
                                 let rel_y = py - content_top;
                                 let layout = pm.calculate_layout();
                                 for (id, rect) in &layout {
-                                    if rel_x >= rect.x && rel_x < rect.x + rect.width
-                                        && rel_y >= rect.y && rel_y < rect.y + rect.height
+                                    if rel_x >= rect.x
+                                        && rel_x < rect.x + rect.width
+                                        && rel_y >= rect.y
+                                        && rel_y < rect.y + rect.height
                                     {
                                         pm.focus(*id);
                                         break;
@@ -4231,7 +4521,10 @@ impl App {
                     }
                 }
 
-                if let Some(mut selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
+                if let Some(mut selection) =
+                    self.mouse_state
+                        .handle_press(button, grid_pos, self.modifiers)
+                {
                     self.mouse_pressed = true;
                     // Double-click expands to the word under the cursor;
                     // triple-click expands to the full line. Simple/Block
@@ -4278,7 +4571,9 @@ impl App {
 
     /// Handle mouse movement
     fn handle_mouse_move(&mut self, position: (f64, f64)) {
-        let Some(renderer) = &self.renderer else { return };
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
         let (cell_width, cell_height) = renderer.cell_size();
         let tab_bar_height = renderer.tab_bar_height();
         let chrome_bar_height = renderer.chrome_bar_height();
@@ -4290,9 +4585,13 @@ impl App {
             0.0
         };
         let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
-        let scroll_offset = self.tabs
+        let scroll_offset = self
+            .tabs
             .as_ref()
-            .and_then(|tabs| tabs.active_tab().map(|tab| tab.terminal.grid().scroll_offset()))
+            .and_then(|tabs| {
+                tabs.active_tab()
+                    .map(|tab| tab.terminal.grid().scroll_offset())
+            })
             .and_then(|offset| i32::try_from(offset).ok())
             .unwrap_or(0);
         let grid_pos = screen_to_grid(
@@ -4310,9 +4609,7 @@ impl App {
             let px = position.0 as f32;
             let py = position.1 as f32;
             let window_size = self.window.as_ref().map(|w| w.inner_size());
-            let tab_infos = self.tabs.as_ref()
-                .map(|t| t.tab_info())
-                .unwrap_or_default();
+            let tab_infos = self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
             let new_hover = if py < tab_bar_height {
                 if let Some(renderer) = &self.renderer {
                     if let Some(size) = window_size {
@@ -4484,7 +4781,8 @@ impl App {
                                 break;
                             }
                         }
-                        self.commands_panel.set_hover(hovered_index, hovered_add, hovered_delete);
+                        self.commands_panel
+                            .set_hover(hovered_index, hovered_add, hovered_delete);
                     } else {
                         self.commands_panel.set_hover(None, false, None);
                     }
@@ -4552,7 +4850,8 @@ impl App {
 
                     let row_height = (cell_height * 2.0).max(28.0);
                     let dropdown_width = (cell_width * 22.0).max(200.0);
-                    let dropdown_x = (dropdown_anchor_x + session_button_width - dropdown_width).max(0.0);
+                    let dropdown_x =
+                        (dropdown_anchor_x + session_button_width - dropdown_width).max(0.0);
                     let dropdown_y = tab_bar_height;
 
                     let session_count = self.session_dropdown_items.len().min(5);
@@ -4560,8 +4859,10 @@ impl App {
                     let total_items = display_rows + 1; // + "Manage Sessions"
                     let dropdown_height = total_items as f32 * row_height + 4.0;
 
-                    self.session_dropdown_hovered = if px >= dropdown_x && px <= dropdown_x + dropdown_width
-                        && py >= dropdown_y && py <= dropdown_y + dropdown_height
+                    self.session_dropdown_hovered = if px >= dropdown_x
+                        && px <= dropdown_x + dropdown_width
+                        && py >= dropdown_y
+                        && py <= dropdown_y + dropdown_height
                     {
                         let relative_y = py - dropdown_y - 2.0;
                         let row = (relative_y / row_height) as usize;
@@ -4622,7 +4923,9 @@ impl App {
 
     /// Check if a click position is within the scrollbar area
     fn is_click_on_scrollbar(&self, x: f64, _y: f64) -> bool {
-        let Some(renderer) = &self.renderer else { return false };
+        let Some(renderer) = &self.renderer else {
+            return false;
+        };
         let (window_width, _) = renderer.window_size();
 
         // Scrollbar is 6px wide + 2px margin from right edge, with an expanded hit area
@@ -4630,7 +4933,8 @@ impl App {
         let scrollbar_x = window_width as f32 - scrollbar_hit_width;
 
         // Check if there's actually scrollback content
-        let has_scrollback = self.tabs
+        let has_scrollback = self
+            .tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab())
             .map(|tab| tab.terminal.grid().scrollback_len() > 0)
@@ -4641,7 +4945,9 @@ impl App {
 
     /// Map a vertical mouse position to a scroll offset and apply it
     fn scroll_to_scrollbar_position(&mut self, y: f64) {
-        let Some(renderer) = &self.renderer else { return };
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
         let tab_bar_height = renderer.tab_bar_height();
         let padding = renderer.padding();
         let (_, window_height) = renderer.window_size();
@@ -4657,7 +4963,9 @@ impl App {
         let scrollbar_bottom = window_height as f32 - padding;
         let scrollbar_height = scrollbar_bottom - scrollbar_top;
 
-        if scrollbar_height <= 0.0 { return; }
+        if scrollbar_height <= 0.0 {
+            return;
+        }
 
         // Fraction from top (0.0=top, 1.0=bottom)
         let fraction = ((y as f32 - scrollbar_top) / scrollbar_height).clamp(0.0, 1.0);
@@ -4678,8 +4986,7 @@ impl App {
 /// Minimal RFC 4648 base64 encoder (standard alphabet) used for the OSC 52
 /// clipboard reply. Keeps us off an external `base64` dependency.
 fn base64_encode_standard(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
     let mut chunks = input.chunks_exact(3);
     for chunk in &mut chunks {
@@ -4736,4 +5043,3 @@ mod base64_tests {
         assert_eq!(base64_encode_standard(&bytes), "AP+AfwE=");
     }
 }
-

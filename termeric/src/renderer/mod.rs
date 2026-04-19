@@ -7,14 +7,14 @@
 //! - Tab bar rendering
 
 mod glyph_cache;
-mod text;
-mod rect;
 mod image;
+mod rect;
+mod text;
 
-pub(crate) mod draw;
 mod chrome;
-mod harvest;
+pub(crate) mod draw;
 mod git;
+mod harvest;
 mod overlays;
 mod palette;
 mod panels;
@@ -32,19 +32,19 @@ pub use glyph_cache::GlyphCache;
 
 use image::ImagePipeline;
 
-use anyhow::Result;
-use std::sync::Arc;
-use wgpu::*;
-use winit::window::Window;
-use termeric_core::{Grid, Selection, Color as TermColor, CellAttrs, CellFlags};
-use crate::config::theme::Theme;
 use crate::config::CursorStyle;
-use crate::ui::settings::SettingsPanelInfo;
+use crate::config::theme::Theme;
 use crate::terminal::search::{Search, SearchBarInfo};
 use crate::terminal::url::UrlCache;
+use crate::ui::settings::SettingsPanelInfo;
+use anyhow::Result;
+use std::sync::Arc;
+use termeric_core::{CellAttrs, CellFlags, Color as TermColor, Grid, Selection};
+use wgpu::*;
+use winit::window::Window;
 
-use text::TextPipeline;
 use rect::RectPipeline;
+use text::TextPipeline;
 
 use crate::tabs::TabInfo;
 use crate::ui::command_palette::PaletteInfo;
@@ -141,7 +141,7 @@ impl UiPalette {
             search_match: theme.ui.search_match.with_alpha(0.35).to_f32_array(),
             search_match_current: theme.ui.search_match.with_alpha(0.65).to_f32_array(),
             search_indicator: theme.ansi_color(2).to_f32_array(), // green
-            search_error: theme.ansi_color(1).to_f32_array(), // red
+            search_error: theme.ansi_color(1).to_f32_array(),     // red
             // URL/hyperlink color from theme
             url: theme.ui.url.to_f32_array(),
             // Command palette — fully theme-derived
@@ -254,7 +254,15 @@ pub struct Renderer {
 
 impl Renderer {
     /// Create a new renderer for the given window
-    pub fn new(window: Arc<Window>, font_size: f32, font_family: &str, padding: f32, scale_factor: f32, theme: &Theme, ligatures: bool) -> Result<Self> {
+    pub fn new(
+        window: Arc<Window>,
+        font_size: f32,
+        font_family: &str,
+        padding: f32,
+        scale_factor: f32,
+        theme: &Theme,
+        ligatures: bool,
+    ) -> Result<Self> {
         let size = window.inner_size();
 
         // Create wgpu instance
@@ -302,7 +310,10 @@ impl Renderer {
             width: size.width,
             height: size.height,
             present_mode: PresentMode::Fifo,
-            alpha_mode: if surface_caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+            alpha_mode: if surface_caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            {
                 wgpu::CompositeAlphaMode::PreMultiplied
             } else {
                 surface_caps.alpha_modes[0]
@@ -314,7 +325,8 @@ impl Renderer {
 
         // Create glyph cache
         let scaled_font_size = (font_size * scale_factor).max(1.0);
-        let glyph_cache = GlyphCache::new(&device, &queue, scaled_font_size, font_family, ligatures)?;
+        let glyph_cache =
+            GlyphCache::new(&device, &queue, scaled_font_size, font_family, ligatures)?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
@@ -548,7 +560,8 @@ impl Renderer {
                 // Main groove (3px)
                 self.rect_pipeline.push_rect(x, y0, 3.0, len, groove_color);
                 // Light edge on the right (1px)
-                self.rect_pipeline.push_rect(x + 3.0, y0, 1.0, len, edge_color);
+                self.rect_pipeline
+                    .push_rect(x + 3.0, y0, 1.0, len, edge_color);
             } else {
                 let x0 = padding + div.start;
                 let x1 = padding + div.end;
@@ -557,7 +570,8 @@ impl Renderer {
                 // Main groove (3px)
                 self.rect_pipeline.push_rect(x0, y, len, 3.0, groove_color);
                 // Light edge on bottom (1px)
-                self.rect_pipeline.push_rect(x0, y + 3.0, len, 1.0, edge_color);
+                self.rect_pipeline
+                    .push_rect(x0, y + 3.0, len, 1.0, edge_color);
             }
         }
     }
@@ -590,23 +604,68 @@ impl Renderer {
     /// images: optional list of image placements and their data for Kitty graphics
     /// panes: multi-pane render data (empty = single-grid mode)
     /// harvest: optional harvest mode render info
-    pub fn render(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, shortcuts_panel: Option<&ShortcutsPanelInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) -> Result<(), SurfaceError> {
+    pub fn render(
+        &mut self,
+        grid: &Grid,
+        selection: Option<&Selection>,
+        cursor_opacity: f32,
+        cursor_pos: (f32, f32),
+        tabs: &[TabInfo],
+        copy_flash: f32,
+        focus_dim: f32,
+        settings_panel: Option<&SettingsPanelInfo>,
+        search_bar: Option<&SearchBarInfo>,
+        search: &Search,
+        images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>,
+        session_dropdown: Option<&SessionDropdownInfo>,
+        session_panel: Option<&crate::session::panel::SessionPanelInfo>,
+        commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
+        command_palette: Option<&PaletteInfo>,
+        shortcuts_panel: Option<&ShortcutsPanelInfo>,
+        cursor_style: CursorStyle,
+        panes: &[PaneRenderData],
+        harvest: Option<&HarvestRenderInfo>,
+    ) -> Result<(), SurfaceError> {
         let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         // Build render data from grid and tabs (inserts layer boundaries)
-        self.build_render_data(grid, selection, cursor_opacity, cursor_pos, tabs, copy_flash, focus_dim, settings_panel, search_bar, search, session_dropdown, session_panel, commands_panel, command_palette, shortcuts_panel, cursor_style, panes, harvest);
+        self.build_render_data(
+            grid,
+            selection,
+            cursor_opacity,
+            cursor_pos,
+            tabs,
+            copy_flash,
+            focus_dim,
+            settings_panel,
+            search_bar,
+            search,
+            session_dropdown,
+            session_panel,
+            commands_panel,
+            command_palette,
+            shortcuts_panel,
+            cursor_style,
+            panes,
+            harvest,
+        );
 
         // Build image render data if any
         self.build_image_data(images);
 
         // Upload vertex data
         self.rect_pipeline.upload(&self.device, &self.queue);
-        self.text_pipeline.upload(&self.device, &self.queue, &mut self.glyph_cache);
+        self.text_pipeline
+            .upload(&self.device, &self.queue, &mut self.glyph_cache);
         self.image_pipeline.upload(&self.device, &self.queue);
 
         {
@@ -633,7 +692,10 @@ impl Renderer {
             // Draw layers interleaved: for each layer, draw its rects then its text.
             // This ensures overlay backgrounds (higher layers) fully occlude content
             // from lower layers, fixing the bleed-through issue.
-            let layer_count = self.rect_pipeline.layer_count().max(self.text_pipeline.layer_count());
+            let layer_count = self
+                .rect_pipeline
+                .layer_count()
+                .max(self.text_pipeline.layer_count());
 
             for layer in 0..layer_count {
                 // Draw rectangles for this layer (backgrounds, panels, etc.)
@@ -645,7 +707,8 @@ impl Renderer {
                 }
 
                 // Draw text for this layer
-                self.text_pipeline.draw_layer(&mut render_pass, &self.glyph_cache, layer);
+                self.text_pipeline
+                    .draw_layer(&mut render_pass, &self.glyph_cache, layer);
             }
         }
 
@@ -656,7 +719,10 @@ impl Renderer {
     }
 
     /// Build image render data from placements
-    fn build_image_data(&mut self, images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>) {
+    fn build_image_data(
+        &mut self,
+        images: Option<&[(&termeric_core::ImagePlacement, &termeric_core::StoredImage)]>,
+    ) {
         self.image_pipeline.clear();
 
         let Some(images) = images else {
@@ -683,27 +749,54 @@ impl Renderer {
                     // dimensions available — proceed with placement below
                 }
             } else {
-                self.image_pipeline.upload_image(&self.device, &self.queue, image);
+                self.image_pipeline
+                    .upload_image(&self.device, &self.queue, image);
             }
 
             // Calculate position
             let x = padding + (placement.col as f32) * cell_width + placement.x_offset as f32;
-            let y = tab_bar_height + padding + (placement.row as f32) * cell_height + placement.y_offset as f32;
+            let y = tab_bar_height
+                + padding
+                + (placement.row as f32) * cell_height
+                + placement.y_offset as f32;
 
             // Calculate size (use placement size or image natural size)
-            let width = placement.width
+            let width = placement
+                .width
                 .map(|w| w as f32 * cell_width)
                 .unwrap_or(image.width as f32);
-            let height = placement.height
+            let height = placement
+                .height
                 .map(|h| h as f32 * cell_height)
                 .unwrap_or(image.height as f32);
 
-            self.image_pipeline.push_image(image.id, x, y, width, height);
+            self.image_pipeline
+                .push_image(image.id, x, y, width, height);
         }
     }
 
     /// Build render data from the grid and tabs
-    fn build_render_data(&mut self, grid: &Grid, selection: Option<&Selection>, cursor_opacity: f32, cursor_pos: (f32, f32), tabs: &[TabInfo], copy_flash: f32, focus_dim: f32, settings_panel: Option<&SettingsPanelInfo>, search_bar: Option<&SearchBarInfo>, search: &Search, session_dropdown: Option<&SessionDropdownInfo>, session_panel: Option<&crate::session::panel::SessionPanelInfo>, commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>, command_palette: Option<&PaletteInfo>, shortcuts_panel: Option<&ShortcutsPanelInfo>, cursor_style: CursorStyle, panes: &[PaneRenderData], harvest: Option<&HarvestRenderInfo>) {
+    fn build_render_data(
+        &mut self,
+        grid: &Grid,
+        selection: Option<&Selection>,
+        cursor_opacity: f32,
+        cursor_pos: (f32, f32),
+        tabs: &[TabInfo],
+        copy_flash: f32,
+        focus_dim: f32,
+        settings_panel: Option<&SettingsPanelInfo>,
+        search_bar: Option<&SearchBarInfo>,
+        search: &Search,
+        session_dropdown: Option<&SessionDropdownInfo>,
+        session_panel: Option<&crate::session::panel::SessionPanelInfo>,
+        commands_panel: Option<&crate::ui::commands::panel::CommandsPanelInfo>,
+        command_palette: Option<&PaletteInfo>,
+        shortcuts_panel: Option<&ShortcutsPanelInfo>,
+        cursor_style: CursorStyle,
+        panes: &[PaneRenderData],
+        harvest: Option<&HarvestRenderInfo>,
+    ) {
         self.rect_pipeline.clear();
         self.text_pipeline.clear();
         self.pane_dividers.clear();
@@ -754,8 +847,10 @@ impl Renderer {
                 self.build_pane_grid(
                     pane.grid,
                     pane.selection,
-                    pane_x, pane_y,
-                    pane_cols.max(1), pane_rows.max(1),
+                    pane_x,
+                    pane_y,
+                    pane_cols.max(1),
+                    pane_rows.max(1),
                     pane.is_focused,
                     cursor_style,
                     cursor_opacity,
@@ -772,13 +867,32 @@ impl Renderer {
                     let border_color = adjust_alpha(self.ui.cursor, 0.5);
                     let bw = 2.0_f32;
                     // Top
-                    self.rect_pipeline.push_rect(pane_x, pane_y, pane.rect.width, bw, border_color);
+                    self.rect_pipeline
+                        .push_rect(pane_x, pane_y, pane.rect.width, bw, border_color);
                     // Bottom
-                    self.rect_pipeline.push_rect(pane_x, pane_y + pane.rect.height - bw, pane.rect.width, bw, border_color);
+                    self.rect_pipeline.push_rect(
+                        pane_x,
+                        pane_y + pane.rect.height - bw,
+                        pane.rect.width,
+                        bw,
+                        border_color,
+                    );
                     // Left
-                    self.rect_pipeline.push_rect(pane_x, pane_y, bw, pane.rect.height, border_color);
+                    self.rect_pipeline.push_rect(
+                        pane_x,
+                        pane_y,
+                        bw,
+                        pane.rect.height,
+                        border_color,
+                    );
                     // Right
-                    self.rect_pipeline.push_rect(pane_x + pane.rect.width - bw, pane_y, bw, pane.rect.height, border_color);
+                    self.rect_pipeline.push_rect(
+                        pane_x + pane.rect.width - bw,
+                        pane_y,
+                        bw,
+                        pane.rect.height,
+                        border_color,
+                    );
                 }
             }
         } else {
@@ -792,8 +906,10 @@ impl Renderer {
             self.build_pane_grid(
                 grid,
                 selection,
-                grid_x, grid_y,
-                grid_cols, grid_rows,
+                grid_x,
+                grid_y,
+                grid_cols,
+                grid_rows,
                 true, // always focused in single mode
                 cursor_style,
                 cursor_opacity,
@@ -815,7 +931,8 @@ impl Renderer {
         if self.bell_intensity > 0.0 {
             let alpha = self.bell_intensity * 0.15;
             let flash_color = [1.0, 1.0, 1.0, alpha];
-            self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, flash_color);
+            self.rect_pipeline
+                .push_rect(0.0, 0.0, window_width, window_height, flash_color);
         }
 
         // ── LAYER 1: Harvest indicators (in gutter, alongside grid) ──
@@ -993,7 +1110,8 @@ impl Renderer {
         // Selection highlight color
         let selection_base = self.ui.selection;
         let selection_flash = self.ui.selection_flash;
-        let selection_color = apply_brightness(mix(selection_base, selection_flash, copy_flash), brightness);
+        let selection_color =
+            apply_brightness(mix(selection_base, selection_flash, copy_flash), brightness);
 
         let scroll_offset = grid.scroll_offset();
         let scroll_offset_i32 = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
@@ -1006,12 +1124,15 @@ impl Renderer {
         let matching_rows = search.matching_rows();
 
         let rows_to_render: Vec<(usize, i32)> = if filter_mode {
-            matching_rows.iter()
+            matching_rows
+                .iter()
                 .enumerate()
                 .map(|(visual_row, &grid_row)| (visual_row, grid_row))
                 .collect()
         } else {
-            (0..pane_rows.min(grid.rows())).map(|row| (row, row as i32 - scroll_offset_i32)).collect()
+            (0..pane_rows.min(grid.rows()))
+                .map(|row| (row, row as i32 - scroll_offset_i32))
+                .collect()
         };
 
         for (visual_row, grid_row) in rows_to_render {
@@ -1036,9 +1157,10 @@ impl Renderer {
                     break;
                 }
 
-                let is_selected = is_focused && selection
-                    .map(|s| s.contains(grid_row, col))
-                    .unwrap_or(false);
+                let is_selected = is_focused
+                    && selection
+                        .map(|s| s.contains(grid_row, col))
+                        .unwrap_or(false);
 
                 let is_search_match = search.is_match(grid_row, col);
                 let is_current_match = search.is_current_match(grid_row, col);
@@ -1047,20 +1169,37 @@ impl Renderer {
 
                 // Draw background
                 if is_selected {
-                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height, selection_color);
+                    self.rect_pipeline
+                        .push_rect(x, y, cell_width, cell_height, selection_color);
                 } else if is_current_match {
-                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height,
-                        apply_brightness(self.ui.search_match_current, brightness));
+                    self.rect_pipeline.push_rect(
+                        x,
+                        y,
+                        cell_width,
+                        cell_height,
+                        apply_brightness(self.ui.search_match_current, brightness),
+                    );
                 } else if is_search_match {
-                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height,
-                        apply_brightness(self.ui.search_match, brightness));
+                    self.rect_pipeline.push_rect(
+                        x,
+                        y,
+                        cell_width,
+                        cell_height,
+                        apply_brightness(self.ui.search_match, brightness),
+                    );
                 } else if bg != default_bg {
-                    self.rect_pipeline.push_rect(x, y, cell_width, cell_height, [
-                        bg.r as f32 / 255.0 * brightness,
-                        bg.g as f32 / 255.0 * brightness,
-                        bg.b as f32 / 255.0 * brightness,
-                        1.0,
-                    ]);
+                    self.rect_pipeline.push_rect(
+                        x,
+                        y,
+                        cell_width,
+                        cell_height,
+                        [
+                            bg.r as f32 / 255.0 * brightness,
+                            bg.g as f32 / 255.0 * brightness,
+                            bg.b as f32 / 255.0 * brightness,
+                            1.0,
+                        ],
+                    );
                 }
 
                 // Draw character
@@ -1070,10 +1209,20 @@ impl Renderer {
                             if let Some(sel_text) = self.ui.selection_text {
                                 apply_brightness(sel_text, brightness)
                             } else {
-                                [fg.r as f32 / 255.0 * brightness, fg.g as f32 / 255.0 * brightness, fg.b as f32 / 255.0 * brightness, 1.0]
+                                [
+                                    fg.r as f32 / 255.0 * brightness,
+                                    fg.g as f32 / 255.0 * brightness,
+                                    fg.b as f32 / 255.0 * brightness,
+                                    1.0,
+                                ]
                             }
                         } else {
-                            [fg.r as f32 / 255.0 * brightness, fg.g as f32 / 255.0 * brightness, fg.b as f32 / 255.0 * brightness, 1.0]
+                            [
+                                fg.r as f32 / 255.0 * brightness,
+                                fg.g as f32 / 255.0 * brightness,
+                                fg.b as f32 / 255.0 * brightness,
+                                1.0,
+                            ]
                         };
                         self.text_pipeline.push_char(c, x, y, text_color);
                     }
@@ -1082,12 +1231,15 @@ impl Renderer {
                 // Draw underline styles
                 if cell.attrs.has_underline() {
                     let underline_color = cell.underline_color.unwrap_or(cell.fg);
-                    let ul_color = apply_brightness([
-                        underline_color.r as f32 / 255.0,
-                        underline_color.g as f32 / 255.0,
-                        underline_color.b as f32 / 255.0,
-                        1.0,
-                    ], brightness);
+                    let ul_color = apply_brightness(
+                        [
+                            underline_color.r as f32 / 255.0,
+                            underline_color.g as f32 / 255.0,
+                            underline_color.b as f32 / 255.0,
+                            1.0,
+                        ],
+                        brightness,
+                    );
 
                     let underline_y = y + cell_height - 2.0;
                     let underline_thickness = 1.0;
@@ -1095,20 +1247,41 @@ impl Renderer {
                     if cell.attrs.contains(CellAttrs::CURLY_UNDERLINE) {
                         self.draw_wavy_underline(x, underline_y, cell_width, ul_color);
                     } else if cell.attrs.contains(CellAttrs::DOUBLE_UNDERLINE) {
-                        self.rect_pipeline.push_rect(x, underline_y - 2.0, cell_width, underline_thickness, ul_color);
-                        self.rect_pipeline.push_rect(x, underline_y, cell_width, underline_thickness, ul_color);
+                        self.rect_pipeline.push_rect(
+                            x,
+                            underline_y - 2.0,
+                            cell_width,
+                            underline_thickness,
+                            ul_color,
+                        );
+                        self.rect_pipeline.push_rect(
+                            x,
+                            underline_y,
+                            cell_width,
+                            underline_thickness,
+                            ul_color,
+                        );
                     } else if cell.attrs.contains(CellAttrs::DOTTED_UNDERLINE) {
                         self.draw_dotted_underline(x, underline_y, cell_width, ul_color);
                     } else if cell.attrs.contains(CellAttrs::DASHED_UNDERLINE) {
                         self.draw_dashed_underline(x, underline_y, cell_width, ul_color);
                     } else {
-                        self.rect_pipeline.push_rect(x, underline_y, cell_width, underline_thickness, ul_color);
+                        self.rect_pipeline.push_rect(
+                            x,
+                            underline_y,
+                            cell_width,
+                            underline_thickness,
+                            ul_color,
+                        );
                     }
                 }
 
                 // Draw hyperlink underline
                 let is_hyperlink = cell.flags.contains(CellFlags::HYPERLINK);
-                let is_detected_url = self.url_cache.as_ref().map_or(false, |c| c.is_url(visual_row, col));
+                let is_detected_url = self
+                    .url_cache
+                    .as_ref()
+                    .map_or(false, |c| c.is_url(visual_row, col));
                 if (is_hyperlink || is_detected_url) && !cell.attrs.has_underline() {
                     let link_color = apply_brightness(self.ui.url, brightness);
                     let underline_y = y + cell_height - 2.0;
@@ -1126,29 +1299,53 @@ impl Renderer {
 
                 if y + cell_height <= max_grid_y {
                     let cursor_color = apply_brightness(self.ui.cursor, brightness);
-                    let cc = [cursor_color[0], cursor_color[1], cursor_color[2], cursor_opacity];
+                    let cc = [
+                        cursor_color[0],
+                        cursor_color[1],
+                        cursor_color[2],
+                        cursor_opacity,
+                    ];
 
                     match cursor_style {
                         CursorStyle::Block => {
-                            self.rect_pipeline.push_rounded_rect(x, y, cell_width, cell_height, cc, 2.0);
+                            self.rect_pipeline.push_rounded_rect(
+                                x,
+                                y,
+                                cell_width,
+                                cell_height,
+                                cc,
+                                2.0,
+                            );
                             let cursor_row = cursor.row as usize;
                             let cursor_col = cursor.col as usize;
                             if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
                                 if let Some(c) = cell.content.char() {
                                     if !c.is_whitespace() {
                                         let ct = apply_brightness(self.ui.cursor_text, brightness);
-                                        self.text_pipeline.push_char(c, x, y, [ct[0], ct[1], ct[2], cursor_opacity]);
+                                        self.text_pipeline.push_char(
+                                            c,
+                                            x,
+                                            y,
+                                            [ct[0], ct[1], ct[2], cursor_opacity],
+                                        );
                                     }
                                 }
                             }
                         }
                         CursorStyle::Underline => {
                             let underline_height = 2.0_f32.max(cell_height * 0.1);
-                            self.rect_pipeline.push_rect(x, y + cell_height - underline_height, cell_width, underline_height, cc);
+                            self.rect_pipeline.push_rect(
+                                x,
+                                y + cell_height - underline_height,
+                                cell_width,
+                                underline_height,
+                                cc,
+                            );
                         }
                         CursorStyle::Beam => {
                             let beam_width = 2.0_f32.max(cell_width * 0.1);
-                            self.rect_pipeline.push_rect(x, y, beam_width, cell_height, cc);
+                            self.rect_pipeline
+                                .push_rect(x, y, beam_width, cell_height, cc);
                         }
                     }
                 }
@@ -1171,13 +1368,20 @@ impl Renderer {
             if scrollbar_height > 20.0 {
                 let track_color = [1.0_f32, 1.0, 1.0, 0.05];
                 self.rect_pipeline.push_rounded_rect(
-                    scrollbar_x, scrollbar_top, scrollbar_width, scrollbar_height, track_color, 3.0,
+                    scrollbar_x,
+                    scrollbar_top,
+                    scrollbar_width,
+                    scrollbar_height,
+                    track_color,
+                    3.0,
                 );
 
                 // Minimum thumb size of 32px keeps it targetable on HiDPI
                 // displays even when scrollback vastly exceeds the viewport.
                 let thumb_ratio = (visible_rows as f32) / (total_rows as f32);
-                let thumb_height = (scrollbar_height * thumb_ratio).max(32.0).min(scrollbar_height);
+                let thumb_height = (scrollbar_height * thumb_ratio)
+                    .max(32.0)
+                    .min(scrollbar_height);
                 let max_offset = scrollback_len;
                 let scroll_fraction = if max_offset > 0 {
                     scroll_offset as f32 / max_offset as f32
@@ -1189,7 +1393,12 @@ impl Renderer {
 
                 let thumb_color = [1.0_f32, 1.0, 1.0, 0.25];
                 self.rect_pipeline.push_rounded_rect(
-                    scrollbar_x, thumb_y, scrollbar_width, thumb_height, thumb_color, 3.0,
+                    scrollbar_x,
+                    thumb_y,
+                    scrollbar_width,
+                    thumb_height,
+                    thumb_color,
+                    3.0,
                 );
             }
         }

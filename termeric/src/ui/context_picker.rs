@@ -155,14 +155,20 @@ impl ContextPicker {
                 ContextKind::GitDiffUnstaged => {
                     if let Some(diff) = run_git_diff(self.cwd.as_deref(), false) {
                         if !diff.trim().is_empty() {
-                            parts.push(format!("=== Git Diff (Unstaged) ===\n{}", truncate(&diff, MAX_SOURCE_CHARS)));
+                            parts.push(format!(
+                                "=== Git Diff (Unstaged) ===\n{}",
+                                truncate(&diff, MAX_SOURCE_CHARS)
+                            ));
                         }
                     }
                 }
                 ContextKind::GitDiffStaged => {
                     if let Some(diff) = run_git_diff(self.cwd.as_deref(), true) {
                         if !diff.trim().is_empty() {
-                            parts.push(format!("=== Git Diff (Staged) ===\n{}", truncate(&diff, MAX_SOURCE_CHARS)));
+                            parts.push(format!(
+                                "=== Git Diff (Staged) ===\n{}",
+                                truncate(&diff, MAX_SOURCE_CHARS)
+                            ));
                         }
                     }
                 }
@@ -174,14 +180,20 @@ impl ContextPicker {
                 ContextKind::TerminalOutput { .. } => {
                     if let Some(ref output) = terminal_output {
                         if !output.trim().is_empty() {
-                            parts.push(format!("=== Recent Terminal Output ===\n{}", truncate(output, MAX_SOURCE_CHARS)));
+                            parts.push(format!(
+                                "=== Recent Terminal Output ===\n{}",
+                                truncate(output, MAX_SOURCE_CHARS)
+                            ));
                         }
                     }
                 }
                 ContextKind::TestOutput => {
                     if let Some(ref output) = terminal_output {
                         if let Some(test_output) = extract_test_output(output) {
-                            parts.push(format!("=== Test Output ===\n{}", truncate(&test_output, MAX_SOURCE_CHARS)));
+                            parts.push(format!(
+                                "=== Test Output ===\n{}",
+                                truncate(&test_output, MAX_SOURCE_CHARS)
+                            ));
                         }
                     }
                 }
@@ -287,7 +299,9 @@ fn run_file_tree(cwd: Option<&str>) -> Option<String> {
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
-        cmd.output().ok().and_then(|o| String::from_utf8(o.stdout).ok())
+        cmd.output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
     }
 }
 

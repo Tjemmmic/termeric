@@ -8,7 +8,7 @@ mod hyperlink;
 mod row;
 mod storage;
 
-pub use cell::{Cell, CellContent, CellAttrs, CellFlags, Color, ColorSpec};
+pub use cell::{Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec};
 pub use hyperlink::{Hyperlink, HyperlinkRegistry};
 pub use row::Row;
 
@@ -69,7 +69,9 @@ impl Grid {
 
     /// Resize the grid to new dimensions, reflowing text when columns change
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        let (new_row, new_col) = self.storage.resize(cols, rows, self.cursor.row, self.cursor.col);
+        let (new_row, new_col) = self
+            .storage
+            .resize(cols, rows, self.cursor.row, self.cursor.col);
         self.cols = cols;
         self.rows = rows;
         self.cursor.row = new_row;
@@ -128,7 +130,8 @@ impl Grid {
             let lines_back = self.scroll_offset - row;
             if lines_back <= scrollback_len {
                 let scrollback_idx = scrollback_len - lines_back;
-                self.storage.scrollback_row(scrollback_idx)
+                self.storage
+                    .scrollback_row(scrollback_idx)
                     .and_then(|r| r.get(col))
             } else {
                 // Scrolled past available scrollback (shouldn't happen with clamping)
@@ -272,9 +275,7 @@ impl Grid {
     /// Iterate over all visible cells
     pub fn iter_cells(&self) -> impl Iterator<Item = (usize, usize, &Cell)> {
         (0..self.rows).flat_map(move |row| {
-            (0..self.cols).filter_map(move |col| {
-                self.cell(row, col).map(|cell| (row, col, cell))
-            })
+            (0..self.cols).filter_map(move |col| self.cell(row, col).map(|cell| (row, col, cell)))
         })
     }
 
@@ -284,7 +285,9 @@ impl Grid {
     /// sequences to preserve colors and attributes. Trailing empty lines and
     /// prompt-like lines are trimmed to avoid double prompts on restore.
     pub fn export_scrollback_text(&self) -> Vec<String> {
-        let mut lines: Vec<String> = self.storage.iter_scrollback()
+        let mut lines: Vec<String> = self
+            .storage
+            .iter_scrollback()
             .chain(self.storage.iter_visible())
             .map(|row| row.to_ansi_string())
             .collect();

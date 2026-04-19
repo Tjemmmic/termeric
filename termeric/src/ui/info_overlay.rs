@@ -50,10 +50,7 @@ impl InfoOverlayLayout {
         // Match the renderer: hint string determines a min width so the
         // dismiss hint never wraps.
         let hint_chars = 37_usize; // "Esc / Enter to dismiss  ·  C to copy"
-        let max_line_chars = lines.iter()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap_or(20);
+        let max_line_chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(20);
         let content_w = max_line_chars.max(hint_chars) as f32 * char_scale;
         let title_w = title.chars().count() as f32 * cell_width;
         let inner_w = content_w.max(title_w);
@@ -158,9 +155,7 @@ impl InfoOverlay {
     /// Show a compact version overlay
     pub fn show_version(&mut self) {
         self.title = "Termeric".into();
-        self.lines = vec![
-            format!("v{}", env!("CARGO_PKG_VERSION")),
-        ];
+        self.lines = vec![format!("v{}", env!("CARGO_PKG_VERSION"))];
         self.animation.open();
     }
 

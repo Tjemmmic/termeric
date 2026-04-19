@@ -79,7 +79,7 @@ impl CellAttrs {
             | CellAttrs::DOUBLE_UNDERLINE.bits()
             | CellAttrs::CURLY_UNDERLINE.bits()
             | CellAttrs::DOTTED_UNDERLINE.bits()
-            | CellAttrs::DASHED_UNDERLINE.bits()
+            | CellAttrs::DASHED_UNDERLINE.bits(),
     );
 
     /// Check if any underline style is active

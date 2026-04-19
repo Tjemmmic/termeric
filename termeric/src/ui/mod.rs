@@ -8,14 +8,14 @@
 //! - Context picker modal
 
 pub mod animation;
-pub mod command_palette;
-pub mod constants;
-pub mod text_input;
-pub mod commands;
 pub mod claude_chrome;
+pub mod command_palette;
+pub mod commands;
+pub mod constants;
 pub mod context_picker;
 pub mod diff_review;
 pub mod info_overlay;
 pub mod settings;
 pub mod shortcuts_panel;
+pub mod text_input;
 pub mod toast;

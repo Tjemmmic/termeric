@@ -4,7 +4,7 @@
 
 mod prompt;
 
-pub use prompt::{PromptTracker, PromptMark, PromptType, CommandRegion};
+pub use prompt::{CommandRegion, PromptMark, PromptTracker, PromptType};
 
 /// Shell integration state for a terminal
 #[derive(Debug, Default)]
@@ -61,8 +61,13 @@ impl ShellIntegration {
                 } else {
                     None
                 };
-                log::trace!("OSC 133 D: Command finished at row {}, exit code: {:?}", cursor_row, exit_code);
-                self.prompt_tracker.mark_command_finished(cursor_row, exit_code);
+                log::trace!(
+                    "OSC 133 D: Command finished at row {}, exit code: {:?}",
+                    cursor_row,
+                    exit_code
+                );
+                self.prompt_tracker
+                    .mark_command_finished(cursor_row, exit_code);
             }
             _ => {
                 log::trace!("OSC 133: Unknown type '{}'", type_str);

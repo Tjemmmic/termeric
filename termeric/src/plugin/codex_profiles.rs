@@ -4,8 +4,8 @@
 //! sessions. A repo can auto-select a profile via `.termeric/config` under the
 //! `[codex]` section.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use super::claude_profiles::ProfileTarget;
 
@@ -79,7 +79,10 @@ mod tests {
         assert_eq!(profile.approval_mode, Some("suggest".to_string()));
         assert_eq!(profile.sandbox_mode, Some("read-only".to_string()));
         assert!(profile.auto_record);
-        assert_eq!(profile.env.get("OPENAI_API_KEY"), Some(&"test-key".to_string()));
+        assert_eq!(
+            profile.env.get("OPENAI_API_KEY"),
+            Some(&"test-key".to_string())
+        );
         match profile.target.unwrap() {
             ProfileTarget::Ssh { host, user } => {
                 assert_eq!(host, "dev01");

@@ -41,12 +41,12 @@ impl SproutAction {
     /// Get the icon character for this action
     pub fn icon(&self) -> char {
         match self {
-            Self::CopyOutput => '\u{2398}',   // Copy symbol
-            Self::CopyCommand => '\u{2318}',  // Command
-            Self::Rerun => '\u{21BB}',        // Clockwise arrow
+            Self::CopyOutput => '\u{2398}',    // Copy symbol
+            Self::CopyCommand => '\u{2318}',   // Command
+            Self::Rerun => '\u{21BB}',         // Clockwise arrow
             Self::SearchOutput => '\u{1F50D}', // Magnifying glass
-            Self::ScrollTo => '\u{2193}',     // Down arrow
-            Self::Explain => '\u{2139}',      // Info
+            Self::ScrollTo => '\u{2193}',      // Down arrow
+            Self::Explain => '\u{2139}',       // Info
         }
     }
 

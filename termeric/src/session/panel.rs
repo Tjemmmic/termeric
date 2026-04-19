@@ -103,38 +103,42 @@ impl SessionPanel {
     /// Refresh the session list from disk
     pub fn refresh_sessions(&mut self) {
         let names = super::list_sessions();
-        self.sessions = names.iter().map(|name| {
-            // Parse the session TOML once so we can pull title, last_command,
-            // and working_directory out of the same read.
-            let session_text = super::session_file_path(name)
-                .and_then(|path| std::fs::read_to_string(&path).ok());
-            let field = |key: &str| -> Option<String> {
-                session_text.as_ref().and_then(|s| {
-                    s.lines()
-                        .find(|line| line.starts_with(key))
-                        .and_then(|line| {
-                            line.split('=').nth(1)
-                                .map(|v| v.trim().trim_matches('"').to_string())
+        self.sessions = names
+            .iter()
+            .map(|name| {
+                // Parse the session TOML once so we can pull title, last_command,
+                // and working_directory out of the same read.
+                let session_text = super::session_file_path(name)
+                    .and_then(|path| std::fs::read_to_string(&path).ok());
+                let field = |key: &str| -> Option<String> {
+                    session_text.as_ref().and_then(|s| {
+                        s.lines()
+                            .find(|line| line.starts_with(key))
+                            .and_then(|line| {
+                                line.split('=')
+                                    .nth(1)
+                                    .map(|v| v.trim().trim_matches('"').to_string())
+                            })
+                            .filter(|v| !v.is_empty())
+                    })
+                };
+
+                let display_name = field("title").unwrap_or_else(|| name.clone());
+                // Subtitle prefers last_command, falls back to the cwd basename.
+                let subtitle = field("last_command")
+                    .or_else(|| {
+                        field("working_directory").map(|cwd| {
+                            std::path::Path::new(&cwd)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or(cwd)
                         })
-                        .filter(|v| !v.is_empty())
-                })
-            };
+                    })
+                    .unwrap_or_default();
 
-            let display_name = field("title").unwrap_or_else(|| name.clone());
-            // Subtitle prefers last_command, falls back to the cwd basename.
-            let subtitle = field("last_command")
-                .or_else(|| field("working_directory").map(|cwd| {
-                    std::path::Path::new(&cwd)
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or(cwd)
-                }))
-                .unwrap_or_default();
-
-            // Try to read last modified time
-            let last_modified = match super::session_file_path(name) {
-                Some(path) if path.exists() => {
-                    std::fs::metadata(&path)
+                // Try to read last modified time
+                let last_modified = match super::session_file_path(name) {
+                    Some(path) if path.exists() => std::fs::metadata(&path)
                         .ok()
                         .and_then(|m| m.modified().ok())
                         .map(|t| {
@@ -150,18 +154,18 @@ impl SessionPanel {
                                 format!("{}d ago", secs / 86400)
                             }
                         })
-                        .unwrap_or_else(|| "unknown".to_string())
-                }
-                _ => "unknown".to_string(),
-            };
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    _ => "unknown".to_string(),
+                };
 
-            SessionEntry {
-                id: name.clone(),
-                display_name,
-                subtitle,
-                last_modified,
-            }
-        }).collect();
+                SessionEntry {
+                    id: name.clone(),
+                    display_name,
+                    subtitle,
+                    last_modified,
+                }
+            })
+            .collect();
     }
 
     /// Build info for the renderer

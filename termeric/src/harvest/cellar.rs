@@ -208,7 +208,8 @@ impl RootCellar {
             return 1.0;
         }
 
-        let completed: Vec<_> = self.entries
+        let completed: Vec<_> = self
+            .entries
             .iter()
             .filter(|e| e.exit_code.is_some())
             .collect();

@@ -1,22 +1,34 @@
 //! Search bar rendering and hit-testing
 
-use super::{Renderer, adjust_alpha};
 use super::types::*;
+use super::{Renderer, adjust_alpha};
 use crate::terminal::search::SearchBarInfo;
 
 impl Renderer {
-    pub(super) fn build_search_bar(&mut self, info: &SearchBarInfo, window_width: f32, tab_bar_height: f32) {
+    pub(super) fn build_search_bar(
+        &mut self,
+        info: &SearchBarInfo,
+        window_width: f32,
+        tab_bar_height: f32,
+    ) {
         let padding = 8.0;
         let bar_height = self.cell_height + padding * 2.0;
         let bar_y = tab_bar_height;
 
         // Background - warm dark tone
         let bar_bg = self.ui.search_bg;
-        self.rect_pipeline.push_rect(0.0, bar_y, window_width, bar_height, bar_bg);
+        self.rect_pipeline
+            .push_rect(0.0, bar_y, window_width, bar_height, bar_bg);
 
         // Bottom border
         let border_color = adjust_alpha(self.ui.tab_border, 0.5);
-        self.rect_pipeline.push_rect(0.0, bar_y + bar_height - 1.0, window_width, 1.0, border_color);
+        self.rect_pipeline.push_rect(
+            0.0,
+            bar_y + bar_height - 1.0,
+            window_width,
+            1.0,
+            border_color,
+        );
 
         let text_y = bar_y + padding;
         let mut text_x = padding;
@@ -25,7 +37,8 @@ impl Renderer {
         let prompt = "/";
         let prompt_color = self.ui.search_indicator;
         for c in prompt.chars() {
-            self.text_pipeline.push_char(c, text_x, text_y, prompt_color);
+            self.text_pipeline
+                .push_char(c, text_x, text_y, prompt_color);
             text_x += self.cell_width;
         }
         text_x += self.cell_width * 0.3;
@@ -37,11 +50,8 @@ impl Renderer {
             // Draw cursor at current position
             if char_index == info.cursor_pos {
                 let cursor_color = adjust_alpha(self.ui.cursor, 0.8);
-                self.rect_pipeline.push_rect(
-                    text_x, text_y,
-                    2.0, self.cell_height,
-                    cursor_color,
-                );
+                self.rect_pipeline
+                    .push_rect(text_x, text_y, 2.0, self.cell_height, cursor_color);
             }
 
             self.text_pipeline.push_char(c, text_x, text_y, text_color);
@@ -52,11 +62,8 @@ impl Renderer {
         // Draw cursor at end if at end of query
         if info.cursor_pos >= info.query.len() {
             let cursor_color = adjust_alpha(self.ui.cursor, 0.8);
-            self.rect_pipeline.push_rect(
-                text_x, text_y,
-                2.0, self.cell_height,
-                cursor_color,
-            );
+            self.rect_pipeline
+                .push_rect(text_x, text_y, 2.0, self.cell_height, cursor_color);
         }
         text_x += self.cell_width;
 
@@ -68,11 +75,13 @@ impl Renderer {
             // Down arrow ▼
             let arrow_color = self.ui.search_indicator;
             right_x -= self.cell_width;
-            self.text_pipeline.push_char('▼', right_x, text_y, arrow_color);
+            self.text_pipeline
+                .push_char('▼', right_x, text_y, arrow_color);
 
             // Up arrow ▲
             right_x -= self.cell_width;
-            self.text_pipeline.push_char('▲', right_x, text_y, arrow_color);
+            self.text_pipeline
+                .push_char('▲', right_x, text_y, arrow_color);
 
             right_x -= self.cell_width * 0.5; // Gap before count
         }
@@ -97,7 +106,8 @@ impl Renderer {
             };
 
             for c in count_text.chars() {
-                self.text_pipeline.push_char(c, right_x, text_y, count_color);
+                self.text_pipeline
+                    .push_char(c, right_x, text_y, count_color);
                 right_x += self.cell_width;
             }
             right_x -= count_width + self.cell_width; // Reset and add gap
@@ -118,7 +128,8 @@ impl Renderer {
             };
 
             for c in indicator.chars() {
-                self.text_pipeline.push_char(c, right_x, text_y, regex_color);
+                self.text_pipeline
+                    .push_char(c, right_x, text_y, regex_color);
                 right_x += self.cell_width;
             }
             right_x -= indicator_width + self.cell_width;
@@ -138,7 +149,8 @@ impl Renderer {
             };
 
             for c in indicator.chars() {
-                self.text_pipeline.push_char(c, right_x, text_y, indicator_color);
+                self.text_pipeline
+                    .push_char(c, right_x, text_y, indicator_color);
                 right_x += self.cell_width;
             }
             right_x -= indicator_width + self.cell_width;
@@ -163,7 +175,8 @@ impl Renderer {
             };
 
             for c in indicator.chars() {
-                self.text_pipeline.push_char(c, right_x, text_y, indicator_color);
+                self.text_pipeline
+                    .push_char(c, right_x, text_y, indicator_color);
                 right_x += self.cell_width;
             }
             let _ = right_x; // Silence unused warning
@@ -189,12 +202,21 @@ impl Renderer {
                     .rfind(|c: char| c.is_whitespace())
                     .map(|i| i)
                     .unwrap_or(truncated.len());
-                let base = if cut > 0 { &truncated[..cut] } else { &truncated };
+                let base = if cut > 0 {
+                    &truncated[..cut]
+                } else {
+                    &truncated
+                };
                 format!("{}…", base.trim_end())
             };
 
             for (i, c) in display.chars().enumerate() {
-                self.text_pipeline.push_char(c, error_x + i as f32 * self.cell_width, text_y, error_color);
+                self.text_pipeline.push_char(
+                    c,
+                    error_x + i as f32 * self.cell_width,
+                    text_y,
+                    error_color,
+                );
             }
         }
     }

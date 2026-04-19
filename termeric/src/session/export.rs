@@ -5,15 +5,15 @@
 use std::fs;
 use std::path::Path;
 
-use super::transcript::{TranscriptEntry, EntryKind};
+use super::transcript::{EntryKind, TranscriptEntry};
 
 /// Export a JSONL transcript file to Markdown format.
 ///
 /// Reads the JSONL file, groups entries, and produces a formatted
 /// Markdown document with timestamps, code blocks, and diff sections.
 pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
-    let contents = fs::read_to_string(jsonl_path)
-        .map_err(|e| format!("Failed to read transcript: {}", e))?;
+    let contents =
+        fs::read_to_string(jsonl_path).map_err(|e| format!("Failed to read transcript: {}", e))?;
 
     let entries: Vec<TranscriptEntry> = contents
         .lines()
@@ -59,7 +59,10 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
         match entry.kind {
             EntryKind::Meta => continue,
             EntryKind::Input => {
-                md.push_str(&format!("### 📝 Input `{}`\n\n", format_unix_ts(entry.timestamp / 1000)));
+                md.push_str(&format!(
+                    "### 📝 Input `{}`\n\n",
+                    format_unix_ts(entry.timestamp / 1000)
+                ));
                 md.push_str("```\n");
                 md.push_str(&entry.content);
                 if !entry.content.ends_with('\n') {
@@ -68,7 +71,10 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
                 md.push_str("```\n\n");
             }
             EntryKind::Output => {
-                md.push_str(&format!("### 💬 Output `{}`\n\n", format_unix_ts(entry.timestamp / 1000)));
+                md.push_str(&format!(
+                    "### 💬 Output `{}`\n\n",
+                    format_unix_ts(entry.timestamp / 1000)
+                ));
                 // Truncate very long output blocks
                 if entry.content.len() > 5000 {
                     let truncated = &entry.content[..5000];
@@ -83,11 +89,17 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
                 }
             }
             EntryKind::Diff => {
-                let filename = entry.metadata.as_ref()
+                let filename = entry
+                    .metadata
+                    .as_ref()
                     .and_then(|m| m.get("filename"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                md.push_str(&format!("### 📝 Diff: `{}` `{}`\n\n", filename, format_unix_ts(entry.timestamp / 1000)));
+                md.push_str(&format!(
+                    "### 📝 Diff: `{}` `{}`\n\n",
+                    filename,
+                    format_unix_ts(entry.timestamp / 1000)
+                ));
                 md.push_str("```diff\n");
                 md.push_str(&entry.content);
                 if !entry.content.ends_with('\n') {
@@ -96,7 +108,9 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
                 md.push_str("```\n\n");
             }
             EntryKind::Command => {
-                let exit_code = entry.metadata.as_ref()
+                let exit_code = entry
+                    .metadata
+                    .as_ref()
                     .and_then(|m| m.get("exit_code"))
                     .and_then(|v| v.as_i64());
                 let status = match exit_code {

@@ -1,8 +1,8 @@
 //! Mouse input handling and coordinate conversion
 
+use termeric_core::{Point, Selection, SelectionType};
 use winit::event::MouseButton;
 use winit::keyboard::ModifiersState;
-use termeric_core::{Selection, SelectionType, Point};
 
 /// Mouse input state tracker
 pub struct MouseState {
@@ -51,9 +51,10 @@ impl MouseState {
         // clicks on adjacent words don't get merged into false triple-clicks.
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(self.last_click_time);
-        let same_position = self.last_click_pos.map(|p| {
-            p.row == position.row && p.col == position.col
-        }).unwrap_or(false);
+        let same_position = self
+            .last_click_pos
+            .map(|p| p.row == position.row && p.col == position.col)
+            .unwrap_or(false);
 
         if elapsed.as_millis() < 400 && same_position {
             self.click_count = (self.click_count % 3) + 1;

@@ -6,7 +6,12 @@ use crate::ui::settings::{SettingsModalLayout, SettingsPanelInfo};
 
 impl Renderer {
     /// Build settings panel render data — centered modal with scrim
-    pub(super) fn build_settings_panel(&mut self, info: &SettingsPanelInfo, window_width: f32, window_height: f32) {
+    pub(super) fn build_settings_panel(
+        &mut self,
+        info: &SettingsPanelInfo,
+        window_width: f32,
+        window_height: f32,
+    ) {
         let anim = info.animation;
         if anim <= 0.0 {
             return;
@@ -17,7 +22,8 @@ impl Renderer {
 
         // ── Scrim (full-window dark overlay) ──
         let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
-        self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
+        self.rect_pipeline
+            .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
         // ── Geometry via the shared layout struct ──
         let layout = SettingsModalLayout::calculate(
@@ -32,17 +38,44 @@ impl Renderer {
         // ── Panel background ──
         let panel_bg = adjust_alpha(self.ui.palette_bg, anim);
         self.rect_pipeline.push_rounded_rect(
-            layout.panel_x, layout.panel_y,
-            layout.panel_width, layout.panel_height,
-            panel_bg, CARD_CORNER_RADIUS,
+            layout.panel_x,
+            layout.panel_y,
+            layout.panel_width,
+            layout.panel_height,
+            panel_bg,
+            CARD_CORNER_RADIUS,
         );
 
         // ── Panel border ──
         let border = adjust_alpha(self.ui.palette_border, 0.4 * anim);
-        self.rect_pipeline.push_rect(layout.panel_x + CARD_CORNER_RADIUS, layout.panel_y, layout.panel_width - CARD_CORNER_RADIUS * 2.0, BORDER_WIDTH, border);
-        self.rect_pipeline.push_rect(layout.panel_x + CARD_CORNER_RADIUS, layout.panel_y + layout.panel_height - BORDER_WIDTH, layout.panel_width - CARD_CORNER_RADIUS * 2.0, BORDER_WIDTH, border);
-        self.rect_pipeline.push_rect(layout.panel_x, layout.panel_y + CARD_CORNER_RADIUS, BORDER_WIDTH, layout.panel_height - CARD_CORNER_RADIUS * 2.0, border);
-        self.rect_pipeline.push_rect(layout.panel_x + layout.panel_width - BORDER_WIDTH, layout.panel_y + CARD_CORNER_RADIUS, BORDER_WIDTH, layout.panel_height - CARD_CORNER_RADIUS * 2.0, border);
+        self.rect_pipeline.push_rect(
+            layout.panel_x + CARD_CORNER_RADIUS,
+            layout.panel_y,
+            layout.panel_width - CARD_CORNER_RADIUS * 2.0,
+            BORDER_WIDTH,
+            border,
+        );
+        self.rect_pipeline.push_rect(
+            layout.panel_x + CARD_CORNER_RADIUS,
+            layout.panel_y + layout.panel_height - BORDER_WIDTH,
+            layout.panel_width - CARD_CORNER_RADIUS * 2.0,
+            BORDER_WIDTH,
+            border,
+        );
+        self.rect_pipeline.push_rect(
+            layout.panel_x,
+            layout.panel_y + CARD_CORNER_RADIUS,
+            BORDER_WIDTH,
+            layout.panel_height - CARD_CORNER_RADIUS * 2.0,
+            border,
+        );
+        self.rect_pipeline.push_rect(
+            layout.panel_x + layout.panel_width - BORDER_WIDTH,
+            layout.panel_y + CARD_CORNER_RADIUS,
+            BORDER_WIDTH,
+            layout.panel_height - CARD_CORNER_RADIUS * 2.0,
+            border,
+        );
 
         // ── Title ──
         let title_y = layout.panel_y + layout.padding;
@@ -51,7 +84,8 @@ impl Renderer {
         let title_color = adjust_alpha(self.ui.palette_text, anim);
         let title_scale = cell_width * 1.05;
         for (i, c) in title.chars().enumerate() {
-            self.text_pipeline.push_char(c, title_x + i as f32 * title_scale, title_y, title_color);
+            self.text_pipeline
+                .push_char(c, title_x + i as f32 * title_scale, title_y, title_color);
         }
 
         // ── Search input ──
@@ -60,15 +94,19 @@ impl Renderer {
         let input_w = layout.panel_width - layout.padding * 2.0;
         let input_bg = adjust_alpha(self.ui.palette_input_bg, 0.8 * anim);
         self.rect_pipeline.push_rounded_rect(
-            input_x, input_y,
-            input_w, layout.input_height,
-            input_bg, 8.0,
+            input_x,
+            input_y,
+            input_w,
+            layout.input_height,
+            input_bg,
+            8.0,
         );
 
         // Search icon "/"
         let text_y = input_y + (layout.input_height - cell_height) / 2.0;
         let prompt_color = adjust_alpha(self.ui.palette_accent, anim);
-        self.text_pipeline.push_char('/', input_x + cell_width * 0.8, text_y, prompt_color);
+        self.text_pipeline
+            .push_char('/', input_x + cell_width * 0.8, text_y, prompt_color);
 
         // Filter text
         let text_start_x = input_x + cell_width * 2.2;
@@ -77,14 +115,16 @@ impl Renderer {
         for (byte_idx, c) in info.filter.char_indices() {
             if byte_idx == info.filter_cursor {
                 let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-                self.rect_pipeline.push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
+                self.rect_pipeline
+                    .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
             }
             self.text_pipeline.push_char(c, text_x, text_y, text_color);
             text_x += cell_width;
         }
         if info.filter_cursor >= info.filter.len() {
             let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-            self.rect_pipeline.push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
+            self.rect_pipeline
+                .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
         }
 
         // Placeholder
@@ -102,8 +142,10 @@ impl Renderer {
         let sep_y = input_y + layout.input_height + layout.gap;
         let sep_color = adjust_alpha(self.ui.palette_border, 0.3 * anim);
         self.rect_pipeline.push_rect(
-            layout.panel_x + layout.padding, sep_y,
-            layout.panel_width - layout.padding * 2.0, layout.separator_height,
+            layout.panel_x + layout.padding,
+            sep_y,
+            layout.panel_width - layout.padding * 2.0,
+            layout.separator_height,
             sep_color,
         );
 
@@ -126,15 +168,19 @@ impl Renderer {
                 let header_sep_y = ey + layout.row_height - 1.0;
                 let accent = adjust_alpha(self.ui.palette_accent, 0.5 * anim);
                 self.rect_pipeline.push_rect(
-                    layout.panel_x + layout.padding, header_sep_y,
-                    layout.panel_width - layout.padding * 2.0 - layout.scrollbar_width, 1.0,
+                    layout.panel_x + layout.padding,
+                    header_sep_y,
+                    layout.panel_width - layout.padding * 2.0 - layout.scrollbar_width,
+                    1.0,
                     accent,
                 );
 
                 let label_color = adjust_alpha(self.ui.palette_accent, 0.85 * anim);
                 for (ci, c) in entry.label.chars().enumerate() {
                     let cx = layout.panel_x + layout.padding + ci as f32 * cell_width;
-                    if cx + cell_width > layout.panel_x + layout.panel_width - layout.padding { break; }
+                    if cx + cell_width > layout.panel_x + layout.panel_width - layout.padding {
+                        break;
+                    }
                     self.text_pipeline.push_char(c, cx, text_cy, label_color);
                 }
             } else {
@@ -144,22 +190,31 @@ impl Renderer {
                 if is_selected {
                     let sel_bg = adjust_alpha(self.ui.palette_accent, 0.12 * anim);
                     self.rect_pipeline.push_rounded_rect(
-                        layout.panel_x + layout.padding * 0.5, ey,
-                        layout.panel_width - layout.padding, layout.row_height,
-                        sel_bg, 4.0,
+                        layout.panel_x + layout.padding * 0.5,
+                        ey,
+                        layout.panel_width - layout.padding,
+                        layout.row_height,
+                        sel_bg,
+                        4.0,
                     );
                     let accent = adjust_alpha(self.ui.palette_accent, anim);
                     self.rect_pipeline.push_rounded_rect(
-                        layout.panel_x + layout.padding * 0.3, ey,
-                        3.0, layout.row_height,
-                        accent, 2.0,
+                        layout.panel_x + layout.padding * 0.3,
+                        ey,
+                        3.0,
+                        layout.row_height,
+                        accent,
+                        2.0,
                     );
                 } else if is_hovered {
                     let hover_bg = adjust_alpha(self.ui.palette_accent, 0.06 * anim);
                     self.rect_pipeline.push_rounded_rect(
-                        layout.panel_x + layout.padding * 0.5, ey,
-                        layout.panel_width - layout.padding, layout.row_height,
-                        hover_bg, 4.0,
+                        layout.panel_x + layout.padding * 0.5,
+                        ey,
+                        layout.panel_width - layout.padding,
+                        layout.row_height,
+                        hover_bg,
+                        4.0,
                     );
                 }
 
@@ -170,7 +225,9 @@ impl Renderer {
                 };
                 for (ci, c) in entry.label.chars().enumerate() {
                     let cx = layout.panel_x + layout.padding + cell_width + ci as f32 * cell_width;
-                    if cx + cell_width > layout.value_x - cell_width { break; }
+                    if cx + cell_width > layout.value_x - cell_width {
+                        break;
+                    }
                     self.text_pipeline.push_char(c, cx, text_cy, label_color);
                 }
 
@@ -179,25 +236,33 @@ impl Renderer {
                 } else {
                     adjust_alpha(self.ui.palette_text_dim, 0.7 * anim)
                 };
-                let max_value_x = layout.panel_x + layout.panel_width - layout.padding - layout.scrollbar_width - cell_width;
+                let max_value_x = layout.panel_x + layout.panel_width
+                    - layout.padding
+                    - layout.scrollbar_width
+                    - cell_width;
 
                 match &entry.kind {
                     crate::ui::settings::SettingKind::Numeric { .. } => {
                         if is_selected {
                             let arrow_color = adjust_alpha(self.ui.palette_accent, anim);
-                            self.text_pipeline.push_char('◀', layout.value_x, text_cy, arrow_color);
+                            self.text_pipeline
+                                .push_char('◀', layout.value_x, text_cy, arrow_color);
                         }
                         let val_start = layout.value_x + cell_width * 2.0;
                         for (ci, c) in entry.value.chars().enumerate() {
                             let cx = val_start + ci as f32 * cell_width;
-                            if cx + cell_width > max_value_x { break; }
+                            if cx + cell_width > max_value_x {
+                                break;
+                            }
                             self.text_pipeline.push_char(c, cx, text_cy, value_color);
                         }
                         if is_selected {
-                            let arrow_x = val_start + entry.value.len() as f32 * cell_width + cell_width;
+                            let arrow_x =
+                                val_start + entry.value.len() as f32 * cell_width + cell_width;
                             if arrow_x + cell_width <= max_value_x {
                                 let arrow_color = adjust_alpha(self.ui.palette_accent, anim);
-                                self.text_pipeline.push_char('▶', arrow_x, text_cy, arrow_color);
+                                self.text_pipeline
+                                    .push_char('▶', arrow_x, text_cy, arrow_color);
                             }
                         }
                     }
@@ -206,17 +271,21 @@ impl Renderer {
                         let val_start = layout.value_x + cell_width * 2.0;
                         for (ci, c) in entry.value.chars().enumerate() {
                             let cx = val_start + ci as f32 * cell_width;
-                            if cx + cell_width > max_value_x { break; }
+                            if cx + cell_width > max_value_x {
+                                break;
+                            }
                             self.text_pipeline.push_char(c, cx, text_cy, value_color);
                         }
-                        let chevron_x = val_start + entry.value.len() as f32 * cell_width + cell_width;
+                        let chevron_x =
+                            val_start + entry.value.len() as f32 * cell_width + cell_width;
                         if chevron_x + cell_width <= max_value_x {
                             let chevron_color = if is_selected {
                                 adjust_alpha(self.ui.palette_accent, anim)
                             } else {
                                 adjust_alpha(self.ui.palette_text_dim, 0.5 * anim)
                             };
-                            self.text_pipeline.push_char('▼', chevron_x, text_cy, chevron_color);
+                            self.text_pipeline
+                                .push_char('▼', chevron_x, text_cy, chevron_color);
                         }
                     }
                     crate::ui::settings::SettingKind::ReadOnly => {
@@ -239,7 +308,8 @@ impl Renderer {
 
         // ── Scrollbar ──
         if info.entries.len() > layout.rows_that_fit {
-            let sb_x = layout.panel_x + layout.panel_width - layout.padding * 0.5 - layout.scrollbar_width;
+            let sb_x =
+                layout.panel_x + layout.panel_width - layout.padding * 0.5 - layout.scrollbar_width;
             let sb_track_h = layout.list_height;
             let total = info.entries.len() as f32;
             let visible = layout.rows_that_fit as f32;
@@ -249,16 +319,22 @@ impl Renderer {
 
             let track_color = adjust_alpha(self.ui.palette_border, 0.15 * anim);
             self.rect_pipeline.push_rounded_rect(
-                sb_x, layout.list_y,
-                layout.scrollbar_width, sb_track_h,
-                track_color, 2.0,
+                sb_x,
+                layout.list_y,
+                layout.scrollbar_width,
+                sb_track_h,
+                track_color,
+                2.0,
             );
 
             let thumb_color = adjust_alpha(self.ui.palette_text_dim, 0.4 * anim);
             self.rect_pipeline.push_rounded_rect(
-                sb_x, thumb_y,
-                layout.scrollbar_width, thumb_h,
-                thumb_color, 2.0,
+                sb_x,
+                thumb_y,
+                layout.scrollbar_width,
+                thumb_h,
+                thumb_color,
+                2.0,
             );
         }
 
@@ -266,8 +342,10 @@ impl Renderer {
         let footer_y = layout.panel_y + layout.panel_height - layout.footer_area;
         let footer_sep_color = adjust_alpha(self.ui.palette_border, 0.2 * anim);
         self.rect_pipeline.push_rect(
-            layout.panel_x + layout.padding, footer_y,
-            layout.panel_width - layout.padding * 2.0, 1.0,
+            layout.panel_x + layout.padding,
+            footer_y,
+            layout.panel_width - layout.padding * 2.0,
+            1.0,
             footer_sep_color,
         );
 
@@ -277,13 +355,21 @@ impl Renderer {
         let footer_scale = cell_width * 0.85;
         for (i, c) in footer_text.chars().enumerate() {
             let cx = layout.panel_x + layout.padding + i as f32 * footer_scale;
-            if cx + cell_width > layout.panel_x + layout.panel_width - layout.padding { break; }
-            self.text_pipeline.push_char(c, cx, footer_text_y, footer_color);
+            if cx + cell_width > layout.panel_x + layout.panel_width - layout.padding {
+                break;
+            }
+            self.text_pipeline
+                .push_char(c, cx, footer_text_y, footer_color);
         }
     }
 
     /// Build dropdown overlay render data for settings — rendered last (on top)
-    pub(super) fn build_dropdown_overlay(&mut self, info: &SettingsPanelInfo, window_width: f32, window_height: f32) {
+    pub(super) fn build_dropdown_overlay(
+        &mut self,
+        info: &SettingsPanelInfo,
+        window_width: f32,
+        window_height: f32,
+    ) {
         if !info.dropdown_open {
             return;
         }
@@ -296,19 +382,25 @@ impl Renderer {
         let cell_height = self.cell_height;
 
         let layout = SettingsModalLayout::calculate(
-            window_width, window_height,
-            cell_width, cell_height,
-            anim, info.entries.len(),
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            anim,
+            info.entries.len(),
         );
 
         // Find the selected entry's absolute index.
-        let Some(abs_idx) = info.entries
+        let Some(abs_idx) = info
+            .entries
             .iter()
             .enumerate()
             .filter(|(_, e)| !e.is_header)
             .nth(info.selected)
             .map(|(i, _)| i)
-        else { return; };
+        else {
+            return;
+        };
         let entry = &info.entries[abs_idx];
 
         let (options_text, option_count): (Vec<String>, usize) = match &entry.kind {
@@ -325,14 +417,20 @@ impl Renderer {
         }
 
         let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
-        let Some(rect) = layout.dropdown_rect(abs_idx, info.scroll_offset, option_count, max_option_len)
-        else { return; };
+        let Some(rect) =
+            layout.dropdown_rect(abs_idx, info.scroll_offset, option_count, max_option_len)
+        else {
+            return;
+        };
 
         // Shadow
         self.rect_pipeline.push_rounded_rect(
-            rect.x + 2.0, rect.y + 2.0,
-            rect.width, rect.height,
-            [0.0, 0.0, 0.0, 0.3 * anim], 6.0,
+            rect.x + 2.0,
+            rect.y + 2.0,
+            rect.width,
+            rect.height,
+            [0.0, 0.0, 0.0, 0.3 * anim],
+            6.0,
         );
 
         // Background (fully opaque so content behind doesn't bleed)
@@ -342,23 +440,26 @@ impl Renderer {
             self.ui.palette_bg[2],
             1.0,
         ];
-        self.rect_pipeline.push_rounded_rect(
-            rect.x, rect.y,
-            rect.width, rect.height,
-            dd_bg, 6.0,
-        );
+        self.rect_pipeline
+            .push_rounded_rect(rect.x, rect.y, rect.width, rect.height, dd_bg, 6.0);
 
         // Border
         let border_color = adjust_alpha(self.ui.palette_border, 0.5 * anim);
         self.rect_pipeline.push_rounded_rect(
-            rect.x, rect.y,
-            rect.width, rect.height,
-            border_color, 6.0,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            border_color,
+            6.0,
         );
         self.rect_pipeline.push_rounded_rect(
-            rect.x + 1.0, rect.y + 1.0,
-            rect.width - 2.0, rect.height - 2.0,
-            dd_bg, 5.0,
+            rect.x + 1.0,
+            rect.y + 1.0,
+            rect.width - 2.0,
+            rect.height - 2.0,
+            dd_bg,
+            5.0,
         );
 
         // Render options
@@ -369,22 +470,31 @@ impl Renderer {
             if is_highlighted {
                 let sel = adjust_alpha(self.ui.palette_accent, 0.12 * anim);
                 self.rect_pipeline.push_rounded_rect(
-                    rect.x + 4.0, oy,
-                    rect.width - 8.0, rect.option_height,
-                    sel, 4.0,
+                    rect.x + 4.0,
+                    oy,
+                    rect.width - 8.0,
+                    rect.option_height,
+                    sel,
+                    4.0,
                 );
                 let accent = adjust_alpha(self.ui.palette_accent, anim);
                 self.rect_pipeline.push_rounded_rect(
-                    rect.x + 2.0, oy,
-                    3.0, rect.option_height,
-                    accent, 2.0,
+                    rect.x + 2.0,
+                    oy,
+                    3.0,
+                    rect.option_height,
+                    accent,
+                    2.0,
                 );
             } else if info.dropdown_hovered == Some(oidx) {
                 let hover = adjust_alpha(self.ui.palette_accent, 0.06 * anim);
                 self.rect_pipeline.push_rounded_rect(
-                    rect.x + 4.0, oy,
-                    rect.width - 8.0, rect.option_height,
-                    hover, 4.0,
+                    rect.x + 4.0,
+                    oy,
+                    rect.width - 8.0,
+                    rect.option_height,
+                    hover,
+                    4.0,
                 );
             }
 
@@ -397,7 +507,12 @@ impl Renderer {
             for (ci, c) in opt_text.chars().enumerate() {
                 let cx = rect.x + cell_width * 1.5 + ci as f32 * cell_width;
                 if cx + cell_width > rect.x + rect.width - 8.0 {
-                    self.text_pipeline.push_char('.', cx, opt_text_y, adjust_alpha(self.ui.palette_text_dim, 0.5 * anim));
+                    self.text_pipeline.push_char(
+                        '.',
+                        cx,
+                        opt_text_y,
+                        adjust_alpha(self.ui.palette_text_dim, 0.5 * anim),
+                    );
                     break;
                 }
                 self.text_pipeline.push_char(c, cx, opt_text_y, opt_color);
@@ -437,7 +552,13 @@ impl Renderer {
 
         let mut current_x = x;
         while current_x < x + width {
-            self.rect_pipeline.push_rect(current_x, y, dot_size.min(x + width - current_x), 1.0, color);
+            self.rect_pipeline.push_rect(
+                current_x,
+                y,
+                dot_size.min(x + width - current_x),
+                1.0,
+                color,
+            );
             current_x += step;
         }
     }
@@ -450,7 +571,13 @@ impl Renderer {
 
         let mut current_x = x;
         while current_x < x + width {
-            self.rect_pipeline.push_rect(current_x, y, dash_length.min(x + width - current_x), 1.0, color);
+            self.rect_pipeline.push_rect(
+                current_x,
+                y,
+                dash_length.min(x + width - current_x),
+                1.0,
+                color,
+            );
             current_x += step;
         }
     }

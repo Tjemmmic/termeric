@@ -22,7 +22,8 @@ impl Renderer {
             self.ui.tab_bar_bg[2] * 0.85,
             1.0,
         ];
-        self.rect_pipeline.push_rect(0.0, bar_y, window_width, bar_height, bg);
+        self.rect_pipeline
+            .push_rect(0.0, bar_y, window_width, bar_height, bg);
 
         // Thin separator line at bottom
         let sep = [
@@ -31,7 +32,8 @@ impl Renderer {
             self.ui.palette_border[2],
             0.3,
         ];
-        self.rect_pipeline.push_rect(0.0, bar_y + bar_height - 1.0, window_width, 1.0, sep);
+        self.rect_pipeline
+            .push_rect(0.0, bar_y + bar_height - 1.0, window_width, 1.0, sep);
 
         let text_y = bar_y + (bar_height - cell_height) / 2.0;
         let text_color = self.ui.palette_text;
@@ -71,7 +73,8 @@ impl Renderer {
             // Dirty indicator
             if info.dirty {
                 cx += char_scale * 0.3;
-                self.text_pipeline.push_char('●', cx, text_y, [0.9, 0.6, 0.2, 1.0]);
+                self.text_pipeline
+                    .push_char('●', cx, text_y, [0.9, 0.6, 0.2, 1.0]);
                 cx += char_scale;
             }
 
@@ -106,13 +109,25 @@ impl Renderer {
 
         // Badge background
         let badge_bg = [accent[0] * 0.25, accent[1] * 0.25, accent[2] * 0.25, 0.6];
-        self.rect_pipeline.push_rounded_rect(host_start, badge_y, badge_width, badge_height, badge_bg, badge_height / 2.0);
+        self.rect_pipeline.push_rounded_rect(
+            host_start,
+            badge_y,
+            badge_width,
+            badge_height,
+            badge_bg,
+            badge_height / 2.0,
+        );
 
         // Badge text
         let badge_text_x = host_start + badge_padding;
         for (i, c) in info.host_label.chars().enumerate() {
             if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, badge_text_x + i as f32 * char_scale, text_y, accent);
+                self.text_pipeline.push_char(
+                    c,
+                    badge_text_x + i as f32 * char_scale,
+                    text_y,
+                    accent,
+                );
             }
         }
         cx = host_start + badge_width + char_scale;
@@ -144,7 +159,8 @@ impl Renderer {
             let rec_label = "REC";
             let rec_x = dot_x - rec_label.len() as f32 * char_scale - char_scale * 0.5;
             for (i, c) in rec_label.chars().enumerate() {
-                self.text_pipeline.push_char(c, rec_x + i as f32 * char_scale, text_y, rec_color);
+                self.text_pipeline
+                    .push_char(c, rec_x + i as f32 * char_scale, text_y, rec_color);
             }
         }
 
@@ -158,7 +174,8 @@ impl Renderer {
         };
         for (i, c) in ctx_label.chars().enumerate() {
             if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, ctx_x + i as f32 * char_scale, text_y, dim_color);
+                self.text_pipeline
+                    .push_char(c, ctx_x + i as f32 * char_scale, text_y, dim_color);
             }
         }
     }

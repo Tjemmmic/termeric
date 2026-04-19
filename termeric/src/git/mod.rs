@@ -65,7 +65,12 @@ impl GitRepo {
         let branch = self.current_branch();
         let dirty = self.is_dirty();
         let (ahead, behind) = self.ahead_behind().unwrap_or((0, 0));
-        GitStatus { branch, dirty, ahead, behind }
+        GitStatus {
+            branch,
+            dirty,
+            ahead,
+            behind,
+        }
     }
 
     /// Calculate ahead/behind counts relative to upstream
@@ -156,8 +161,15 @@ impl GitRepo {
 
 /// Git subcommands that accept branch names as arguments
 const BRANCH_SUBCOMMANDS: &[&str] = &[
-    "checkout", "switch", "merge", "rebase", "branch", "diff",
-    "log", "cherry-pick", "reset",
+    "checkout",
+    "switch",
+    "merge",
+    "rebase",
+    "branch",
+    "diff",
+    "log",
+    "cherry-pick",
+    "reset",
 ];
 
 /// Parse the input buffer to detect if user is typing a git command
@@ -210,8 +222,8 @@ mod tests {
 
         // Should NOT trigger
         assert_eq!(detect_git_completion("git checkout"), None); // no trailing space
-        assert_eq!(detect_git_completion("git status"), None);   // not a branch subcommand
-        assert_eq!(detect_git_completion("echo hello"), None);   // not git
+        assert_eq!(detect_git_completion("git status"), None); // not a branch subcommand
+        assert_eq!(detect_git_completion("echo hello"), None); // not git
         assert_eq!(detect_git_completion("git checkout -b"), None); // flag
     }
 }

@@ -6,7 +6,6 @@
 //! The scanner operates as a simple state machine that can handle both
 //! standard `diff -u` output and `git diff` output with color escape sequences.
 
-
 /// A single line in a diff hunk
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiffLine {
@@ -286,14 +285,16 @@ impl DiffDetector {
 
 /// Check if a line looks like `--- a/file` or `--- file`
 fn is_minus_line(line: &str) -> bool {
-    line.starts_with("--- a/") || line.starts_with("--- b/") ||
-    (line.starts_with("--- ") && !line.starts_with("--- /dev/null") && line.len() > 5)
+    line.starts_with("--- a/")
+        || line.starts_with("--- b/")
+        || (line.starts_with("--- ") && !line.starts_with("--- /dev/null") && line.len() > 5)
 }
 
 /// Check if a line looks like `+++ b/file` or `+++ file`
 fn is_plus_line(line: &str) -> bool {
-    line.starts_with("+++ a/") || line.starts_with("+++ b/") ||
-    (line.starts_with("+++ ") && line.len() > 5)
+    line.starts_with("+++ a/")
+        || line.starts_with("+++ b/")
+        || (line.starts_with("+++ ") && line.len() > 5)
 }
 
 /// Check if a line is a hunk header: `@@ -start,count +start,count @@`
@@ -359,10 +360,22 @@ mod tests {
         assert_eq!(diff.filename, "src/main.rs");
         assert_eq!(diff.hunks.len(), 1);
         assert_eq!(diff.hunks[0].lines.len(), 5);
-        assert_eq!(diff.hunks[0].lines[0], DiffLine::Context("fn main() {".to_string()));
-        assert_eq!(diff.hunks[0].lines[1], DiffLine::Removed("    println!(\"hello\");".to_string()));
-        assert_eq!(diff.hunks[0].lines[2], DiffLine::Added("    println!(\"hello, world!\");".to_string()));
-        assert_eq!(diff.hunks[0].lines[3], DiffLine::Added("    println!(\"goodbye\");".to_string()));
+        assert_eq!(
+            diff.hunks[0].lines[0],
+            DiffLine::Context("fn main() {".to_string())
+        );
+        assert_eq!(
+            diff.hunks[0].lines[1],
+            DiffLine::Removed("    println!(\"hello\");".to_string())
+        );
+        assert_eq!(
+            diff.hunks[0].lines[2],
+            DiffLine::Added("    println!(\"hello, world!\");".to_string())
+        );
+        assert_eq!(
+            diff.hunks[0].lines[3],
+            DiffLine::Added("    println!(\"goodbye\");".to_string())
+        );
         assert_eq!(diff.hunks[0].lines[4], DiffLine::Context("}".to_string()));
     }
 

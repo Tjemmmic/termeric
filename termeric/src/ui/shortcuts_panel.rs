@@ -3,15 +3,18 @@
 //! A dedicated overlay for browsing, searching, and recording keyboard shortcuts,
 //! modeled after the command palette (OverlayAnimation, centered panel, search bar).
 
-use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
 use super::animation::OverlayAnimation;
 use super::text_input::TextInput;
+use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
 
 /// Result of a user action in the shortcuts panel
 #[derive(Debug, Clone)]
 pub enum ShortcutsAction {
     /// Set a keyboard shortcut binding
-    SetShortcut { action: BindableAction, chord: Option<KeyChord> },
+    SetShortcut {
+        action: BindableAction,
+        chord: Option<KeyChord>,
+    },
     /// No action
     None,
 }
@@ -144,7 +147,9 @@ impl ShortcutsPanel {
         if !self.recording {
             return false;
         }
-        let Some(started) = self.recording_started else { return false };
+        let Some(started) = self.recording_started else {
+            return false;
+        };
         if started.elapsed() >= timeout {
             self.recording = false;
             self.recording_action = None;
@@ -262,7 +267,11 @@ impl ShortcutsPanel {
     }
 
     /// Handle a key press. Returns a ShortcutsAction.
-    pub fn handle_key(&mut self, key: ShortcutsKey, registry: &ShortcutRegistry) -> ShortcutsAction {
+    pub fn handle_key(
+        &mut self,
+        key: ShortcutsKey,
+        registry: &ShortcutRegistry,
+    ) -> ShortcutsAction {
         // Recording mode: capture the key
         if self.recording {
             return match key {
@@ -277,7 +286,10 @@ impl ShortcutsPanel {
                     self.recording_started = None;
                     let action = self.recording_action.take();
                     match action {
-                        Some(a) => ShortcutsAction::SetShortcut { action: a, chord: None },
+                        Some(a) => ShortcutsAction::SetShortcut {
+                            action: a,
+                            chord: None,
+                        },
                         None => ShortcutsAction::None,
                     }
                 }
@@ -292,7 +304,10 @@ impl ShortcutsPanel {
                                 self.conflict_label = Some(conflicting.meta().label.to_string());
                             }
                         }
-                        ShortcutsAction::SetShortcut { action: a, chord: Some(chord) }
+                        ShortcutsAction::SetShortcut {
+                            action: a,
+                            chord: Some(chord),
+                        }
                     } else {
                         ShortcutsAction::None
                     }
@@ -348,7 +363,10 @@ impl ShortcutsPanel {
                 let idx = self.selectable_index(&entries, self.selected);
                 if let Some(entry) = entries.get(idx) {
                     if !entry.is_header {
-                        return ShortcutsAction::SetShortcut { action: entry.action, chord: None };
+                        return ShortcutsAction::SetShortcut {
+                            action: entry.action,
+                            chord: None,
+                        };
                     }
                 }
                 ShortcutsAction::None

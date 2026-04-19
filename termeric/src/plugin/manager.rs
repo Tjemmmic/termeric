@@ -4,7 +4,9 @@
 //! It owns all plugin instances, dispatches lifecycle hooks, and collects
 //! actions that plugins want the app to perform.
 
-use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext, PluginKeybinding};
+use super::hooks::{
+    Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext, PluginKeybinding,
+};
 
 /// Manages all registered plugins and dispatches hooks.
 #[derive(Debug)]
@@ -36,7 +38,12 @@ impl PluginManager {
         }
 
         plugin.on_load(ctx)?;
-        log::info!("Loaded plugin: {} v{} ({})", plugin.name(), plugin.version(), id);
+        log::info!(
+            "Loaded plugin: {} v{} ({})",
+            plugin.name(),
+            plugin.version(),
+            id
+        );
         self.plugins.push(plugin);
         Ok(())
     }
@@ -65,9 +72,15 @@ impl PluginManager {
         match hook {
             Hook::TabCreated { tab_id } => log::trace!("Dispatching TabCreated(tab_id={})", tab_id),
             Hook::TabClosed { tab_id } => log::trace!("Dispatching TabClosed(tab_id={})", tab_id),
-            Hook::TabSwitched { from, to } => log::trace!("Dispatching TabSwitched(from={}, to={})", from, to),
+            Hook::TabSwitched { from, to } => {
+                log::trace!("Dispatching TabSwitched(from={}, to={})", from, to)
+            }
             Hook::CommandExecuted { command, exit_code } => {
-                log::trace!("Dispatching CommandExecuted(cmd={:?}, exit={:?})", command, exit_code);
+                log::trace!(
+                    "Dispatching CommandExecuted(cmd={:?}, exit={:?})",
+                    command,
+                    exit_code
+                );
             }
             _ => {}
         }
@@ -110,21 +123,14 @@ impl PluginManager {
 
     /// Get all keybindings from all registered plugins.
     pub fn all_keybindings(&self) -> Vec<PluginKeybinding> {
-        self.plugins
-            .iter()
-            .flat_map(|p| p.keybindings())
-            .collect()
+        self.plugins.iter().flat_map(|p| p.keybindings()).collect()
     }
 
     /// Execute a plugin command by ID.
     ///
     /// Dispatches a `CommandInvoked` hook and returns the first action
     /// produced, if any.
-    pub fn execute_command(
-        &mut self,
-        command_id: &str,
-        ctx: &PluginContext,
-    ) -> Vec<PluginAction> {
+    pub fn execute_command(&mut self, command_id: &str, ctx: &PluginContext) -> Vec<PluginAction> {
         let hook = Hook::CommandInvoked {
             command_id: command_id.to_string(),
         };

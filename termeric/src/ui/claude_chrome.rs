@@ -2,7 +2,6 @@
 //!
 //! Shows: repo name · branch · host badge · [Context] button · transcript indicator
 
-
 /// Host where the Claude Code session is running
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostTarget {

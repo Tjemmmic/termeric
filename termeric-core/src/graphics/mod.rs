@@ -3,11 +3,11 @@
 //! Implements the Kitty Graphics Protocol for displaying images in the terminal.
 //! Images are stored in GPU-friendly format and referenced by cell positions.
 
-mod kitty;
 mod image;
+mod kitty;
 
-pub use kitty::{KittyCommand, KittyAction, KittyTransmission, KittyFormat, KittyPlacement};
-pub use image::{ImageStorage, ImageId, StoredImage, ImagePlacement};
+pub use image::{ImageId, ImagePlacement, ImageStorage, StoredImage};
+pub use kitty::{KittyAction, KittyCommand, KittyFormat, KittyPlacement, KittyTransmission};
 
 use std::collections::HashMap;
 
@@ -60,15 +60,9 @@ impl GraphicsManager {
             KittyAction::Transmit | KittyAction::TransmitAndDisplay => {
                 self.handle_transmission(cmd)
             }
-            KittyAction::Display => {
-                self.handle_display(cmd)
-            }
-            KittyAction::Delete => {
-                self.handle_delete(cmd)
-            }
-            KittyAction::Query => {
-                Some(GraphicsResponse::ok(cmd.image_id.unwrap_or(0)))
-            }
+            KittyAction::Display => self.handle_display(cmd),
+            KittyAction::Delete => self.handle_delete(cmd),
+            KittyAction::Query => Some(GraphicsResponse::ok(cmd.image_id.unwrap_or(0))),
             KittyAction::FrameComposition => {
                 // Animation frames - not implemented yet
                 log::trace!("Kitty animation frame composition not implemented");
@@ -99,7 +93,9 @@ impl GraphicsManager {
 
         // Start a new transmission
         let data = cmd.data.unwrap_or_default();
-        let format = cmd.transmission.as_ref()
+        let format = cmd
+            .transmission
+            .as_ref()
             .map(|t| t.format)
             .unwrap_or(KittyFormat::Rgba);
         let width = cmd.transmission.as_ref().and_then(|t| t.width);
@@ -107,14 +103,17 @@ impl GraphicsManager {
 
         if cmd.more_chunks {
             // Start chunked transmission
-            self.pending.insert(image_id, PendingImage {
-                id: ImageId(image_id),
-                format,
-                width,
-                height,
-                data,
-                more_chunks: true,
-            });
+            self.pending.insert(
+                image_id,
+                PendingImage {
+                    id: ImageId(image_id),
+                    format,
+                    width,
+                    height,
+                    data,
+                    more_chunks: true,
+                },
+            );
             return None;
         }
 
@@ -185,7 +184,8 @@ impl GraphicsManager {
                 if pending.data.len() != expected {
                     return Err(format!(
                         "RGBA data size mismatch: expected {}, got {}",
-                        expected, pending.data.len()
+                        expected,
+                        pending.data.len()
                     ));
                 }
                 Ok(DecodedImage {
@@ -202,7 +202,8 @@ impl GraphicsManager {
                 if pending.data.len() != expected {
                     return Err(format!(
                         "RGB data size mismatch: expected {}, got {}",
-                        expected, pending.data.len()
+                        expected,
+                        pending.data.len()
                     ));
                 }
                 let mut rgba = Vec::with_capacity((width * height * 4) as usize);
@@ -253,7 +254,12 @@ impl GraphicsManager {
     }
 
     /// Add an image placement
-    fn add_placement(&mut self, image_id: ImageId, placement_id: Option<u32>, placement: KittyPlacement) {
+    fn add_placement(
+        &mut self,
+        image_id: ImageId,
+        placement_id: Option<u32>,
+        placement: KittyPlacement,
+    ) {
         let placement = ImagePlacement {
             image_id,
             placement_id,

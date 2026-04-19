@@ -8,12 +8,11 @@
 //! Sessions are identified by a timestamp-based ID (e.g., "2026-02-24_21h59m43").
 //! Each tab independently tracks its own session identity.
 
-pub mod save;
-pub mod restore;
-pub mod panel;
-pub mod transcript;
 pub mod export;
-
+pub mod panel;
+pub mod restore;
+pub mod save;
+pub mod transcript;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -151,9 +150,7 @@ fn now_iso8601() -> String {
     // Convert to ISO format: "2026-02-24T21:59:43Z"
     let parts: Vec<&str> = id.splitn(2, '_').collect();
     if parts.len() == 2 {
-        let time_part = parts[1]
-            .replace('h', ":")
-            .replace('m', ":");
+        let time_part = parts[1].replace('h', ":").replace('m', ":");
         format!("{}T{}Z", parts[0], time_part)
     } else {
         format!("{}Z", duration.as_secs())
@@ -240,10 +237,12 @@ pub fn list_sessions_with_titles() -> Vec<(String, String)> {
             let title = session_file_path(&id)
                 .and_then(|path| std::fs::read_to_string(&path).ok())
                 .and_then(|content| {
-                    content.lines()
+                    content
+                        .lines()
                         .find(|line| line.starts_with("title"))
                         .and_then(|line| {
-                            line.split('=').nth(1)
+                            line.split('=')
+                                .nth(1)
                                 .map(|v| v.trim().trim_matches('"').to_string())
                         })
                 })

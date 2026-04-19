@@ -1,8 +1,8 @@
 //! Session restoration functionality
 
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
-use anyhow::Result;
 
 use super::{Session, session_dir};
 
@@ -40,10 +40,7 @@ pub fn restore_session_from_path(path: &Path) -> Result<Session> {
 ///
 /// Returns the lines of scrollback text, or an empty vec if the file
 /// doesn't exist or can't be read.
-pub fn load_scrollback_text(
-    session_id: &str,
-    scrollback_file: &str,
-) -> Vec<String> {
+pub fn load_scrollback_text(session_id: &str, scrollback_file: &str) -> Vec<String> {
     let Some(dir) = session_dir(session_id) else {
         return Vec::new();
     };
@@ -52,7 +49,11 @@ pub fn load_scrollback_text(
     match fs::read_to_string(&filepath) {
         Ok(content) => {
             let lines: Vec<String> = content.lines().map(String::from).collect();
-            log::info!("Loaded {} scrollback lines from {:?}", lines.len(), filepath);
+            log::info!(
+                "Loaded {} scrollback lines from {:?}",
+                lines.len(),
+                filepath
+            );
             lines
         }
         Err(e) => {

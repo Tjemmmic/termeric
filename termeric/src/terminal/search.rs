@@ -4,7 +4,7 @@
 //! Supports both literal and regex search modes.
 
 use regex::Regex;
-use termeric_core::{Grid, CellContent};
+use termeric_core::{CellContent, Grid};
 
 /// A search match in the terminal
 #[derive(Clone, Debug, PartialEq)]
@@ -449,9 +449,21 @@ mod tests {
     fn test_navigation() {
         let mut search = Search::new();
         search.matches = vec![
-            SearchMatch { row: 0, start_col: 0, end_col: 4 },
-            SearchMatch { row: 1, start_col: 5, end_col: 9 },
-            SearchMatch { row: 2, start_col: 0, end_col: 4 },
+            SearchMatch {
+                row: 0,
+                start_col: 0,
+                end_col: 4,
+            },
+            SearchMatch {
+                row: 1,
+                start_col: 5,
+                end_col: 9,
+            },
+            SearchMatch {
+                row: 2,
+                start_col: 0,
+                end_col: 4,
+            },
         ];
         search.current_match = Some(0);
 

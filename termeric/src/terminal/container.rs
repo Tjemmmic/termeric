@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::io;
 use termeric_core::{Terminal, TerminalEvent};
 
-use crate::panes::{PaneDir, PaneId, PaneRect, SplitDirection, Divider};
+use crate::panes::{Divider, PaneDir, PaneId, PaneRect, SplitDirection};
 
 /// A container that holds one or more terminals
 ///

@@ -124,10 +124,7 @@ impl TranscriptRecorder {
         let filename = format!("transcript_{}.jsonl", timestamp);
         let path = dir.join(&filename);
 
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let mut writer = BufWriter::new(file);
 
         // Write metadata entry
@@ -175,9 +172,13 @@ impl TranscriptRecorder {
 
     /// Record a detected diff
     pub fn record_diff(&mut self, filename: &str, diff_content: &str) {
-        self.write_entry(EntryKind::Diff, diff_content, Some(serde_json::json!({
-            "filename": filename,
-        })));
+        self.write_entry(
+            EntryKind::Diff,
+            diff_content,
+            Some(serde_json::json!({
+                "filename": filename,
+            })),
+        );
     }
 
     /// Get the path to the transcript file
@@ -229,9 +230,13 @@ impl TranscriptRecorder {
 #[cfg(test)]
 impl TranscriptRecorder {
     fn record_command(&mut self, command: &str, exit_code: Option<i32>) {
-        self.write_entry(EntryKind::Command, command, Some(serde_json::json!({
-            "exit_code": exit_code,
-        })));
+        self.write_entry(
+            EntryKind::Command,
+            command,
+            Some(serde_json::json!({
+                "exit_code": exit_code,
+            })),
+        );
     }
 }
 
@@ -267,9 +272,9 @@ mod tests {
         let dir = std::env::temp_dir().join("termeric_test_transcript");
         let _ = fs::remove_dir_all(&dir);
 
-        let recorder = TranscriptRecorder::new(
-            &dir, Some("termeric"), Some("main"), "Local", "default"
-        ).unwrap();
+        let recorder =
+            TranscriptRecorder::new(&dir, Some("termeric"), Some("main"), "Local", "default")
+                .unwrap();
 
         assert!(recorder.path().exists());
         assert_eq!(recorder.entry_count, 1); // metadata entry
@@ -288,9 +293,7 @@ mod tests {
         let dir = std::env::temp_dir().join("termeric_test_transcript_entries");
         let _ = fs::remove_dir_all(&dir);
 
-        let mut recorder = TranscriptRecorder::new(
-            &dir, None, None, "Local", "default"
-        ).unwrap();
+        let mut recorder = TranscriptRecorder::new(&dir, None, None, "Local", "default").unwrap();
 
         recorder.record_input("Hello Claude");
         recorder.record_output("I'll help you with that.");
@@ -319,9 +322,7 @@ mod tests {
         let dir = std::env::temp_dir().join("termeric_test_transcript_redact");
         let _ = fs::remove_dir_all(&dir);
 
-        let mut recorder = TranscriptRecorder::new(
-            &dir, None, None, "Local", "default"
-        ).unwrap();
+        let mut recorder = TranscriptRecorder::new(&dir, None, None, "Local", "default").unwrap();
 
         recorder.record_input("export API_KEY=sk-abc123xyz456");
 

@@ -31,23 +31,32 @@ impl Renderer {
         // Background
         let bg_color = self.ui.settings_bg;
         self.rect_pipeline.push_rounded_rect(
-            dropdown_x, dropdown_y,
-            dropdown_width, dropdown_height,
-            bg_color, 8.0,
+            dropdown_x,
+            dropdown_y,
+            dropdown_width,
+            dropdown_height,
+            bg_color,
+            8.0,
         );
 
         // Border
         let border_color = self.ui.settings_separator;
         self.rect_pipeline.push_rounded_rect(
-            dropdown_x - 1.0, dropdown_y - 1.0,
-            dropdown_width + 2.0, dropdown_height + 2.0,
-            border_color, 8.0,
+            dropdown_x - 1.0,
+            dropdown_y - 1.0,
+            dropdown_width + 2.0,
+            dropdown_height + 2.0,
+            border_color,
+            8.0,
         );
         // Re-draw bg on top of border to create border effect
         self.rect_pipeline.push_rounded_rect(
-            dropdown_x, dropdown_y,
-            dropdown_width, dropdown_height,
-            bg_color, 8.0,
+            dropdown_x,
+            dropdown_y,
+            dropdown_width,
+            dropdown_height,
+            bg_color,
+            8.0,
         );
 
         let text_color = self.ui.settings_text;
@@ -64,13 +73,19 @@ impl Renderer {
                     break;
                 }
                 if !c.is_whitespace() {
-                    self.text_pipeline.push_char(c, text_x, text_y, dim_text_color);
+                    self.text_pipeline
+                        .push_char(c, text_x, text_y, dim_text_color);
                 }
                 text_x += cell_width * 0.85;
             }
         }
 
-        for (i, (_, display_title)) in info.sessions.iter().take(SESSION_DROPDOWN_MAX_ITEMS).enumerate() {
+        for (i, (_, display_title)) in info
+            .sessions
+            .iter()
+            .take(SESSION_DROPDOWN_MAX_ITEMS)
+            .enumerate()
+        {
             let item_y = dropdown_y + 2.0 + i as f32 * row_height;
 
             // Hover highlight
@@ -82,8 +97,10 @@ impl Renderer {
                     self.ui.settings_selected[3] * 0.4,
                 ];
                 self.rect_pipeline.push_rounded_rect(
-                    dropdown_x + 4.0, item_y,
-                    dropdown_width - 8.0, row_height,
+                    dropdown_x + 4.0,
+                    item_y,
+                    dropdown_width - 8.0,
+                    row_height,
                     hover_color,
                     4.0,
                 );
@@ -93,7 +110,8 @@ impl Renderer {
             let mut text_x = dropdown_x + padding_x;
 
             // Session icon
-            self.text_pipeline.push_char('◆', text_x - cell_width * 0.3, text_y, accent_color);
+            self.text_pipeline
+                .push_char('◆', text_x - cell_width * 0.3, text_y, accent_color);
             text_x += cell_width;
 
             // Display session title, truncate if needed
@@ -118,8 +136,10 @@ impl Renderer {
         let display_rows = session_count.max(1); // match build logic
         let sep_y = dropdown_y + 2.0 + display_rows as f32 * row_height;
         self.rect_pipeline.push_rect(
-            dropdown_x + padding_x, sep_y,
-            dropdown_width - padding_x * 2.0, 1.0,
+            dropdown_x + padding_x,
+            sep_y,
+            dropdown_width - padding_x * 2.0,
+            1.0,
             self.ui.settings_separator,
         );
 
@@ -136,8 +156,10 @@ impl Renderer {
                 self.ui.settings_selected[3] * 0.4,
             ];
             self.rect_pipeline.push_rounded_rect(
-                dropdown_x + 4.0, manage_y,
-                dropdown_width - 8.0, row_height,
+                dropdown_x + 4.0,
+                manage_y,
+                dropdown_width - 8.0,
+                row_height,
                 hover_color,
                 4.0,
             );
@@ -147,7 +169,8 @@ impl Renderer {
         let mut manage_x = dropdown_x + padding_x;
         for c in "Manage Sessions…".chars() {
             if !c.is_whitespace() {
-                self.text_pipeline.push_char(c, manage_x, manage_text_y, dim_text_color);
+                self.text_pipeline
+                    .push_char(c, manage_x, manage_text_y, dim_text_color);
             }
             manage_x += cell_width * 0.85;
         }
@@ -181,8 +204,10 @@ impl Renderer {
         let dropdown_height = total_items as f32 * row_height + 4.0;
 
         // Check if click is within dropdown bounds
-        if x < dropdown_x || x > dropdown_x + dropdown_width
-            || y < dropdown_y || y > dropdown_y + dropdown_height
+        if x < dropdown_x
+            || x > dropdown_x + dropdown_width
+            || y < dropdown_y
+            || y > dropdown_y + dropdown_height
         {
             return SessionDropdownClick::Dismiss;
         }
@@ -204,5 +229,4 @@ impl Renderer {
 
         SessionDropdownClick::None
     }
-
 }

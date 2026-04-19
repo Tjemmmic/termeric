@@ -28,18 +28,18 @@
 //! let grid = terminal.grid();
 //! ```
 
-pub mod grid;
-pub mod term;
 pub mod ansi;
-pub mod pty;
 pub mod event;
 pub mod graphics;
+pub mod grid;
+pub mod pty;
 pub mod shell;
+pub mod term;
 
 // Re-export commonly used types
-pub use grid::{Cell, CellContent, CellAttrs, CellFlags, Color, Grid, Row, Cursor};
-pub use term::{Terminal, Selection, SelectionType, Point};
-pub use pty::Pty;
-pub use event::{TerminalEvent, NotificationRequest};
+pub use event::{NotificationRequest, TerminalEvent};
 pub use graphics::{GraphicsManager, ImageId, ImagePlacement, StoredImage};
-pub use shell::{ShellIntegration, PromptMark, CommandRegion};
+pub use grid::{Cell, CellAttrs, CellContent, CellFlags, Color, Cursor, Grid, Row};
+pub use pty::Pty;
+pub use shell::{CommandRegion, PromptMark, ShellIntegration};
+pub use term::{Point, Selection, SelectionType, Terminal};

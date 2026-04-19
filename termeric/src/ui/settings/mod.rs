@@ -1,5 +1,5 @@
-use crate::config::{Config, SplashMode};
 use crate::config::theme::Theme;
+use crate::config::{Config, SplashMode};
 use crate::input::keybindings::ShortcutRegistry;
 
 /// Default fallback font (always available)
@@ -238,7 +238,10 @@ pub enum SettingKind {
     /// Numeric value with min, max, step
     Numeric { min: f32, max: f32, step: f32 },
     /// Dropdown with a list of options and current index
-    Dropdown { options: Vec<String>, selected: usize },
+    Dropdown {
+        options: Vec<String>,
+        selected: usize,
+    },
     /// Predefined list of numeric values (for logarithmic-style stepping)
     SteppedList { values: Vec<usize>, selected: usize },
     /// Read-only display value
@@ -445,245 +448,482 @@ impl SettingsPanel {
     }
 
     /// Build the flat list of all settings grouped by section from config
-    fn all_items(&self, config: &Config, _registry: &ShortcutRegistry) -> Vec<(SettingsSection, Vec<SettingItem>)> {
+    fn all_items(
+        &self,
+        config: &Config,
+        _registry: &ShortcutRegistry,
+    ) -> Vec<(SettingsSection, Vec<SettingItem>)> {
         let mut result = Vec::new();
 
         // Font
         {
             let font_options = self.available_fonts.clone();
-            let font_selected = font_options.iter().position(|n| n == &config.font.family).unwrap_or(0);
-            result.push((SettingsSection::Font, vec![
-                SettingItem {
-                    label: "Size",
-                    value: format!("{:.1}", config.font.size),
-                    kind: SettingKind::Numeric { min: 8.0, max: 72.0, step: 1.0 },
-                },
-                SettingItem {
-                    label: "Family",
-                    value: config.font.family.clone(),
-                    kind: SettingKind::Dropdown { options: font_options, selected: font_selected },
-                },
-                SettingItem {
-                    label: "Line Height",
-                    value: format!("{:.2}", config.font.line_height),
-                    kind: SettingKind::Numeric { min: 0.8, max: 2.0, step: 0.05 },
-                },
-            ]));
+            let font_selected = font_options
+                .iter()
+                .position(|n| n == &config.font.family)
+                .unwrap_or(0);
+            result.push((
+                SettingsSection::Font,
+                vec![
+                    SettingItem {
+                        label: "Size",
+                        value: format!("{:.1}", config.font.size),
+                        kind: SettingKind::Numeric {
+                            min: 8.0,
+                            max: 72.0,
+                            step: 1.0,
+                        },
+                    },
+                    SettingItem {
+                        label: "Family",
+                        value: config.font.family.clone(),
+                        kind: SettingKind::Dropdown {
+                            options: font_options,
+                            selected: font_selected,
+                        },
+                    },
+                    SettingItem {
+                        label: "Line Height",
+                        value: format!("{:.2}", config.font.line_height),
+                        kind: SettingKind::Numeric {
+                            min: 0.8,
+                            max: 2.0,
+                            step: 0.05,
+                        },
+                    },
+                ],
+            ));
         }
 
         // Theme
         {
-            let options: Vec<String> = Theme::list_available().iter().map(|s| s.to_string()).collect();
-            let selected = options.iter().position(|n| n == &config.theme.name).unwrap_or(0);
-            let mut items = vec![
-                SettingItem {
-                    label: "Theme",
-                    value: config.theme.name.clone(),
-                    kind: SettingKind::Dropdown { options, selected },
-                },
-            ];
+            let options: Vec<String> = Theme::list_available()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let selected = options
+                .iter()
+                .position(|n| n == &config.theme.name)
+                .unwrap_or(0);
+            let mut items = vec![SettingItem {
+                label: "Theme",
+                value: config.theme.name.clone(),
+                kind: SettingKind::Dropdown { options, selected },
+            }];
             if let Some(meta) = &self.theme_meta {
                 if !meta.name.is_empty() {
-                    items.push(SettingItem { label: "Name", value: meta.name.clone(), kind: SettingKind::ReadOnly });
+                    items.push(SettingItem {
+                        label: "Name",
+                        value: meta.name.clone(),
+                        kind: SettingKind::ReadOnly,
+                    });
                 }
                 if !meta.author.is_empty() {
-                    items.push(SettingItem { label: "Author", value: meta.author.clone(), kind: SettingKind::ReadOnly });
+                    items.push(SettingItem {
+                        label: "Author",
+                        value: meta.author.clone(),
+                        kind: SettingKind::ReadOnly,
+                    });
                 }
                 if !meta.description.is_empty() {
-                    items.push(SettingItem { label: "Description", value: meta.description.clone(), kind: SettingKind::ReadOnly });
+                    items.push(SettingItem {
+                        label: "Description",
+                        value: meta.description.clone(),
+                        kind: SettingKind::ReadOnly,
+                    });
                 }
             }
             result.push((SettingsSection::Theme, items));
         }
 
         // Window
-        result.push((SettingsSection::Window, vec![
-            SettingItem {
-                label: "Padding",
-                value: format!("{}", config.window.padding),
-                kind: SettingKind::Numeric { min: 0.0, max: 64.0, step: 2.0 },
-            },
-            SettingItem {
-                label: "Opacity",
-                value: format!("{:.2}", config.window.opacity),
-                kind: SettingKind::Numeric { min: 0.1, max: 1.0, step: 0.05 },
-            },
-            SettingItem {
-                label: "Decorations",
-                value: if config.window.decorations { "On".into() } else { "Off".into() },
-                kind: SettingKind::Dropdown {
-                    options: vec!["On".into(), "Off".into()],
-                    selected: if config.window.decorations { 0 } else { 1 },
+        result.push((
+            SettingsSection::Window,
+            vec![
+                SettingItem {
+                    label: "Padding",
+                    value: format!("{}", config.window.padding),
+                    kind: SettingKind::Numeric {
+                        min: 0.0,
+                        max: 64.0,
+                        step: 2.0,
+                    },
                 },
-            },
-        ]));
+                SettingItem {
+                    label: "Opacity",
+                    value: format!("{:.2}", config.window.opacity),
+                    kind: SettingKind::Numeric {
+                        min: 0.1,
+                        max: 1.0,
+                        step: 0.05,
+                    },
+                },
+                SettingItem {
+                    label: "Decorations",
+                    value: if config.window.decorations {
+                        "On".into()
+                    } else {
+                        "Off".into()
+                    },
+                    kind: SettingKind::Dropdown {
+                        options: vec!["On".into(), "Off".into()],
+                        selected: if config.window.decorations { 0 } else { 1 },
+                    },
+                },
+            ],
+        ));
 
         // Cursor
         {
             use crate::config::CursorStyle;
-            let style_options: Vec<String> = CursorStyle::ALL.iter().map(|s| s.label().to_string()).collect();
-            let style_selected = CursorStyle::ALL.iter().position(|s| *s == config.cursor.style).unwrap_or(0);
-            result.push((SettingsSection::Cursor, vec![
-                SettingItem {
-                    label: "Style",
-                    value: config.cursor.style.label().into(),
-                    kind: SettingKind::Dropdown { options: style_options, selected: style_selected },
-                },
-                SettingItem {
-                    label: "Blink",
-                    value: if config.cursor.blink { "On".into() } else { "Off".into() },
-                    kind: SettingKind::Dropdown {
-                        options: vec!["On".into(), "Off".into()],
-                        selected: if config.cursor.blink { 0 } else { 1 },
+            let style_options: Vec<String> = CursorStyle::ALL
+                .iter()
+                .map(|s| s.label().to_string())
+                .collect();
+            let style_selected = CursorStyle::ALL
+                .iter()
+                .position(|s| *s == config.cursor.style)
+                .unwrap_or(0);
+            result.push((
+                SettingsSection::Cursor,
+                vec![
+                    SettingItem {
+                        label: "Style",
+                        value: config.cursor.style.label().into(),
+                        kind: SettingKind::Dropdown {
+                            options: style_options,
+                            selected: style_selected,
+                        },
                     },
-                },
-                SettingItem {
-                    label: "Blink Rate",
-                    value: format!("{}ms", config.cursor.blink_rate),
-                    kind: SettingKind::Numeric { min: 100.0, max: 2000.0, step: 50.0 },
-                },
-            ]));
+                    SettingItem {
+                        label: "Blink",
+                        value: if config.cursor.blink {
+                            "On".into()
+                        } else {
+                            "Off".into()
+                        },
+                        kind: SettingKind::Dropdown {
+                            options: vec!["On".into(), "Off".into()],
+                            selected: if config.cursor.blink { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "Blink Rate",
+                        value: format!("{}ms", config.cursor.blink_rate),
+                        kind: SettingKind::Numeric {
+                            min: 100.0,
+                            max: 2000.0,
+                            step: 50.0,
+                        },
+                    },
+                ],
+            ));
         }
 
         // Bell
-        result.push((SettingsSection::Bell, vec![
-            SettingItem {
-                label: "Visual",
-                value: if config.bell.visual { "On".into() } else { "Off".into() },
-                kind: SettingKind::Dropdown {
-                    options: vec!["On".into(), "Off".into()],
-                    selected: if config.bell.visual { 0 } else { 1 },
+        result.push((
+            SettingsSection::Bell,
+            vec![
+                SettingItem {
+                    label: "Visual",
+                    value: if config.bell.visual {
+                        "On".into()
+                    } else {
+                        "Off".into()
+                    },
+                    kind: SettingKind::Dropdown {
+                        options: vec!["On".into(), "Off".into()],
+                        selected: if config.bell.visual { 0 } else { 1 },
+                    },
                 },
-            },
-            SettingItem {
-                label: "Audio",
-                value: if config.bell.audio { "On".into() } else { "Off".into() },
-                kind: SettingKind::Dropdown {
-                    options: vec!["On".into(), "Off".into()],
-                    selected: if config.bell.audio { 0 } else { 1 },
+                SettingItem {
+                    label: "Audio",
+                    value: if config.bell.audio {
+                        "On".into()
+                    } else {
+                        "Off".into()
+                    },
+                    kind: SettingKind::Dropdown {
+                        options: vec!["On".into(), "Off".into()],
+                        selected: if config.bell.audio { 0 } else { 1 },
+                    },
                 },
-            },
-            SettingItem {
-                label: "Flash Duration",
-                value: format!("{}ms", config.bell.visual_duration_ms),
-                kind: SettingKind::Numeric { min: 50.0, max: 1000.0, step: 50.0 },
-            },
-        ]));
+                SettingItem {
+                    label: "Flash Duration",
+                    value: format!("{}ms", config.bell.visual_duration_ms),
+                    kind: SettingKind::Numeric {
+                        min: 50.0,
+                        max: 1000.0,
+                        step: 50.0,
+                    },
+                },
+            ],
+        ));
 
         // Scrollback
         {
-            let steps: Vec<usize> = vec![100, 500, 1_000, 2_000, 5_000, 10_000, 25_000, 50_000, 100_000];
-            let selected = steps.iter().position(|&v| v >= config.scrollback.lines).unwrap_or(steps.len() - 1);
+            let steps: Vec<usize> = vec![
+                100, 500, 1_000, 2_000, 5_000, 10_000, 25_000, 50_000, 100_000,
+            ];
+            let selected = steps
+                .iter()
+                .position(|&v| v >= config.scrollback.lines)
+                .unwrap_or(steps.len() - 1);
             let speed_steps: Vec<usize> = vec![1, 2, 3, 4, 6, 8, 10, 15, 20];
-            let speed_selected = speed_steps.iter().position(|&v| v >= config.scrollback.scroll_speed as usize).unwrap_or(speed_steps.len() - 1);
-            result.push((SettingsSection::Scrollback, vec![
-                SettingItem {
-                    label: "Lines",
-                    value: format!("{}", config.scrollback.lines),
-                    kind: SettingKind::SteppedList { values: steps, selected },
-                },
-                SettingItem {
-                    label: "Scroll Speed",
-                    value: format!("{}", config.scrollback.scroll_speed as usize),
-                    kind: SettingKind::SteppedList { values: speed_steps, selected: speed_selected },
-                },
-            ]));
+            let speed_selected = speed_steps
+                .iter()
+                .position(|&v| v >= config.scrollback.scroll_speed as usize)
+                .unwrap_or(speed_steps.len() - 1);
+            result.push((
+                SettingsSection::Scrollback,
+                vec![
+                    SettingItem {
+                        label: "Lines",
+                        value: format!("{}", config.scrollback.lines),
+                        kind: SettingKind::SteppedList {
+                            values: steps,
+                            selected,
+                        },
+                    },
+                    SettingItem {
+                        label: "Scroll Speed",
+                        value: format!("{}", config.scrollback.scroll_speed as usize),
+                        kind: SettingKind::SteppedList {
+                            values: speed_steps,
+                            selected: speed_selected,
+                        },
+                    },
+                ],
+            ));
         }
 
         // Startup
         {
-            let splash_options: Vec<String> = SplashMode::ALL.iter().map(|m| m.label().to_string()).collect();
-            let splash_selected = SplashMode::ALL.iter().position(|m| *m == config.splash.mode).unwrap_or(0);
-            result.push((SettingsSection::Startup, vec![
-                SettingItem {
+            let splash_options: Vec<String> = SplashMode::ALL
+                .iter()
+                .map(|m| m.label().to_string())
+                .collect();
+            let splash_selected = SplashMode::ALL
+                .iter()
+                .position(|m| *m == config.splash.mode)
+                .unwrap_or(0);
+            result.push((
+                SettingsSection::Startup,
+                vec![SettingItem {
                     label: "Splash",
                     value: config.splash.mode.label().to_string(),
-                    kind: SettingKind::Dropdown { options: splash_options, selected: splash_selected },
-                },
-            ]));
+                    kind: SettingKind::Dropdown {
+                        options: splash_options,
+                        selected: splash_selected,
+                    },
+                }],
+            ));
         }
 
         // Shell
         {
-            let program = config.shell.program.clone().unwrap_or_else(|| "(default)".into());
-            let args_str = if config.shell.args.is_empty() { "(none)".into() } else { config.shell.args.join(" ") };
-            result.push((SettingsSection::Shell, vec![
-                SettingItem { label: "Program", value: program, kind: SettingKind::ReadOnly },
-                SettingItem { label: "Args", value: args_str, kind: SettingKind::ReadOnly },
-            ]));
+            let program = config
+                .shell
+                .program
+                .clone()
+                .unwrap_or_else(|| "(default)".into());
+            let args_str = if config.shell.args.is_empty() {
+                "(none)".into()
+            } else {
+                config.shell.args.join(" ")
+            };
+            result.push((
+                SettingsSection::Shell,
+                vec![
+                    SettingItem {
+                        label: "Program",
+                        value: program,
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
+                        label: "Args",
+                        value: args_str,
+                        kind: SettingKind::ReadOnly,
+                    },
+                ],
+            ));
         }
 
         // Sessions
         {
             let on_off = vec!["On".into(), "Off".into()];
-            result.push((SettingsSection::Sessions, vec![
-                SettingItem {
-                    label: "Auto Save",
-                    value: if config.session.auto_save { "On".into() } else { "Off".into() },
-                    kind: SettingKind::Dropdown { options: on_off.clone(), selected: if config.session.auto_save { 0 } else { 1 } },
-                },
-                SettingItem {
-                    label: "Auto Restore",
-                    value: if config.session.auto_restore { "On".into() } else { "Off".into() },
-                    kind: SettingKind::Dropdown { options: on_off.clone(), selected: if config.session.auto_restore { 0 } else { 1 } },
-                },
-                SettingItem {
-                    label: "Save Scrollback",
-                    value: if config.session.save_scrollback { "On".into() } else { "Off".into() },
-                    kind: SettingKind::Dropdown { options: on_off, selected: if config.session.save_scrollback { 0 } else { 1 } },
-                },
-            ]));
+            result.push((
+                SettingsSection::Sessions,
+                vec![
+                    SettingItem {
+                        label: "Auto Save",
+                        value: if config.session.auto_save {
+                            "On".into()
+                        } else {
+                            "Off".into()
+                        },
+                        kind: SettingKind::Dropdown {
+                            options: on_off.clone(),
+                            selected: if config.session.auto_save { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "Auto Restore",
+                        value: if config.session.auto_restore {
+                            "On".into()
+                        } else {
+                            "Off".into()
+                        },
+                        kind: SettingKind::Dropdown {
+                            options: on_off.clone(),
+                            selected: if config.session.auto_restore { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "Save Scrollback",
+                        value: if config.session.save_scrollback {
+                            "On".into()
+                        } else {
+                            "Off".into()
+                        },
+                        kind: SettingKind::Dropdown {
+                            options: on_off,
+                            selected: if config.session.save_scrollback { 0 } else { 1 },
+                        },
+                    },
+                ],
+            ));
         }
 
         // Plugins
         {
             let en_dis: Vec<String> = vec!["Enabled".into(), "Disabled".into()];
-            let claude_model_opts: Vec<String> = vec!["(default)".into(), "sonnet".into(), "opus".into(), "haiku".into()];
-            let claude_model_val = config.plugins.claude_code.model.clone().unwrap_or_else(|| "(default)".into());
-            let claude_model_sel = claude_model_opts.iter().position(|m| m == &claude_model_val).unwrap_or(0);
-            let codex_model_opts: Vec<String> = vec!["(default)".into(), "o3-mini".into(), "o4-mini".into(), "gpt-4.1".into()];
-            let codex_model_val = config.plugins.codex.model.clone().unwrap_or_else(|| "(default)".into());
-            let codex_model_sel = codex_model_opts.iter().position(|m| m == &codex_model_val).unwrap_or(0);
-            let codex_approval_opts: Vec<String> = vec!["suggest".into(), "auto-edit".into(), "full-auto".into()];
-            let codex_approval_sel = codex_approval_opts.iter().position(|m| m == &config.plugins.codex.approval_mode).unwrap_or(0);
-            let claude_approval_opts: Vec<String> = vec!["(interactive)".into(), "auto-accept".into()];
-            let claude_approval_val = config.plugins.claude_code.approval_mode.clone().unwrap_or_else(|| "(interactive)".into());
-            let claude_approval_sel = claude_approval_opts.iter().position(|m| m == &claude_approval_val).unwrap_or(0);
+            let claude_model_opts: Vec<String> = vec![
+                "(default)".into(),
+                "sonnet".into(),
+                "opus".into(),
+                "haiku".into(),
+            ];
+            let claude_model_val = config
+                .plugins
+                .claude_code
+                .model
+                .clone()
+                .unwrap_or_else(|| "(default)".into());
+            let claude_model_sel = claude_model_opts
+                .iter()
+                .position(|m| m == &claude_model_val)
+                .unwrap_or(0);
+            let codex_model_opts: Vec<String> = vec![
+                "(default)".into(),
+                "o3-mini".into(),
+                "o4-mini".into(),
+                "gpt-4.1".into(),
+            ];
+            let codex_model_val = config
+                .plugins
+                .codex
+                .model
+                .clone()
+                .unwrap_or_else(|| "(default)".into());
+            let codex_model_sel = codex_model_opts
+                .iter()
+                .position(|m| m == &codex_model_val)
+                .unwrap_or(0);
+            let codex_approval_opts: Vec<String> =
+                vec!["suggest".into(), "auto-edit".into(), "full-auto".into()];
+            let codex_approval_sel = codex_approval_opts
+                .iter()
+                .position(|m| m == &config.plugins.codex.approval_mode)
+                .unwrap_or(0);
+            let claude_approval_opts: Vec<String> =
+                vec!["(interactive)".into(), "auto-accept".into()];
+            let claude_approval_val = config
+                .plugins
+                .claude_code
+                .approval_mode
+                .clone()
+                .unwrap_or_else(|| "(interactive)".into());
+            let claude_approval_sel = claude_approval_opts
+                .iter()
+                .position(|m| m == &claude_approval_val)
+                .unwrap_or(0);
 
-            result.push((SettingsSection::Plugins, vec![
-                SettingItem {
-                    label: "Claude Code",
-                    value: if config.plugins.claude_code.enabled { "Enabled".into() } else { "Disabled".into() },
-                    kind: SettingKind::Dropdown { options: en_dis.clone(), selected: if config.plugins.claude_code.enabled { 0 } else { 1 } },
-                },
-                SettingItem { label: "Claude Binary", value: config.plugins.claude_code.binary.clone(), kind: SettingKind::ReadOnly },
-                SettingItem {
-                    label: "Claude Model",
-                    value: claude_model_val,
-                    kind: SettingKind::Dropdown { options: claude_model_opts, selected: claude_model_sel },
-                },
-                SettingItem {
-                    label: "Claude Approval",
-                    value: claude_approval_val,
-                    kind: SettingKind::Dropdown { options: claude_approval_opts, selected: claude_approval_sel },
-                },
-                SettingItem {
-                    label: "Codex",
-                    value: if config.plugins.codex.enabled { "Enabled".into() } else { "Disabled".into() },
-                    kind: SettingKind::Dropdown { options: en_dis, selected: if config.plugins.codex.enabled { 0 } else { 1 } },
-                },
-                SettingItem { label: "Codex Binary", value: config.plugins.codex.binary.clone(), kind: SettingKind::ReadOnly },
-                SettingItem {
-                    label: "Codex Model",
-                    value: codex_model_val,
-                    kind: SettingKind::Dropdown { options: codex_model_opts, selected: codex_model_sel },
-                },
-                SettingItem {
-                    label: "Codex Approval",
-                    value: config.plugins.codex.approval_mode.clone(),
-                    kind: SettingKind::Dropdown { options: codex_approval_opts, selected: codex_approval_sel },
-                },
-            ]));
+            result.push((
+                SettingsSection::Plugins,
+                vec![
+                    SettingItem {
+                        label: "Claude Code",
+                        value: if config.plugins.claude_code.enabled {
+                            "Enabled".into()
+                        } else {
+                            "Disabled".into()
+                        },
+                        kind: SettingKind::Dropdown {
+                            options: en_dis.clone(),
+                            selected: if config.plugins.claude_code.enabled {
+                                0
+                            } else {
+                                1
+                            },
+                        },
+                    },
+                    SettingItem {
+                        label: "Claude Binary",
+                        value: config.plugins.claude_code.binary.clone(),
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
+                        label: "Claude Model",
+                        value: claude_model_val,
+                        kind: SettingKind::Dropdown {
+                            options: claude_model_opts,
+                            selected: claude_model_sel,
+                        },
+                    },
+                    SettingItem {
+                        label: "Claude Approval",
+                        value: claude_approval_val,
+                        kind: SettingKind::Dropdown {
+                            options: claude_approval_opts,
+                            selected: claude_approval_sel,
+                        },
+                    },
+                    SettingItem {
+                        label: "Codex",
+                        value: if config.plugins.codex.enabled {
+                            "Enabled".into()
+                        } else {
+                            "Disabled".into()
+                        },
+                        kind: SettingKind::Dropdown {
+                            options: en_dis,
+                            selected: if config.plugins.codex.enabled { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "Codex Binary",
+                        value: config.plugins.codex.binary.clone(),
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
+                        label: "Codex Model",
+                        value: codex_model_val,
+                        kind: SettingKind::Dropdown {
+                            options: codex_model_opts,
+                            selected: codex_model_sel,
+                        },
+                    },
+                    SettingItem {
+                        label: "Codex Approval",
+                        value: config.plugins.codex.approval_mode.clone(),
+                        kind: SettingKind::Dropdown {
+                            options: codex_approval_opts,
+                            selected: codex_approval_sel,
+                        },
+                    },
+                ],
+            ));
         }
 
         result
@@ -698,15 +938,19 @@ impl SettingsPanel {
         let mut entries = Vec::new();
         for (section, items) in &all {
             // Collect matching items in this section
-            let matching: Vec<(usize, &SettingItem)> = items.iter().enumerate().filter(|(_, item)| {
-                if !has_filter {
-                    return true;
-                }
-                // Match against label, value, or section name
-                item.label.to_lowercase().contains(&filter_lower)
-                    || item.value.to_lowercase().contains(&filter_lower)
-                    || section.label().to_lowercase().contains(&filter_lower)
-            }).collect();
+            let matching: Vec<(usize, &SettingItem)> = items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| {
+                    if !has_filter {
+                        return true;
+                    }
+                    // Match against label, value, or section name
+                    item.label.to_lowercase().contains(&filter_lower)
+                        || item.value.to_lowercase().contains(&filter_lower)
+                        || section.label().to_lowercase().contains(&filter_lower)
+                })
+                .collect();
 
             if matching.is_empty() {
                 continue;
@@ -748,14 +992,21 @@ impl SettingsPanel {
 
     /// Get the nth selectable entry's absolute index in the entries vec
     fn nth_selectable_abs_index(entries: &[SettingEntry], n: usize) -> Option<usize> {
-        entries.iter().enumerate()
+        entries
+            .iter()
+            .enumerate()
             .filter(|(_, e)| !e.is_header)
             .nth(n)
             .map(|(i, _)| i)
     }
 
     /// Handle a key press. Returns a SettingsAction if a config change should be applied.
-    pub fn handle_key(&mut self, key: SettingsKey, config: &Config, registry: &ShortcutRegistry) -> SettingsAction {
+    pub fn handle_key(
+        &mut self,
+        key: SettingsKey,
+        config: &Config,
+        registry: &ShortcutRegistry,
+    ) -> SettingsAction {
         // If a dropdown is open, handle keys within it
         if self.dropdown_open {
             return self.handle_dropdown_key(key, config, registry);
@@ -793,7 +1044,8 @@ impl SettingsPanel {
             SettingsKey::Right | SettingsKey::Enter => {
                 if let Some(entry) = Self::nth_selectable(&entries, self.selected) {
                     match &entry.kind {
-                        SettingKind::Dropdown { selected, .. } | SettingKind::SteppedList { selected, .. } => {
+                        SettingKind::Dropdown { selected, .. }
+                        | SettingKind::SteppedList { selected, .. } => {
                             self.dropdown_open = true;
                             self.dropdown_highlight = *selected;
                             SettingsAction::None
@@ -807,7 +1059,10 @@ impl SettingsPanel {
             SettingsKey::Tab => {
                 if let Some(current) = Self::nth_selectable(&entries, self.selected) {
                     let sections = SettingsSection::all();
-                    let current_idx = sections.iter().position(|s| *s == current.section).unwrap_or(0);
+                    let current_idx = sections
+                        .iter()
+                        .position(|s| *s == current.section)
+                        .unwrap_or(0);
                     let next_section = sections[(current_idx + 1) % sections.len()];
                     if let Some(idx) = Self::first_selectable_in_section(&entries, next_section) {
                         self.selected = idx;
@@ -847,7 +1102,10 @@ impl SettingsPanel {
     }
 
     /// Find the selectable index of the first item in `section`.
-    fn first_selectable_in_section(entries: &[SettingEntry], section: SettingsSection) -> Option<usize> {
+    fn first_selectable_in_section(
+        entries: &[SettingEntry],
+        section: SettingsSection,
+    ) -> Option<usize> {
         entries
             .iter()
             .filter(|e| !e.is_header)
@@ -884,7 +1142,12 @@ impl SettingsPanel {
     }
 
     /// Handle keys when a dropdown overlay is open
-    fn handle_dropdown_key(&mut self, key: SettingsKey, config: &Config, registry: &ShortcutRegistry) -> SettingsAction {
+    fn handle_dropdown_key(
+        &mut self,
+        key: SettingsKey,
+        config: &Config,
+        registry: &ShortcutRegistry,
+    ) -> SettingsAction {
         let entries = self.build_entries(config, registry);
         let entry = Self::nth_selectable(&entries, self.selected);
         let Some(entry) = entry else {
@@ -899,7 +1162,10 @@ impl SettingsPanel {
         let option_count = match &entry_kind {
             SettingKind::Dropdown { options, .. } => options.len(),
             SettingKind::SteppedList { values, .. } => values.len(),
-            _ => { self.dropdown_open = false; return SettingsAction::None; }
+            _ => {
+                self.dropdown_open = false;
+                return SettingsAction::None;
+            }
         };
 
         match key {
@@ -921,47 +1187,105 @@ impl SettingsPanel {
             }
             SettingsKey::Enter | SettingsKey::Right => {
                 self.dropdown_open = false;
-                self.map_dropdown_action(entry_section, entry_label, &entry_kind, self.dropdown_highlight)
+                self.map_dropdown_action(
+                    entry_section,
+                    entry_label,
+                    &entry_kind,
+                    self.dropdown_highlight,
+                )
             }
             _ => SettingsAction::None,
         }
     }
 
     /// Map a dropdown option selection to a SettingsAction
-    fn map_dropdown_action(&self, section: SettingsSection, label: &str, kind: &SettingKind, option_idx: usize) -> SettingsAction {
+    fn map_dropdown_action(
+        &self,
+        section: SettingsSection,
+        label: &str,
+        kind: &SettingKind,
+        option_idx: usize,
+    ) -> SettingsAction {
         match kind {
             SettingKind::Dropdown { options, .. } => {
-                let Some(new_val) = options.get(option_idx) else { return SettingsAction::None; };
+                let Some(new_val) = options.get(option_idx) else {
+                    return SettingsAction::None;
+                };
                 let new_val = new_val.clone();
                 match (section, label) {
                     (SettingsSection::Theme, _) => SettingsAction::SetTheme(new_val),
                     (SettingsSection::Font, "Family") => SettingsAction::SetFontFamily(new_val),
-                    (SettingsSection::Window, "Decorations") => SettingsAction::SetDecorations(new_val == "On"),
+                    (SettingsSection::Window, "Decorations") => {
+                        SettingsAction::SetDecorations(new_val == "On")
+                    }
                     (SettingsSection::Cursor, "Style") => SettingsAction::SetCursorStyle(new_val),
-                    (SettingsSection::Cursor, "Blink") => SettingsAction::SetCursorBlink(new_val == "On"),
-                    (SettingsSection::Bell, "Visual") => SettingsAction::SetVisualBell(new_val == "On"),
-                    (SettingsSection::Bell, "Audio") => SettingsAction::SetAudioBell(new_val == "On"),
+                    (SettingsSection::Cursor, "Blink") => {
+                        SettingsAction::SetCursorBlink(new_val == "On")
+                    }
+                    (SettingsSection::Bell, "Visual") => {
+                        SettingsAction::SetVisualBell(new_val == "On")
+                    }
+                    (SettingsSection::Bell, "Audio") => {
+                        SettingsAction::SetAudioBell(new_val == "On")
+                    }
                     (SettingsSection::Startup, "Splash") => {
-                        let mode = SplashMode::ALL.get(option_idx).copied().unwrap_or(SplashMode::FirstBoot);
+                        let mode = SplashMode::ALL
+                            .get(option_idx)
+                            .copied()
+                            .unwrap_or(SplashMode::FirstBoot);
                         SettingsAction::SetSplashMode(mode)
                     }
-                    (SettingsSection::Sessions, "Auto Save") => SettingsAction::SetSessionAutoSave(new_val == "On"),
-                    (SettingsSection::Sessions, "Auto Restore") => SettingsAction::SetSessionAutoRestore(new_val == "On"),
-                    (SettingsSection::Sessions, "Save Scrollback") => SettingsAction::SetSessionSaveScrollback(new_val == "On"),
-                    (SettingsSection::Plugins, "Claude Code") => SettingsAction::SetPluginEnabled { plugin_id: "claude-code".into(), enabled: new_val == "Enabled" },
-                    (SettingsSection::Plugins, "Claude Model") => SettingsAction::SetPluginModel { plugin_id: "claude-code".into(), model: new_val },
-                    (SettingsSection::Plugins, "Claude Approval") => SettingsAction::SetPluginApprovalMode { plugin_id: "claude-code".into(), mode: new_val },
-                    (SettingsSection::Plugins, "Codex") => SettingsAction::SetPluginEnabled { plugin_id: "codex".into(), enabled: new_val == "Enabled" },
-                    (SettingsSection::Plugins, "Codex Model") => SettingsAction::SetPluginModel { plugin_id: "codex".into(), model: new_val },
-                    (SettingsSection::Plugins, "Codex Approval") => SettingsAction::SetPluginApprovalMode { plugin_id: "codex".into(), mode: new_val },
+                    (SettingsSection::Sessions, "Auto Save") => {
+                        SettingsAction::SetSessionAutoSave(new_val == "On")
+                    }
+                    (SettingsSection::Sessions, "Auto Restore") => {
+                        SettingsAction::SetSessionAutoRestore(new_val == "On")
+                    }
+                    (SettingsSection::Sessions, "Save Scrollback") => {
+                        SettingsAction::SetSessionSaveScrollback(new_val == "On")
+                    }
+                    (SettingsSection::Plugins, "Claude Code") => SettingsAction::SetPluginEnabled {
+                        plugin_id: "claude-code".into(),
+                        enabled: new_val == "Enabled",
+                    },
+                    (SettingsSection::Plugins, "Claude Model") => SettingsAction::SetPluginModel {
+                        plugin_id: "claude-code".into(),
+                        model: new_val,
+                    },
+                    (SettingsSection::Plugins, "Claude Approval") => {
+                        SettingsAction::SetPluginApprovalMode {
+                            plugin_id: "claude-code".into(),
+                            mode: new_val,
+                        }
+                    }
+                    (SettingsSection::Plugins, "Codex") => SettingsAction::SetPluginEnabled {
+                        plugin_id: "codex".into(),
+                        enabled: new_val == "Enabled",
+                    },
+                    (SettingsSection::Plugins, "Codex Model") => SettingsAction::SetPluginModel {
+                        plugin_id: "codex".into(),
+                        model: new_val,
+                    },
+                    (SettingsSection::Plugins, "Codex Approval") => {
+                        SettingsAction::SetPluginApprovalMode {
+                            plugin_id: "codex".into(),
+                            mode: new_val,
+                        }
+                    }
                     _ => SettingsAction::None,
                 }
             }
             SettingKind::SteppedList { values, .. } => {
-                let Some(&new_val) = values.get(option_idx) else { return SettingsAction::None; };
+                let Some(&new_val) = values.get(option_idx) else {
+                    return SettingsAction::None;
+                };
                 match (section, label) {
-                    (SettingsSection::Scrollback, "Lines") => SettingsAction::SetScrollback(new_val),
-                    (SettingsSection::Scrollback, "Scroll Speed") => SettingsAction::SetScrollSpeed(new_val as f64),
+                    (SettingsSection::Scrollback, "Lines") => {
+                        SettingsAction::SetScrollback(new_val)
+                    }
+                    (SettingsSection::Scrollback, "Scroll Speed") => {
+                        SettingsAction::SetScrollSpeed(new_val as f64)
+                    }
                     _ => SettingsAction::None,
                 }
             }
@@ -977,22 +1301,34 @@ impl SettingsPanel {
 
         match &entry.kind {
             SettingKind::Numeric { min, max, step } => {
-                let clean_val = entry.value.trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
+                let clean_val = entry
+                    .value
+                    .trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.');
                 let current: f32 = clean_val.parse().unwrap_or(0.0);
                 let new_val = (current + step * direction as f32).clamp(*min, *max);
 
                 match (entry.section, entry.label) {
                     (SettingsSection::Font, "Size") => SettingsAction::SetFontSize(new_val),
-                    (SettingsSection::Font, "Line Height") => SettingsAction::SetLineHeight(new_val),
-                    (SettingsSection::Window, "Padding") => SettingsAction::SetPadding(new_val as u32),
+                    (SettingsSection::Font, "Line Height") => {
+                        SettingsAction::SetLineHeight(new_val)
+                    }
+                    (SettingsSection::Window, "Padding") => {
+                        SettingsAction::SetPadding(new_val as u32)
+                    }
                     (SettingsSection::Window, "Opacity") => SettingsAction::SetOpacity(new_val),
-                    (SettingsSection::Cursor, "Blink Rate") => SettingsAction::SetCursorBlinkRate(new_val as u32),
-                    (SettingsSection::Bell, "Flash Duration") => SettingsAction::SetBellDuration(new_val as u64),
+                    (SettingsSection::Cursor, "Blink Rate") => {
+                        SettingsAction::SetCursorBlinkRate(new_val as u32)
+                    }
+                    (SettingsSection::Bell, "Flash Duration") => {
+                        SettingsAction::SetBellDuration(new_val as u64)
+                    }
                     _ => SettingsAction::None,
                 }
             }
             SettingKind::Dropdown { options, selected } => {
-                if options.is_empty() { return SettingsAction::None; }
+                if options.is_empty() {
+                    return SettingsAction::None;
+                }
                 let new_idx = if direction > 0 {
                     (selected + 1) % options.len()
                 } else {
@@ -1001,7 +1337,9 @@ impl SettingsPanel {
                 self.map_dropdown_action(entry.section, entry.label, &entry.kind, new_idx)
             }
             SettingKind::SteppedList { values, selected } => {
-                if values.is_empty() { return SettingsAction::None; }
+                if values.is_empty() {
+                    return SettingsAction::None;
+                }
                 let new_idx = if direction > 0 {
                     (*selected + 1).min(values.len() - 1)
                 } else {
@@ -1117,7 +1455,11 @@ impl SettingsPanel {
             ),
             SettingKind::SteppedList { values, .. } => (
                 values.len(),
-                values.iter().map(|v| v.to_string().len()).max().unwrap_or(10),
+                values
+                    .iter()
+                    .map(|v| v.to_string().len())
+                    .max()
+                    .unwrap_or(10),
             ),
             _ => return None,
         };
@@ -1194,7 +1536,11 @@ pub struct SettingsPanelInfo {
 impl SettingsPanel {
     /// Build display info for the renderer. Resolves any pending section jump
     /// and keeps the selected entry within the visible scroll window.
-    pub fn build_info(&mut self, config: &Config, registry: &ShortcutRegistry) -> SettingsPanelInfo {
+    pub fn build_info(
+        &mut self,
+        config: &Config,
+        registry: &ShortcutRegistry,
+    ) -> SettingsPanelInfo {
         let entries = self.build_entries(config, registry);
 
         if let Some(section) = self.pending_section_jump.take() {

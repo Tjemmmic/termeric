@@ -96,7 +96,9 @@ impl ImageStorage {
         }
 
         // Evict images until we have space
-        while self.current_memory + new_size > self.max_memory || self.images.len() >= self.max_images {
+        while self.current_memory + new_size > self.max_memory
+            || self.images.len() >= self.max_images
+        {
             if let Some(oldest_id) = self.access_order.first().copied() {
                 self.remove(oldest_id);
             } else {

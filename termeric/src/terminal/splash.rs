@@ -41,7 +41,11 @@ pub fn show_splash(terminal: &mut Terminal) {
 
     // Find the maximum width of the art. Use char count, not byte length,
     // so non-ASCII characters don't throw off the centering calculation.
-    let art_width = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let art_width = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
 
     // Calculate starting column to horizontally center (if art fits)
     let start_col = if art_width < term_cols {

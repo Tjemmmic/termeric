@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
-use wgpu::*;
 use wgpu::util::DeviceExt;
+use wgpu::*;
 
 /// Vertex for rectangle rendering (with rounded-corner metadata)
 #[repr(C)]
@@ -93,18 +93,16 @@ impl RectPipeline {
         // Create bind group layout
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Rect Bind Group Layout"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-            ],
+                count: None,
+            }],
         });
 
         // Create pipeline layout
@@ -161,12 +159,10 @@ impl RectPipeline {
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Rect Bind Group"),
             layout: &bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
         });
 
         Ok(Self {
@@ -212,7 +208,15 @@ impl RectPipeline {
 
     /// Push a line segment from (x1,y1) to (x2,y2) with the given thickness.
     /// This uses the line segment SDF in the shader for perfect anti-aliasing at any angle.
-    pub fn push_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: [f32; 4]) {
+    pub fn push_line(
+        &mut self,
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        thickness: f32,
+        color: [f32; 4],
+    ) {
         let base_idx = self.vertices.len() as u32;
         let half_t = thickness / 2.0;
         let pad = half_t + 1.0; // Extra pixel for anti-aliasing
@@ -255,7 +259,15 @@ impl RectPipeline {
     }
 
     /// Push a rounded rectangle with the given corner radius
-    pub fn push_rounded_rect(&mut self, x: f32, y: f32, width: f32, height: f32, color: [f32; 4], radius: f32) {
+    pub fn push_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: [f32; 4],
+        radius: f32,
+    ) {
         let base_idx = self.vertices.len() as u32;
 
         let x0 = x;
@@ -299,17 +311,21 @@ impl RectPipeline {
         let vertex_data = bytemuck::cast_slice(&self.vertices);
         let index_data = bytemuck::cast_slice(&self.indices);
 
-        self.vertex_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Rect Vertex Buffer"),
-            contents: vertex_data,
-            usage: BufferUsages::VERTEX,
-        }));
+        self.vertex_buffer = Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Rect Vertex Buffer"),
+                contents: vertex_data,
+                usage: BufferUsages::VERTEX,
+            }),
+        );
 
-        self.index_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Rect Index Buffer"),
-            contents: index_data,
-            usage: BufferUsages::INDEX,
-        }));
+        self.index_buffer = Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Rect Index Buffer"),
+                contents: index_data,
+                usage: BufferUsages::INDEX,
+            }),
+        );
     }
 
     /// Draw only the rectangles belonging to a specific layer.
@@ -319,8 +335,12 @@ impl RectPipeline {
             return;
         }
 
-        let Some(vertex_buffer) = &self.vertex_buffer else { return };
-        let Some(index_buffer) = &self.index_buffer else { return };
+        let Some(vertex_buffer) = &self.vertex_buffer else {
+            return;
+        };
+        let Some(index_buffer) = &self.index_buffer else {
+            return;
+        };
 
         // Determine index range for this layer
         let start = if layer == 0 {

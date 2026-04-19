@@ -87,11 +87,20 @@ pub enum PluginAction {
     /// Copy N lines from a plugin tab to clipboard
     CopyFromPluginTab { plugin_id: String, lines: usize },
     /// Apply a detected diff to the filesystem via `git apply`
-    ApplyDiff { diff_content: String, cwd: Option<String> },
+    ApplyDiff {
+        diff_content: String,
+        cwd: Option<String>,
+    },
     /// Stage a detected diff via `git apply --cached`
-    StageDiff { diff_content: String, cwd: Option<String> },
+    StageDiff {
+        diff_content: String,
+        cwd: Option<String>,
+    },
     /// Revert a detected diff via `git apply --reverse`
-    RevertDiff { diff_content: String, cwd: Option<String> },
+    RevertDiff {
+        diff_content: String,
+        cwd: Option<String>,
+    },
     /// Toggle transcript recording for the active Claude session
     ToggleTranscript,
     /// Inject context text into the active plugin tab
@@ -99,7 +108,10 @@ pub enum PluginAction {
     /// List available profiles for a plugin (shows selection overlay)
     ListProfiles { plugin_id: String },
     /// Apply a named profile to the active plugin session
-    ApplyProfile { plugin_id: String, profile_name: String },
+    ApplyProfile {
+        plugin_id: String,
+        profile_name: String,
+    },
 }
 
 /// Metadata for a command a plugin contributes to the command palette.

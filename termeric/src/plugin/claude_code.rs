@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::ai_common;
+use super::claude_profiles::{ClaudeProfile, resolve_repo_profile};
 use super::hooks::{
     Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext, PluginKeybinding,
 };
-use super::claude_profiles::{ClaudeProfile, resolve_repo_profile};
 
 /// Configuration for the Claude Code plugin.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -97,8 +97,7 @@ impl ClaudeCodePlugin {
         profile_approval_mode: Option<&str>,
     ) -> Vec<String> {
         // Collect approval-mode flag + config args + profile args into one slice
-        let effective_approval = profile_approval_mode
-            .or(self.config.approval_mode.as_deref());
+        let effective_approval = profile_approval_mode.or(self.config.approval_mode.as_deref());
 
         let mut combined_extra: Vec<String> = Vec::new();
         if effective_approval == Some("auto-accept") {
@@ -209,13 +208,11 @@ impl Plugin for ClaudeCodePlugin {
                 "claude-code.open" => {
                     HookResponse::Actions(self.build_launch_actions(ctx, &[], "Claude Code"))
                 }
-                "claude-code.resume" => {
-                    HookResponse::Actions(self.build_launch_actions(
-                        ctx,
-                        &["--continue"],
-                        "Claude Code (resume)",
-                    ))
-                }
+                "claude-code.resume" => HookResponse::Actions(self.build_launch_actions(
+                    ctx,
+                    &["--continue"],
+                    "Claude Code (resume)",
+                )),
                 "claude-code.copy-last" => HookResponse::Action(PluginAction::CopyFromPluginTab {
                     plugin_id: "claude-code".to_string(),
                     lines: self.config.copy_lines,
@@ -226,7 +223,9 @@ impl Plugin for ClaudeCodePlugin {
                 "claude-code.restart" => HookResponse::Action(PluginAction::RestartPlugin {
                     plugin_id: "claude-code".to_string(),
                 }),
-                "claude-code.toggle-transcript" => HookResponse::Action(PluginAction::ToggleTranscript),
+                "claude-code.toggle-transcript" => {
+                    HookResponse::Action(PluginAction::ToggleTranscript)
+                }
                 // review-diff, copy-diff, insert-context, export-session, jump-to-error,
                 // and select-profile are handled directly by the App
                 "claude-code.review-diff"
@@ -589,7 +588,10 @@ mod tests {
             },
             &ctx,
         );
-        assert!(matches!(response, HookResponse::Action(PluginAction::ToggleTranscript)));
+        assert!(matches!(
+            response,
+            HookResponse::Action(PluginAction::ToggleTranscript)
+        ));
     }
 
     #[test]
@@ -750,9 +752,7 @@ mod tests {
 
         match extract_open_tab(response) {
             Some(PluginAction::OpenTab {
-                args,
-                env: tab_env,
-                ..
+                args, env: tab_env, ..
             }) => {
                 // Profile env should be passed through
                 assert_eq!(tab_env.get("CLAUDE_API_KEY"), Some(&"test-key".to_string()));
@@ -802,9 +802,7 @@ mod tests {
 
         match extract_open_tab(response) {
             Some(PluginAction::OpenTab {
-                args,
-                env: tab_env,
-                ..
+                args, env: tab_env, ..
             }) => {
                 assert_eq!(tab_env.get("MY_VAR"), Some(&"my-val".to_string()));
                 assert!(args.contains(&"--continue".to_string()));

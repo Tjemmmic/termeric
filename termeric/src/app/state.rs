@@ -22,14 +22,12 @@ impl AppState {
 
         if state_path.exists() {
             match std::fs::read_to_string(&state_path) {
-                Ok(content) => {
-                    match serde_json::from_str(&content) {
-                        Ok(state) => return state,
-                        Err(e) => {
-                            log::warn!("Failed to parse state file: {}", e);
-                        }
+                Ok(content) => match serde_json::from_str(&content) {
+                    Ok(state) => return state,
+                    Err(e) => {
+                        log::warn!("Failed to parse state file: {}", e);
                     }
-                }
+                },
                 Err(e) => {
                     log::warn!("Failed to read state file: {}", e);
                 }

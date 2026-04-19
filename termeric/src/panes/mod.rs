@@ -3,19 +3,19 @@
 //! This module provides support for splitting a tab into multiple terminal panes,
 //! arranged in a binary tree structure for flexible horizontal and vertical splits.
 
-mod tree;
 mod layout;
+mod tree;
 
-pub use tree::{PaneTree, PaneId, SplitDirection};
 pub use layout::PaneRect;
+pub use tree::{PaneId, PaneTree, SplitDirection};
 
+use crate::config::ShellConfig;
+use crate::terminal::container::{SplitContainer, TerminalContainer};
 use std::collections::HashMap;
 use std::io;
 use std::sync::mpsc::Receiver;
-use termeric_core::{Pty, Terminal, TerminalEvent};
 use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
-use crate::config::ShellConfig;
-use crate::terminal::container::{TerminalContainer, SplitContainer};
+use termeric_core::{Pty, Terminal, TerminalEvent};
 
 /// Four-way direction for pane navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +57,13 @@ pub struct Pane {
 
 impl Pane {
     /// Create a new pane with a shell
-    pub fn new(id: PaneId, cols: usize, rows: usize, shell: &ShellConfig, scrollback_lines: usize) -> anyhow::Result<Self> {
+    pub fn new(
+        id: PaneId,
+        cols: usize,
+        rows: usize,
+        shell: &ShellConfig,
+        scrollback_lines: usize,
+    ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(cols, rows);
         terminal.grid_mut().set_scrollback_limit(scrollback_lines);
         let pty = Pty::new_with_command(
@@ -250,7 +256,12 @@ impl PaneManager {
         // Recalculate all pane sizes
         self.recalculate_sizes();
 
-        log::info!("Split pane {:?} {:?}, created pane {:?}", self.focused, direction, new_id);
+        log::info!(
+            "Split pane {:?} {:?}, created pane {:?}",
+            self.focused,
+            direction,
+            new_id
+        );
         Ok(new_id)
     }
 
@@ -290,7 +301,9 @@ impl PaneManager {
     /// user a cue when they hit the edge of the layout.
     pub fn navigate(&mut self, dir: PaneDir) -> bool {
         let layout = self.calculate_layout();
-        let Some(current) = layout.get(&self.focused).copied() else { return false };
+        let Some(current) = layout.get(&self.focused).copied() else {
+            return false;
+        };
 
         let target = layout
             .iter()
@@ -361,7 +374,13 @@ impl PaneManager {
     }
 
     /// Resize the total available space
-    pub fn resize(&mut self, total_width: f32, total_height: f32, cell_width: f32, cell_height: f32) {
+    pub fn resize(
+        &mut self,
+        total_width: f32,
+        total_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) {
         self.total_width = total_width;
         self.total_height = total_height;
         self.cell_width = cell_width;
@@ -412,8 +431,10 @@ impl PaneManager {
     /// Returns true if a divider was hit and resized.
     pub fn resize_divider_at(&mut self, pos_x: f32, pos_y: f32, threshold: f32) -> bool {
         let rect = PaneRect {
-            x: 0.0, y: 0.0,
-            width: self.total_width, height: self.total_height,
+            x: 0.0,
+            y: 0.0,
+            width: self.total_width,
+            height: self.total_height,
         };
         if self.tree.resize_at(rect, pos_x, pos_y, threshold) {
             // Recalculate pane sizes after ratio change
@@ -427,8 +448,10 @@ impl PaneManager {
     /// Hit-test dividers. Returns Some(is_vertical) if near a divider.
     pub fn hit_test_divider(&self, pos_x: f32, pos_y: f32) -> Option<bool> {
         let rect = PaneRect {
-            x: 0.0, y: 0.0,
-            width: self.total_width, height: self.total_height,
+            x: 0.0,
+            y: 0.0,
+            width: self.total_width,
+            height: self.total_height,
         };
         self.tree.hit_test_divider(rect, pos_x, pos_y)
     }
@@ -453,16 +476,17 @@ impl PaneManager {
     /// Iterate over all panes with their layouts
     pub fn iter_with_layout(&self) -> impl Iterator<Item = (&Pane, PaneRect)> {
         let layout = self.calculate_layout();
-        self.panes.values().filter_map(move |pane| {
-            layout.get(&pane.id).map(|&rect| (pane, rect))
-        })
+        self.panes
+            .values()
+            .filter_map(move |pane| layout.get(&pane.id).map(|&rect| (pane, rect)))
     }
 
     /// Remove closed panes and resize remaining panes to fill the space.
     ///
     /// Returns true if panes remain, false if the map is now empty.
     pub fn cleanup_closed(&mut self) -> bool {
-        let closed: Vec<PaneId> = self.panes
+        let closed: Vec<PaneId> = self
+            .panes
             .iter()
             .filter(|(_, pane)| pane.closed)
             .map(|(&id, _)| id)
@@ -573,11 +597,12 @@ impl SplitContainer for PaneManager {
 
     fn iter_panes(&self) -> Vec<(&Terminal, PaneRect, bool)> {
         let layout = self.calculate_layout();
-        self.panes.values()
+        self.panes
+            .values()
             .filter_map(|pane| {
-                layout.get(&pane.id).map(|&rect| {
-                    (&pane.terminal, rect, pane.id == self.focused)
-                })
+                layout
+                    .get(&pane.id)
+                    .map(|&rect| (&pane.terminal, rect, pane.id == self.focused))
             })
             .collect()
     }

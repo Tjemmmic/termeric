@@ -26,8 +26,8 @@ impl GrowthPhase {
     /// Get the color for this phase [r, g, b, a]
     pub fn color(&self) -> [f32; 4] {
         match self {
-            Self::Seed => [0.5, 0.4, 0.3, 0.6],      // Brown seed
-            Self::Sprouting => [0.5, 0.6, 0.4, 0.8], // Light green
+            Self::Seed => [0.5, 0.4, 0.3, 0.6],       // Brown seed
+            Self::Sprouting => [0.5, 0.6, 0.4, 0.8],  // Light green
             Self::Growing => [0.4, 0.7, 0.3, 1.0],    // Green
             Self::FullGrowth => [0.3, 0.8, 0.3, 1.0], // Bright green
             Self::Withering => [0.6, 0.4, 0.3, 0.8],  // Brown (wilted)
@@ -39,12 +39,12 @@ impl GrowthPhase {
     /// Get a character representation for text-based display
     pub fn character(&self) -> char {
         match self {
-            Self::Seed => '\u{25CF}',      // Filled circle
-            Self::Sprouting => '\u{2740}', // Flower
-            Self::Growing => '\u{2618}',   // Shamrock
+            Self::Seed => '\u{25CF}',       // Filled circle
+            Self::Sprouting => '\u{2740}',  // Flower
+            Self::Growing => '\u{2618}',    // Shamrock
             Self::FullGrowth => '\u{2766}', // Floral heart
-            Self::Withering => '\u{2767}', // Rotated floral heart
-            Self::Blooming => '\u{2055}',  // Flower
+            Self::Withering => '\u{2767}',  // Rotated floral heart
+            Self::Blooming => '\u{2055}',   // Flower
             Self::Finished => ' ',
         }
     }

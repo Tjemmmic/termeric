@@ -51,14 +51,14 @@ impl AnsiColor {
 /// Get the default color for a normal ANSI color (0-7)
 pub fn ansi_color(idx: u16) -> Color {
     match idx {
-        0 => Color::rgb(0, 0, 0),         // Black
-        1 => Color::rgb(205, 49, 49),     // Red
-        2 => Color::rgb(13, 188, 121),    // Green
-        3 => Color::rgb(229, 229, 16),    // Yellow
-        4 => Color::rgb(36, 114, 200),    // Blue
-        5 => Color::rgb(188, 63, 188),    // Magenta
-        6 => Color::rgb(17, 168, 205),    // Cyan
-        7 => Color::rgb(229, 229, 229),   // White
+        0 => Color::rgb(0, 0, 0),       // Black
+        1 => Color::rgb(205, 49, 49),   // Red
+        2 => Color::rgb(13, 188, 121),  // Green
+        3 => Color::rgb(229, 229, 16),  // Yellow
+        4 => Color::rgb(36, 114, 200),  // Blue
+        5 => Color::rgb(188, 63, 188),  // Magenta
+        6 => Color::rgb(17, 168, 205),  // Cyan
+        7 => Color::rgb(229, 229, 229), // White
         _ => Color::rgb(255, 255, 255),
     }
 }
@@ -66,14 +66,14 @@ pub fn ansi_color(idx: u16) -> Color {
 /// Get the default color for a bright ANSI color (8-15)
 pub fn ansi_bright_color(idx: u16) -> Color {
     match idx {
-        0 => Color::rgb(102, 102, 102),   // Bright Black (Gray)
-        1 => Color::rgb(241, 76, 76),     // Bright Red
-        2 => Color::rgb(35, 209, 139),    // Bright Green
-        3 => Color::rgb(245, 245, 67),    // Bright Yellow
-        4 => Color::rgb(59, 142, 234),    // Bright Blue
-        5 => Color::rgb(214, 112, 214),   // Bright Magenta
-        6 => Color::rgb(41, 184, 219),    // Bright Cyan
-        7 => Color::rgb(255, 255, 255),   // Bright White
+        0 => Color::rgb(102, 102, 102), // Bright Black (Gray)
+        1 => Color::rgb(241, 76, 76),   // Bright Red
+        2 => Color::rgb(35, 209, 139),  // Bright Green
+        3 => Color::rgb(245, 245, 67),  // Bright Yellow
+        4 => Color::rgb(59, 142, 234),  // Bright Blue
+        5 => Color::rgb(214, 112, 214), // Bright Magenta
+        6 => Color::rgb(41, 184, 219),  // Bright Cyan
+        7 => Color::rgb(255, 255, 255), // Bright White
         _ => Color::rgb(255, 255, 255),
     }
 }
@@ -96,9 +96,7 @@ pub fn color_256(idx: u8) -> Color {
 
             // Convert to 0-255 range
             // 0 -> 0, 1 -> 95, 2 -> 135, 3 -> 175, 4 -> 215, 5 -> 255
-            let to_255 = |v: u8| -> u8 {
-                if v == 0 { 0 } else { v * 40 + 55 }
-            };
+            let to_255 = |v: u8| -> u8 { if v == 0 { 0 } else { v * 40 + 55 } };
 
             Color::rgb(to_255(r), to_255(g), to_255(b))
         }
@@ -163,5 +161,4 @@ mod tests {
         let light = color_256(255);
         assert_eq!(light, Color::rgb(238, 238, 238));
     }
-
 }

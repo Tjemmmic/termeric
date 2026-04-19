@@ -36,12 +36,33 @@ impl Default for Theme {
 /// `test_all_listed_themes_load`).
 const BUILTIN_THEME_NAMES: [&str; 26] = [
     // Root themes (Termeric house palettes)
-    "turmeric", "ginger", "daikon", "malanga", "beet", "turnip",
-    "yuca", "taro", "wasabi", "galangal", "horseradish", "parsnip",
+    "turmeric",
+    "ginger",
+    "daikon",
+    "malanga",
+    "beet",
+    "turnip",
+    "yuca",
+    "taro",
+    "wasabi",
+    "galangal",
+    "horseradish",
+    "parsnip",
     // Community themes
-    "solarized-dark", "solarized-light", "dracula", "nord",
-    "gruvbox-dark", "gruvbox-light", "catppuccin-mocha", "catppuccin-latte",
-    "tokyo-night", "one-dark", "one-light", "rose-pine", "kanagawa", "everforest",
+    "solarized-dark",
+    "solarized-light",
+    "dracula",
+    "nord",
+    "gruvbox-dark",
+    "gruvbox-light",
+    "catppuccin-mocha",
+    "catppuccin-latte",
+    "tokyo-night",
+    "one-dark",
+    "one-light",
+    "rose-pine",
+    "kanagawa",
+    "everforest",
 ];
 
 impl Theme {
@@ -58,32 +79,32 @@ impl Theme {
         let toml_str = match name.to_lowercase().as_str() {
             // ── Root themes (Termeric house palettes) ──
             "turmeric" | "default" => include_str!("../../themes/roots/turmeric.toml"),
-            "ginger"              => include_str!("../../themes/roots/ginger.toml"),
-            "daikon"              => include_str!("../../themes/roots/daikon.toml"),
-            "malanga"             => include_str!("../../themes/roots/malanga.toml"),
-            "beet"                => include_str!("../../themes/roots/beet.toml"),
-            "turnip"              => include_str!("../../themes/roots/turnip.toml"),
-            "yuca"                => include_str!("../../themes/roots/yuca.toml"),
-            "taro"                => include_str!("../../themes/roots/taro.toml"),
-            "wasabi"              => include_str!("../../themes/roots/wasabi.toml"),
-            "galangal"            => include_str!("../../themes/roots/galangal.toml"),
-            "horseradish"         => include_str!("../../themes/roots/horseradish.toml"),
-            "parsnip"             => include_str!("../../themes/roots/parsnip.toml"),
+            "ginger" => include_str!("../../themes/roots/ginger.toml"),
+            "daikon" => include_str!("../../themes/roots/daikon.toml"),
+            "malanga" => include_str!("../../themes/roots/malanga.toml"),
+            "beet" => include_str!("../../themes/roots/beet.toml"),
+            "turnip" => include_str!("../../themes/roots/turnip.toml"),
+            "yuca" => include_str!("../../themes/roots/yuca.toml"),
+            "taro" => include_str!("../../themes/roots/taro.toml"),
+            "wasabi" => include_str!("../../themes/roots/wasabi.toml"),
+            "galangal" => include_str!("../../themes/roots/galangal.toml"),
+            "horseradish" => include_str!("../../themes/roots/horseradish.toml"),
+            "parsnip" => include_str!("../../themes/roots/parsnip.toml"),
             // ── Community themes ──
-            "solarized-dark"   => include_str!("../../themes/community/solarized-dark.toml"),
-            "solarized-light"  => include_str!("../../themes/community/solarized-light.toml"),
-            "dracula"          => include_str!("../../themes/community/dracula.toml"),
-            "nord"             => include_str!("../../themes/community/nord.toml"),
-            "gruvbox-dark"     => include_str!("../../themes/community/gruvbox-dark.toml"),
-            "gruvbox-light"    => include_str!("../../themes/community/gruvbox-light.toml"),
+            "solarized-dark" => include_str!("../../themes/community/solarized-dark.toml"),
+            "solarized-light" => include_str!("../../themes/community/solarized-light.toml"),
+            "dracula" => include_str!("../../themes/community/dracula.toml"),
+            "nord" => include_str!("../../themes/community/nord.toml"),
+            "gruvbox-dark" => include_str!("../../themes/community/gruvbox-dark.toml"),
+            "gruvbox-light" => include_str!("../../themes/community/gruvbox-light.toml"),
             "catppuccin-mocha" => include_str!("../../themes/community/catppuccin-mocha.toml"),
             "catppuccin-latte" => include_str!("../../themes/community/catppuccin-latte.toml"),
-            "tokyo-night"      => include_str!("../../themes/community/tokyo-night.toml"),
-            "one-dark"         => include_str!("../../themes/community/one-dark.toml"),
-            "one-light"        => include_str!("../../themes/community/one-light.toml"),
-            "rose-pine"        => include_str!("../../themes/community/rose-pine.toml"),
-            "kanagawa"         => include_str!("../../themes/community/kanagawa.toml"),
-            "everforest"       => include_str!("../../themes/community/everforest.toml"),
+            "tokyo-night" => include_str!("../../themes/community/tokyo-night.toml"),
+            "one-dark" => include_str!("../../themes/community/one-dark.toml"),
+            "one-light" => include_str!("../../themes/community/one-light.toml"),
+            "rose-pine" => include_str!("../../themes/community/rose-pine.toml"),
+            "kanagawa" => include_str!("../../themes/community/kanagawa.toml"),
+            "everforest" => include_str!("../../themes/community/everforest.toml"),
             _ => return Err(anyhow!("Unknown built-in theme: {}", name)),
         };
         let theme: Theme = toml::from_str(toml_str)?;
@@ -180,14 +201,54 @@ pub struct PrimaryColors {
 impl Default for PrimaryColors {
     fn default() -> Self {
         Self {
-            black:   Color { r: 0x1C, g: 0x14, b: 0x10, a: 1.0 },
-            red:     Color { r: 0xC7, g: 0x56, b: 0x46, a: 1.0 },
-            green:   Color { r: 0x5D, g: 0x8C, b: 0x4A, a: 1.0 },
-            yellow:  Color { r: 0xC9, g: 0xA2, b: 0x27, a: 1.0 },
-            blue:    Color { r: 0x6B, g: 0x8E, b: 0x9B, a: 1.0 },
-            magenta: Color { r: 0xA6, g: 0x7B, b: 0x8A, a: 1.0 },
-            cyan:    Color { r: 0x4A, g: 0x8C, b: 0x7B, a: 1.0 },
-            white:   Color { r: 0xD4, g: 0xC4, b: 0xA8, a: 1.0 },
+            black: Color {
+                r: 0x1C,
+                g: 0x14,
+                b: 0x10,
+                a: 1.0,
+            },
+            red: Color {
+                r: 0xC7,
+                g: 0x56,
+                b: 0x46,
+                a: 1.0,
+            },
+            green: Color {
+                r: 0x5D,
+                g: 0x8C,
+                b: 0x4A,
+                a: 1.0,
+            },
+            yellow: Color {
+                r: 0xC9,
+                g: 0xA2,
+                b: 0x27,
+                a: 1.0,
+            },
+            blue: Color {
+                r: 0x6B,
+                g: 0x8E,
+                b: 0x9B,
+                a: 1.0,
+            },
+            magenta: Color {
+                r: 0xA6,
+                g: 0x7B,
+                b: 0x8A,
+                a: 1.0,
+            },
+            cyan: Color {
+                r: 0x4A,
+                g: 0x8C,
+                b: 0x7B,
+                a: 1.0,
+            },
+            white: Color {
+                r: 0xD4,
+                g: 0xC4,
+                b: 0xA8,
+                a: 1.0,
+            },
         }
     }
 }
@@ -208,14 +269,54 @@ pub struct BrightColors {
 impl Default for BrightColors {
     fn default() -> Self {
         Self {
-            black:   Color { r: 0x3D, g: 0x30, b: 0x28, a: 1.0 },
-            red:     Color { r: 0xE0, g: 0x7B, b: 0x5F, a: 1.0 },
-            green:   Color { r: 0x7C, g: 0xB8, b: 0x6A, a: 1.0 },
-            yellow:  Color { r: 0xE8, g: 0xA8, b: 0x38, a: 1.0 },
-            blue:    Color { r: 0x8B, g: 0xB0, b: 0xC0, a: 1.0 },
-            magenta: Color { r: 0xC8, g: 0x99, b: 0xA8, a: 1.0 },
-            cyan:    Color { r: 0x6B, g: 0xB8, b: 0x9E, a: 1.0 },
-            white:   Color { r: 0xF5, g: 0xEB, b: 0xD9, a: 1.0 },
+            black: Color {
+                r: 0x3D,
+                g: 0x30,
+                b: 0x28,
+                a: 1.0,
+            },
+            red: Color {
+                r: 0xE0,
+                g: 0x7B,
+                b: 0x5F,
+                a: 1.0,
+            },
+            green: Color {
+                r: 0x7C,
+                g: 0xB8,
+                b: 0x6A,
+                a: 1.0,
+            },
+            yellow: Color {
+                r: 0xE8,
+                g: 0xA8,
+                b: 0x38,
+                a: 1.0,
+            },
+            blue: Color {
+                r: 0x8B,
+                g: 0xB0,
+                b: 0xC0,
+                a: 1.0,
+            },
+            magenta: Color {
+                r: 0xC8,
+                g: 0x99,
+                b: 0xA8,
+                a: 1.0,
+            },
+            cyan: Color {
+                r: 0x6B,
+                g: 0xB8,
+                b: 0x9E,
+                a: 1.0,
+            },
+            white: Color {
+                r: 0xF5,
+                g: 0xEB,
+                b: 0xD9,
+                a: 1.0,
+            },
         }
     }
 }
@@ -240,17 +341,67 @@ pub struct UiColors {
 impl Default for UiColors {
     fn default() -> Self {
         Self {
-            background:     Color { r: 0x1C, g: 0x14, b: 0x10, a: 1.0 },
-            foreground:     Color { r: 0xD4, g: 0xC4, b: 0xA8, a: 1.0 },
-            cursor:         Color { r: 0xE0, g: 0x7B, b: 0x20, a: 1.0 },
-            cursor_text:    Color { r: 0x1C, g: 0x14, b: 0x10, a: 1.0 },
-            selection:      Color { r: 0xC9, g: 0xA2, b: 0x27, a: 0.35 },
-            selection_text:  None,
-            border:         Color { r: 0x3D, g: 0x30, b: 0x28, a: 1.0 },
-            tab_active:     Color { r: 0xE0, g: 0x7B, b: 0x20, a: 1.0 },
-            tab_inactive:   Color { r: 0x2D, g: 0x24, b: 0x20, a: 1.0 },
-            search_match:   Color { r: 0x7C, g: 0xB8, b: 0x6A, a: 0.4 },
-            url:            Color { r: 0x6B, g: 0xB8, b: 0x9E, a: 1.0 },
+            background: Color {
+                r: 0x1C,
+                g: 0x14,
+                b: 0x10,
+                a: 1.0,
+            },
+            foreground: Color {
+                r: 0xD4,
+                g: 0xC4,
+                b: 0xA8,
+                a: 1.0,
+            },
+            cursor: Color {
+                r: 0xE0,
+                g: 0x7B,
+                b: 0x20,
+                a: 1.0,
+            },
+            cursor_text: Color {
+                r: 0x1C,
+                g: 0x14,
+                b: 0x10,
+                a: 1.0,
+            },
+            selection: Color {
+                r: 0xC9,
+                g: 0xA2,
+                b: 0x27,
+                a: 0.35,
+            },
+            selection_text: None,
+            border: Color {
+                r: 0x3D,
+                g: 0x30,
+                b: 0x28,
+                a: 1.0,
+            },
+            tab_active: Color {
+                r: 0xE0,
+                g: 0x7B,
+                b: 0x20,
+                a: 1.0,
+            },
+            tab_inactive: Color {
+                r: 0x2D,
+                g: 0x24,
+                b: 0x20,
+                a: 1.0,
+            },
+            search_match: Color {
+                r: 0x7C,
+                g: 0xB8,
+                b: 0x6A,
+                a: 0.4,
+            },
+            url: Color {
+                r: 0x6B,
+                g: 0xB8,
+                b: 0x9E,
+                a: 1.0,
+            },
         }
     }
 }

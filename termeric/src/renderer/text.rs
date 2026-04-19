@@ -2,8 +2,8 @@
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
-use wgpu::*;
 use wgpu::util::DeviceExt;
+use wgpu::*;
 
 use super::glyph_cache::GlyphCache;
 
@@ -294,22 +294,33 @@ impl TextPipeline {
             let vertex_data = bytemuck::cast_slice(&self.vertices);
             let index_data = bytemuck::cast_slice(&self.indices);
 
-            self.vertex_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Text Vertex Buffer"),
-                contents: vertex_data,
-                usage: BufferUsages::VERTEX,
-            }));
+            self.vertex_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Text Vertex Buffer"),
+                    contents: vertex_data,
+                    usage: BufferUsages::VERTEX,
+                },
+            ));
 
-            self.index_buffer = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Text Index Buffer"),
-                contents: index_data,
-                usage: BufferUsages::INDEX,
-            }));
+            self.index_buffer = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Text Index Buffer"),
+                    contents: index_data,
+                    usage: BufferUsages::INDEX,
+                },
+            ));
         }
     }
 
     /// Standard per-character upload (no ligatures)
-    fn upload_standard(&mut self, queue: &Queue, glyph_cache: &mut GlyphCache, atlas_w: f32, atlas_h: f32, baseline: f32) {
+    fn upload_standard(
+        &mut self,
+        queue: &Queue,
+        glyph_cache: &mut GlyphCache,
+        atlas_w: f32,
+        atlas_h: f32,
+        baseline: f32,
+    ) {
         // Build index-space layer boundaries as we iterate through queued chars
         self.index_layer_boundaries.clear();
         let mut next_boundary_idx = 0usize;
@@ -323,7 +334,9 @@ impl TextPipeline {
                 next_boundary_idx += 1;
             }
 
-            let Some(entry) = glyph_cache.get_or_insert(queued.c, queue) else { continue };
+            let Some(entry) = glyph_cache.get_or_insert(queued.c, queue) else {
+                continue;
+            };
 
             if entry.width == 0 || entry.height == 0 {
                 continue;
@@ -342,12 +355,35 @@ impl TextPipeline {
 
             let base_idx = self.vertices.len() as u32;
 
-            self.vertices.push(TextVertex { position: [x0, y0], tex_coords: [u0, v0], color: queued.color });
-            self.vertices.push(TextVertex { position: [x1, y0], tex_coords: [u1, v0], color: queued.color });
-            self.vertices.push(TextVertex { position: [x1, y1], tex_coords: [u1, v1], color: queued.color });
-            self.vertices.push(TextVertex { position: [x0, y1], tex_coords: [u0, v1], color: queued.color });
+            self.vertices.push(TextVertex {
+                position: [x0, y0],
+                tex_coords: [u0, v0],
+                color: queued.color,
+            });
+            self.vertices.push(TextVertex {
+                position: [x1, y0],
+                tex_coords: [u1, v0],
+                color: queued.color,
+            });
+            self.vertices.push(TextVertex {
+                position: [x1, y1],
+                tex_coords: [u1, v1],
+                color: queued.color,
+            });
+            self.vertices.push(TextVertex {
+                position: [x0, y1],
+                tex_coords: [u0, v1],
+                color: queued.color,
+            });
 
-            self.indices.extend_from_slice(&[base_idx, base_idx + 1, base_idx + 2, base_idx, base_idx + 2, base_idx + 3]);
+            self.indices.extend_from_slice(&[
+                base_idx,
+                base_idx + 1,
+                base_idx + 2,
+                base_idx,
+                base_idx + 2,
+                base_idx + 3,
+            ]);
         }
 
         // Flush any remaining layer boundaries (layers with no chars, or at the end)
@@ -363,14 +399,25 @@ impl TextPipeline {
     /// Because text vertices are built from queued chars during upload(),
     /// and each queued char produces exactly 4 vertices / 6 indices,
     /// we can map layer boundaries (in queued-char space) to index ranges.
-    pub fn draw_layer<'a>(&'a self, render_pass: &mut RenderPass<'a>, _glyph_cache: &'a GlyphCache, layer: usize) {
+    pub fn draw_layer<'a>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        _glyph_cache: &'a GlyphCache,
+        layer: usize,
+    ) {
         if self.indices.is_empty() {
             return;
         }
 
-        let Some(vertex_buffer) = &self.vertex_buffer else { return };
-        let Some(index_buffer) = &self.index_buffer else { return };
-        let Some(bind_group) = &self.bind_group else { return };
+        let Some(vertex_buffer) = &self.vertex_buffer else {
+            return;
+        };
+        let Some(index_buffer) = &self.index_buffer else {
+            return;
+        };
+        let Some(bind_group) = &self.bind_group else {
+            return;
+        };
 
         // Each queued char produces at most 6 indices (one quad),
         // but some chars may produce 0 indices (whitespace, missing glyphs).

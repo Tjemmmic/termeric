@@ -37,22 +37,49 @@ pub enum Severity {
 /// Known destructive command patterns
 static PATTERNS: &[(&str, &str, Severity)] = &[
     // Critical: system-level destructive commands
-    ("rm -rf /", "Recursive force-delete from root", Severity::Critical),
-    ("rm -rf ~", "Recursive force-delete home directory", Severity::Critical),
-    ("rm -rf /*", "Recursive force-delete root contents", Severity::Critical),
+    (
+        "rm -rf /",
+        "Recursive force-delete from root",
+        Severity::Critical,
+    ),
+    (
+        "rm -rf ~",
+        "Recursive force-delete home directory",
+        Severity::Critical,
+    ),
+    (
+        "rm -rf /*",
+        "Recursive force-delete root contents",
+        Severity::Critical,
+    ),
     ("> /dev/sd", "Overwrite raw disk device", Severity::Critical),
     ("dd if=", "Raw disk write (dd)", Severity::Critical),
     ("mkfs.", "Format filesystem", Severity::Critical),
-    ("chmod -R 777 /", "Open all permissions from root", Severity::Critical),
+    (
+        "chmod -R 777 /",
+        "Open all permissions from root",
+        Severity::Critical,
+    ),
     (":(){ :|:& };:", "Fork bomb", Severity::Critical),
-
     // Warning: potentially dangerous commands
     ("rm -rf", "Recursive force-delete", Severity::Warning),
     ("sudo rm", "Deleting files as root", Severity::Warning),
-    ("chmod -R 777", "Opening all permissions recursively", Severity::Warning),
-    ("chown -R", "Changing ownership recursively", Severity::Warning),
+    (
+        "chmod -R 777",
+        "Opening all permissions recursively",
+        Severity::Warning,
+    ),
+    (
+        "chown -R",
+        "Changing ownership recursively",
+        Severity::Warning,
+    ),
     ("> /dev/null", "Redirecting to /dev/null", Severity::Warning),
-    ("truncate -s 0", "Truncating file to zero", Severity::Warning),
+    (
+        "truncate -s 0",
+        "Truncating file to zero",
+        Severity::Warning,
+    ),
 ];
 
 /// Check an input line against destructive patterns.
@@ -73,7 +100,9 @@ pub fn check_command(input: &str) -> Option<GuardrailMatch> {
         if lower.contains(pattern) {
             let is_better = match (&best_match, severity) {
                 (None, _) => true,
-                (Some(existing), Severity::Critical) if existing.severity != Severity::Critical => true,
+                (Some(existing), Severity::Critical) if existing.severity != Severity::Critical => {
+                    true
+                }
                 _ => false,
             };
             if is_better {

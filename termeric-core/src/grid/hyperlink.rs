@@ -108,10 +108,8 @@ mod tests {
         assert_eq!(link.url, "https://example.com");
         assert!(link.id.is_none());
 
-        let link_with_id = Hyperlink::with_id(
-            "https://example.com".to_string(),
-            "my-link".to_string(),
-        );
+        let link_with_id =
+            Hyperlink::with_id("https://example.com".to_string(), "my-link".to_string());
         assert_eq!(link_with_id.id, Some("my-link".to_string()));
     }
 
@@ -142,14 +140,10 @@ mod tests {
         let mut registry = HyperlinkRegistry::new();
 
         // Same URL but different IDs should be different entries
-        let id1 = registry.get_or_insert(
-            "https://example.com".to_string(),
-            Some("link1".to_string()),
-        );
-        let id2 = registry.get_or_insert(
-            "https://example.com".to_string(),
-            Some("link2".to_string()),
-        );
+        let id1 =
+            registry.get_or_insert("https://example.com".to_string(), Some("link1".to_string()));
+        let id2 =
+            registry.get_or_insert("https://example.com".to_string(), Some("link2".to_string()));
 
         assert_ne!(id1, id2);
         assert_eq!(registry.len(), 2);

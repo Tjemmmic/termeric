@@ -143,29 +143,30 @@ impl KittyCommand {
         let placement_id = params.get("p").and_then(|s| s.parse().ok());
 
         // Parse transmission parameters
-        let transmission = if action == KittyAction::Transmit || action == KittyAction::TransmitAndDisplay {
-            Some(KittyTransmission {
-                format: match params.get("f").map(|s| s.as_str()) {
-                    Some("24") => KittyFormat::Rgb,
-                    Some("100") => KittyFormat::Png,
-                    _ => KittyFormat::Rgba,
-                },
-                width: params.get("s").and_then(|s| s.parse().ok()),
-                height: params.get("v").and_then(|s| s.parse().ok()),
-                medium: match params.get("t").map(|s| s.as_str()) {
-                    Some("f") => KittyMedium::File,
-                    Some("t") => KittyMedium::TempFile,
-                    Some("s") => KittyMedium::SharedMemory,
-                    _ => KittyMedium::Direct,
-                },
-                compression: match params.get("o").map(|s| s.as_str()) {
-                    Some("z") => KittyCompression::Zlib,
-                    _ => KittyCompression::None,
-                },
-            })
-        } else {
-            None
-        };
+        let transmission =
+            if action == KittyAction::Transmit || action == KittyAction::TransmitAndDisplay {
+                Some(KittyTransmission {
+                    format: match params.get("f").map(|s| s.as_str()) {
+                        Some("24") => KittyFormat::Rgb,
+                        Some("100") => KittyFormat::Png,
+                        _ => KittyFormat::Rgba,
+                    },
+                    width: params.get("s").and_then(|s| s.parse().ok()),
+                    height: params.get("v").and_then(|s| s.parse().ok()),
+                    medium: match params.get("t").map(|s| s.as_str()) {
+                        Some("f") => KittyMedium::File,
+                        Some("t") => KittyMedium::TempFile,
+                        Some("s") => KittyMedium::SharedMemory,
+                        _ => KittyMedium::Direct,
+                    },
+                    compression: match params.get("o").map(|s| s.as_str()) {
+                        Some("z") => KittyCompression::Zlib,
+                        _ => KittyCompression::None,
+                    },
+                })
+            } else {
+                None
+            };
 
         // Parse placement parameters
         let placement = Some(KittyPlacement {
@@ -225,7 +226,8 @@ fn decode_base64(data: &[u8]) -> Option<Vec<u8>> {
         table
     };
 
-    let data: Vec<u8> = data.iter()
+    let data: Vec<u8> = data
+        .iter()
         .copied()
         .filter(|&b| b != b'\n' && b != b'\r' && b != b' ')
         .collect();

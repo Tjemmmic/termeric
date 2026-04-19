@@ -9,13 +9,13 @@ mod selection;
 
 pub use cursor::SavedCursor;
 pub use mode::TerminalMode;
-pub use selection::{Selection, SelectionType, Point};
+pub use selection::{Point, Selection, SelectionType};
 
-use crate::grid::{Grid, CellAttrs, CellContent, CellFlags, Color, ColorSpec, HyperlinkRegistry};
 use crate::ansi::Processor;
-use crate::graphics::{GraphicsManager, KittyCommand, ImagePlacement, ImageId, StoredImage};
-use crate::shell::ShellIntegration;
 use crate::event::TerminalEvent;
+use crate::graphics::{GraphicsManager, ImageId, ImagePlacement, KittyCommand, StoredImage};
+use crate::grid::{CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry};
+use crate::shell::ShellIntegration;
 
 /// Tab stop interval
 const TAB_INTERVAL: usize = 8;
@@ -305,7 +305,8 @@ impl Terminal {
             if scroll_top == 0 && scroll_bottom == self.rows {
                 self.grid_mut().scroll_down();
             } else {
-                self.grid_mut().scroll_region_down(scroll_top, scroll_bottom);
+                self.grid_mut()
+                    .scroll_region_down(scroll_top, scroll_bottom);
             }
         }
     }
@@ -327,7 +328,8 @@ impl Terminal {
     /// Move cursor up
     pub fn cursor_up(&mut self, n: usize) {
         let cursor = self.grid().cursor();
-        self.grid_mut().set_cursor(cursor.row.saturating_sub(n), cursor.col);
+        self.grid_mut()
+            .set_cursor(cursor.row.saturating_sub(n), cursor.col);
     }
 
     /// Move cursor down
@@ -347,7 +349,8 @@ impl Terminal {
     /// Move cursor backward (left)
     pub fn cursor_backward(&mut self, n: usize) {
         let cursor = self.grid().cursor();
-        self.grid_mut().set_cursor(cursor.row, cursor.col.saturating_sub(n));
+        self.grid_mut()
+            .set_cursor(cursor.row, cursor.col.saturating_sub(n));
     }
 
     /// Set cursor position (1-indexed input, converted to 0-indexed)
@@ -636,7 +639,8 @@ impl Terminal {
         let scroll_bottom = self.scroll_bottom;
         if cursor.row < scroll_bottom {
             for _ in 0..count {
-                self.grid_mut().scroll_region_down(cursor.row, scroll_bottom);
+                self.grid_mut()
+                    .scroll_region_down(cursor.row, scroll_bottom);
             }
         }
     }
@@ -777,9 +781,8 @@ impl Terminal {
         let Some(row) = self.grid().row_at_offset(point.row) else {
             return (point, point);
         };
-        let cell_char = |col: usize| -> Option<char> {
-            row.get(col).and_then(|c| c.content.char())
-        };
+        let cell_char =
+            |col: usize| -> Option<char> { row.get(col).and_then(|c| c.content.char()) };
 
         // Anchor must itself be a word char, otherwise don't expand.
         match cell_char(point.col) {
@@ -842,7 +845,9 @@ impl Terminal {
         let mut text = String::new();
 
         for row in start.row..=end.row {
-            let Some(grid_row) = self.grid().row_at_offset(row) else { continue };
+            let Some(grid_row) = self.grid().row_at_offset(row) else {
+                continue;
+            };
 
             // Resolve the column range based on selection type.
             let (start_col, end_col) = match selection.ty {
@@ -882,7 +887,11 @@ impl Terminal {
 /// Covers alphanumerics plus the common path / URL / identifier punctuation
 /// so filenames, URLs, and code identifiers select as a single unit.
 fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '+' | '~' | '%' | '?' | '&' | '=' | '#')
+    c.is_alphanumeric()
+        || matches!(
+            c,
+            '_' | '-' | '.' | '/' | ':' | '@' | '+' | '~' | '%' | '?' | '&' | '=' | '#'
+        )
 }
 
 #[cfg(test)]
@@ -1019,7 +1028,10 @@ mod tests {
         term.resize(40, 24);
 
         let after_grow = extract_all_chars(&term);
-        assert_eq!(before, after_grow, "Characters lost after grow back to 40 cols");
+        assert_eq!(
+            before, after_grow,
+            "Characters lost after grow back to 40 cols"
+        );
     }
 
     #[test]
@@ -1137,7 +1149,10 @@ mod tests {
         assert_eq!(chars.len(), 22, "Expected 22 chars, got: '{}'", chars);
         assert!(chars.contains("Hello"), "Missing 'Hello' in output");
         assert!(chars.contains("World"), "Missing 'World' in output");
-        assert!(chars.contains("ABCDEFGHIJ"), "Missing 'ABCDEFGHIJ' in output");
+        assert!(
+            chars.contains("ABCDEFGHIJ"),
+            "Missing 'ABCDEFGHIJ' in output"
+        );
     }
 
     #[test]
@@ -1153,7 +1168,10 @@ mod tests {
         term.resize(40, 24);
 
         let after = extract_all_chars(&term);
-        assert_eq!(before, after, "Characters lost after growing from 5x3 to 40x24");
+        assert_eq!(
+            before, after,
+            "Characters lost after growing from 5x3 to 40x24"
+        );
     }
 
     #[test]
@@ -1169,20 +1187,26 @@ mod tests {
 
         // Phase 2: Write text that wraps at 40 cols
         // A 60-char line will wrap: 40 chars on row 0 (wrapped), 20 chars on row 1
-        let long_line = "ABCDEFGHIJ" .repeat(6); // 60 chars
+        let long_line = "ABCDEFGHIJ".repeat(6); // 60 chars
         term.process(long_line.as_bytes());
         term.process(b"\r\n");
         term.process(b"Short line\r\n");
         term.process(b"$ "); // prompt
 
         let before = extract_all_chars(&term);
-        assert!(before.contains(&long_line), "Long line should be fully present");
+        assert!(
+            before.contains(&long_line),
+            "Long line should be fully present"
+        );
 
         // Phase 3: Resize back to full width (simulating pane close)
         term.resize(80, 24);
 
         let after = extract_all_chars(&term);
-        assert_eq!(before, after, "Characters lost after expanding from 40 to 80 cols");
+        assert_eq!(
+            before, after,
+            "Characters lost after expanding from 40 to 80 cols"
+        );
 
         // The 60-char line should now fit on a single row (no wrapping needed at 80 cols)
         // Check that row 0 has the full content (either in scrollback or visible)
@@ -1193,7 +1217,10 @@ mod tests {
                 let text = row.to_string();
                 if text == long_line {
                     found_full_line = true;
-                    assert!(!row.is_wrapped(), "60-char line should not be wrapped at 80 cols");
+                    assert!(
+                        !row.is_wrapped(),
+                        "60-char line should not be wrapped at 80 cols"
+                    );
                     break;
                 }
             }
@@ -1203,11 +1230,17 @@ mod tests {
             let text = row.to_string();
             if text == long_line {
                 found_full_line = true;
-                assert!(!row.is_wrapped(), "60-char line in scrollback should not be wrapped at 80 cols");
+                assert!(
+                    !row.is_wrapped(),
+                    "60-char line in scrollback should not be wrapped at 80 cols"
+                );
                 break;
             }
         }
-        assert!(found_full_line, "Should find the full 60-char line on a single row after resize to 80 cols");
+        assert!(
+            found_full_line,
+            "Should find the full 60-char line on a single row after resize to 80 cols"
+        );
     }
 
     #[test]
@@ -1233,6 +1266,9 @@ mod tests {
         term.resize(80, 24);
 
         let after = extract_all_chars(&term);
-        assert_eq!(before, after, "Characters lost after expanding from 20 to 80 cols");
+        assert_eq!(
+            before, after,
+            "Characters lost after expanding from 20 to 80 cols"
+        );
     }
 }

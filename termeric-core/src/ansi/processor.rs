@@ -1,8 +1,8 @@
 //! Escape sequence processor
 
-use vte::Parser;
-use crate::term::Terminal;
 use super::handler::Handler;
+use crate::term::Terminal;
+use vte::Parser;
 
 /// Processor for parsing and handling escape sequences
 pub struct Processor {

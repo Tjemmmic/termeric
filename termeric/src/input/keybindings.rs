@@ -562,9 +562,7 @@ fn capitalize_key(key: &str) -> String {
         "down" => "Down".to_string(),
         "left" => "Left".to_string(),
         "right" => "Right".to_string(),
-        k if k.starts_with('f') && k.len() <= 3 && k[1..].parse::<u8>().is_ok() => {
-            k.to_uppercase()
-        }
+        k if k.starts_with('f') && k.len() <= 3 && k[1..].parse::<u8>().is_ok() => k.to_uppercase(),
         k => {
             let mut c = k.chars();
             match c.next() {
@@ -711,7 +709,7 @@ impl ShortcutRegistry {
 
     /// Clear a binding (unbind the action).
     #[allow(dead_code)] // Consumed only by unit tests; the shortcuts panel
-                       // will use this once the Reset UI lands.
+    // will use this once the Reset UI lands.
     pub fn clear_binding(&mut self, action: BindableAction) {
         self.set_binding(action, None);
     }
@@ -1047,7 +1045,11 @@ mod tests {
     fn test_from_id_roundtrip() {
         for &action in BindableAction::all() {
             let id = action.meta().id;
-            assert_eq!(BindableAction::from_id(id), Some(action), "roundtrip failed for {id}");
+            assert_eq!(
+                BindableAction::from_id(id),
+                Some(action),
+                "roundtrip failed for {id}"
+            );
         }
     }
 

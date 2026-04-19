@@ -142,7 +142,13 @@ impl GridStorage {
 
     /// Resize the grid with text reflow when columns change.
     /// Accepts cursor position and returns the new cursor position after reflow.
-    pub fn resize(&mut self, new_cols: usize, new_rows: usize, cursor_row: usize, cursor_col: usize) -> (usize, usize) {
+    pub fn resize(
+        &mut self,
+        new_cols: usize,
+        new_rows: usize,
+        cursor_row: usize,
+        cursor_col: usize,
+    ) -> (usize, usize) {
         let old_cols = self.cols;
         let mut new_cursor = (cursor_row, cursor_col);
 
@@ -154,7 +160,8 @@ impl GridStorage {
             // Reflow visible rows with cursor tracking
             let old_visible = std::mem::take(&mut self.rows);
             let cursor_info = Some((cursor_row, cursor_col));
-            let (reflowed, tracked_cursor) = Self::reflow_rows_with_cursor(old_visible, new_cols, cursor_info);
+            let (reflowed, tracked_cursor) =
+                Self::reflow_rows_with_cursor(old_visible, new_cols, cursor_info);
             self.rows = reflowed;
             if let Some(pos) = tracked_cursor {
                 new_cursor = pos;
@@ -176,7 +183,12 @@ impl GridStorage {
 
         // Phase 1: trim trailing empty rows
         while self.rows.len() > new_rows {
-            if self.rows.last().map(|r| r.to_string().is_empty()).unwrap_or(false) {
+            if self
+                .rows
+                .last()
+                .map(|r| r.to_string().is_empty())
+                .unwrap_or(false)
+            {
                 self.rows.pop();
             } else {
                 break;
@@ -260,7 +272,8 @@ impl GridStorage {
                 // Check if cursor is in this row of the logical line
                 if let Some((cr, cc)) = cursor {
                     if cr == row_idx && cursor_cell_offset.is_none() {
-                        cursor_cell_offset = Some(line_cells.len() + cc.min(row_len.saturating_sub(1)));
+                        cursor_cell_offset =
+                            Some(line_cells.len() + cc.min(row_len.saturating_sub(1)));
                     }
                 }
                 line_cells.extend(cells);
@@ -283,7 +296,12 @@ impl GridStorage {
 
                 // If cursor was in this logical line, compute its new position
                 if let Some(cell_offset) = cursor_cell_offset.take() {
-                    new_cursor = Some(Self::find_cursor_in_output(&result, output_start, cell_offset, new_cols));
+                    new_cursor = Some(Self::find_cursor_in_output(
+                        &result,
+                        output_start,
+                        cell_offset,
+                        new_cols,
+                    ));
                 }
 
                 line_cells = Vec::new();
@@ -297,7 +315,12 @@ impl GridStorage {
             Self::rewrap_line(&mut result, line_cells, new_cols);
 
             if let Some(cell_offset) = cursor_cell_offset.take() {
-                new_cursor = Some(Self::find_cursor_in_output(&result, output_start, cell_offset, new_cols));
+                new_cursor = Some(Self::find_cursor_in_output(
+                    &result,
+                    output_start,
+                    cell_offset,
+                    new_cols,
+                ));
             }
         }
 
@@ -337,7 +360,10 @@ impl GridStorage {
         use super::cell::CellFlags;
 
         // Trim trailing empty cells so padding doesn't inflate the line
-        while cells.last().is_some_and(|c| c.is_empty() && !c.is_wide_char_spacer()) {
+        while cells
+            .last()
+            .is_some_and(|c| c.is_empty() && !c.is_wide_char_spacer())
+        {
             cells.pop();
         }
 
@@ -440,7 +466,6 @@ impl GridStorage {
     pub fn iter_visible(&self) -> impl Iterator<Item = &Row> {
         self.rows.iter()
     }
-
 }
 
 #[cfg(test)]
@@ -633,6 +658,10 @@ mod tests {
         let (new_row, _new_col) = storage.resize(5, 3, 4, 2);
 
         // Cursor must be in the visible area [0..2]
-        assert!(new_row < 3, "cursor row {} is outside visible area", new_row);
+        assert!(
+            new_row < 3,
+            "cursor row {} is outside visible area",
+            new_row
+        );
     }
 }

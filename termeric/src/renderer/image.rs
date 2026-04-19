@@ -3,9 +3,9 @@
 //! Renders inline images using wgpu textures.
 
 use std::collections::HashMap;
-use wgpu::*;
-use wgpu::util::DeviceExt;
 use termeric_core::{ImageId, StoredImage};
+use wgpu::util::DeviceExt;
+use wgpu::*;
 
 /// Vertex for image rendering
 #[repr(C)]
@@ -68,19 +68,20 @@ impl ImagePipeline {
         });
 
         // Uniform bind group layout
-        let uniform_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Image Uniform Bind Group Layout"),
-            entries: &[BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::VERTEX,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let uniform_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Image Uniform Bind Group Layout"),
+                entries: &[BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
 
         let uniform_bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("Image Uniform Bind Group"),
@@ -92,27 +93,28 @@ impl ImagePipeline {
         });
 
         // Texture bind group layout
-        let texture_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("Image Texture Bind Group Layout"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Image Texture Bind Group Layout"),
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: true },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
 
         // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -247,13 +249,16 @@ impl ImagePipeline {
             ],
         });
 
-        self.images.insert(image.id, GpuImage {
-            texture,
-            view,
-            bind_group,
-            width: image.width,
-            height: image.height,
-        });
+        self.images.insert(
+            image.id,
+            GpuImage {
+                texture,
+                view,
+                bind_group,
+                width: image.width,
+                height: image.height,
+            },
+        );
     }
 
     /// Queue an image for rendering
@@ -285,10 +290,22 @@ impl ImagePipeline {
             let base_idx = vertices.len() as u16;
 
             // Four corners
-            vertices.push(ImageVertex { position: [x, y], tex_coords: [0.0, 0.0] });
-            vertices.push(ImageVertex { position: [x + w, y], tex_coords: [1.0, 0.0] });
-            vertices.push(ImageVertex { position: [x + w, y + h], tex_coords: [1.0, 1.0] });
-            vertices.push(ImageVertex { position: [x, y + h], tex_coords: [0.0, 1.0] });
+            vertices.push(ImageVertex {
+                position: [x, y],
+                tex_coords: [0.0, 0.0],
+            });
+            vertices.push(ImageVertex {
+                position: [x + w, y],
+                tex_coords: [1.0, 0.0],
+            });
+            vertices.push(ImageVertex {
+                position: [x + w, y + h],
+                tex_coords: [1.0, 1.0],
+            });
+            vertices.push(ImageVertex {
+                position: [x, y + h],
+                tex_coords: [0.0, 1.0],
+            });
 
             // Two triangles
             indices.push(base_idx);
@@ -331,7 +348,9 @@ impl ImagePipeline {
     ///
     /// `active_ids` is the set of image IDs that are still in use.
     pub fn gc_images(&mut self, active_ids: &[ImageId]) {
-        let stale: Vec<ImageId> = self.images.keys()
+        let stale: Vec<ImageId> = self
+            .images
+            .keys()
             .filter(|id| !active_ids.contains(id))
             .copied()
             .collect();
@@ -346,8 +365,12 @@ impl ImagePipeline {
             return;
         }
 
-        let Some(vertex_buffer) = &self.vertex_buffer else { return };
-        let Some(index_buffer) = &self.index_buffer else { return };
+        let Some(vertex_buffer) = &self.vertex_buffer else {
+            return;
+        };
+        let Some(index_buffer) = &self.index_buffer else {
+            return;
+        };
 
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -363,5 +386,4 @@ impl ImagePipeline {
             index_offset += 6;
         }
     }
-
 }

@@ -3,7 +3,6 @@
 //! This module provides functionality for detecting URLs in terminal output
 //! and handling click-to-open functionality.
 
-
 /// A detected URL in the terminal
 #[derive(Clone, Debug)]
 pub struct DetectedUrl {
@@ -61,13 +60,7 @@ impl UrlDetector {
     pub fn new() -> Self {
         Self {
             schemes: vec![
-                "http://",
-                "https://",
-                "ftp://",
-                "ftps://",
-                "file://",
-                "mailto:",
-                "ssh://",
+                "http://", "https://", "ftp://", "ftps://", "file://", "mailto:", "ssh://",
                 "git://",
             ],
         }
@@ -116,8 +109,8 @@ impl UrlDetector {
             match c {
                 // Valid URL characters
                 'a'..='z' | 'A'..='Z' | '0'..='9' => end = i + c.len_utf8(),
-                '-' | '.' | '_' | '~' | ':' | '/' | '?' | '#' | '[' | ']' | '@' |
-                '!' | '$' | '&' | '\'' | '*' | '+' | ',' | ';' | '=' | '%' => {
+                '-' | '.' | '_' | '~' | ':' | '/' | '?' | '#' | '[' | ']' | '@' | '!' | '$'
+                | '&' | '\'' | '*' | '+' | ',' | ';' | '=' | '%' => {
                     end = i + c.len_utf8();
                     match c {
                         '(' => paren_depth += 1,
@@ -269,7 +262,9 @@ impl UrlCache {
     /// Get URL at a specific position
     pub fn url_at(&self, row: usize, col: usize) -> Option<&DetectedUrl> {
         if row < self.rows {
-            self.urls_by_row[row].iter().find(|url| url.contains(row, col))
+            self.urls_by_row[row]
+                .iter()
+                .find(|url| url.contains(row, col))
         } else {
             None
         }
@@ -326,10 +321,16 @@ mod tests {
     #[test]
     fn test_detect_url_with_parens() {
         let detector = UrlDetector::new();
-        let urls = detector.detect_in_line("Wikipedia: https://en.wikipedia.org/wiki/Rust_(programming_language)", 0);
+        let urls = detector.detect_in_line(
+            "Wikipedia: https://en.wikipedia.org/wiki/Rust_(programming_language)",
+            0,
+        );
 
         assert_eq!(urls.len(), 1);
-        assert_eq!(urls[0].url, "https://en.wikipedia.org/wiki/Rust_(programming_language)");
+        assert_eq!(
+            urls[0].url,
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        );
     }
 
     #[test]

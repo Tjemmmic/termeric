@@ -1,8 +1,8 @@
 //! Toast rendering — bottom-right stacked cards with severity-tinted border.
 
 use super::{Renderer, adjust_alpha};
-use crate::ui::toast::{ToastInfo, ToastSeverity};
 use crate::ui::constants::CARD_CORNER_RADIUS;
+use crate::ui::toast::{ToastInfo, ToastSeverity};
 
 impl Renderer {
     /// Draw the active toast stack in the bottom-right corner, newest at
@@ -37,8 +37,7 @@ impl Renderer {
             let opacity = toast.opacity;
             // Width from message length, clamped.
             let text_w = toast.message.chars().count() as f32 * cell_width;
-            let w = (text_w + padding * 2.0 + cell_width * 2.0)
-                .clamp(min_w, max_w);
+            let w = (text_w + padding * 2.0 + cell_width * 2.0).clamp(min_w, max_w);
             let x = window_width - w - right_margin;
 
             // Slide-in: offset horizontally until fully faded in.
@@ -53,15 +52,24 @@ impl Renderer {
                 ),
                 ToastSeverity::Success => {
                     let green = [0.38, 0.73, 0.42, 1.0];
-                    (adjust_alpha(green, 0.45 * opacity), adjust_alpha(green, opacity))
+                    (
+                        adjust_alpha(green, 0.45 * opacity),
+                        adjust_alpha(green, opacity),
+                    )
                 }
                 ToastSeverity::Warning => {
                     let amber = [0.92, 0.66, 0.20, 1.0];
-                    (adjust_alpha(amber, 0.55 * opacity), adjust_alpha(amber, opacity))
+                    (
+                        adjust_alpha(amber, 0.55 * opacity),
+                        adjust_alpha(amber, opacity),
+                    )
                 }
                 ToastSeverity::Error => {
                     let red = [0.85, 0.36, 0.30, 1.0];
-                    (adjust_alpha(red, 0.65 * opacity), adjust_alpha(red, opacity))
+                    (
+                        adjust_alpha(red, 0.65 * opacity),
+                        adjust_alpha(red, opacity),
+                    )
                 }
             };
 
@@ -77,33 +85,35 @@ impl Renderer {
 
             // Drop shadow
             self.rect_pipeline.push_rounded_rect(
-                tx + 2.0, y + 3.0,
-                w, row_h,
+                tx + 2.0,
+                y + 3.0,
+                w,
+                row_h,
                 [0.0, 0.0, 0.0, 0.25 * opacity],
                 CARD_CORNER_RADIUS,
             );
             // Background
-            self.rect_pipeline.push_rounded_rect(
-                tx, y,
-                w, row_h,
-                bg, CARD_CORNER_RADIUS,
-            );
+            self.rect_pipeline
+                .push_rounded_rect(tx, y, w, row_h, bg, CARD_CORNER_RADIUS);
             // Border (outer)
+            self.rect_pipeline
+                .push_rounded_rect(tx, y, w, row_h, border_color, CARD_CORNER_RADIUS);
             self.rect_pipeline.push_rounded_rect(
-                tx, y,
-                w, row_h,
-                border_color, CARD_CORNER_RADIUS,
-            );
-            self.rect_pipeline.push_rounded_rect(
-                tx + 1.0, y + 1.0,
-                w - 2.0, row_h - 2.0,
-                bg, CARD_CORNER_RADIUS - 1.0,
+                tx + 1.0,
+                y + 1.0,
+                w - 2.0,
+                row_h - 2.0,
+                bg,
+                CARD_CORNER_RADIUS - 1.0,
             );
             // Left accent bar (severity indicator)
             self.rect_pipeline.push_rounded_rect(
-                tx + 3.0, y + 4.0,
-                3.0, row_h - 8.0,
-                accent_color, 2.0,
+                tx + 3.0,
+                y + 4.0,
+                3.0,
+                row_h - 8.0,
+                accent_color,
+                2.0,
             );
 
             // Message text

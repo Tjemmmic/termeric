@@ -204,12 +204,10 @@ mod tests {
         // Errors should live at least as long as warnings, and warnings at
         // least as long as info/success.
         assert!(
-            ToastSeverity::Error.default_duration()
-                >= ToastSeverity::Warning.default_duration()
+            ToastSeverity::Error.default_duration() >= ToastSeverity::Warning.default_duration()
         );
         assert!(
-            ToastSeverity::Warning.default_duration()
-                >= ToastSeverity::Info.default_duration()
+            ToastSeverity::Warning.default_duration() >= ToastSeverity::Info.default_duration()
         );
     }
 }

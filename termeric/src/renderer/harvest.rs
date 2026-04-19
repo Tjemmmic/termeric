@@ -5,9 +5,9 @@
 //! - `build_root_cellar()` — slide-in command history panel
 //! - `build_sprout_menu()` — context menu for command actions
 
-use super::{Renderer, adjust_alpha};
 use super::draw::DrawCtx;
-use crate::renderer::types::{IndicatorRenderInfo, CellarRenderInfo, SproutMenuRenderInfo};
+use super::{Renderer, adjust_alpha};
+use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
 
 impl Renderer {
     /// Draw growth indicators in the left gutter next to terminal rows.
@@ -107,17 +107,34 @@ impl Renderer {
             } else {
                 adjust_alpha([0.8, 0.3, 0.2, 1.0], anim) // red
             };
-            ctx.draw_text(&rate_text, panel_x + cell_width, header_y + cell_height, rate_color);
+            ctx.draw_text(
+                &rate_text,
+                panel_x + cell_width,
+                header_y + cell_height,
+                rate_color,
+            );
 
             // Separator
             let sep_y = header_y + cell_height * 2.5;
-            ctx.draw_separator(panel_x + cell_width * 0.5, sep_y, panel_width - cell_width, border);
+            ctx.draw_separator(
+                panel_x + cell_width * 0.5,
+                sep_y,
+                panel_width - cell_width,
+                border,
+            );
 
             // Entry list
             let list_top = sep_y + cell_height * 0.5;
-            let max_visible = ((panel_height - (list_top - panel_y) - cell_height) / cell_height).floor() as usize;
+            let max_visible = ((panel_height - (list_top - panel_y) - cell_height) / cell_height)
+                .floor() as usize;
 
-            for (i, entry) in cellar.entries.iter().skip(cellar.scroll).take(max_visible).enumerate() {
+            for (i, entry) in cellar
+                .entries
+                .iter()
+                .skip(cellar.scroll)
+                .take(max_visible)
+                .enumerate()
+            {
                 let entry_y = list_top + i as f32 * cell_height;
                 let entry_color = adjust_alpha(entry.health_color, entry.opacity * anim);
 
@@ -127,7 +144,8 @@ impl Renderer {
                     1 => '\u{25CB}', // empty circle (warning)
                     _ => '\u{2716}', // heavy X (sick)
                 };
-                ctx.text.push_char(health_char, panel_x + cell_width, entry_y, entry_color);
+                ctx.text
+                    .push_char(health_char, panel_x + cell_width, entry_y, entry_color);
 
                 // Exit code
                 let code_text = match entry.exit_code {
@@ -145,7 +163,8 @@ impl Renderer {
             // Scrollbar
             let scrollbar_x = panel_x + panel_width - cell_width;
             ctx.draw_scrollbar(
-                scrollbar_x, list_top,
+                scrollbar_x,
+                list_top,
                 panel_height - (list_top - panel_y) - cell_height,
                 cellar.entries.len(),
                 max_visible,
@@ -197,18 +216,30 @@ impl Renderer {
                 // Highlight selected item
                 if i == menu.selected {
                     ctx.rect.push_rounded_rect(
-                        menu.x + 2.0, item_y,
-                        menu.width - 4.0, item_height,
+                        menu.x + 2.0,
+                        item_y,
+                        menu.width - 4.0,
+                        item_height,
                         highlight_bg,
                         4.0,
                     );
                 }
 
                 // Icon
-                ctx.text.push_char(*icon, menu.x + padding, item_y + (item_height - cell_height) / 2.0, icon_color);
+                ctx.text.push_char(
+                    *icon,
+                    menu.x + padding,
+                    item_y + (item_height - cell_height) / 2.0,
+                    icon_color,
+                );
 
                 // Action name
-                ctx.draw_text(name, menu.x + padding + cell_width * 2.0, item_y + (item_height - cell_height) / 2.0, text_color);
+                ctx.draw_text(
+                    name,
+                    menu.x + padding + cell_width * 2.0,
+                    item_y + (item_height - cell_height) / 2.0,
+                    text_color,
+                );
             }
         }
     }

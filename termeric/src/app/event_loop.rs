@@ -146,10 +146,14 @@ impl ApplicationHandler for App {
                             }
                             Key::Character(c) => {
                                 // Number key 1-9 for profile selection
-                                if let Some(digit) = c.as_str().chars().next().and_then(|ch| ch.to_digit(10)) {
+                                if let Some(digit) =
+                                    c.as_str().chars().next().and_then(|ch| ch.to_digit(10))
+                                {
                                     if digit >= 1 && digit <= 9 {
                                         let idx = (digit - 1) as usize;
-                                        if let Some((ref plugin_id, ref profiles)) = self.pending_profile_selection {
+                                        if let Some((ref plugin_id, ref profiles)) =
+                                            self.pending_profile_selection
+                                        {
                                             if idx < profiles.len() {
                                                 let profile_name = profiles[idx].clone();
                                                 let plugin_id = plugin_id.clone();
@@ -179,7 +183,9 @@ impl ApplicationHandler for App {
                         match &event.logical_key {
                             Key::Named(NamedKey::Escape) => {
                                 // Mark diffs as reviewed before dismissing
-                                if let (Some(tab_idx), Some(tabs)) = (self.diff_review.diff_tab_index, &mut self.tabs) {
+                                if let (Some(tab_idx), Some(tabs)) =
+                                    (self.diff_review.diff_tab_index, &mut self.tabs)
+                                {
                                     if tabs.iter().enumerate().any(|(i, _)| i == tab_idx) {
                                         // We can't mutate through iter(), use the index directly
                                     }
@@ -271,7 +277,9 @@ impl ApplicationHandler for App {
                                     }
                                 }
                                 Key::Named(NamedKey::Enter) => {
-                                    let action = harvest.sprout_menu.as_ref()
+                                    let action = harvest
+                                        .sprout_menu
+                                        .as_ref()
                                         .and_then(|m| m.selected_action().cloned());
                                     let target_row = harvest
                                         .sprout_menu
@@ -318,11 +326,13 @@ impl ApplicationHandler for App {
                             }
                             Key::Character(c) => {
                                 // Ctrl+Shift+P to close (toggle)
-                                if self.modifiers.control_key() && self.modifiers.shift_key()
+                                if self.modifiers.control_key()
+                                    && self.modifiers.shift_key()
                                     && (c.as_str() == "p" || c.as_str() == "P")
                                 {
                                     self.command_palette.close();
-                                } else if !self.modifiers.control_key() && !self.modifiers.alt_key() {
+                                } else if !self.modifiers.control_key() && !self.modifiers.alt_key()
+                                {
                                     for ch in c.chars() {
                                         self.command_palette.handle_char(ch);
                                     }
@@ -340,8 +350,8 @@ impl ApplicationHandler for App {
                 // Handle shortcuts panel input (centered modal)
                 if self.shortcuts_panel.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
                         use crate::ui::shortcuts_panel::ShortcutsKey;
+                        use winit::keyboard::{Key, NamedKey};
 
                         // In recording mode, capture the raw key
                         if self.shortcuts_panel.is_recording() {
@@ -350,18 +360,23 @@ impl ApplicationHandler for App {
                                 Key::Named(NamedKey::Backspace) | Key::Named(NamedKey::Delete) => {
                                     Some(ShortcutsKey::Delete)
                                 }
-                                _ => {
-                                    match &event.logical_key {
-                                        Key::Named(NamedKey::Control | NamedKey::Shift | NamedKey::Alt | NamedKey::Super) => None,
-                                        _ => {
-                                            KeyChord::from_key_event(&event.logical_key, self.modifiers)
-                                                .map(ShortcutsKey::RecordedChord)
-                                        }
+                                _ => match &event.logical_key {
+                                    Key::Named(
+                                        NamedKey::Control
+                                        | NamedKey::Shift
+                                        | NamedKey::Alt
+                                        | NamedKey::Super,
+                                    ) => None,
+                                    _ => {
+                                        KeyChord::from_key_event(&event.logical_key, self.modifiers)
+                                            .map(ShortcutsKey::RecordedChord)
                                     }
-                                }
+                                },
                             };
                             if let Some(key) = shortcuts_key {
-                                let action = self.shortcuts_panel.handle_key(key, &self.shortcut_registry);
+                                let action = self
+                                    .shortcuts_panel
+                                    .handle_key(key, &self.shortcut_registry);
                                 self.apply_shortcuts_action(action);
                                 if let Some(window) = &self.window {
                                     window.request_redraw();
@@ -377,14 +392,18 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Enter) => Some(ShortcutsKey::Enter),
                             Key::Named(NamedKey::Backspace) => Some(ShortcutsKey::Backspace),
                             Key::Named(NamedKey::Delete) => Some(ShortcutsKey::Delete),
-                            Key::Character(c) if !self.modifiers.control_key() && !self.modifiers.alt_key() => {
+                            Key::Character(c)
+                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
+                            {
                                 c.chars().next().map(ShortcutsKey::Char)
                             }
                             _ => None,
                         };
 
                         if let Some(key) = shortcuts_key {
-                            let action = self.shortcuts_panel.handle_key(key, &self.shortcut_registry);
+                            let action = self
+                                .shortcuts_panel
+                                .handle_key(key, &self.shortcut_registry);
                             self.apply_shortcuts_action(action);
                             if let Some(window) = &self.window {
                                 window.request_redraw();
@@ -409,21 +428,25 @@ impl ApplicationHandler for App {
                             Key::Named(NamedKey::Tab) => Some(SettingsKey::Tab),
                             Key::Named(NamedKey::Backspace) => Some(SettingsKey::FilterBackspace),
                             Key::Named(NamedKey::Delete) => Some(SettingsKey::Delete),
-                            Key::Character(c) if self.modifiers.control_key() => {
-                                match c.as_str() {
-                                    "s" | "S" => Some(SettingsKey::Save),
-                                    "r" | "R" => Some(SettingsKey::Reset),
-                                    _ => None,
-                                }
-                            }
-                            Key::Character(c) if !self.modifiers.control_key() && !self.modifiers.alt_key() => {
+                            Key::Character(c) if self.modifiers.control_key() => match c.as_str() {
+                                "s" | "S" => Some(SettingsKey::Save),
+                                "r" | "R" => Some(SettingsKey::Reset),
+                                _ => None,
+                            },
+                            Key::Character(c)
+                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
+                            {
                                 c.chars().next().map(SettingsKey::FilterChar)
                             }
                             _ => None,
                         };
 
                         if let Some(key) = settings_key {
-                            let action = self.settings_panel.handle_key(key, &self.config, &self.shortcut_registry);
+                            let action = self.settings_panel.handle_key(
+                                key,
+                                &self.config,
+                                &self.shortcut_registry,
+                            );
                             self.apply_settings_action(action);
                             if let Some(window) = &self.window {
                                 window.request_redraw();
@@ -492,7 +515,9 @@ impl ApplicationHandler for App {
                 }
 
                 // Handle git completion navigation (Tab to accept, Up/Down to navigate, Escape to dismiss)
-                if self.git_completions_visible && event.state == winit::event::ElementState::Pressed {
+                if self.git_completions_visible
+                    && event.state == winit::event::ElementState::Pressed
+                {
                     use winit::keyboard::Key;
                     match event.logical_key.as_ref() {
                         Key::Named(winit::keyboard::NamedKey::Tab) => {
@@ -502,7 +527,9 @@ impl ApplicationHandler for App {
                                 // Accept the selected completion
                                 if let Some(idx) = self.git_completion_index {
                                     if let Some(branch) = self.git_completions.get(idx).cloned() {
-                                        if let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer) {
+                                        if let Some(partial) = crate::git::detect_git_completion(
+                                            &self.input_line_buffer,
+                                        ) {
                                             let partial_len = partial.len();
                                             if let Some(tabs) = &mut self.tabs {
                                                 if let Some(tab) = tabs.active_tab_mut() {
@@ -554,7 +581,10 @@ impl ApplicationHandler for App {
 
                 // Check unified shortcut registry (replaces hardcoded check_keybinding)
                 if event.state == winit::event::ElementState::Pressed {
-                    if let Some(bindable) = self.shortcut_registry.check(&event.logical_key, self.modifiers) {
+                    if let Some(bindable) = self
+                        .shortcut_registry
+                        .check(&event.logical_key, self.modifiers)
+                    {
                         let action = bindable.to_action();
                         if self.handle_action(action) {
                             return;
@@ -564,7 +594,10 @@ impl ApplicationHandler for App {
 
                 // Check plugin/custom keybindings (SendText, RunCommand, PluginCommand)
                 if event.state == winit::event::ElementState::Pressed {
-                    if let Some(key_action) = self.keybinding_manager.check(&event.logical_key, self.modifiers) {
+                    if let Some(key_action) = self
+                        .keybinding_manager
+                        .check(&event.logical_key, self.modifiers)
+                    {
                         if self.handle_key_action(key_action.clone()) {
                             return;
                         }
@@ -583,7 +616,8 @@ impl ApplicationHandler for App {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
-                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
+                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
+                        {
                             use crate::ui::info_overlay::InfoOverlayLayout;
                             let (sw, sh) = renderer.window_size();
                             let layout = InfoOverlayLayout::calculate(
@@ -635,7 +669,8 @@ impl ApplicationHandler for App {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
-                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
+                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
+                        {
                             use crate::ui::command_palette::PaletteLayout;
                             let (sw, sh) = renderer.window_size();
                             let info = self.command_palette.build_info();
@@ -669,7 +704,8 @@ impl ApplicationHandler for App {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
-                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
+                        if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
+                        {
                             let cw = renderer.cell_width();
                             let (sw, sh) = renderer.window_size();
                             let (ww, wh) = (sw as f32, sh as f32);
@@ -679,8 +715,10 @@ impl ApplicationHandler for App {
                             let panel_y = wh * 0.10;
                             let panel_height = wh * 0.75;
                             let (mx, my) = (pos.0 as f32, pos.1 as f32);
-                            if mx < panel_x || mx > panel_x + panel_width
-                                || my < panel_y || my > panel_y + panel_height
+                            if mx < panel_x
+                                || mx > panel_x + panel_width
+                                || my < panel_y
+                                || my > panel_y + panel_height
                             {
                                 self.shortcuts_panel.close();
                             }
@@ -725,7 +763,8 @@ impl ApplicationHandler for App {
                             .settings_panel
                             .build_entries(&self.config, &self.shortcut_registry)
                             .len();
-                        self.settings_panel.scroll_down((-lines).ceil() as usize, total);
+                        self.settings_panel
+                            .scroll_down((-lines).ceil() as usize, total);
                     }
                     if let Some(window) = &self.window {
                         window.request_redraw();
@@ -741,7 +780,8 @@ impl ApplicationHandler for App {
                     if lines > 0.0 {
                         self.shortcuts_panel.scroll_up(lines.ceil() as usize);
                     } else if lines < 0.0 {
-                        self.shortcuts_panel.scroll_down((-lines).ceil() as usize, &self.shortcut_registry);
+                        self.shortcuts_panel
+                            .scroll_down((-lines).ceil() as usize, &self.shortcut_registry);
                     }
                     if let Some(window) = &self.window {
                         window.request_redraw();

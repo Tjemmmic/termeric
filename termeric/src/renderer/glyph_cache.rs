@@ -3,12 +3,12 @@
 //! This module handles font loading, glyph rasterization, and texture atlas management.
 //! Supports font ligatures through cosmic-text's advanced shaping.
 
+use crate::ui::constants::LINE_HEIGHT_MULTIPLIER;
 use anyhow::Result;
 use cosmic_text::{
     Attrs, Buffer, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, SwashCache,
 };
 use std::collections::HashMap;
-use crate::ui::constants::LINE_HEIGHT_MULTIPLIER;
 use wgpu::*;
 
 /// Size of the glyph atlas texture
@@ -124,7 +124,13 @@ pub struct GlyphCache {
 
 impl GlyphCache {
     /// Create a new glyph cache
-    pub fn new(device: &Device, queue: &Queue, font_size: f32, font_family: &str, ligatures: bool) -> Result<Self> {
+    pub fn new(
+        device: &Device,
+        queue: &Queue,
+        font_size: f32,
+        font_family: &str,
+        ligatures: bool,
+    ) -> Result<Self> {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
 
@@ -133,7 +139,8 @@ impl GlyphCache {
         let metrics = Metrics::new(font_size, line_height);
 
         // Measure a character to get cell dimensions and check if font was found
-        let (cell_width, cell_height, use_monospace_fallback) = measure_cell(&mut font_system, &metrics, font_family);
+        let (cell_width, cell_height, use_monospace_fallback) =
+            measure_cell(&mut font_system, &metrics, font_family);
 
         // Create atlas texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -291,7 +298,10 @@ impl GlyphCache {
                 let physical = glyph.physical((0.0, 0.0), 1.0);
 
                 // Rasterize using swash
-                if let Some(image) = self.swash_cache.get_image(&mut self.font_system, physical.cache_key) {
+                if let Some(image) = self
+                    .swash_cache
+                    .get_image(&mut self.font_system, physical.cache_key)
+                {
                     return Some(RasterizedGlyph {
                         width: image.placement.width,
                         height: image.placement.height,
@@ -314,7 +324,13 @@ impl GlyphCache {
     }
 
     /// Allocate space in the atlas
-    fn allocate(&mut self, width: u32, height: u32, bearing_x: i32, bearing_y: i32) -> Option<GlyphEntry> {
+    fn allocate(
+        &mut self,
+        width: u32,
+        height: u32,
+        bearing_x: i32,
+        bearing_y: i32,
+    ) -> Option<GlyphEntry> {
         let padding = 1;
 
         // Handle empty glyphs
@@ -425,13 +441,7 @@ impl GlyphCache {
             features.enable(FeatureTag::DISCRETIONARY_LIGATURES);
 
             let attrs = Attrs::new().family(family).font_features(features);
-            buffer.set_text(
-                &mut self.font_system,
-                text,
-                &attrs,
-                Shaping::Advanced,
-                None,
-            );
+            buffer.set_text(&mut self.font_system, text, &attrs, Shaping::Advanced, None);
 
             for run in buffer.layout_runs() {
                 for glyph in run.glyphs.iter() {
@@ -445,51 +455,52 @@ impl GlyphCache {
         let mut total_width: f32 = 0.0;
 
         for (cache_key, x_offset, width) in glyph_infos {
-            let entry = if let Some(image) = self.swash_cache.get_image(&mut self.font_system, cache_key) {
-                let img_width = image.placement.width;
-                let img_height = image.placement.height;
-                let img_left = image.placement.left;
-                let img_top = image.placement.top;
-                let img_data = image.data.clone();
+            let entry =
+                if let Some(image) = self.swash_cache.get_image(&mut self.font_system, cache_key) {
+                    let img_width = image.placement.width;
+                    let img_height = image.placement.height;
+                    let img_left = image.placement.left;
+                    let img_top = image.placement.top;
+                    let img_data = image.data.clone();
 
-                let entry = self.allocate(img_width, img_height, img_left, img_top)?;
+                    let entry = self.allocate(img_width, img_height, img_left, img_top)?;
 
-                if img_width > 0 && img_height > 0 {
-                    queue.write_texture(
-                        TexelCopyTextureInfo {
-                            texture: &self.texture,
-                            mip_level: 0,
-                            origin: Origin3d {
-                                x: entry.x,
-                                y: entry.y,
-                                z: 0,
+                    if img_width > 0 && img_height > 0 {
+                        queue.write_texture(
+                            TexelCopyTextureInfo {
+                                texture: &self.texture,
+                                mip_level: 0,
+                                origin: Origin3d {
+                                    x: entry.x,
+                                    y: entry.y,
+                                    z: 0,
+                                },
+                                aspect: TextureAspect::All,
                             },
-                            aspect: TextureAspect::All,
-                        },
-                        &img_data,
-                        TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(img_width),
-                            rows_per_image: Some(img_height),
-                        },
-                        Extent3d {
-                            width: img_width,
-                            height: img_height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-                entry
-            } else {
-                GlyphEntry {
-                    x: 0,
-                    y: 0,
-                    width: 0,
-                    height: 0,
-                    bearing_x: 0,
-                    bearing_y: 0,
-                }
-            };
+                            &img_data,
+                            TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(img_width),
+                                rows_per_image: Some(img_height),
+                            },
+                            Extent3d {
+                                width: img_width,
+                                height: img_height,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                    }
+                    entry
+                } else {
+                    GlyphEntry {
+                        x: 0,
+                        y: 0,
+                        width: 0,
+                        height: 0,
+                        bearing_x: 0,
+                        bearing_y: 0,
+                    }
+                };
 
             glyphs.push(ShapedGlyph {
                 entry,
@@ -514,7 +525,8 @@ impl GlyphCache {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
-        let mut fonts: Vec<String> = self.font_system
+        let mut fonts: Vec<String> = self
+            .font_system
             .db()
             .faces()
             .filter(|face| {
@@ -526,9 +538,7 @@ impl GlyphCache {
                 let name = face.families.first().map(|(n, _)| n.as_str()).unwrap_or("");
                 !name.contains("Emoji") && !name.contains("Symbol") && !name.contains("Icons")
             })
-            .filter_map(|face| {
-                face.families.first().map(|(name, _)| name.clone())
-            })
+            .filter_map(|face| face.families.first().map(|(name, _)| name.clone()))
             .filter(|name| seen.insert(name.clone())) // Deduplicate
             .collect();
 
@@ -536,7 +546,11 @@ impl GlyphCache {
 
         // Always include "monospace" as the first option (system default)
         let mut result = vec!["monospace".to_string()];
-        result.extend(fonts.into_iter().filter(|f| f.to_lowercase() != "monospace"));
+        result.extend(
+            fonts
+                .into_iter()
+                .filter(|f| f.to_lowercase() != "monospace"),
+        );
 
         result
     }
@@ -554,14 +568,20 @@ impl GlyphCache {
         self.metrics = Metrics::new(font_size, line_height);
 
         // Remeasure cell dimensions
-        let (cell_width, cell_height, use_fallback) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        let (cell_width, cell_height, use_fallback) =
+            measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
         self.cell_width = cell_width;
         self.cell_height = cell_height;
         self.use_monospace_fallback = use_fallback;
 
         self.clear_atlas(queue);
 
-        log::info!("Font size changed to {}, cell size: {}x{}", font_size, cell_width, cell_height);
+        log::info!(
+            "Font size changed to {}, cell size: {}x{}",
+            font_size,
+            cell_width,
+            cell_height
+        );
     }
 
     /// Change font family, clearing the cache and recalculating metrics
@@ -572,14 +592,20 @@ impl GlyphCache {
 
         self.font_family = font_family;
 
-        let (cell_width, cell_height, use_fallback) = measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        let (cell_width, cell_height, use_fallback) =
+            measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
         self.cell_width = cell_width;
         self.cell_height = cell_height;
         self.use_monospace_fallback = use_fallback;
 
         self.clear_atlas(queue);
 
-        log::info!("Font family changed to {}, cell size: {}x{}", self.font_family, cell_width, cell_height);
+        log::info!(
+            "Font family changed to {}, cell size: {}x{}",
+            self.font_family,
+            cell_width,
+            cell_height
+        );
     }
 
     /// Clear the glyph atlas, entry caches, and reset packing cursor.
@@ -630,19 +656,17 @@ struct RasterizedGlyph {
 /// typically representative of monospace font width.
 ///
 /// Returns (cell_width, cell_height, use_monospace_fallback)
-fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &str) -> (f32, f32, bool) {
+fn measure_cell(
+    font_system: &mut FontSystem,
+    metrics: &Metrics,
+    font_family: &str,
+) -> (f32, f32, bool) {
     let family = family_for(font_family);
     let attrs = Attrs::new().family(family);
 
     // Measure a single 'M' character to get the natural width
     let mut buffer = Buffer::new(font_system, *metrics);
-    buffer.set_text(
-        font_system,
-        "M",
-        &attrs,
-        Shaping::Basic,
-        None,
-    );
+    buffer.set_text(font_system, "M", &attrs, Shaping::Basic, None);
 
     let mut measured_width: f32 = 0.0;
     let mut font_id: Option<cosmic_text::fontdb::ID> = None;
@@ -654,13 +678,22 @@ fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &s
     }
 
     // Try to get the actual font name and check if it's monospace
-    let (actual_font_name, is_monospace) = font_id.map(|id| {
-        let name = font_system.db().face(id).map(|face| {
-            face.families.first().map(|(name, _)| name.clone()).unwrap_or_else(|| "unknown".to_string())
-        }).unwrap_or_else(|| "unknown".to_string());
-        let is_mono = font_system.is_monospace(id);
-        (name, is_mono)
-    }).unwrap_or_else(|| ("none".to_string(), false));
+    let (actual_font_name, is_monospace) = font_id
+        .map(|id| {
+            let name = font_system
+                .db()
+                .face(id)
+                .map(|face| {
+                    face.families
+                        .first()
+                        .map(|(name, _)| name.clone())
+                        .unwrap_or_else(|| "unknown".to_string())
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            let is_mono = font_system.is_monospace(id);
+            (name, is_mono)
+        })
+        .unwrap_or_else(|| ("none".to_string(), false));
 
     // Check if the requested font was found by comparing names
     let requested_lower = font_family.to_lowercase();
@@ -670,8 +703,8 @@ fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &s
     // 1. User requested generic "monospace" - always matches
     // 2. Actual font name contains or is contained in requested name
     let is_generic_request = matches!(requested_lower.as_str(), "monospace" | "mono" | "default");
-    let name_matches = actual_lower.contains(&requested_lower) ||
-                       requested_lower.contains(&actual_lower);
+    let name_matches =
+        actual_lower.contains(&requested_lower) || requested_lower.contains(&actual_lower);
     let font_was_found = is_generic_request || name_matches;
 
     // Only use fallback if font wasn't found AND got a non-monospace fallback
@@ -704,7 +737,8 @@ fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &s
 
         log::warn!(
             "Font '{}' not found (got '{}'), using system monospace for rendering",
-            font_family, actual_font_name
+            font_family,
+            actual_font_name
         );
 
         if mono_width > 0.0 {
@@ -716,7 +750,9 @@ fn measure_cell(font_system: &mut FontSystem, metrics: &Metrics, font_family: &s
         // Font was found but width seems off - still use measured width, just log it
         log::debug!(
             "Font '{}' measured width {:.2} exceeds expected max {:.2}, but using it anyway",
-            font_family, measured_width, expected_max
+            font_family,
+            measured_width,
+            expected_max
         );
         measured_width.round().max(1.0)
     };

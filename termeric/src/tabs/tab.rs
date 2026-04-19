@@ -2,19 +2,19 @@
 //!
 //! A `Tab` wraps a terminal + PTY pair and provides session save/restore support.
 
-use std::collections::HashMap;
-use std::sync::mpsc::Receiver;
-use std::time::Instant;
-use termeric_core::{Pty, Terminal, TerminalEvent};
-use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
+use crate::session::Session;
+use crate::session::transcript::TranscriptRecorder;
 use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
 use crate::ui::claude_chrome::AiSessionState;
-use crate::session::Session;
-use crate::session::transcript::TranscriptRecorder;
+use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
+use std::time::Instant;
+use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
+use termeric_core::{Pty, Terminal, TerminalEvent};
 
-use super::title::{get_process_cwd, dir_name_from_path, abbreviate_path, get_foreground_process};
+use super::title::{abbreviate_path, dir_name_from_path, get_foreground_process, get_process_cwd};
 
 /// What kind of tab this is
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +69,13 @@ pub struct Tab {
 
 impl Tab {
     /// Create a new tab with a shell
-    pub fn new(id: usize, cols: usize, rows: usize, shell: &ShellConfig, scrollback_lines: usize) -> anyhow::Result<Self> {
+    pub fn new(
+        id: usize,
+        cols: usize,
+        rows: usize,
+        shell: &ShellConfig,
+        scrollback_lines: usize,
+    ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(cols, rows);
         terminal.grid_mut().set_scrollback_limit(scrollback_lines);
         let pty = Pty::new_with_command(
@@ -82,7 +88,8 @@ impl Tab {
         let rx = spawn_reader_thread(reader);
 
         // Get initial title from current working directory
-        let title = handle.child_id()
+        let title = handle
+            .child_id()
             .and_then(get_process_cwd)
             .map(|cwd| dir_name_from_path(&cwd))
             .unwrap_or_else(|| format!("Tab {}", id + 1));
@@ -135,13 +142,7 @@ impl Tab {
             env.push((key, value));
         }
 
-        let pty = Pty::new_with_env(
-            cols as u16,
-            rows as u16,
-            Some(program),
-            args,
-            &env,
-        )?;
+        let pty = Pty::new_with_env(cols as u16, rows as u16, Some(program), args, &env)?;
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
 
@@ -317,7 +318,8 @@ impl Tab {
             .map(|t| t.to_string())
             .or_else(|| working_dir.map(|cwd| dir_name_from_path(cwd)))
             .or_else(|| {
-                handle.child_id()
+                handle
+                    .child_id()
                     .and_then(get_process_cwd)
                     .map(|cwd| dir_name_from_path(&cwd))
             })
@@ -366,7 +368,8 @@ impl Tab {
         let working_dir = self.working_directory();
 
         // Build session title: "~/path | last_command" or "~/path"
-        let path = working_dir.as_deref()
+        let path = working_dir
+            .as_deref()
             .map(abbreviate_path)
             .unwrap_or_else(|| self.title.clone());
         let session_title = match &self.last_command {
@@ -398,7 +401,11 @@ impl Tab {
                         session.scrollback_file = Some(filename);
                     }
                     Err(e) => {
-                        log::error!("Failed to save scrollback for session '{}': {}", session_id, e);
+                        log::error!(
+                            "Failed to save scrollback for session '{}': {}",
+                            session_id,
+                            e
+                        );
                     }
                 }
             }
@@ -475,4 +482,3 @@ impl TerminalContainer for Tab {
         self.closed
     }
 }
-

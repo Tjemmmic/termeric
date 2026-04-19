@@ -182,7 +182,7 @@ impl Row {
     /// or default) so that replaying through a terminal re-resolves indexed colors
     /// through the current theme. This allows session restore to adapt to theme changes.
     pub fn to_ansi_string(&self) -> String {
-        use super::cell::{Color, ColorSpec, CellAttrs, CellContent};
+        use super::cell::{CellAttrs, CellContent, Color, ColorSpec};
 
         let default_fg = Color::default_fg();
         let default_bg = Color::default_bg();
@@ -195,12 +195,16 @@ impl Row {
 
         // Find the last cell that has meaningful content: either non-empty text
         // OR non-default styling (colors/attributes).
-        let last_meaningful = self.cells.iter().rposition(|c| {
-            !c.content.is_empty()
-                || c.fg != default_fg
-                || c.bg != default_bg
-                || c.attrs != CellAttrs::empty()
-        }).unwrap_or(0);
+        let last_meaningful = self
+            .cells
+            .iter()
+            .rposition(|c| {
+                !c.content.is_empty()
+                    || c.fg != default_fg
+                    || c.bg != default_bg
+                    || c.attrs != CellAttrs::empty()
+            })
+            .unwrap_or(0);
 
         for (i, cell) in self.cells.iter().enumerate() {
             if i > last_meaningful {
@@ -278,13 +282,11 @@ impl Row {
         use super::cell::ColorSpec;
         match spec {
             ColorSpec::Default => params.push("39".to_string()),
-            ColorSpec::Indexed(n) => {
-                match n {
-                    0..=7 => params.push(format!("{}", 30 + n)),
-                    8..=15 => params.push(format!("{}", 90 + n - 8)),
-                    _ => params.push(format!("38;5;{}", n)),
-                }
-            }
+            ColorSpec::Indexed(n) => match n {
+                0..=7 => params.push(format!("{}", 30 + n)),
+                8..=15 => params.push(format!("{}", 90 + n - 8)),
+                _ => params.push(format!("38;5;{}", n)),
+            },
             ColorSpec::TrueColor(c) => {
                 params.push(format!("38;2;{};{};{}", c.r, c.g, c.b));
             }
@@ -296,13 +298,11 @@ impl Row {
         use super::cell::ColorSpec;
         match spec {
             ColorSpec::Default => params.push("49".to_string()),
-            ColorSpec::Indexed(n) => {
-                match n {
-                    0..=7 => params.push(format!("{}", 40 + n)),
-                    8..=15 => params.push(format!("{}", 100 + n - 8)),
-                    _ => params.push(format!("48;5;{}", n)),
-                }
-            }
+            ColorSpec::Indexed(n) => match n {
+                0..=7 => params.push(format!("{}", 40 + n)),
+                8..=15 => params.push(format!("{}", 100 + n - 8)),
+                _ => params.push(format!("48;5;{}", n)),
+            },
             ColorSpec::TrueColor(c) => {
                 params.push(format!("48;2;{};{};{}", c.r, c.g, c.b));
             }

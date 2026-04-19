@@ -145,7 +145,11 @@ impl PaletteLayout {
             return None;
         }
         let row = ((y - self.list_y) / self.row_height) as usize;
-        if row < self.visible_count { Some(row) } else { None }
+        if row < self.visible_count {
+            Some(row)
+        } else {
+            None
+        }
     }
 }
 
@@ -226,7 +230,8 @@ impl CommandPalette {
         self.registry.extend(commands);
         // Re-sort: Core first, then Plugin, alphabetically within
         self.registry.sort_by(|a, b| {
-            a.category.cmp(&b.category)
+            a.category
+                .cmp(&b.category)
                 .then_with(|| a.title.cmp(&b.title))
         });
     }
@@ -404,11 +409,13 @@ impl CommandPalette {
 
         if self.input.text().is_empty() {
             // Show all commands, recently used first
-            let mut scored: Vec<PaletteEntry> = self.registry
+            let mut scored: Vec<PaletteEntry> = self
+                .registry
                 .iter()
                 .enumerate()
                 .map(|(i, cmd)| {
-                    let recency_bonus = self.recently_used
+                    let recency_bonus = self
+                        .recently_used
                         .iter()
                         .position(|r| r == &cmd.id)
                         .map(|pos| 1_000_000 - (pos as i64 * 10_000))
@@ -425,7 +432,8 @@ impl CommandPalette {
         } else {
             let query = self.input.text();
 
-            let mut scored: Vec<PaletteEntry> = self.registry
+            let mut scored: Vec<PaletteEntry> = self
+                .registry
                 .iter()
                 .enumerate()
                 .filter_map(|(i, cmd)| {
@@ -436,7 +444,9 @@ impl CommandPalette {
                     let category_match = FuzzySearch::new(query, &cmd.category).best_match();
 
                     // Try matching against shortcut
-                    let shortcut_match = cmd.shortcut.as_ref()
+                    let shortcut_match = cmd
+                        .shortcut
+                        .as_ref()
                         .and_then(|s| FuzzySearch::new(query, s).best_match());
 
                     // Try matching against combined "title category"
@@ -454,18 +464,24 @@ impl CommandPalette {
 
                     // Take best score
                     let best = [
-                        title_match.as_ref().map(|m| (m.score(), m.matched_indices().copied().collect::<Vec<_>>())),
+                        title_match
+                            .as_ref()
+                            .map(|m| (m.score(), m.matched_indices().copied().collect::<Vec<_>>())),
                         category_match.as_ref().map(|m| (m.score(), Vec::new())),
                         shortcut_match.as_ref().map(|m| (m.score(), Vec::new())),
-                        combined_match.as_ref().map(|m| (m.score(), m.matched_indices().copied().collect::<Vec<_>>())),
+                        combined_match
+                            .as_ref()
+                            .map(|m| (m.score(), m.matched_indices().copied().collect::<Vec<_>>())),
                     ];
 
-                    let (score, positions) = best.iter()
+                    let (score, positions) = best
+                        .iter()
                         .filter_map(|x| x.as_ref())
                         .max_by_key(|(s, _)| *s)?;
 
                     // Recency bonus (smaller than search score)
-                    let recency_bonus = self.recently_used
+                    let recency_bonus = self
+                        .recently_used
                         .iter()
                         .position(|r| r == &cmd.id)
                         .map(|pos| 100 - pos as i64)
@@ -483,7 +499,6 @@ impl CommandPalette {
             self.entries = scored;
         }
     }
-
 }
 
 /// Build the default set of core commands
@@ -935,17 +950,15 @@ mod tests {
     #[test]
     fn test_plugin_commands_register() {
         let mut palette = test_palette();
-        let plugin_cmds = vec![
-            RegisteredCommand {
-                id: "claude-code.open".into(),
-                title: "Open Claude Code".into(),
-                category: "AI".into(),
-                shortcut: Some("Ctrl+Shift+I".into()),
-                icon: None,
-                source: CommandSource::Plugin("claude-code".into()),
-                destructive: false,
-            },
-        ];
+        let plugin_cmds = vec![RegisteredCommand {
+            id: "claude-code.open".into(),
+            title: "Open Claude Code".into(),
+            category: "AI".into(),
+            shortcut: Some("Ctrl+Shift+I".into()),
+            icon: None,
+            source: CommandSource::Plugin("claude-code".into()),
+            destructive: false,
+        }];
         palette.register_commands(plugin_cmds);
         palette.open();
         palette.handle_char('c');
@@ -959,17 +972,15 @@ mod tests {
     #[test]
     fn test_execute_plugin_returns_plugin_result() {
         let mut palette = CommandPalette::new();
-        palette.register_commands(vec![
-            RegisteredCommand {
-                id: "test-plugin.action".into(),
-                title: "Test Action".into(),
-                category: "Test".into(),
-                shortcut: None,
-                icon: None,
-                source: CommandSource::Plugin("test".into()),
-                destructive: false,
-            },
-        ]);
+        palette.register_commands(vec![RegisteredCommand {
+            id: "test-plugin.action".into(),
+            title: "Test Action".into(),
+            category: "Test".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Plugin("test".into()),
+            destructive: false,
+        }]);
         palette.open();
         let result = palette.execute();
         assert!(matches!(result, PaletteResult::RunPluginCommand(_)));

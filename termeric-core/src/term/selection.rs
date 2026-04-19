@@ -121,8 +121,7 @@ impl Selection {
                 let min_col = start.col.min(end.col);
                 let max_col = start.col.max(end.col);
 
-                point.row >= start.row && point.row <= end.row &&
-                    col >= min_col && col <= max_col
+                point.row >= start.row && point.row <= end.row && col >= min_col && col <= max_col
             }
             SelectionType::Lines => {
                 // Line selection includes entire rows
@@ -143,7 +142,11 @@ impl Selection {
     }
 
     /// Get the column range for a specific row
-    pub fn col_range(&self, row: i32, total_cols: usize) -> Option<std::ops::RangeInclusive<usize>> {
+    pub fn col_range(
+        &self,
+        row: i32,
+        total_cols: usize,
+    ) -> Option<std::ops::RangeInclusive<usize>> {
         if !self.row_range().contains(&row) {
             return None;
         }
@@ -153,7 +156,11 @@ impl Selection {
         match self.ty {
             SelectionType::Simple | SelectionType::Semantic => {
                 let start_col = if row == start.row { start.col } else { 0 };
-                let end_col = if row == end.row { end.col } else { total_cols.saturating_sub(1) };
+                let end_col = if row == end.row {
+                    end.col
+                } else {
+                    total_cols.saturating_sub(1)
+                };
                 Some(start_col..=end_col)
             }
             SelectionType::Block => {
@@ -161,9 +168,7 @@ impl Selection {
                 let max_col = start.col.max(end.col).min(total_cols.saturating_sub(1));
                 Some(min_col..=max_col)
             }
-            SelectionType::Lines => {
-                Some(0..=total_cols.saturating_sub(1))
-            }
+            SelectionType::Lines => Some(0..=total_cols.saturating_sub(1)),
         }
     }
 }

@@ -6,12 +6,12 @@
 //! - Organic Indicators: Plant-growth animations for long processes
 
 mod cellar;
-pub mod sprouts;
 mod indicators;
+pub mod sprouts;
 
-pub use cellar::{RootCellar, CommandEntry};
-pub use sprouts::SproutMenu;
+pub use cellar::{CommandEntry, RootCellar};
 pub use indicators::GrowthIndicator;
+pub use sprouts::SproutMenu;
 
 use termeric_core::CommandRegion;
 
@@ -63,7 +63,11 @@ impl HarvestMode {
 
     /// Mark a command as completed
     pub fn complete_command(&mut self, prompt_row: usize, success: bool) {
-        if let Some(indicator) = self.indicators.iter_mut().find(|i| i.prompt_row == prompt_row) {
+        if let Some(indicator) = self
+            .indicators
+            .iter_mut()
+            .find(|i| i.prompt_row == prompt_row)
+        {
             indicator.complete(success);
         }
     }

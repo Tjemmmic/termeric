@@ -2,8 +2,8 @@
 //!
 //! Handles the geometry of pane rectangles within the terminal window.
 
-use std::collections::HashMap;
 use super::tree::PaneId;
+use std::collections::HashMap;
 
 /// A rectangle describing a pane's position and size
 #[derive(Debug, Clone, Copy)]
@@ -21,7 +21,12 @@ pub struct PaneRect {
 impl PaneRect {
     /// Create a new rectangle
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Get the right edge
@@ -92,7 +97,8 @@ impl PaneLayout {
 
     /// Find the pane at a given position
     pub fn pane_at(&self, x: f32, y: f32) -> Option<PaneId> {
-        self.rects.iter()
+        self.rects
+            .iter()
             .find(|(_, rect)| rect.contains(x, y))
             .map(|(&id, _)| id)
     }

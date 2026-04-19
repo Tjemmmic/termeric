@@ -3,10 +3,9 @@
 //! Profiles define environment, permission, and targeting rules for Claude Code
 //! sessions. A repo can auto-select a profile via `.termeric/config`.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-
 
 /// A Claude Code profile defining behavior for a session
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -50,7 +49,11 @@ pub enum ProfileTarget {
     /// Run via SSH
     Ssh { host: String, user: Option<String> },
     /// Run inside a container
-    Container { name: String, #[serde(default = "default_runtime")] runtime: String },
+    Container {
+        name: String,
+        #[serde(default = "default_runtime")]
+        runtime: String,
+    },
 }
 
 fn default_runtime() -> String {

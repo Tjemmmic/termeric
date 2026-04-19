@@ -3,9 +3,9 @@
 //! This module provides escape sequence parsing using the `vte` crate
 //! and implements the handler for terminal state updates.
 
+mod color;
 mod handler;
 mod processor;
-mod color;
 
+pub use color::{AnsiColor, ansi_bright_color, ansi_color, color_256};
 pub use processor::Processor;
-pub use color::{AnsiColor, color_256, ansi_color, ansi_bright_color};

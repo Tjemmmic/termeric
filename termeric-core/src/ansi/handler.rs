@@ -1,10 +1,10 @@
 //! VTE escape sequence handler
 
-use vte::{Params, Perform};
+use super::color::{ansi_bright_color, ansi_color};
+use crate::event::{NotificationRequest, TerminalEvent};
 use crate::grid::{CellAttrs, Color, ColorSpec};
 use crate::term::{Terminal, TerminalMode};
-use crate::event::{TerminalEvent, NotificationRequest};
-use super::color::{ansi_color, ansi_bright_color};
+use vte::{Params, Perform};
 
 /// Handler for VTE callbacks that updates terminal state
 pub struct Handler<'a> {
@@ -74,16 +74,24 @@ impl Perform for Handler<'_> {
     }
 
     /// Handle a CSI sequence
-    fn csi_dispatch(&mut self, raw_params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
-        let params: Vec<u16> = raw_params.iter()
-            .flat_map(|p| p.iter().copied())
-            .collect();
+    fn csi_dispatch(
+        &mut self,
+        raw_params: &Params,
+        intermediates: &[u8],
+        _ignore: bool,
+        action: char,
+    ) {
+        let params: Vec<u16> = raw_params.iter().flat_map(|p| p.iter().copied()).collect();
 
         let private = intermediates.first() == Some(&b'?');
 
         macro_rules! param {
             ($idx:expr, $default:expr) => {
-                params.get($idx).copied().filter(|&v| v != 0).unwrap_or($default)
+                params
+                    .get($idx)
+                    .copied()
+                    .filter(|&v| v != 0)
+                    .unwrap_or($default)
             };
         }
 
@@ -128,7 +136,9 @@ impl Perform for Handler<'_> {
                 // offset the row under ORIGIN mode (scroll_top would be
                 // added again to an already-absolute row), so set the
                 // grid cursor directly.
-                let col = param!(0, 1).saturating_sub(1).min(self.terminal.cols() as u16 - 1) as usize;
+                let col = param!(0, 1)
+                    .saturating_sub(1)
+                    .min(self.terminal.cols() as u16 - 1) as usize;
                 let row = self.terminal.grid().cursor().row;
                 self.terminal.grid_mut().set_cursor(row, col);
             }
@@ -210,9 +220,10 @@ impl Perform for Handler<'_> {
                         5 => {
                             // DSR - Device Status Report: respond with "OK"
                             log::trace!("Device status report requested");
-                            self.terminal.push_event(
-                                crate::event::TerminalEvent::PtyWrite(b"\x1b[0n".to_vec()),
-                            );
+                            self.terminal
+                                .push_event(crate::event::TerminalEvent::PtyWrite(
+                                    b"\x1b[0n".to_vec(),
+                                ));
                         }
                         6 => {
                             // CPR - Cursor Position Report
@@ -220,16 +231,11 @@ impl Perform for Handler<'_> {
                             let row = cursor.row + 1; // 1-indexed
                             let col = cursor.col + 1; // 1-indexed
                             let response = format!("\x1b[{};{}R", row, col);
-                            log::trace!(
-                                "Cursor position report: row={}, col={}",
-                                row,
-                                col
-                            );
-                            self.terminal.push_event(
-                                crate::event::TerminalEvent::PtyWrite(
+                            log::trace!("Cursor position report: row={}, col={}", row, col);
+                            self.terminal
+                                .push_event(crate::event::TerminalEvent::PtyWrite(
                                     response.into_bytes(),
-                                ),
-                            );
+                                ));
                         }
                         _ => {}
                     }
@@ -275,7 +281,9 @@ impl Perform for Handler<'_> {
             _ => {
                 log::trace!(
                     "Unhandled CSI: params={:?}, intermediates={:?}, action='{}'",
-                    params, intermediates, action
+                    params,
+                    intermediates,
+                    action
                 );
             }
         }
@@ -322,12 +330,14 @@ impl Perform for Handler<'_> {
 
             // DECKPAM - Application Keypad Mode
             (b'=', []) => {
-                self.terminal.set_mode(TerminalMode::KEYPAD_APPLICATION, true);
+                self.terminal
+                    .set_mode(TerminalMode::KEYPAD_APPLICATION, true);
             }
 
             // DECKPNM - Normal Keypad Mode
             (b'>', []) => {
-                self.terminal.set_mode(TerminalMode::KEYPAD_APPLICATION, false);
+                self.terminal
+                    .set_mode(TerminalMode::KEYPAD_APPLICATION, false);
             }
 
             // Character set designation
@@ -341,7 +351,9 @@ impl Perform for Handler<'_> {
             _ => {
                 log::trace!(
                     "Unhandled ESC: intermediates={:?}, byte=0x{:02X} ('{}')",
-                    intermediates, byte, byte as char
+                    intermediates,
+                    byte,
+                    byte as char
                 );
             }
         }
@@ -410,10 +422,12 @@ impl Perform for Handler<'_> {
                 if params.len() > 1 {
                     if let Ok(message) = std::str::from_utf8(params[1]) {
                         log::info!("Desktop notification: {}", message);
-                        self.terminal.push_event(TerminalEvent::Notification(NotificationRequest {
-                            title: None,
-                            body: message.to_string(),
-                        }));
+                        self.terminal.push_event(TerminalEvent::Notification(
+                            NotificationRequest {
+                                title: None,
+                                body: message.to_string(),
+                            },
+                        ));
                     }
                 }
             }
@@ -444,10 +458,9 @@ impl Perform for Handler<'_> {
                             String::new()
                         };
                         log::info!("Desktop notification: {:?} - {}", title, body);
-                        self.terminal.push_event(TerminalEvent::Notification(NotificationRequest {
-                            title,
-                            body,
-                        }));
+                        self.terminal.push_event(TerminalEvent::Notification(
+                            NotificationRequest { title, body },
+                        ));
                     }
                 }
             }
@@ -470,7 +483,11 @@ impl Perform for Handler<'_> {
             self.apc_data.clear();
             log::trace!("Starting Kitty graphics APC sequence");
         } else {
-            log::trace!("DCS hook: intermediates={:?}, action='{}'", intermediates, action);
+            log::trace!(
+                "DCS hook: intermediates={:?}, action='{}'",
+                intermediates,
+                action
+            );
         }
     }
 
@@ -484,7 +501,10 @@ impl Perform for Handler<'_> {
     fn unhook(&mut self) {
         // DCS/APC unhook - end of device control string or application program command
         if self.in_apc {
-            log::trace!("Kitty graphics APC sequence received, {} bytes", self.apc_data.len());
+            log::trace!(
+                "Kitty graphics APC sequence received, {} bytes",
+                self.apc_data.len()
+            );
             // Process the accumulated data
             let data = std::mem::take(&mut self.apc_data);
             self.terminal.handle_graphics_command(&data);
@@ -555,30 +575,44 @@ impl Handler<'_> {
                 29 => self.remove_attr(CellAttrs::STRIKE),
 
                 // Foreground colors (30-37)
-                30..=37 => self.terminal.set_fg(ansi_color(primary - 30), ColorSpec::Indexed((primary - 30) as u8)),
+                30..=37 => self.terminal.set_fg(
+                    ansi_color(primary - 30),
+                    ColorSpec::Indexed((primary - 30) as u8),
+                ),
 
                 // Extended foreground color (38:2:R:G:B or 38:5:N)
                 38 => {
-                    if let Some((color, spec)) = self.parse_extended_color_spec_from_subparams(&values[1..]) {
+                    if let Some((color, spec)) =
+                        self.parse_extended_color_spec_from_subparams(&values[1..])
+                    {
                         self.terminal.set_fg(color, spec);
                     }
                 }
 
                 // Default foreground
-                39 => self.terminal.set_fg(Color::default_fg(), ColorSpec::Default),
+                39 => self
+                    .terminal
+                    .set_fg(Color::default_fg(), ColorSpec::Default),
 
                 // Background colors (40-47)
-                40..=47 => self.terminal.set_bg(ansi_color(primary - 40), ColorSpec::Indexed((primary - 40) as u8)),
+                40..=47 => self.terminal.set_bg(
+                    ansi_color(primary - 40),
+                    ColorSpec::Indexed((primary - 40) as u8),
+                ),
 
                 // Extended background color (48:2:R:G:B or 48:5:N)
                 48 => {
-                    if let Some((color, spec)) = self.parse_extended_color_spec_from_subparams(&values[1..]) {
+                    if let Some((color, spec)) =
+                        self.parse_extended_color_spec_from_subparams(&values[1..])
+                    {
                         self.terminal.set_bg(color, spec);
                     }
                 }
 
                 // Default background
-                49 => self.terminal.set_bg(Color::default_bg(), ColorSpec::Default),
+                49 => self
+                    .terminal
+                    .set_bg(Color::default_bg(), ColorSpec::Default),
 
                 // Extended underline color (58:2:R:G:B or 58:5:N)
                 58 => {
@@ -591,10 +625,16 @@ impl Handler<'_> {
                 59 => self.terminal.reset_underline_color(),
 
                 // Bright foreground colors (90-97)
-                90..=97 => self.terminal.set_fg(ansi_bright_color(primary - 90), ColorSpec::Indexed((primary - 90 + 8) as u8)),
+                90..=97 => self.terminal.set_fg(
+                    ansi_bright_color(primary - 90),
+                    ColorSpec::Indexed((primary - 90 + 8) as u8),
+                ),
 
                 // Bright background colors (100-107)
-                100..=107 => self.terminal.set_bg(ansi_bright_color(primary - 100), ColorSpec::Indexed((primary - 100 + 8) as u8)),
+                100..=107 => self.terminal.set_bg(
+                    ansi_bright_color(primary - 100),
+                    ColorSpec::Indexed((primary - 100 + 8) as u8),
+                ),
 
                 _ => {
                     log::trace!("Unknown SGR parameter: {}", primary);
@@ -606,11 +646,15 @@ impl Handler<'_> {
     /// Parse extended color from colon-separated subparameters
     /// Handles formats like: 2:R:G:B (RGB) or 5:N (256-color)
     fn parse_extended_color_from_subparams(&self, subparams: &[u16]) -> Option<Color> {
-        self.parse_extended_color_spec_from_subparams(subparams).map(|(c, _)| c)
+        self.parse_extended_color_spec_from_subparams(subparams)
+            .map(|(c, _)| c)
     }
 
     /// Parse extended color with its spec from colon-separated subparameters
-    fn parse_extended_color_spec_from_subparams(&self, subparams: &[u16]) -> Option<(Color, ColorSpec)> {
+    fn parse_extended_color_spec_from_subparams(
+        &self,
+        subparams: &[u16],
+    ) -> Option<(Color, ColorSpec)> {
         if subparams.is_empty() {
             return None;
         }
@@ -619,7 +663,8 @@ impl Handler<'_> {
             2 => {
                 // RGB color: 2:R:G:B (may have additional empty : separators)
                 // Some terminals send 2::R:G:B (with colorspace placeholder)
-                let rgb: Vec<u16> = subparams[1..].iter()
+                let rgb: Vec<u16> = subparams[1..]
+                    .iter()
                     .copied()
                     .filter(|&v| v <= 255) // Filter valid color values
                     .take(3)
@@ -653,7 +698,8 @@ impl Handler<'_> {
                 match mode {
                     1 => {
                         // DECCKM - Application cursor keys
-                        self.terminal.set_mode(TerminalMode::CURSOR_KEYS_APPLICATION, enable);
+                        self.terminal
+                            .set_mode(TerminalMode::CURSOR_KEYS_APPLICATION, enable);
                     }
                     6 => {
                         // DECOM - Origin mode
@@ -666,7 +712,8 @@ impl Handler<'_> {
                     }
                     12 => {
                         // ATT610 - Cursor blinking
-                        self.terminal.set_mode(TerminalMode::CURSOR_BLINKING, enable);
+                        self.terminal
+                            .set_mode(TerminalMode::CURSOR_BLINKING, enable);
                     }
                     25 => {
                         // DECTCEM - Cursor visible
@@ -678,11 +725,13 @@ impl Handler<'_> {
                     }
                     1002 => {
                         // Button event mouse tracking
-                        self.terminal.set_mode(TerminalMode::MOUSE_BUTTON_EVENT, enable);
+                        self.terminal
+                            .set_mode(TerminalMode::MOUSE_BUTTON_EVENT, enable);
                     }
                     1003 => {
                         // Any event mouse tracking
-                        self.terminal.set_mode(TerminalMode::MOUSE_ANY_EVENT, enable);
+                        self.terminal
+                            .set_mode(TerminalMode::MOUSE_ANY_EVENT, enable);
                     }
                     1004 => {
                         // Focus events
@@ -706,12 +755,14 @@ impl Handler<'_> {
                     }
                     2004 => {
                         // Bracketed paste mode
-                        self.terminal.set_mode(TerminalMode::BRACKETED_PASTE, enable);
+                        self.terminal
+                            .set_mode(TerminalMode::BRACKETED_PASTE, enable);
                     }
                     2026 => {
                         // Synchronized output mode
                         // When enabled, terminal should buffer output until disabled
-                        self.terminal.set_mode(TerminalMode::SYNCHRONIZED_OUTPUT, enable);
+                        self.terminal
+                            .set_mode(TerminalMode::SYNCHRONIZED_OUTPUT, enable);
                         log::trace!("Synchronized output mode: {}", enable);
                     }
                     _ => {
@@ -727,7 +778,8 @@ impl Handler<'_> {
                     }
                     20 => {
                         // LNM - Linefeed/Newline mode
-                        self.terminal.set_mode(TerminalMode::LINEFEED_NEWLINE, enable);
+                        self.terminal
+                            .set_mode(TerminalMode::LINEFEED_NEWLINE, enable);
                     }
                     _ => {
                         log::trace!("Unknown ANSI mode {}: {}", mode, enable);

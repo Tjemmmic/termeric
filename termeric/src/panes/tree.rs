@@ -3,9 +3,9 @@
 //! Uses a binary tree where each node is either a leaf (pane) or a split
 //! containing two children.
 
-use std::collections::HashMap;
-use super::layout::PaneRect;
 use super::Divider;
+use super::layout::PaneRect;
+use std::collections::HashMap;
 
 /// Unique identifier for a pane
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,9 +52,7 @@ impl PaneNode {
     pub fn contains(&self, id: PaneId) -> bool {
         match self {
             PaneNode::Leaf(leaf_id) => *leaf_id == id,
-            PaneNode::Split { first, second, .. } => {
-                first.contains(id) || second.contains(id)
-            }
+            PaneNode::Split { first, second, .. } => first.contains(id) || second.contains(id),
         }
     }
 
@@ -75,8 +73,8 @@ impl PaneNode {
             }
             PaneNode::Leaf(_) => false,
             PaneNode::Split { first, second, .. } => {
-                first.split_leaf(target, new_id, direction) ||
-                second.split_leaf(target, new_id, direction)
+                first.split_leaf(target, new_id, direction)
+                    || second.split_leaf(target, new_id, direction)
             }
         }
     }
@@ -140,7 +138,9 @@ impl PaneNode {
                 }
 
                 // Recursively search
-                first.find_sibling(target).or_else(|| second.find_sibling(target))
+                first
+                    .find_sibling(target)
+                    .or_else(|| second.find_sibling(target))
             }
         }
     }
@@ -151,7 +151,12 @@ impl PaneNode {
             PaneNode::Leaf(id) => {
                 result.insert(*id, rect);
             }
-            PaneNode::Split { direction, ratio, first, second } => {
+            PaneNode::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
                 let (first_rect, second_rect) = match direction {
                     SplitDirection::Horizontal => {
                         // Split horizontally (top/bottom)
@@ -206,7 +211,13 @@ impl PaneNode {
     /// `pos` is the mouse position in the divider's axis (x for vertical, y for horizontal).
     /// Returns true if a split was resized.
     fn resize_at(&mut self, rect: PaneRect, pos_x: f32, pos_y: f32, hit_threshold: f32) -> bool {
-        if let PaneNode::Split { direction, ratio, first, second } = self {
+        if let PaneNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        {
             let divider_thickness = 4.0;
             match direction {
                 SplitDirection::Horizontal => {
@@ -215,23 +226,37 @@ impl PaneNode {
                         && pos_x >= rect.x
                         && pos_x <= rect.x + rect.width
                     {
-                        let new_ratio = ((pos_y - rect.y) / (rect.height - divider_thickness))
-                            .clamp(0.1, 0.9);
+                        let new_ratio =
+                            ((pos_y - rect.y) / (rect.height - divider_thickness)).clamp(0.1, 0.9);
                         *ratio = new_ratio;
                         return true;
                     }
                     // Recurse into children
                     let first_height = (rect.height - divider_thickness) * *ratio;
-                    if first.resize_at(PaneRect {
-                        x: rect.x, y: rect.y,
-                        width: rect.width, height: first_height,
-                    }, pos_x, pos_y, hit_threshold) {
+                    if first.resize_at(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: first_height,
+                        },
+                        pos_x,
+                        pos_y,
+                        hit_threshold,
+                    ) {
                         return true;
                     }
-                    if second.resize_at(PaneRect {
-                        x: rect.x, y: rect.y + first_height + divider_thickness,
-                        width: rect.width, height: rect.height - first_height - divider_thickness,
-                    }, pos_x, pos_y, hit_threshold) {
+                    if second.resize_at(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y + first_height + divider_thickness,
+                            width: rect.width,
+                            height: rect.height - first_height - divider_thickness,
+                        },
+                        pos_x,
+                        pos_y,
+                        hit_threshold,
+                    ) {
                         return true;
                     }
                 }
@@ -241,23 +266,37 @@ impl PaneNode {
                         && pos_y >= rect.y
                         && pos_y <= rect.y + rect.height
                     {
-                        let new_ratio = ((pos_x - rect.x) / (rect.width - divider_thickness))
-                            .clamp(0.1, 0.9);
+                        let new_ratio =
+                            ((pos_x - rect.x) / (rect.width - divider_thickness)).clamp(0.1, 0.9);
                         *ratio = new_ratio;
                         return true;
                     }
                     // Recurse into children
                     let first_width = (rect.width - divider_thickness) * *ratio;
-                    if first.resize_at(PaneRect {
-                        x: rect.x, y: rect.y,
-                        width: first_width, height: rect.height,
-                    }, pos_x, pos_y, hit_threshold) {
+                    if first.resize_at(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: first_width,
+                            height: rect.height,
+                        },
+                        pos_x,
+                        pos_y,
+                        hit_threshold,
+                    ) {
                         return true;
                     }
-                    if second.resize_at(PaneRect {
-                        x: rect.x + first_width + divider_thickness, y: rect.y,
-                        width: rect.width - first_width - divider_thickness, height: rect.height,
-                    }, pos_x, pos_y, hit_threshold) {
+                    if second.resize_at(
+                        PaneRect {
+                            x: rect.x + first_width + divider_thickness,
+                            y: rect.y,
+                            width: rect.width - first_width - divider_thickness,
+                            height: rect.height,
+                        },
+                        pos_x,
+                        pos_y,
+                        hit_threshold,
+                    ) {
                         return true;
                     }
                 }
@@ -267,47 +306,91 @@ impl PaneNode {
     }
 
     /// Check if a position is near a divider (for cursor change / drag detection)
-    fn hit_test_divider(&self, rect: PaneRect, pos_x: f32, pos_y: f32, threshold: f32) -> Option<bool> {
-        if let PaneNode::Split { direction, ratio, first, second } = self {
+    fn hit_test_divider(
+        &self,
+        rect: PaneRect,
+        pos_x: f32,
+        pos_y: f32,
+        threshold: f32,
+    ) -> Option<bool> {
+        if let PaneNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        {
             let divider_thickness = 4.0;
             match direction {
                 SplitDirection::Horizontal => {
                     let divider_y = rect.y + (rect.height - divider_thickness) * *ratio;
                     if (pos_y - divider_y).abs() < threshold
-                        && pos_x >= rect.x && pos_x <= rect.x + rect.width
+                        && pos_x >= rect.x
+                        && pos_x <= rect.x + rect.width
                     {
                         return Some(false); // horizontal divider → vertical resize cursor
                     }
                     let first_height = (rect.height - divider_thickness) * *ratio;
-                    if let Some(v) = first.hit_test_divider(PaneRect {
-                        x: rect.x, y: rect.y, width: rect.width, height: first_height,
-                    }, pos_x, pos_y, threshold) {
+                    if let Some(v) = first.hit_test_divider(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: first_height,
+                        },
+                        pos_x,
+                        pos_y,
+                        threshold,
+                    ) {
                         return Some(v);
                     }
-                    if let Some(v) = second.hit_test_divider(PaneRect {
-                        x: rect.x, y: rect.y + first_height + divider_thickness,
-                        width: rect.width, height: rect.height - first_height - divider_thickness,
-                    }, pos_x, pos_y, threshold) {
+                    if let Some(v) = second.hit_test_divider(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y + first_height + divider_thickness,
+                            width: rect.width,
+                            height: rect.height - first_height - divider_thickness,
+                        },
+                        pos_x,
+                        pos_y,
+                        threshold,
+                    ) {
                         return Some(v);
                     }
                 }
                 SplitDirection::Vertical => {
                     let divider_x = rect.x + (rect.width - divider_thickness) * *ratio;
                     if (pos_x - divider_x).abs() < threshold
-                        && pos_y >= rect.y && pos_y <= rect.y + rect.height
+                        && pos_y >= rect.y
+                        && pos_y <= rect.y + rect.height
                     {
                         return Some(true); // vertical divider → horizontal resize cursor
                     }
                     let first_width = (rect.width - divider_thickness) * *ratio;
-                    if let Some(v) = first.hit_test_divider(PaneRect {
-                        x: rect.x, y: rect.y, width: first_width, height: rect.height,
-                    }, pos_x, pos_y, threshold) {
+                    if let Some(v) = first.hit_test_divider(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: first_width,
+                            height: rect.height,
+                        },
+                        pos_x,
+                        pos_y,
+                        threshold,
+                    ) {
                         return Some(v);
                     }
-                    if let Some(v) = second.hit_test_divider(PaneRect {
-                        x: rect.x + first_width + divider_thickness, y: rect.y,
-                        width: rect.width - first_width - divider_thickness, height: rect.height,
-                    }, pos_x, pos_y, threshold) {
+                    if let Some(v) = second.hit_test_divider(
+                        PaneRect {
+                            x: rect.x + first_width + divider_thickness,
+                            y: rect.y,
+                            width: rect.width - first_width - divider_thickness,
+                            height: rect.height,
+                        },
+                        pos_x,
+                        pos_y,
+                        threshold,
+                    ) {
                         return Some(v);
                     }
                 }
@@ -318,7 +401,13 @@ impl PaneNode {
 
     /// Get dividers for rendering
     fn get_dividers(&self, rect: PaneRect, result: &mut Vec<Divider>) {
-        if let PaneNode::Split { direction, ratio, first, second } = self {
+        if let PaneNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        {
             let divider_thickness = 4.0;
             match direction {
                 SplitDirection::Horizontal => {
@@ -332,18 +421,24 @@ impl PaneNode {
 
                     // Recurse into children
                     let first_height = (rect.height - divider_thickness) * ratio;
-                    first.get_dividers(PaneRect {
-                        x: rect.x,
-                        y: rect.y,
-                        width: rect.width,
-                        height: first_height,
-                    }, result);
-                    second.get_dividers(PaneRect {
-                        x: rect.x,
-                        y: rect.y + first_height + divider_thickness,
-                        width: rect.width,
-                        height: rect.height - first_height - divider_thickness,
-                    }, result);
+                    first.get_dividers(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: rect.width,
+                            height: first_height,
+                        },
+                        result,
+                    );
+                    second.get_dividers(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y + first_height + divider_thickness,
+                            width: rect.width,
+                            height: rect.height - first_height - divider_thickness,
+                        },
+                        result,
+                    );
                 }
                 SplitDirection::Vertical => {
                     let divider_x = rect.x + (rect.width - divider_thickness) * ratio;
@@ -356,18 +451,24 @@ impl PaneNode {
 
                     // Recurse into children
                     let first_width = (rect.width - divider_thickness) * ratio;
-                    first.get_dividers(PaneRect {
-                        x: rect.x,
-                        y: rect.y,
-                        width: first_width,
-                        height: rect.height,
-                    }, result);
-                    second.get_dividers(PaneRect {
-                        x: rect.x + first_width + divider_thickness,
-                        y: rect.y,
-                        width: rect.width - first_width - divider_thickness,
-                        height: rect.height,
-                    }, result);
+                    first.get_dividers(
+                        PaneRect {
+                            x: rect.x,
+                            y: rect.y,
+                            width: first_width,
+                            height: rect.height,
+                        },
+                        result,
+                    );
+                    second.get_dividers(
+                        PaneRect {
+                            x: rect.x + first_width + divider_thickness,
+                            y: rect.y,
+                            width: rect.width - first_width - divider_thickness,
+                            height: rect.height,
+                        },
+                        result,
+                    );
                 }
             }
         }
@@ -446,7 +547,12 @@ mod tests {
     #[test]
     fn test_single_pane() {
         let tree = PaneTree::new(PaneId(0));
-        let layout = tree.calculate_layout(PaneRect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 });
+        let layout = tree.calculate_layout(PaneRect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        });
 
         assert_eq!(layout.len(), 1);
         let rect = layout.get(&PaneId(0)).unwrap();
@@ -459,7 +565,12 @@ mod tests {
         let mut tree = PaneTree::new(PaneId(0));
         tree.split(PaneId(0), PaneId(1), SplitDirection::Vertical);
 
-        let layout = tree.calculate_layout(PaneRect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 });
+        let layout = tree.calculate_layout(PaneRect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        });
         assert_eq!(layout.len(), 2);
 
         let rect0 = layout.get(&PaneId(0)).unwrap();
@@ -476,7 +587,12 @@ mod tests {
         let mut tree = PaneTree::new(PaneId(0));
         tree.split(PaneId(0), PaneId(1), SplitDirection::Horizontal);
 
-        let layout = tree.calculate_layout(PaneRect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 });
+        let layout = tree.calculate_layout(PaneRect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 600.0,
+        });
         assert_eq!(layout.len(), 2);
 
         let rect0 = layout.get(&PaneId(0)).unwrap();
