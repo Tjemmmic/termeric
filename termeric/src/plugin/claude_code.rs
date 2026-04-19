@@ -142,15 +142,17 @@ impl ClaudeCodePlugin {
         (None, profile_name)
     }
 
-    /// Build the full `OpenTab` action with profile resolution applied.
-    fn build_launch_action(
+    /// Build the launch action(s). Emits a `ShowNotice` alongside `OpenTab`
+    /// when a requested profile name wasn't found in config, so the user
+    /// doesn't silently get defaults.
+    fn build_launch_actions(
         &self,
         ctx: &PluginContext,
         extra_cli_args: &[&str],
         title: &str,
-    ) -> PluginAction {
+    ) -> Vec<PluginAction> {
         let cwd = self.resolve_cwd(ctx);
-        let (profile, _profile_name) = self.resolve_profile(cwd);
+        let (profile, profile_name) = self.resolve_profile(cwd);
 
         let (profile_extra_args, profile_env, profile_approval) = match profile {
             Some(p) => (
@@ -166,14 +168,29 @@ impl ClaudeCodePlugin {
         env.insert("COLUMNS".to_string(), ctx.terminal_size.0.to_string());
         env.insert("LINES".to_string(), ctx.terminal_size.1.to_string());
 
-        PluginAction::OpenTab {
+        let mut actions = Vec::with_capacity(2);
+        // If a profile name was requested but not found, surface it.
+        if profile.is_none() {
+            if let Some(name) = profile_name {
+                actions.push(PluginAction::ShowNotice {
+                    title: "Claude Code profile not found".into(),
+                    lines: vec![
+                        format!("Profile '{}' is not defined in your config.", name),
+                        String::new(),
+                        "Falling back to defaults for this tab.".into(),
+                    ],
+                });
+            }
+        }
+        actions.push(PluginAction::OpenTab {
             program: self.config.binary.clone(),
             args: self.build_args(extra_cli_args, profile_extra_args, profile_approval),
             cwd: cwd.map(|s| s.to_string()),
             title: Some(title.to_string()),
             plugin_id: Some("claude-code".to_string()),
             env,
-        }
+        });
+        actions
     }
 }
 
@@ -190,10 +207,10 @@ impl Plugin for ClaudeCodePlugin {
         match hook {
             Hook::CommandInvoked { command_id } => match command_id.as_str() {
                 "claude-code.open" => {
-                    HookResponse::Action(self.build_launch_action(ctx, &[], "Claude Code"))
+                    HookResponse::Actions(self.build_launch_actions(ctx, &[], "Claude Code"))
                 }
                 "claude-code.resume" => {
-                    HookResponse::Action(self.build_launch_action(
+                    HookResponse::Actions(self.build_launch_actions(
                         ctx,
                         &["--continue"],
                         "Claude Code (resume)",
@@ -258,6 +275,19 @@ impl Plugin for ClaudeCodePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Return the first `OpenTab` action from a `HookResponse` regardless of
+    /// whether it was emitted as `Action(_)` or `Actions(vec![...])`.
+    fn extract_open_tab(response: HookResponse) -> Option<PluginAction> {
+        let actions: Vec<PluginAction> = match response {
+            HookResponse::Action(a) => vec![a],
+            HookResponse::Actions(v) => v,
+            _ => vec![],
+        };
+        actions
+            .into_iter()
+            .find(|a| matches!(a, PluginAction::OpenTab { .. }))
+    }
 
     #[test]
     fn test_default_config() {
@@ -360,8 +390,8 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab {
                 program,
                 args,
                 cwd,
@@ -378,7 +408,7 @@ mod tests {
                 assert_eq!(env.get("COLUMNS"), Some(&"80".to_string()));
                 assert_eq!(env.get("LINES"), Some(&"24".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 
@@ -399,12 +429,12 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab { args, title, .. }) => {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab { args, title, .. }) => {
                 assert!(args.contains(&"--continue".to_string()));
                 assert_eq!(title, Some("Claude Code (resume)".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab) with --continue"),
+            _ => panic!("Expected OpenTab with --continue"),
         }
     }
 
@@ -447,11 +477,11 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab { cwd, .. }) => {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab { cwd, .. }) => {
                 assert_eq!(cwd, None); // cwd not passed when inherit_cwd is false
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 
@@ -718,8 +748,8 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab {
                 args,
                 env: tab_env,
                 ..
@@ -732,7 +762,7 @@ mod tests {
                 // Profile approval_mode should inject --dangerously-skip-permissions
                 assert!(args.contains(&"--dangerously-skip-permissions".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 
@@ -770,8 +800,8 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab {
                 args,
                 env: tab_env,
                 ..
@@ -779,7 +809,7 @@ mod tests {
                 assert_eq!(tab_env.get("MY_VAR"), Some(&"my-val".to_string()));
                 assert!(args.contains(&"--continue".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab) with --continue"),
+            _ => panic!("Expected OpenTab with --continue"),
         }
     }
 
@@ -800,14 +830,14 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab { env, .. }) => {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab { env, .. }) => {
                 // No profile env, but terminal size is always passed
                 assert_eq!(env.len(), 2);
                 assert_eq!(env.get("COLUMNS"), Some(&"80".to_string()));
                 assert_eq!(env.get("LINES"), Some(&"24".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 }

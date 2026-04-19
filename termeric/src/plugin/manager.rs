@@ -88,6 +88,15 @@ impl PluginManager {
                     );
                     actions.push(action);
                 }
+                HookResponse::Actions(batch) => {
+                    log::debug!(
+                        "Hook {:?} produced {} actions from plugin '{}'",
+                        hook,
+                        batch.len(),
+                        plugin.id()
+                    );
+                    actions.extend(batch);
+                }
             }
         }
 
@@ -115,12 +124,11 @@ impl PluginManager {
         &mut self,
         command_id: &str,
         ctx: &PluginContext,
-    ) -> Option<PluginAction> {
+    ) -> Vec<PluginAction> {
         let hook = Hook::CommandInvoked {
             command_id: command_id.to_string(),
         };
-        let actions = self.dispatch(&hook, ctx);
-        actions.into_iter().next()
+        self.dispatch(&hook, ctx)
     }
 
     /// Unload all plugins (calls `on_unload` on each).
@@ -328,11 +336,11 @@ mod tests {
 
         mgr.register(Box::new(ActionPlugin), &ctx).unwrap();
 
-        let action = mgr.execute_command("action.open", &ctx);
-        assert!(action.is_some());
+        let actions = mgr.execute_command("action.open", &ctx);
+        assert!(!actions.is_empty());
 
-        let action = mgr.execute_command("nonexistent", &ctx);
-        assert!(action.is_none());
+        let actions = mgr.execute_command("nonexistent", &ctx);
+        assert!(actions.is_empty());
     }
 
     #[test]

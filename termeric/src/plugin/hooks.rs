@@ -47,6 +47,8 @@ pub enum HookResponse {
     Handled,
     /// Plugin wants to execute an action
     Action(PluginAction),
+    /// Plugin wants to execute several actions (notice + open, etc.)
+    Actions(Vec<PluginAction>),
 }
 
 /// Actions a plugin can request the app to perform.
@@ -74,6 +76,10 @@ pub enum PluginAction {
     Notify { title: String, body: String },
     /// Show a message in the command palette area
     ShowMessage { message: String },
+    /// Show a modal info overlay (title + body lines). Use for anything the
+    /// user needs to actually see — failed profile lookups, config warnings,
+    /// etc.
+    ShowNotice { title: String, lines: Vec<String> },
     /// Clear a plugin-owned tab (send Ctrl+C + clear)
     ClearPluginTab { plugin_id: String },
     /// Close all tabs of a plugin and reopen fresh

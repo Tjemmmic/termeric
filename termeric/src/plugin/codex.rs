@@ -187,15 +187,17 @@ impl CodexPlugin {
         (None, profile_name)
     }
 
-    /// Build the full `OpenTab` action with profile resolution applied.
-    fn build_launch_action(
+    /// Build the launch action(s). Emits a `ShowNotice` alongside `OpenTab`
+    /// when a requested profile name wasn't found in config, so the user
+    /// doesn't silently get defaults.
+    fn build_launch_actions(
         &self,
         ctx: &PluginContext,
         extra_cli_args: &[&str],
         title: &str,
-    ) -> PluginAction {
+    ) -> Vec<PluginAction> {
         let cwd = self.resolve_cwd(ctx);
-        let (profile, _profile_name) = self.resolve_profile(cwd);
+        let (profile, profile_name) = self.resolve_profile(cwd);
 
         let (profile_extra_args, profile_env, profile_approval, profile_sandbox) = match profile {
             Some(p) => (
@@ -212,14 +214,28 @@ impl CodexPlugin {
         env.insert("COLUMNS".to_string(), ctx.terminal_size.0.to_string());
         env.insert("LINES".to_string(), ctx.terminal_size.1.to_string());
 
-        PluginAction::OpenTab {
+        let mut actions = Vec::with_capacity(2);
+        if profile.is_none() {
+            if let Some(name) = profile_name {
+                actions.push(PluginAction::ShowNotice {
+                    title: "Codex profile not found".into(),
+                    lines: vec![
+                        format!("Profile '{}' is not defined in your config.", name),
+                        String::new(),
+                        "Falling back to defaults for this tab.".into(),
+                    ],
+                });
+            }
+        }
+        actions.push(PluginAction::OpenTab {
             program: self.config.binary.clone(),
             args: self.build_args(extra_cli_args, profile_extra_args, profile_approval, profile_sandbox),
             cwd: cwd.map(|s| s.to_string()),
             title: Some(title.to_string()),
             plugin_id: Some("codex".to_string()),
             env,
-        }
+        });
+        actions
     }
 }
 
@@ -236,10 +252,10 @@ impl Plugin for CodexPlugin {
         match hook {
             Hook::CommandInvoked { command_id } => match command_id.as_str() {
                 "codex.open" => {
-                    HookResponse::Action(self.build_launch_action(ctx, &[], "Codex"))
+                    HookResponse::Actions(self.build_launch_actions(ctx, &[], "Codex"))
                 }
                 "codex.resume" => {
-                    HookResponse::Action(self.build_launch_action(
+                    HookResponse::Actions(self.build_launch_actions(
                         ctx,
                         &["--continue"],
                         "Codex (resume)",
@@ -290,6 +306,19 @@ impl Plugin for CodexPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Return the first `OpenTab` action from a `HookResponse` regardless of
+    /// whether it was emitted as `Action(_)` or `Actions(vec![...])`.
+    fn extract_open_tab(response: HookResponse) -> Option<PluginAction> {
+        let actions: Vec<PluginAction> = match response {
+            HookResponse::Action(a) => vec![a],
+            HookResponse::Actions(v) => v,
+            _ => vec![],
+        };
+        actions
+            .into_iter()
+            .find(|a| matches!(a, PluginAction::OpenTab { .. }))
+    }
 
     #[test]
     fn test_default_config() {
@@ -529,8 +558,8 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab {
                 program,
                 args,
                 cwd,
@@ -539,18 +568,16 @@ mod tests {
                 env,
             }) => {
                 assert_eq!(program, "codex");
-                // Default args: --suggest --sandbox workspace-write
                 assert!(args.contains(&"--suggest".to_string()));
                 assert!(args.contains(&"--sandbox".to_string()));
                 assert!(args.contains(&"workspace-write".to_string()));
                 assert_eq!(cwd, Some("/tmp/project".to_string()));
                 assert_eq!(title, Some("Codex".to_string()));
                 assert_eq!(plugin_id, Some("codex".to_string()));
-                // env contains terminal size (COLUMNS, LINES)
                 assert_eq!(env.get("COLUMNS"), Some(&"80".to_string()));
                 assert_eq!(env.get("LINES"), Some(&"24".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 
@@ -571,12 +598,12 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab { args, title, .. }) => {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab { args, title, .. }) => {
                 assert!(args.contains(&"--continue".to_string()));
                 assert_eq!(title, Some("Codex (resume)".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab) with --continue"),
+            _ => panic!("Expected OpenTab with --continue"),
         }
     }
 
@@ -764,11 +791,11 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab { cwd, .. }) => {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab { cwd, .. }) => {
                 assert_eq!(cwd, None);
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 
@@ -858,25 +885,21 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab {
                 args,
                 env: tab_env,
                 ..
             }) => {
-                // Profile env should be passed through
                 assert_eq!(tab_env.get("OPENAI_API_KEY"), Some(&"test-key".to_string()));
                 assert_eq!(tab_env.get("CUSTOM_VAR"), Some(&"custom-val".to_string()));
-                // Profile approval_mode should inject --full-auto
                 assert!(args.contains(&"--full-auto".to_string()));
                 assert!(!args.contains(&"--suggest".to_string()));
-                // Profile sandbox_mode should inject --sandbox danger-full-access
                 assert!(args.contains(&"danger-full-access".to_string()));
                 assert!(!args.contains(&"workspace-write".to_string()));
-                // Profile extra_args should be in args
                 assert!(args.contains(&"--notify".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 
@@ -897,14 +920,13 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab { env, .. }) => {
-                // No profile env, but terminal size is always passed
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab { env, .. }) => {
                 assert_eq!(env.len(), 2);
                 assert_eq!(env.get("COLUMNS"), Some(&"80".to_string()));
                 assert_eq!(env.get("LINES"), Some(&"24".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab)"),
+            _ => panic!("Expected OpenTab action"),
         }
     }
 
@@ -942,8 +964,8 @@ mod tests {
             &ctx,
         );
 
-        match response {
-            HookResponse::Action(PluginAction::OpenTab {
+        match extract_open_tab(response) {
+            Some(PluginAction::OpenTab {
                 args,
                 env: tab_env,
                 ..
@@ -951,7 +973,7 @@ mod tests {
                 assert_eq!(tab_env.get("MY_VAR"), Some(&"my-val".to_string()));
                 assert!(args.contains(&"--continue".to_string()));
             }
-            _ => panic!("Expected Action(OpenTab) with --continue"),
+            _ => panic!("Expected OpenTab with --continue"),
         }
     }
 }
