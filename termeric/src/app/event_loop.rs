@@ -606,7 +606,10 @@ impl ApplicationHandler for App {
                             let btn_area_height = ch * 4.5;
                             let card_height = padding + title_height + content_height + btn_area_height + padding * 0.5;
                             let card_x = (ww - card_width) / 2.0;
-                            let card_y = (wh - card_height) / 2.0;
+                            // Match the renderer's slide-in offset so the
+                            // hit-test tracks the card during the animation.
+                            let anim = self.info_overlay.animation();
+                            let card_y = (wh - card_height) / 2.0 + (1.0 - anim) * -30.0;
 
                             // Compute two-button geometry (must match renderer)
                             let title_y = card_y + padding;

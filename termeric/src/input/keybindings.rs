@@ -710,11 +710,14 @@ impl ShortcutRegistry {
     }
 
     /// Clear a binding (unbind the action).
+    #[allow(dead_code)] // Consumed only by unit tests; the shortcuts panel
+                       // will use this once the Reset UI lands.
     pub fn clear_binding(&mut self, action: BindableAction) {
         self.set_binding(action, None);
     }
 
     /// Reset a single action to its default binding.
+    #[allow(dead_code)] // See `clear_binding`.
     pub fn reset_binding(&mut self, action: BindableAction) {
         let default = action.meta().default_binding;
         // Remove current from reverse map
@@ -736,6 +739,7 @@ impl ShortcutRegistry {
     }
 
     /// Reset all bindings to defaults.
+    #[allow(dead_code)] // See `clear_binding`.
     pub fn reset_all(&mut self) {
         self.key_map.clear();
         self.user_overrides.clear();

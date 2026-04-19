@@ -7,12 +7,17 @@ use std::collections::HashMap;
 use std::io;
 use termeric_core::{Terminal, TerminalEvent};
 
-use crate::panes::{PaneId, PaneRect, SplitDirection, Divider};
+use crate::panes::{PaneDir, PaneId, PaneRect, SplitDirection, Divider};
 
 /// A container that holds one or more terminals
 ///
 /// This trait abstracts over single-terminal tabs and multi-pane tabs,
 /// providing a uniform interface for the application.
+//
+// Currently only `focused_terminal` is consumed; the rest of the API is a
+// planned abstraction — callers still reach into `PaneManager` / `Tab`
+// directly. Keeping the trait so future refactors have a target.
+#[allow(dead_code)]
 pub trait TerminalContainer {
     /// Get the focused terminal (read-only)
     fn focused_terminal(&self) -> Option<&Terminal>;
@@ -37,6 +42,7 @@ pub trait TerminalContainer {
 /// Extended container that supports split panes
 ///
 /// Containers implementing this trait support splitting into multiple panes.
+#[allow(dead_code)] // See TerminalContainer.
 pub trait SplitContainer: TerminalContainer {
     /// Split the focused pane in the given direction
     fn split(&mut self, direction: SplitDirection) -> anyhow::Result<PaneId>;
@@ -46,7 +52,7 @@ pub trait SplitContainer: TerminalContainer {
     fn close_focused_pane(&mut self) -> bool;
 
     /// Navigate focus to an adjacent pane
-    fn navigate(&mut self, direction: SplitDirection);
+    fn navigate(&mut self, dir: PaneDir);
 
     /// Get the number of panes
     fn pane_count(&self) -> usize;

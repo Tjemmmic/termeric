@@ -1626,8 +1626,21 @@ impl App {
                     window.request_redraw();
                 }
             }
-            Action::SplitVertical | Action::SplitHorizontal | Action::NavigatePane(_) | Action::ClosePane => {
-                log::debug!("Split pane action not yet implemented");
+            Action::SplitVertical => {
+                self.split_pane(SplitDirection::Vertical);
+            }
+            Action::SplitHorizontal => {
+                self.split_pane(SplitDirection::Horizontal);
+            }
+            Action::NavigatePane(dir) => {
+                if let Some(d) = crate::panes::PaneDir::parse(&dir) {
+                    self.navigate_focused_pane(d);
+                } else {
+                    log::warn!("Unknown pane navigation direction: {}", dir);
+                }
+            }
+            Action::ClosePane => {
+                self.close_focused_pane();
             }
             Action::ClearScrollback => {
                 if let Some(terminal) = self.active_terminal_mut() {
@@ -1768,57 +1781,23 @@ impl App {
                         return;
                     }
                     "core.close-pane" => {
-                        if let Some(tabs) = &mut self.tabs {
-                            if let Some(tab) = tabs.active_tab_mut() {
-                                if let Some(ref mut pm) = tab.pane_manager {
-                                    pm.close_focused();
-                                    if pm.pane_count() <= 1 {
-                                        // Transplant the remaining pane's terminal/pty
-                                        // back onto the tab so the user keeps their session
-                                        if let Some(remaining) = pm.take_remaining_pane() {
-                                            tab.terminal = remaining.terminal;
-                                            tab.pty = remaining.pty;
-                                            tab.pty_rx = remaining.pty_rx;
-                                        }
-                                        tab.pane_manager = None;
-                                        // Resize the transplanted terminal/PTY back to
-                                        // full tab dimensions
-                                        if let Err(e) = tab.resize(self.cols, self.rows) {
-                                            log::error!("Failed to resize tab after pane close: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.close_focused_pane();
                         return;
                     }
-                    "core.navigate-pane-right" => {
-                        if let Some(tabs) = &mut self.tabs {
-                            if let Some(tab) = tabs.active_tab_mut() {
-                                if let Some(ref mut pm) = tab.pane_manager {
-                                    pm.navigate(SplitDirection::Vertical);
-                                }
-                            }
-                        }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                    "core.navigate-pane-up" => {
+                        self.navigate_focused_pane(crate::panes::PaneDir::Up);
                         return;
                     }
                     "core.navigate-pane-down" => {
-                        if let Some(tabs) = &mut self.tabs {
-                            if let Some(tab) = tabs.active_tab_mut() {
-                                if let Some(ref mut pm) = tab.pane_manager {
-                                    pm.navigate(SplitDirection::Horizontal);
-                                }
-                            }
-                        }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.navigate_focused_pane(crate::panes::PaneDir::Down);
+                        return;
+                    }
+                    "core.navigate-pane-left" => {
+                        self.navigate_focused_pane(crate::panes::PaneDir::Left);
+                        return;
+                    }
+                    "core.navigate-pane-right" => {
+                        self.navigate_focused_pane(crate::panes::PaneDir::Right);
                         return;
                     }
                     id if id.starts_with("core.theme.") => {
@@ -2504,6 +2483,47 @@ impl App {
         }
 
         // Request redraw to show new pane layout
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// Move focus to the adjacent pane in `dir`. No-op if no pane manager
+    /// or no pane in that direction.
+    fn navigate_focused_pane(&mut self, dir: crate::panes::PaneDir) {
+        if let Some(tabs) = &mut self.tabs {
+            if let Some(tab) = tabs.active_tab_mut() {
+                if let Some(ref mut pm) = tab.pane_manager {
+                    pm.navigate(dir);
+                }
+            }
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// Close the focused pane, collapsing back to a single-terminal tab if
+    /// only one pane remains.
+    fn close_focused_pane(&mut self) {
+        if let Some(tabs) = &mut self.tabs {
+            if let Some(tab) = tabs.active_tab_mut() {
+                if let Some(ref mut pm) = tab.pane_manager {
+                    pm.close_focused();
+                    if pm.pane_count() <= 1 {
+                        if let Some(remaining) = pm.take_remaining_pane() {
+                            tab.terminal = remaining.terminal;
+                            tab.pty = remaining.pty;
+                            tab.pty_rx = remaining.pty_rx;
+                        }
+                        tab.pane_manager = None;
+                        if let Err(e) = tab.resize(self.cols, self.rows) {
+                            log::error!("Failed to resize tab after pane close: {}", e);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }

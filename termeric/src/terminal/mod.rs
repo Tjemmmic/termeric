@@ -5,7 +5,6 @@
 //! - Splash screen
 //! - Diff detection in terminal output
 
-#[allow(dead_code)]
 pub mod container;
 pub mod diff_detector;
 pub mod guardrails;

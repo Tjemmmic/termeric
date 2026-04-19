@@ -17,6 +17,28 @@ use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use crate::config::ShellConfig;
 use crate::terminal::container::{TerminalContainer, SplitContainer};
 
+/// Four-way direction for pane navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl PaneDir {
+    /// Parse "up" / "down" / "left" / "right" (case-insensitive).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            _ => None,
+        }
+    }
+}
+
 /// A single pane containing a terminal
 pub struct Pane {
     /// Unique pane ID
@@ -263,39 +285,64 @@ impl PaneManager {
         true
     }
 
-    /// Navigate to an adjacent pane
-    pub fn navigate(&mut self, direction: SplitDirection) {
-        // Find pane in the given direction
+    /// Navigate to the nearest adjacent pane in `dir`. No-op if there isn't
+    /// a pane in that direction.
+    pub fn navigate(&mut self, dir: PaneDir) {
         let layout = self.calculate_layout();
-        if let Some(current_rect) = layout.get(&self.focused) {
-            let target = match direction {
-                SplitDirection::Vertical => {
-                    // Move right
-                    layout.iter()
-                        .filter(|(id, rect)| {
-                            **id != self.focused &&
-                            rect.x > current_rect.x + current_rect.width * 0.5 &&
-                            rects_overlap_vertically(current_rect, rect)
-                        })
-                        .min_by(|(_, a), (_, b)| a.x.partial_cmp(&b.x).unwrap())
-                        .map(|(id, _)| *id)
-                }
-                SplitDirection::Horizontal => {
-                    // Move down
-                    layout.iter()
-                        .filter(|(id, rect)| {
-                            **id != self.focused &&
-                            rect.y > current_rect.y + current_rect.height * 0.5 &&
-                            rects_overlap_horizontally(current_rect, rect)
-                        })
-                        .min_by(|(_, a), (_, b)| a.y.partial_cmp(&b.y).unwrap())
-                        .map(|(id, _)| *id)
-                }
-            };
+        let Some(current) = layout.get(&self.focused).copied() else { return };
 
-            if let Some(id) = target {
-                self.focused = id;
-            }
+        let target = layout
+            .iter()
+            .filter(|(id, _)| **id != self.focused)
+            .filter(|(_, rect)| match dir {
+                PaneDir::Right => {
+                    rect.x >= current.x + current.width - 1.0
+                        && rects_overlap_vertically(&current, rect)
+                }
+                PaneDir::Left => {
+                    rect.x + rect.width <= current.x + 1.0
+                        && rects_overlap_vertically(&current, rect)
+                }
+                PaneDir::Down => {
+                    rect.y >= current.y + current.height - 1.0
+                        && rects_overlap_horizontally(&current, rect)
+                }
+                PaneDir::Up => {
+                    rect.y + rect.height <= current.y + 1.0
+                        && rects_overlap_horizontally(&current, rect)
+                }
+            })
+            .min_by(|(_, a), (_, b)| {
+                // Primary: distance along the navigation axis (prefer adjacent neighbor).
+                let primary = |r: &PaneRect| match dir {
+                    PaneDir::Right => r.x - current.x,
+                    PaneDir::Left => current.x - r.x,
+                    PaneDir::Down => r.y - current.y,
+                    PaneDir::Up => current.y - r.y,
+                };
+                // Secondary: cross-axis center distance, so a T-split picks
+                // the pane whose other axis aligns most closely with current.
+                let cross = |r: &PaneRect| match dir {
+                    PaneDir::Right | PaneDir::Left => {
+                        ((r.y + r.height * 0.5) - (current.y + current.height * 0.5)).abs()
+                    }
+                    PaneDir::Up | PaneDir::Down => {
+                        ((r.x + r.width * 0.5) - (current.x + current.width * 0.5)).abs()
+                    }
+                };
+                primary(a)
+                    .partial_cmp(&primary(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        cross(a)
+                            .partial_cmp(&cross(b))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            })
+            .map(|(id, _)| *id);
+
+        if let Some(id) = target {
+            self.focused = id;
         }
     }
 
@@ -499,8 +546,8 @@ impl SplitContainer for PaneManager {
         self.close_focused()
     }
 
-    fn navigate(&mut self, direction: SplitDirection) {
-        PaneManager::navigate(self, direction)
+    fn navigate(&mut self, dir: PaneDir) {
+        PaneManager::navigate(self, dir)
     }
 
     fn pane_count(&self) -> usize {
@@ -564,5 +611,15 @@ mod tests {
         let id2 = PaneId(1);
         assert_ne!(id1, id2);
         assert_eq!(id1, PaneId(0));
+    }
+
+    #[test]
+    fn test_pane_dir_parse() {
+        assert_eq!(PaneDir::parse("up"), Some(PaneDir::Up));
+        assert_eq!(PaneDir::parse("DOWN"), Some(PaneDir::Down));
+        assert_eq!(PaneDir::parse("Left"), Some(PaneDir::Left));
+        assert_eq!(PaneDir::parse("right"), Some(PaneDir::Right));
+        assert_eq!(PaneDir::parse("diagonal"), None);
+        assert_eq!(PaneDir::parse(""), None);
     }
 }

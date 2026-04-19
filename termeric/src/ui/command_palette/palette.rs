@@ -640,24 +640,22 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
         source: CommandSource::Core,
         destructive: false,
     });
-    commands.push(RegisteredCommand {
-        id: "core.navigate-pane-right".into(),
-        title: "Navigate Pane Right".into(),
-        category: "Panes".into(),
-        shortcut: None,
-        icon: None,
-        source: CommandSource::Core,
-        destructive: false,
-    });
-    commands.push(RegisteredCommand {
-        id: "core.navigate-pane-down".into(),
-        title: "Navigate Pane Down".into(),
-        category: "Panes".into(),
-        shortcut: None,
-        icon: None,
-        source: CommandSource::Core,
-        destructive: false,
-    });
+    for (id, title) in [
+        ("core.navigate-pane-up", "Navigate Pane Up"),
+        ("core.navigate-pane-down", "Navigate Pane Down"),
+        ("core.navigate-pane-left", "Navigate Pane Left"),
+        ("core.navigate-pane-right", "Navigate Pane Right"),
+    ] {
+        commands.push(RegisteredCommand {
+            id: id.into(),
+            title: title.into(),
+            category: "Panes".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        });
+    }
 
     // ── Theme commands — generated dynamically from all available themes ──
     for name in crate::config::theme::Theme::list_available() {
