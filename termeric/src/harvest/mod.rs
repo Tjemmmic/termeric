@@ -6,7 +6,7 @@
 //! - Organic Indicators: Plant-growth animations for long processes
 
 mod cellar;
-mod sprouts;
+pub mod sprouts;
 mod indicators;
 
 pub use cellar::{RootCellar, CommandEntry};
@@ -27,10 +27,15 @@ pub struct HarvestMode {
 }
 
 impl HarvestMode {
-    /// Create a new harvest mode instance
+    /// Create a new harvest mode instance with default capacity.
     pub fn new() -> Self {
+        Self::with_capacity(100)
+    }
+
+    /// Create a harvest mode with a specific cellar history cap.
+    pub fn with_capacity(max_history: usize) -> Self {
         Self {
-            cellar: RootCellar::new(),
+            cellar: RootCellar::with_capacity(max_history),
             sprout_menu: None,
             indicators: Vec::new(),
         }

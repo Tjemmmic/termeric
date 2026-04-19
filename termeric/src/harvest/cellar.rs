@@ -7,8 +7,9 @@ use std::collections::VecDeque;
 use std::time::Instant;
 use termeric_core::CommandRegion;
 
-/// Maximum number of commands to keep in history
-const MAX_COMMANDS: usize = 100;
+/// Default maximum number of commands to keep in history. Overridable per-
+/// cellar via [`RootCellar::with_capacity`].
+const DEFAULT_MAX_COMMANDS: usize = 100;
 
 /// A command entry in the root cellar
 #[derive(Debug, Clone)]
@@ -76,21 +77,51 @@ impl CommandEntry {
 }
 
 /// Root Cellar - command history with visual timeline
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RootCellar {
     /// Command entries
     entries: VecDeque<CommandEntry>,
-    /// Whether the cellar view is expanded
-    pub expanded: bool,
+    /// Max entries retained before the oldest is evicted
+    max_commands: usize,
+    /// Panel open/close animation — `expanded` reflects target state,
+    /// `animation` drives the visual progress.
+    pub animation: crate::ui::animation::PanelAnimation,
     /// Scroll position in the cellar view
     pub scroll: f32,
 }
 
+impl Default for RootCellar {
+    fn default() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            max_commands: DEFAULT_MAX_COMMANDS,
+            animation: crate::ui::animation::PanelAnimation::new(),
+            scroll: 0.0,
+        }
+    }
+}
+
 #[allow(dead_code)]
 impl RootCellar {
-    /// Create a new root cellar
+    /// Create a new root cellar with the default capacity.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a cellar with a specific max history size.
+    pub fn with_capacity(max_commands: usize) -> Self {
+        Self {
+            max_commands: max_commands.max(1),
+            ..Self::default()
+        }
+    }
+
+    /// Update the cap. Evicts oldest entries if the new cap is lower.
+    pub fn set_max_commands(&mut self, max: usize) {
+        self.max_commands = max.max(1);
+        while self.entries.len() > self.max_commands {
+            self.entries.pop_front();
+        }
     }
 
     /// Add a command entry from a shell integration region
@@ -102,7 +133,7 @@ impl RootCellar {
     /// Add a command entry
     pub fn add(&mut self, entry: CommandEntry) {
         // Remove oldest if at capacity
-        if self.entries.len() >= MAX_COMMANDS {
+        if self.entries.len() >= self.max_commands {
             self.entries.pop_front();
         }
         self.entries.push_back(entry);
@@ -138,20 +169,37 @@ impl RootCellar {
         self.entries.clear();
     }
 
-    /// Toggle expanded view
+    /// Toggle expanded view. Drives the slide-in/out animation.
     pub fn toggle_expanded(&mut self) {
-        self.expanded = !self.expanded;
+        self.animation.toggle();
     }
 
-    /// Update animations (call each frame)
-    pub fn update(&mut self, dt: f32) {
+    /// Whether the cellar is logically open (ignoring animation state).
+    pub fn is_expanded(&self) -> bool {
+        self.animation.is_open()
+    }
+
+    /// Whether the cellar should be rendered this frame (open or
+    /// currently animating out).
+    pub fn is_visible(&self) -> bool {
+        self.animation.is_visible()
+    }
+
+    /// Update animations (call each frame). Returns true if anything is
+    /// still animating (caller should keep scheduling redraws).
+    pub fn update(&mut self, dt: f32) -> bool {
+        let mut any_active = false;
         for entry in &mut self.entries {
             // Animate progress towards 1.0
             if entry.visual_state.progress < 1.0 {
                 entry.visual_state.progress += dt * 2.0; // 0.5 second animation
                 entry.visual_state.progress = entry.visual_state.progress.min(1.0);
+                any_active = true;
             }
         }
+        // Drive the open/close animation.
+        any_active |= self.animation.needs_redraw();
+        any_active
     }
 
     /// Get success rate (percentage of successful commands)
