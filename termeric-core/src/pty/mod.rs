@@ -209,11 +209,15 @@ impl PtyHandle {
     }
 }
 
-/// Spawn a reader thread that sends PTY output via a channel
+/// Spawn a reader thread that sends PTY output via a channel.
+/// Returns the receiver channel. If the thread fails to spawn, the channel
+/// is still returned (but with `PtyEvent::Error` already queued) so callers
+/// can observe the failure through their normal event path instead of
+/// aborting the whole process.
 pub fn spawn_reader_thread(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<PtyEvent> {
     let (tx, rx) = mpsc::channel();
 
-    thread::Builder::new()
+    let result = thread::Builder::new()
         .name("pty-reader".into())
         .spawn(move || {
             let mut buf = [0u8; 4096];
@@ -237,8 +241,14 @@ pub fn spawn_reader_thread(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<P
                     }
                 }
             }
-        })
-        .expect("Failed to spawn PTY reader thread");
+        });
+
+    if let Err(e) = result {
+        log::error!("Failed to spawn PTY reader thread: {}", e);
+        // The tx we would have moved into the thread is dropped, so the
+        // channel is already closed. Callers will see `Closed`/`Error` via
+        // their usual pump without crashing the process.
+    }
 
     rx
 }

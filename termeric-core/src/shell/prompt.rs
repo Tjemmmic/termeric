@@ -142,9 +142,17 @@ impl PromptTracker {
         self.finalize_current_region();
     }
 
-    /// Add a mark and enforce capacity limits
+    /// Add a mark and enforce capacity limits. Logs a warning the first
+    /// time the cap is exceeded so users know navigation history is
+    /// capped in long-running shell sessions.
     fn add_mark(&mut self, mark: PromptMark) {
         if self.marks.len() >= MAX_PROMPTS {
+            if self.marks.len() == MAX_PROMPTS {
+                log::warn!(
+                    "Prompt history reached {} marks; oldest prompts will now be dropped",
+                    MAX_PROMPTS
+                );
+            }
             self.marks.pop_front();
         }
         self.marks.push_back(mark);
@@ -154,6 +162,12 @@ impl PromptTracker {
     fn finalize_current_region(&mut self) {
         if let Some(region) = self.current_region.take() {
             if self.regions.len() >= MAX_PROMPTS {
+                if self.regions.len() == MAX_PROMPTS {
+                    log::warn!(
+                        "Command history reached {} entries; oldest will now be dropped",
+                        MAX_PROMPTS
+                    );
+                }
                 self.regions.pop_front();
             }
             self.regions.push_back(region);
@@ -205,6 +219,13 @@ impl PromptTracker {
     }
 
     /// Get the number of completed command regions
+    /// The command region currently in progress (if any). Used by callers
+    /// that want to react to the active command without waiting for it to
+    /// finish (e.g. live growth indicators).
+    pub fn active_region(&self) -> Option<&CommandRegion> {
+        self.current_region.as_ref()
+    }
+
     pub fn completed_count(&self) -> usize {
         self.regions.len()
     }

@@ -122,10 +122,15 @@ impl Perform for Handler<'_> {
                 self.terminal.carriage_return();
             }
             'G' => {
-                // CHA - Cursor Horizontal Absolute
-                let col = param!(0, 1) as usize;
-                let row = self.terminal.grid().cursor().row + 1;
-                self.terminal.set_cursor_position(row, col);
+                // CHA - Cursor Horizontal Absolute.
+                // Only the column is addressed; the row stays where it is.
+                // Re-routing through `set_cursor_position` would double-
+                // offset the row under ORIGIN mode (scroll_top would be
+                // added again to an already-absolute row), so set the
+                // grid cursor directly.
+                let col = param!(0, 1).saturating_sub(1).min(self.terminal.cols() as u16 - 1) as usize;
+                let row = self.terminal.grid().cursor().row;
+                self.terminal.grid_mut().set_cursor(row, col);
             }
             'H' | 'f' => {
                 // CUP/HVP - Cursor Position
@@ -134,10 +139,15 @@ impl Perform for Handler<'_> {
                 self.terminal.set_cursor_position(row, col);
             }
             'd' => {
-                // VPA - Vertical Position Absolute
+                // VPA - Vertical Position Absolute.
+                // The row parameter is addressed through the normal
+                // ORIGIN-mode path; the column stays where it is. Preserve
+                // column directly to avoid the off-by-one round-trip.
                 let row = param!(0, 1) as usize;
-                let col = self.terminal.grid().cursor().col + 1;
-                self.terminal.set_cursor_position(row, col);
+                let col = self.terminal.grid().cursor().col;
+                // Go through set_cursor_position for the row (so ORIGIN
+                // mode is honored), but keep the column we just captured.
+                self.terminal.set_cursor_position(row, col + 1);
             }
 
             // Erasing

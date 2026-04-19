@@ -521,7 +521,11 @@ impl Terminal {
 
             if let Some(response) = self.graphics.handle_command(cmd) {
                 log::trace!("Graphics response: {:?}", response);
-                // TODO: Send response back to PTY
+                // Emit the response as Kitty graphics ack back to the PTY,
+                // so apps probing for image-protocol support (e.g. `icat`
+                // in Kitty-compatible mode) get the expected reply.
+                let bytes = response.to_escape_sequence().into_bytes();
+                self.push_event(crate::event::TerminalEvent::PtyWrite(bytes));
             }
         }
     }
@@ -735,38 +739,150 @@ impl Terminal {
         }
     }
 
-    /// Get text content for selection
+    /// Extract the text on rows `[start_row..=end_row_inclusive]` from the
+    /// grid (scrollback-aware). Rows are row-at-offset indices: 0..rows-1
+    /// are visible, negative values reach into scrollback. Trailing
+    /// whitespace on each row is stripped.
+    pub fn rows_text(&self, start_row: i32, end_row_inclusive: i32) -> String {
+        if end_row_inclusive < start_row {
+            return String::new();
+        }
+        let mut out = String::new();
+        for row in start_row..=end_row_inclusive {
+            if let Some(grid_row) = self.grid().row_at_offset(row) {
+                let mut line = String::new();
+                for col in 0..self.cols {
+                    if let Some(cell) = grid_row.get(col) {
+                        match &cell.content {
+                            CellContent::Empty => line.push(' '),
+                            CellContent::Char(c) => line.push(*c),
+                            CellContent::Grapheme(g) => line.push_str(g),
+                        }
+                    }
+                }
+                out.push_str(line.trim_end());
+            }
+            if row != end_row_inclusive {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// Expand a click point to its word boundaries (for double-click semantic
+    /// selection). Returns `(start, end_inclusive)`. If the clicked cell is
+    /// whitespace or empty, returns `(point, point)` unchanged so the caller
+    /// falls back to a zero-width selection.
+    pub fn word_at(&self, point: Point) -> (Point, Point) {
+        let Some(row) = self.grid().row_at_offset(point.row) else {
+            return (point, point);
+        };
+        let cell_char = |col: usize| -> Option<char> {
+            row.get(col).and_then(|c| c.content.char())
+        };
+
+        // Anchor must itself be a word char, otherwise don't expand.
+        match cell_char(point.col) {
+            Some(c) if is_word_char(c) => {}
+            _ => return (point, point),
+        }
+
+        let max_col = self.cols.saturating_sub(1);
+        // Walk left
+        let mut start_col = point.col;
+        while start_col > 0 {
+            match cell_char(start_col - 1) {
+                Some(c) if is_word_char(c) => start_col -= 1,
+                _ => break,
+            }
+        }
+        // Walk right
+        let mut end_col = point.col;
+        while end_col < max_col {
+            match cell_char(end_col + 1) {
+                Some(c) if is_word_char(c) => end_col += 1,
+                _ => break,
+            }
+        }
+
+        (
+            Point::new(point.row, start_col),
+            Point::new(point.row, end_col),
+        )
+    }
+
+    /// Expand a click point to its full line (for triple-click line selection).
+    /// Trailing whitespace is excluded so the selection doesn't drag past the
+    /// visible end of the line.
+    pub fn line_at(&self, point: Point) -> (Point, Point) {
+        let Some(row) = self.grid().row_at_offset(point.row) else {
+            return (point, point);
+        };
+        let max_col = self.cols.saturating_sub(1);
+        let mut end_col = max_col;
+        while end_col > 0 {
+            let ch = row.get(end_col).and_then(|c| c.content.char());
+            match ch {
+                Some(c) if !c.is_whitespace() => break,
+                _ => end_col -= 1,
+            }
+        }
+        (Point::new(point.row, 0), Point::new(point.row, end_col))
+    }
+
+    /// Get text content for selection. Honors the selection type:
+    /// - Simple/Semantic: contiguous range, newline between rows.
+    /// - Lines: full rows from start to end.
+    /// - Block: rectangular region (one newline between rows).
     pub fn get_selection_text(&self) -> Option<String> {
         let selection = self.selection.as_ref()?;
         let (start, end) = selection.bounds();
 
+        let max_col = self.cols.saturating_sub(1);
         let mut text = String::new();
 
         for row in start.row..=end.row {
-            if let Some(grid_row) = self.grid().row_at_offset(row) {
-                let start_col = if row == start.row { start.col } else { 0 };
-                let end_col = if row == end.row { end.col } else { self.cols - 1 };
-                let start_col = start_col.min(self.cols.saturating_sub(1));
-                let end_col = end_col.min(self.cols.saturating_sub(1));
+            let Some(grid_row) = self.grid().row_at_offset(row) else { continue };
 
-                for col in start_col..=end_col {
-                    if let Some(cell) = grid_row.get(col) {
-                        match &cell.content {
-                            CellContent::Empty => text.push(' '),
-                            CellContent::Char(c) => text.push(*c),
-                            CellContent::Grapheme(g) => text.push_str(g),
-                        }
+            // Resolve the column range based on selection type.
+            let (start_col, end_col) = match selection.ty {
+                SelectionType::Simple | SelectionType::Semantic => {
+                    let s = if row == start.row { start.col } else { 0 };
+                    let e = if row == end.row { end.col } else { max_col };
+                    (s.min(max_col), e.min(max_col))
+                }
+                SelectionType::Lines => (0, max_col),
+                SelectionType::Block => {
+                    let s = start.col.min(end.col);
+                    let e = start.col.max(end.col);
+                    (s.min(max_col), e.min(max_col))
+                }
+            };
+
+            for col in start_col..=end_col {
+                if let Some(cell) = grid_row.get(col) {
+                    match &cell.content {
+                        CellContent::Empty => text.push(' '),
+                        CellContent::Char(c) => text.push(*c),
+                        CellContent::Grapheme(g) => text.push_str(g),
                     }
                 }
+            }
 
-                if row != end.row {
-                    text.push('\n');
-                }
+            if row != end.row {
+                text.push('\n');
             }
         }
 
         Some(text.trim_end().to_string())
     }
+}
+
+/// Whether `c` counts as part of a word for double-click expansion.
+/// Covers alphanumerics plus the common path / URL / identifier punctuation
+/// so filenames, URLs, and code identifiers select as a single unit.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '@' | '+' | '~' | '%' | '?' | '&' | '=' | '#')
 }
 
 #[cfg(test)]
@@ -789,6 +905,49 @@ mod tests {
 
         let cell = term.grid().cell(0, 0).unwrap();
         assert_eq!(cell.content.char(), Some('A'));
+    }
+
+    fn write_line(term: &mut Terminal, s: &str) {
+        for c in s.chars() {
+            term.write_char(c);
+        }
+    }
+
+    #[test]
+    fn test_word_at_simple_word() {
+        let mut term = Terminal::new(80, 24);
+        write_line(&mut term, "hello world");
+        let (start, end) = term.word_at(Point::new(0, 2)); // inside "hello"
+        assert_eq!(start, Point::new(0, 0));
+        assert_eq!(end, Point::new(0, 4));
+    }
+
+    #[test]
+    fn test_word_at_whitespace_is_noop() {
+        let mut term = Terminal::new(80, 24);
+        write_line(&mut term, "hello world");
+        let (start, end) = term.word_at(Point::new(0, 5)); // the space
+        assert_eq!(start, Point::new(0, 5));
+        assert_eq!(end, Point::new(0, 5));
+    }
+
+    #[test]
+    fn test_word_at_url_like_token() {
+        // path- and URL-like punctuation is part of the word.
+        let mut term = Terminal::new(80, 24);
+        write_line(&mut term, "cat /tmp/foo.txt done");
+        let (start, end) = term.word_at(Point::new(0, 8)); // inside "/tmp/foo.txt"
+        assert_eq!(start, Point::new(0, 4));
+        assert_eq!(end, Point::new(0, 15));
+    }
+
+    #[test]
+    fn test_line_at_trims_trailing_space() {
+        let mut term = Terminal::new(80, 24);
+        write_line(&mut term, "hi   ");
+        let (start, end) = term.line_at(Point::new(0, 3));
+        assert_eq!(start, Point::new(0, 0));
+        assert_eq!(end, Point::new(0, 1)); // "hi" ends at col 1
     }
 
     #[test]

@@ -46,12 +46,13 @@ impl MouseState {
             return None;
         }
 
-        // Check for multi-click (double/triple)
+        // Check for multi-click (double/triple).
+        // Proximity is tight — same row, same column (no fuzz) — so rapid
+        // clicks on adjacent words don't get merged into false triple-clicks.
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(self.last_click_time);
         let same_position = self.last_click_pos.map(|p| {
-            (p.row - position.row).abs() <= 1 &&
-            (p.col as i32 - position.col as i32).abs() <= 2
+            p.row == position.row && p.col == position.col
         }).unwrap_or(false);
 
         if elapsed.as_millis() < 400 && same_position {
