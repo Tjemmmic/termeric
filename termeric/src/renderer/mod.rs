@@ -66,12 +66,10 @@ pub(crate) struct UiPalette {
     pub(crate) tab_text_inactive: [f32; 4],
     // Settings panel colors
     pub(crate) settings_bg: [f32; 4],
-    pub(crate) settings_sidebar_bg: [f32; 4],
     pub(crate) settings_header: [f32; 4],
     pub(crate) settings_text: [f32; 4],
     pub(crate) settings_text_dim: [f32; 4],
     pub(crate) settings_selected: [f32; 4],
-    pub(crate) settings_value: [f32; 4],
     pub(crate) settings_accent: [f32; 4],
     pub(crate) settings_separator: [f32; 4],
     pub(crate) scrim: [f32; 4],
@@ -128,12 +126,10 @@ impl UiPalette {
             tab_text_inactive,
             // Settings panel
             settings_bg: adjust_alpha(shade(bg.to_f32_array(), 0.85), 0.97),
-            settings_sidebar_bg: adjust_alpha(shade(bg.to_f32_array(), 0.7), 0.97),
             settings_header: fg.to_f32_array(),
             settings_text: fg.to_f32_array(),
             settings_text_dim: adjust_alpha(fg.to_f32_array(), 0.55),
             settings_selected: adjust_alpha(cursor.to_f32_array(), 0.25),
-            settings_value: cursor.to_f32_array(),
             settings_accent: tab_active.to_f32_array(),
             settings_separator: adjust_alpha(tab_border.to_f32_array(), 0.4),
             // Warm scrim derived from theme background
