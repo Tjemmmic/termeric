@@ -88,6 +88,10 @@ pub struct TranscriptRecorder {
     max_size: usize,
     /// Whether to redact secrets
     redact: bool,
+    /// Flips true the first time `write_entry` drops a line because the
+    /// on-disk file has reached `max_size`. Callers can poll this to emit
+    /// a one-shot user-facing notification.
+    cap_reached: bool,
 }
 
 impl std::fmt::Debug for TranscriptRecorder {
@@ -149,7 +153,14 @@ impl TranscriptRecorder {
             entry_count: 1,
             max_size: 50 * 1024 * 1024, // 50MB
             redact: true,
+            cap_reached: false,
         })
+    }
+
+    /// Whether the transcript has hit its size cap and is dropping writes.
+    /// Once true it stays true for the lifetime of this recorder.
+    pub fn cap_reached(&self) -> bool {
+        self.cap_reached
     }
 
     /// Record an input event (user typed something)
@@ -178,6 +189,13 @@ impl TranscriptRecorder {
         // Skip if over size limit
         if let Ok(md) = fs::metadata(&self.path) {
             if md.len() as usize >= self.max_size {
+                if !self.cap_reached {
+                    log::warn!(
+                        "Transcript reached size cap ({} bytes); further writes will be dropped",
+                        self.max_size
+                    );
+                }
+                self.cap_reached = true;
                 return;
             }
         }

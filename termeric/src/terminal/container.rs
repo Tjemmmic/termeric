@@ -51,8 +51,8 @@ pub trait SplitContainer: TerminalContainer {
     /// Returns true if a pane was closed, false if this is the last pane
     fn close_focused_pane(&mut self) -> bool;
 
-    /// Navigate focus to an adjacent pane
-    fn navigate(&mut self, dir: PaneDir);
+    /// Navigate focus to an adjacent pane. Returns true if focus moved.
+    fn navigate(&mut self, dir: PaneDir) -> bool;
 
     /// Get the number of panes
     fn pane_count(&self) -> usize;

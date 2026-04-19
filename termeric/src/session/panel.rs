@@ -11,8 +11,8 @@ pub struct SessionEntry {
     pub id: String,
     /// Display name shown to the user
     pub display_name: String,
-    /// Number of tabs in the session
-    pub tab_count: usize,
+    /// Short metadata string shown below the name (last command, cwd basename, etc.)
+    pub subtitle: String,
     /// Last modified time as a human-readable string
     pub last_modified: String,
 }
@@ -104,20 +104,32 @@ impl SessionPanel {
     pub fn refresh_sessions(&mut self) {
         let names = super::list_sessions();
         self.sessions = names.iter().map(|name| {
-            // Try to load the session title from the session file
-            let display_name = super::session_file_path(name)
-                .and_then(|path| std::fs::read_to_string(&path).ok())
-                .and_then(|content| {
-                    // Parse session title from TOML
-                    content.lines()
-                        .find(|line| line.starts_with("title"))
+            // Parse the session TOML once so we can pull title, last_command,
+            // and working_directory out of the same read.
+            let session_text = super::session_file_path(name)
+                .and_then(|path| std::fs::read_to_string(&path).ok());
+            let field = |key: &str| -> Option<String> {
+                session_text.as_ref().and_then(|s| {
+                    s.lines()
+                        .find(|line| line.starts_with(key))
                         .and_then(|line| {
                             line.split('=').nth(1)
                                 .map(|v| v.trim().trim_matches('"').to_string())
                         })
+                        .filter(|v| !v.is_empty())
                 })
-                .filter(|t| !t.is_empty())
-                .unwrap_or_else(|| name.clone());
+            };
+
+            let display_name = field("title").unwrap_or_else(|| name.clone());
+            // Subtitle prefers last_command, falls back to the cwd basename.
+            let subtitle = field("last_command")
+                .or_else(|| field("working_directory").map(|cwd| {
+                    std::path::Path::new(&cwd)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or(cwd)
+                }))
+                .unwrap_or_default();
 
             // Try to read last modified time
             let last_modified = match super::session_file_path(name) {
@@ -146,7 +158,7 @@ impl SessionPanel {
             SessionEntry {
                 id: name.clone(),
                 display_name,
-                tab_count: 1,
+                subtitle,
                 last_modified,
             }
         }).collect();

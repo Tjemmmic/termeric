@@ -84,13 +84,16 @@ impl Session {
 
 /// Generate a timestamp-based session ID
 ///
-/// Format: "2026-02-24_21h59m43"
+/// Format: "2026-02-24_21h59m43_123" — the trailing fragment is the
+/// current-millisecond component, which makes back-to-back saves within
+/// the same second still produce distinct IDs.
 pub fn generate_session_id() -> String {
     use std::time::SystemTime;
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = now.as_secs();
+    let millis_frac = now.subsec_millis();
 
     // Convert to broken-down time manually (UTC)
     let days = secs / 86400;
@@ -128,8 +131,8 @@ pub fn generate_session_id() -> String {
     let day = remaining_days + 1;
 
     format!(
-        "{:04}-{:02}-{:02}_{:02}h{:02}m{:02}",
-        year, month, day, hours, minutes, seconds
+        "{:04}-{:02}-{:02}_{:02}h{:02}m{:02}_{:03}",
+        year, month, day, hours, minutes, seconds, millis_frac
     )
 }
 

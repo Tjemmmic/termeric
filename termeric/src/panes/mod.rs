@@ -285,11 +285,12 @@ impl PaneManager {
         true
     }
 
-    /// Navigate to the nearest adjacent pane in `dir`. No-op if there isn't
-    /// a pane in that direction.
-    pub fn navigate(&mut self, dir: PaneDir) {
+    /// Navigate to the nearest adjacent pane in `dir`. Returns true if
+    /// focus actually moved — the caller can use the bool to give the
+    /// user a cue when they hit the edge of the layout.
+    pub fn navigate(&mut self, dir: PaneDir) -> bool {
         let layout = self.calculate_layout();
-        let Some(current) = layout.get(&self.focused).copied() else { return };
+        let Some(current) = layout.get(&self.focused).copied() else { return false };
 
         let target = layout
             .iter()
@@ -341,8 +342,12 @@ impl PaneManager {
             })
             .map(|(id, _)| *id);
 
-        if let Some(id) = target {
-            self.focused = id;
+        match target {
+            Some(id) => {
+                self.focused = id;
+                true
+            }
+            None => false,
         }
     }
 
@@ -546,7 +551,7 @@ impl SplitContainer for PaneManager {
         self.close_focused()
     }
 
-    fn navigate(&mut self, dir: PaneDir) {
+    fn navigate(&mut self, dir: PaneDir) -> bool {
         PaneManager::navigate(self, dir)
     }
 
