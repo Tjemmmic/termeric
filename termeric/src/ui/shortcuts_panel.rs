@@ -87,6 +87,9 @@ pub struct ShortcutsPanel {
     recording: bool,
     /// The action being recorded
     recording_action: Option<BindableAction>,
+    /// When recording mode was entered. Used to auto-cancel after a
+    /// timeout so users can't get stuck if they walk away.
+    recording_started: Option<std::time::Instant>,
     /// Brief conflict notification text
     conflict_label: Option<String>,
 }
@@ -101,6 +104,7 @@ impl ShortcutsPanel {
             max_visible: 12,
             recording: false,
             recording_action: None,
+            recording_started: None,
             conflict_label: None,
         }
     }
@@ -113,6 +117,7 @@ impl ShortcutsPanel {
         self.scroll_offset = 0;
         self.recording = false;
         self.recording_action = None;
+        self.recording_started = None;
         self.conflict_label = None;
     }
 
@@ -121,6 +126,7 @@ impl ShortcutsPanel {
         self.animation.close();
         self.recording = false;
         self.recording_action = None;
+        self.recording_started = None;
     }
 
     /// Close immediately (no animation)
@@ -128,6 +134,25 @@ impl ShortcutsPanel {
         self.animation.close_immediately();
         self.recording = false;
         self.recording_action = None;
+        self.recording_started = None;
+    }
+
+    /// Cancel recording if it's been idle longer than `timeout`. Returns
+    /// true if a cancellation happened this call (caller may want to
+    /// redraw).
+    pub fn tick_recording_timeout(&mut self, timeout: std::time::Duration) -> bool {
+        if !self.recording {
+            return false;
+        }
+        let Some(started) = self.recording_started else { return false };
+        if started.elapsed() >= timeout {
+            self.recording = false;
+            self.recording_action = None;
+            self.recording_started = None;
+            self.conflict_label = Some("Recording timed out".to_string());
+            return true;
+        }
+        false
     }
 
     /// Toggle open/close
@@ -244,10 +269,12 @@ impl ShortcutsPanel {
                 ShortcutsKey::Escape => {
                     self.recording = false;
                     self.recording_action = None;
+                    self.recording_started = None;
                     ShortcutsAction::None
                 }
                 ShortcutsKey::Delete => {
                     self.recording = false;
+                    self.recording_started = None;
                     let action = self.recording_action.take();
                     match action {
                         Some(a) => ShortcutsAction::SetShortcut { action: a, chord: None },
@@ -256,6 +283,7 @@ impl ShortcutsPanel {
                 }
                 ShortcutsKey::RecordedChord(chord) => {
                     self.recording = false;
+                    self.recording_started = None;
                     let action = self.recording_action.take();
                     if let Some(a) = action {
                         // Check for conflict
@@ -309,6 +337,7 @@ impl ShortcutsPanel {
                     if !entry.is_header {
                         self.recording = true;
                         self.recording_action = Some(entry.action);
+                        self.recording_started = Some(std::time::Instant::now());
                         self.conflict_label = None;
                     }
                 }

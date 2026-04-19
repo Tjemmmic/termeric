@@ -39,14 +39,16 @@ impl Renderer {
         for (i, tab) in tabs.iter().enumerate() {
             // Calculate animation multiplier based on slide-in and close animations
             let anim_multiplier = if tab.close_progress > 0.0 {
-                // Closing: shrink from full to 0 with ease-in curve (accelerate)
+                // Closing: shrink from full to 0 with ease-out cubic so the
+                // motion matches the rest of the UI (settles instead of
+                // accelerating off-screen).
                 let t = tab.close_progress;
-                let eased = t * t; // ease-in: starts slow, speeds up
+                let eased = 1.0 - (1.0 - t).powi(3);
                 1.0 - eased
             } else {
-                // Opening: grow from 0 to full with ease-out curve (decelerate)
+                // Opening: grow from 0 to full with ease-out cubic
                 let t = tab.slide_progress;
-                1.0 - (1.0 - t) * (1.0 - t) // ease-out
+                1.0 - (1.0 - t).powi(3)
             };
 
             // Animated tab width
@@ -113,16 +115,25 @@ impl Renderer {
                     let text_y = y + (tab_height - self.cell_height) / 2.0; // Center vertically
                     let mut text_x = x + tab_padding;
 
-                    // Plugin accent dot before the label
+                    // Plugin accent bar before the label — a short vertical
+                    // stripe rather than a single glyph dot, so AI-backed
+                    // tabs read as distinct at a glance even in crowded
+                    // tab bars.
                     if matches!(&tab.tab_type, TabType::Plugin { .. }) {
-                        let dot_color = [
+                        let bar_x = text_x;
+                        let bar_w = 3.0;
+                        let bar_y = y + tab_height * 0.18;
+                        let bar_h = tab_height * 0.64;
+                        let accent = [
                             self.ui.palette_accent[0],
                             self.ui.palette_accent[1],
                             self.ui.palette_accent[2],
                             text_alpha,
                         ];
-                        self.text_pipeline.push_char('●', text_x, text_y, dot_color);
-                        text_x += self.cell_width * 0.85;
+                        self.rect_pipeline.push_rounded_rect(
+                            bar_x, bar_y, bar_w, bar_h, accent, 1.5,
+                        );
+                        text_x += bar_w + self.cell_width * 0.5;
                     }
 
                     for c in label.chars() {

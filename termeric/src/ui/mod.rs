@@ -18,3 +18,4 @@ pub mod diff_review;
 pub mod info_overlay;
 pub mod settings;
 pub mod shortcuts_panel;
+pub mod toast;

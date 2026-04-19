@@ -31,6 +31,19 @@ impl Default for Theme {
     }
 }
 
+/// Single source of truth for built-in theme names. Used by
+/// `list_available()`; `load_builtin` must stay in sync (enforced by
+/// `test_all_listed_themes_load`).
+const BUILTIN_THEME_NAMES: [&str; 26] = [
+    // Root themes (Termeric house palettes)
+    "turmeric", "ginger", "daikon", "malanga", "beet", "turnip",
+    "yuca", "taro", "wasabi", "galangal", "horseradish", "parsnip",
+    // Community themes
+    "solarized-dark", "solarized-light", "dracula", "nord",
+    "gruvbox-dark", "gruvbox-light", "catppuccin-mocha", "catppuccin-latte",
+    "tokyo-night", "one-dark", "one-light", "rose-pine", "kanagawa", "everforest",
+];
+
 impl Theme {
     /// Load theme from a TOML file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -77,17 +90,12 @@ impl Theme {
         Ok(theme)
     }
 
-    /// List all available built-in theme names.
+    /// List all available built-in theme names. Kept in sync with
+    /// `load_builtin` via the `test_all_listed_themes_load` test below —
+    /// if you add a theme to `load_builtin`, add it here too (the test
+    /// will catch any drift in CI).
     pub fn list_available() -> &'static [&'static str] {
-        &[
-            // Root themes
-            "turmeric", "ginger", "daikon", "malanga", "beet", "turnip",
-            "yuca", "taro", "wasabi", "galangal", "horseradish", "parsnip",
-            // Community themes
-            "solarized-dark", "solarized-light", "dracula", "nord",
-            "gruvbox-dark", "gruvbox-light", "catppuccin-mocha", "catppuccin-latte",
-            "tokyo-night", "one-dark", "one-light", "rose-pine", "kanagawa", "everforest",
-        ]
+        &BUILTIN_THEME_NAMES
     }
 
     /// List custom theme names found in the user's themes directory.
@@ -368,5 +376,18 @@ mod tests {
         assert!(Theme::load_builtin("nord").is_ok());
         assert!(Theme::load_builtin("solarized-dark").is_ok());
         assert!(Theme::load_builtin("unknown").is_err());
+    }
+
+    #[test]
+    fn test_all_listed_themes_load() {
+        // Every name exposed by `list_available` must be loadable by
+        // `load_builtin`. Catches drift between the two lists.
+        for name in Theme::list_available() {
+            assert!(
+                Theme::load_builtin(name).is_ok(),
+                "theme '{}' is listed but can't be loaded",
+                name
+            );
+        }
     }
 }

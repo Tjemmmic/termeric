@@ -19,31 +19,22 @@ impl Renderer {
         let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * 0.85 * anim);
         self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
 
-        // ── Card geometry — auto-width based on content ──
-        let padding = cell_width * 2.5;
-        let line_height = cell_height * 1.6;
-        let title_height = cell_height * 2.8;
-        let btn_area_height = cell_height * 4.5; // buttons + hint text below
-
-        // Compute widest element to size the card
+        // ── Geometry via the shared layout struct ──
+        let layout = crate::ui::info_overlay::InfoOverlayLayout::calculate(
+            window_width, window_height,
+            cell_width, cell_height,
+            anim,
+            &info.title, &info.lines,
+        );
+        let card_x = layout.card_x;
+        let card_y = layout.card_y;
+        let card_width = layout.card_width;
+        let card_height = layout.card_height;
+        let padding = layout.padding;
+        let title_height = layout.title_height;
+        let line_height = layout.line_height;
+        let content_height = layout.content_height;
         let hint_text = "Esc / Enter to dismiss  \u{00b7}  C to copy";
-        let hint_chars = hint_text.chars().count();
-        let max_line_chars = info.lines.iter()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap_or(20);
-        // Content and hint use char_scale; title uses full cell_width
-        let content_w = max_line_chars.max(hint_chars) as f32 * char_scale;
-        let title_w = info.title.chars().count() as f32 * cell_width;
-        let inner_w = content_w.max(title_w);
-        let card_width = (inner_w + padding * 2.0 + cell_width * 2.0)
-            .max(380.0)
-            .min(window_width * 0.85);
-
-        let content_height = info.lines.len() as f32 * line_height;
-        let card_height = padding + title_height + content_height + btn_area_height + padding * 0.5;
-        let card_x = (window_width - card_width) / 2.0;
-        let card_y = (window_height - card_height) / 2.0 + (1.0 - anim) * -30.0;
 
         // ── Drop shadow (layered for softness) ──
         let shadow_layers = 3;

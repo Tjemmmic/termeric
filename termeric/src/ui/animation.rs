@@ -115,6 +115,7 @@ impl OverlayAnimation {
 /// Used by: SettingsPanel, SessionPanel, CommandsPanel.
 /// These are slide-in panels that may be toggled rapidly, requiring the
 /// animation to reverse smoothly from its current position.
+#[derive(Debug, Clone)]
 pub struct PanelAnimation {
     open: bool,
     animation_start: Instant,

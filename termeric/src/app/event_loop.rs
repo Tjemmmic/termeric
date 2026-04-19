@@ -273,10 +273,13 @@ impl ApplicationHandler for App {
                                 Key::Named(NamedKey::Enter) => {
                                     let action = harvest.sprout_menu.as_ref()
                                         .and_then(|m| m.selected_action().cloned());
+                                    let target_row = harvest
+                                        .sprout_menu
+                                        .as_ref()
+                                        .and_then(|m| m.command.as_ref().map(|c| c.row));
                                     harvest.hide_sprout_menu();
-                                    if let Some(_action) = action {
-                                        // TODO: Execute sprout action (copy, rerun, etc.)
-                                        log::info!("Sprout action selected: {}", _action.name());
+                                    if let Some(action) = action {
+                                        self.execute_sprout_action(action, target_row);
                                     }
                                 }
                                 _ => {}
@@ -581,62 +584,32 @@ impl ApplicationHandler for App {
                         && button == winit::event::MouseButton::Left
                     {
                         if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
-                            let cw = renderer.cell_width();
-                            let ch = renderer.cell_height();
+                            use crate::ui::info_overlay::InfoOverlayLayout;
                             let (sw, sh) = renderer.window_size();
-                            let (ww, wh) = (sw as f32, sh as f32);
-                            let char_scale = cw * 0.85;
-                            let padding = cw * 2.5;
-                            let line_height = ch * 1.6;
-                            let title_height = ch * 2.8;
-
-                            // Compute card geometry (must match build_info_overlay)
-                            let hint_chars = 37_usize; // "Esc / Enter to dismiss  ·  C to copy"
-                            let max_line_chars = self.info_overlay.lines.iter()
-                                .map(|l| l.chars().count())
-                                .max()
-                                .unwrap_or(20);
-                            let content_w = max_line_chars.max(hint_chars) as f32 * char_scale;
-                            let title_w = self.info_overlay.title.chars().count() as f32 * cw;
-                            let inner_w = content_w.max(title_w);
-                            let card_width = (inner_w + padding * 2.0 + cw * 2.0)
-                                .max(380.0)
-                                .min(ww * 0.85);
-                            let content_height = self.info_overlay.lines.len() as f32 * line_height;
-                            let btn_area_height = ch * 4.5;
-                            let card_height = padding + title_height + content_height + btn_area_height + padding * 0.5;
-                            let card_x = (ww - card_width) / 2.0;
-                            // Match the renderer's slide-in offset so the
-                            // hit-test tracks the card during the animation.
-                            let anim = self.info_overlay.animation();
-                            let card_y = (wh - card_height) / 2.0 + (1.0 - anim) * -30.0;
-
-                            // Compute two-button geometry (must match renderer)
-                            let title_y = card_y + padding;
-                            let content_start_y = title_y + title_height;
-                            let btn_sep_y = content_start_y + content_height + ch * 0.5;
-                            let btn_h = ch * 1.8;
-                            let btn_h_padding = cw * 2.0;
-                            let btn_gap = cw * 1.5;
-                            let btn_y = btn_sep_y + ch * 0.8;
-
-                            // Copy button: 4 chars
-                            let copy_btn_w = 4.0 * cw + btn_h_padding * 2.0;
-                            // Continue button: 8 chars
-                            let continue_btn_w = 8.0 * cw + btn_h_padding * 2.0;
-                            let total_btns_w = copy_btn_w + btn_gap + continue_btn_w;
-                            let copy_btn_x = card_x + (card_width - total_btns_w) / 2.0;
-                            let continue_btn_x = copy_btn_x + copy_btn_w + btn_gap;
+                            let layout = InfoOverlayLayout::calculate(
+                                sw as f32,
+                                sh as f32,
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                                self.info_overlay.animation(),
+                                &self.info_overlay.title,
+                                &self.info_overlay.lines,
+                            );
 
                             let (mx, my) = (pos.0 as f32, pos.1 as f32);
 
                             // Hit-test Copy button
-                            if mx >= copy_btn_x && mx <= copy_btn_x + copy_btn_w
-                                && my >= btn_y && my <= btn_y + btn_h
-                            {
+                            if layout.copy_button_contains(mx, my) {
                                 let text = self.info_overlay.lines.join("\n");
                                 if let Some(clipboard) = &mut self.clipboard {
-                                    let _ = clipboard.set_text(&text);
+                                    match clipboard.set_text(&text) {
+                                        Ok(()) => {
+                                            self.toasts.success("Copied to clipboard");
+                                        }
+                                        Err(e) => {
+                                            self.toasts.error(format!("Copy failed: {}", e));
+                                        }
+                                    }
                                 }
                                 if let Some(window) = &self.window {
                                     window.request_redraw();
@@ -644,9 +617,7 @@ impl ApplicationHandler for App {
                             }
 
                             // Hit-test Continue button
-                            if mx >= continue_btn_x && mx <= continue_btn_x + continue_btn_w
-                                && my >= btn_y && my <= btn_y + btn_h
-                            {
+                            if layout.continue_button_contains(mx, my) {
                                 self.info_overlay.dismiss();
                                 self.pending_profile_selection = None;
                                 if let Some(window) = &self.window {
@@ -657,26 +628,32 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                // When palette is open, only dismiss on clicks outside the panel
+                // When palette is open, clicks route through the palette:
+                // inside an entry → select+execute, inside but not on an entry
+                // → absorb, outside → close.
                 if self.command_palette.is_active() {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
                         if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer) {
-                            let cw = renderer.cell_width();
+                            use crate::ui::command_palette::PaletteLayout;
                             let (sw, sh) = renderer.window_size();
-                            let (ww, wh) = (sw as f32, sh as f32);
-                            // Approximate panel bounds (must match build_command_palette geometry)
-                            let panel_width = (cw * 55.0_f32).max(450.0).min(ww * 0.65);
-                            let panel_x = (ww - panel_width) / 2.0;
-                            let panel_y = wh * 0.12; // top position
-                            let panel_height = wh * 0.75; // max height
-                            let (mx, my) = (pos.0 as f32, pos.1 as f32);
-                            // Only close if click is outside the panel
-                            if mx < panel_x || mx > panel_x + panel_width
-                                || my < panel_y || my > panel_y + panel_height
-                            {
-                                self.command_palette.close();
+                            let info = self.command_palette.build_info();
+                            let layout = PaletteLayout::calculate(
+                                sw as f32,
+                                sh as f32,
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                                info.animation,
+                                info.entries.len(),
+                            );
+                            let result = self.command_palette.handle_click(
+                                pos.0 as f32,
+                                pos.1 as f32,
+                                &layout,
+                            );
+                            if let Some(res) = result {
+                                self.handle_palette_result(res);
                             }
                         } else {
                             self.command_palette.close();

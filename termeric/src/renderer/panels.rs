@@ -575,10 +575,13 @@ impl Renderer {
                 }
             }
 
-            // Metadata line: "N tabs · Xm ago"
-            let meta = format!("{} tab{} · {}", session.tab_count,
-                if session.tab_count == 1 { "" } else { "s" },
-                session.last_modified);
+            // Metadata line: "<subtitle> · <last_modified>"
+            // Subtitle is the last command or cwd basename; omitted when empty.
+            let meta = if session.subtitle.is_empty() {
+                session.last_modified.clone()
+            } else {
+                format!("{} · {}", session.subtitle, session.last_modified)
+            };
             let meta_y = icon_y + cell_height * 1.3;
             let mut mx = name_x;
             for c in meta.chars() {

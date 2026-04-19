@@ -70,6 +70,10 @@ pub struct App {
     cursor_display_row: f32,
     /// Last frame time for delta calculation
     last_frame_time: Instant,
+    /// Last time we polled the config file for hot-reload
+    last_config_check: Instant,
+    /// Last observed mtime of the config file (for change detection)
+    last_config_mtime: Option<std::time::SystemTime>,
     /// Last known cursor visibility (for snap detection)
     last_cursor_visible: bool,
     /// Last active tab ID (for animation state)
@@ -148,6 +152,8 @@ pub struct App {
     shortcuts_panel: ShortcutsPanel,
     /// Info overlay (About/Version)
     info_overlay: InfoOverlay,
+    /// Transient toast notifications stacked in the bottom-right
+    toasts: crate::ui::toast::ToastManager,
     /// Diff review overlay
     diff_review: DiffReviewOverlay,
     /// Context picker modal
@@ -161,6 +167,9 @@ pub struct App {
     harvest: Option<HarvestMode>,
     /// Number of command regions already processed by harvest
     harvest_region_cursor: usize,
+    /// Prompt row of the command currently running (used to drive the growth
+    /// indicator). None when the shell is at a fresh prompt with no command.
+    harvest_active_prompt_row: Option<usize>,
     /// URL detector for auto-detecting URLs in terminal output
     url_detector: UrlDetector,
     /// Cached URL lookup table, reused between frames
@@ -206,6 +215,10 @@ impl App {
             cursor_display_col: 0.0,
             cursor_display_row: 0.0,
             last_frame_time: Instant::now(),
+            last_config_check: Instant::now(),
+            last_config_mtime: std::fs::metadata(crate::config::Config::config_path())
+                .and_then(|m| m.modified())
+                .ok(),
             last_cursor_visible: true,
             last_active_tab_id: None,
             max_seen_tab_id: None,
@@ -245,6 +258,7 @@ impl App {
             command_palette: CommandPalette::new(),
             shortcuts_panel: ShortcutsPanel::new(),
             info_overlay: InfoOverlay::new(),
+            toasts: crate::ui::toast::ToastManager::new(),
             diff_review: DiffReviewOverlay::new(),
             context_picker: ContextPicker::new(),
             guardrail: GuardrailOverlay::new(),
@@ -252,6 +266,7 @@ impl App {
             pending_profile_selection: None,
             harvest: None,
             harvest_region_cursor: 0,
+            harvest_active_prompt_row: None,
             url_detector: UrlDetector::new(),
             url_cache: UrlCache::new(0),
         });
@@ -284,7 +299,7 @@ impl App {
 
         // Initialize harvest mode if enabled in config
         if app.config.harvest.enabled {
-            app.harvest = Some(HarvestMode::new());
+            app.harvest = Some(HarvestMode::with_capacity(app.config.harvest.max_history));
             log::info!("Harvest mode enabled");
         }
 
@@ -495,8 +510,11 @@ impl App {
     fn force_save_session(&mut self) {
         let Some(tabs) = &mut self.tabs else { return };
         let save_scrollback = self.config.session.save_scrollback;
+        let count = tabs.count();
         tabs.save_all_sessions(save_scrollback);
         log::info!("Sessions saved");
+        let label = if count == 1 { "session" } else { "sessions" };
+        self.toasts.success(format!("Saved {} {}", count, label));
     }
 
     /// Process PTY events for all tabs and panes
@@ -556,19 +574,63 @@ impl App {
             self.handle_terminal_event(event);
         }
 
-        // Feed newly completed command regions to harvest mode and notify plugins
+        // Feed newly completed command regions to harvest mode and notify
+        // plugins. Also track the currently-running command so growth
+        // indicators have time to animate before the completion pulse.
         let mut completed_hooks: Vec<Option<i32>> = Vec::new();
+        let show_indicators = self.config.harvest.show_indicators;
         if let Some(tabs) = &self.tabs {
             if let Some(tab) = tabs.active_tab() {
                 let tracker = &tab.terminal.shell_integration().prompt_tracker;
+
+                // 1. Start indicator for the in-progress command (if any)
+                //    whose output has actually begun. We skip the idle prompt
+                //    state (no command typed yet) so the indicator only
+                //    appears for running work, not every empty prompt.
+                let active_row = tracker
+                    .active_region()
+                    .filter(|r| r.output_row.is_some())
+                    .map(|r| r.prompt_row);
+                if active_row != self.harvest_active_prompt_row {
+                    // If we previously had an active row that never reached
+                    // `completed_region`, clear it — the shell probably
+                    // didn't emit OSC 133;D. Harmless.
+                    self.harvest_active_prompt_row = active_row;
+                    if let (Some(row), Some(ref mut harvest)) = (active_row, self.harvest.as_mut()) {
+                        if show_indicators {
+                            harvest.start_command(row);
+                        }
+                    }
+                }
+
+                // 2. Drain any newly-completed regions.
                 let total = tracker.completed_count();
                 while self.harvest_region_cursor < total {
                     if let Some(region) = tracker.completed_region(self.harvest_region_cursor) {
                         if let Some(ref mut harvest) = self.harvest {
                             harvest.record_command(region);
-                            // Wire start_command/complete_command for growth indicators
-                            harvest.start_command(region.prompt_row);
-                            harvest.complete_command(region.prompt_row, region.exit_code == Some(0));
+                            if show_indicators {
+                                // If we never saw it in the "active" state
+                                // (e.g. instant command), emit start first
+                                // so the indicator has something to animate
+                                // out of.
+                                if harvest
+                                    .indicators
+                                    .iter()
+                                    .all(|i| i.prompt_row != region.prompt_row)
+                                {
+                                    harvest.start_command(region.prompt_row);
+                                }
+                                harvest.complete_command(
+                                    region.prompt_row,
+                                    region.exit_code == Some(0),
+                                );
+                            }
+                        }
+                        // The command whose indicator was active just
+                        // finished — clear the watch.
+                        if self.harvest_active_prompt_row == Some(region.prompt_row) {
+                            self.harvest_active_prompt_row = None;
                         }
                         completed_hooks.push(region.exit_code);
                     }
@@ -603,8 +665,19 @@ impl App {
             TerminalEvent::TitleChanged(_title) => {
                 // Title is handled via shell cwd detection
             }
-            TerminalEvent::ClipboardRequest(_) => {
-                // TODO: Handle clipboard read request
+            TerminalEvent::ClipboardRequest(_which) => {
+                // OSC 52 read: echo the clipboard contents back to the PTY
+                // as a base64-encoded OSC 52 reply so the requesting app
+                // doesn't time out. If the clipboard is unavailable we
+                // still emit an empty reply so the app fails fast.
+                let text = self
+                    .clipboard
+                    .as_mut()
+                    .and_then(|c| c.get_text().ok())
+                    .unwrap_or_default();
+                let encoded = base64_encode_standard(text.as_bytes());
+                let reply = format!("\x1b]52;c;{}\x07", encoded);
+                self.write_to_pty(reply.as_bytes());
             }
             TerminalEvent::ClipboardWrite(text) => {
                 if let Some(clipboard) = &mut self.clipboard {
@@ -784,6 +857,11 @@ impl App {
 
     /// Handle window resize
     fn handle_resize(&mut self, width: u32, height: u32) {
+        // An in-flight divider drag would leave stale hit-test rects after
+        // the geometry changes — cancel it so the next click starts fresh.
+        self.divider_dragging = false;
+        // Same idea for the scrollbar drag (the scrollbar extents move).
+        self.scrollbar_dragging = false;
         // Resize renderer
         if let Some(renderer) = &mut self.renderer {
             renderer.resize(width, height);
@@ -917,6 +995,9 @@ impl App {
         // Compute frame delta time for animations
         let frame_dt = self.last_frame_time.elapsed().as_secs_f32();
 
+        // Hot-reload the config if the file changed on disk.
+        self.poll_config_for_hot_reload();
+
         // Get cursor target position and calculate animations before borrowing
         let cursor_opacity = self.cursor_opacity();
         let copy_flash = self.copy_flash_intensity();
@@ -1036,7 +1117,7 @@ impl App {
         if let Some(ref mut harvest) = self.harvest {
             harvest.update(frame_dt);
             harvest.cellar.update(frame_dt);
-            if harvest.has_active_indicators() || harvest.cellar.expanded || harvest.sprout_menu.is_some() {
+            if harvest.has_active_indicators() || harvest.cellar.is_visible() || harvest.sprout_menu.is_some() {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -1074,6 +1155,15 @@ impl App {
                 window.request_redraw();
             }
         }
+        // Auto-cancel shortcut recording after 15s of no input so users
+        // can't get stuck in recording mode.
+        if self.shortcuts_panel
+            .tick_recording_timeout(std::time::Duration::from_secs(15))
+        {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
         // Build shortcuts panel info if visible
         let shortcuts_info = if self.shortcuts_panel.is_visible() {
             Some(self.shortcuts_panel.build_info(&self.shortcut_registry))
@@ -1102,6 +1192,14 @@ impl App {
                 window.request_redraw();
             }
         }
+
+        // Toast lifecycle: prune expired, push snapshot into renderer.
+        if self.toasts.update() {
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        renderer.set_toasts(self.toasts.build_info());
 
         // Build diff review overlay if visible
         let diff_review_data = if self.diff_review.is_visible() {
@@ -1257,21 +1355,25 @@ impl App {
         };
 
         // Build harvest render info
+        let show_indicators = self.config.harvest.show_indicators;
         let harvest_render_info = self.harvest.as_ref().map(|harvest| {
-            // Growth indicators
-            let indicators: Vec<IndicatorRenderInfo> = harvest.indicators.iter()
-                .filter(|ind| !ind.is_finished())
-                .map(|ind| IndicatorRenderInfo {
-                    row: ind.prompt_row,
-                    character: ind.phase.character(),
-                    color: ind.color(),
-                    scale: ind.scale(),
-                    opacity: if ind.is_finished() { 0.0 } else { 1.0 },
-                })
-                .collect();
-
-            // Cellar panel (if expanded)
-            let cellar = if harvest.cellar.expanded {
+            // Growth indicators (respect the config toggle)
+            let indicators: Vec<IndicatorRenderInfo> = if show_indicators {
+                harvest.indicators.iter()
+                    .filter(|ind| !ind.is_finished())
+                    .map(|ind| IndicatorRenderInfo {
+                        row: ind.prompt_row,
+                        character: ind.phase.character(),
+                        color: ind.color(),
+                        scale: ind.scale(),
+                        opacity: if ind.is_finished() { 0.0 } else { 1.0 },
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // Cellar panel (visible while open or animating out)
+            let cellar = if harvest.cellar.is_visible() {
                 Some(CellarRenderInfo {
                     entries: harvest.cellar.entries().map(|e| CellarEntryInfo {
                         row: e.row,
@@ -1282,7 +1384,7 @@ impl App {
                         opacity: e.visual_state.opacity,
                         depth: e.visual_state.depth,
                     }).collect(),
-                    animation_progress: 1.0, // TODO: wire PanelAnimation
+                    animation_progress: harvest.cellar.animation.progress(),
                     success_rate: harvest.cellar.success_rate(),
                     scroll: harvest.cellar.scroll as usize,
                 })
@@ -1464,7 +1566,11 @@ impl App {
     fn handle_action(&mut self, action: Action) -> bool {
         match action {
             Action::Copy => {
-                self.copy_selection();
+                // If nothing was copied, don't consume the keystroke — let it
+                // pass through (e.g. Ctrl+Shift+C falls through to the PTY).
+                if !self.copy_selection() {
+                    return false;
+                }
             }
             Action::Paste => {
                 self.paste_clipboard();
@@ -1681,9 +1787,17 @@ impl App {
                         return;
                     }
                     "core.reload-config" => {
-                        if let Ok(config) = crate::config::Config::load_or_default() {
-                            self.config = config;
-                            log::info!("Configuration reloaded");
+                        match crate::config::Config::load_or_default() {
+                            Ok(config) => {
+                                self.config = config;
+                                self.apply_config_side_effects();
+                                log::info!("Configuration reloaded");
+                                self.toasts.success("Configuration reloaded");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to reload config: {}", e);
+                                self.toasts.error(format!("Reload failed: {}", e));
+                            }
                         }
                         return;
                     }
@@ -1751,8 +1865,27 @@ impl App {
                         return;
                     }
                     "core.show-sprout-menu" => {
+                        // Anchor the menu to the latest recorded command
+                        // so the actions target something the user can
+                        // reason about. If no command has completed yet
+                        // (e.g. fresh shell), fall back to cursor row.
+                        let (anchor_row, anchor_col, entry) = if let Some(ref h) = self.harvest {
+                            if let Some(latest) = h.cellar.latest().cloned() {
+                                let col = 0;
+                                (latest.row, col, Some(latest))
+                            } else {
+                                let cur = self
+                                    .active_terminal_mut()
+                                    .map(|t| t.grid().cursor())
+                                    .map(|c| (c.row, c.col))
+                                    .unwrap_or((0, 0));
+                                (cur.0, cur.1, None)
+                            }
+                        } else {
+                            (0, 0, None)
+                        };
                         if let Some(ref mut harvest) = self.harvest {
-                            harvest.show_sprout_menu(0, 0, None);
+                            harvest.show_sprout_menu(anchor_row, anchor_col, entry);
                         }
                         return;
                     }
@@ -1802,11 +1935,28 @@ impl App {
                     }
                     id if id.starts_with("core.theme.") => {
                         let theme_name = id.strip_prefix("core.theme.").unwrap_or("");
-                        if let Ok(theme) = Theme::load_by_name(theme_name) {
-                            self.config.theme.name = theme_name.to_string();
-                            self.apply_theme(theme);
-                            if let Ok(msg) = self.save_config() {
-                                log::info!("Theme changed to {}: {}", theme_name, msg);
+                        match Theme::load_by_name(theme_name) {
+                            Ok(theme) => {
+                                self.config.theme.name = theme_name.to_string();
+                                self.apply_theme(theme);
+                                match self.save_config() {
+                                    Ok(msg) => {
+                                        log::info!("Theme changed to {}: {}", theme_name, msg);
+                                        self.toasts.info(format!("Theme: {}", theme_name));
+                                    }
+                                    Err(e) => {
+                                        log::error!("Theme applied but save failed: {}", e);
+                                        self.toasts.warning(format!(
+                                            "Theme '{}' applied but not saved: {}",
+                                            theme_name, e
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                self.toasts.error(format!(
+                                    "Theme '{}' failed: {}", theme_name, err
+                                ));
                             }
                         }
                         return;
@@ -1894,8 +2044,9 @@ impl App {
             }
         }
         let ctx = self.build_plugin_context();
-        if let Some(action) = self.plugin_manager.execute_command(command_id, &ctx) {
-            self.execute_plugin_actions(vec![action]);
+        let actions = self.plugin_manager.execute_command(command_id, &ctx);
+        if !actions.is_empty() {
+            self.execute_plugin_actions(actions);
         }
     }
 
@@ -2160,6 +2311,13 @@ impl App {
                 PluginAction::ShowMessage { message } => {
                     log::info!("Plugin message: {}", message);
                 }
+                PluginAction::ShowNotice { title, lines } => {
+                    log::info!("Plugin notice [{}]: {}", title, lines.join(" / "));
+                    self.info_overlay.show(title, lines);
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
                 PluginAction::ClearPluginTab { plugin_id } => {
                     if let Some(tabs) = &mut self.tabs {
                         // Send Ctrl+C then clear
@@ -2187,8 +2345,9 @@ impl App {
                     // Re-open via plugin command
                     let open_cmd = format!("{}.open", plugin_id);
                     let ctx = self.build_plugin_context();
-                    if let Some(action) = self.plugin_manager.execute_command(&open_cmd, &ctx) {
-                        self.execute_plugin_actions(vec![action]);
+                    let actions = self.plugin_manager.execute_command(&open_cmd, &ctx);
+                    if !actions.is_empty() {
+                        self.execute_plugin_actions(actions);
                     }
                 }
                 PluginAction::ApplyDiff { diff_content, cwd } => {
@@ -2488,15 +2647,195 @@ impl App {
         }
     }
 
-    /// Move focus to the adjacent pane in `dir`. No-op if no pane manager
-    /// or no pane in that direction.
-    fn navigate_focused_pane(&mut self, dir: crate::panes::PaneDir) {
-        if let Some(tabs) = &mut self.tabs {
-            if let Some(tab) = tabs.active_tab_mut() {
-                if let Some(ref mut pm) = tab.pane_manager {
-                    pm.navigate(dir);
+    /// Run a sprout-menu action against the command anchored at
+    /// `target_row` (falls back to the latest recorded cellar entry if
+    /// row is unknown).
+    fn execute_sprout_action(
+        &mut self,
+        action: crate::harvest::sprouts::SproutAction,
+        target_row: Option<usize>,
+    ) {
+        use crate::harvest::sprouts::SproutAction;
+        // Resolve the target command row. Prefer the explicit target, then
+        // fall back to the latest cellar entry.
+        let row = target_row.or_else(|| {
+            self.harvest
+                .as_ref()
+                .and_then(|h| h.cellar.latest().map(|e| e.row))
+        });
+        let Some(row) = row else {
+            self.toasts.warning("No command under cursor");
+            return;
+        };
+
+        // Pull the command region from the active tab's shell integration.
+        let region = {
+            let Some(tabs) = &self.tabs else { return };
+            let Some(tab) = tabs.active_tab() else { return };
+            tab.terminal
+                .shell_integration()
+                .command_at(row as i32)
+                .cloned()
+        };
+        let Some(region) = region else {
+            self.toasts.warning("No shell-integration data for that command");
+            return;
+        };
+
+        match action {
+            SproutAction::CopyCommand => {
+                let text = self.extract_command_text(&region);
+                if text.trim().is_empty() {
+                    self.toasts.warning("Command text is empty");
+                    return;
+                }
+                self.copy_to_clipboard(text, "Copied command");
+            }
+            SproutAction::CopyOutput => {
+                let text = self.extract_output_text(&region);
+                if text.trim().is_empty() {
+                    self.toasts.warning("Output is empty");
+                    return;
+                }
+                self.copy_to_clipboard(text, "Copied output");
+            }
+            SproutAction::Rerun => {
+                let text = self.extract_command_text(&region);
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    self.toasts.warning("Nothing to rerun");
+                    return;
+                }
+                // Send the command + newline to the active PTY.
+                let mut payload = trimmed.as_bytes().to_vec();
+                payload.push(b'\n');
+                self.write_to_pty(&payload);
+                self.toasts.info("Re-ran command");
+            }
+            SproutAction::ScrollTo => {
+                // Scroll the terminal so the prompt row is visible at the
+                // top of the viewport (modulo scrollback mechanics).
+                if let Some(terminal) = self.active_terminal_mut() {
+                    let scrollback_len = terminal.grid().scrollback_len() as i32;
+                    // `row` is an absolute prompt row from the time of
+                    // capture. Convert it to a scroll offset; anything
+                    // older than the current viewport requires a positive
+                    // offset.
+                    let rows_on_screen = terminal.rows() as i32;
+                    let target = (row as i32).max(0);
+                    let offset = (scrollback_len + rows_on_screen - 1 - target).max(0) as usize;
+                    terminal.grid_mut().set_scroll_offset(offset);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
                 }
             }
+            SproutAction::SearchOutput => {
+                // Open search (scoping to output region is a follow-up —
+                // for now we just activate the search bar so the user can
+                // type a query over the full scrollback).
+                if !self.search.is_active() {
+                    self.search.start();
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            SproutAction::Explain => {
+                // Hand the command off to the Claude Code plugin with a
+                // short "explain this" preamble injected as context.
+                let cmd = self.extract_command_text(&region);
+                let out = self.extract_output_text(&region);
+                if cmd.trim().is_empty() {
+                    self.toasts.warning("No command to explain");
+                    return;
+                }
+                let context = format!(
+                    "Please explain this command and its output.\n\n$ {}\n\n{}",
+                    cmd.trim(),
+                    out.trim(),
+                );
+                self.execute_plugin_actions(vec![
+                    crate::plugin::PluginAction::InjectContext { text: context },
+                ]);
+            }
+        }
+    }
+
+    /// Copy `text` to the clipboard, emit a success toast with `label`.
+    fn copy_to_clipboard(&mut self, text: String, label: &str) {
+        if let Some(clipboard) = &mut self.clipboard {
+            match clipboard.set_text(&text) {
+                Ok(()) => {
+                    self.copy_flash_start = Some(Instant::now());
+                    self.toasts.success(label.to_string());
+                }
+                Err(e) => {
+                    log::error!("Clipboard write failed: {}", e);
+                    self.toasts.error(format!("Copy failed: {}", e));
+                }
+            }
+        } else {
+            self.toasts.warning("Clipboard not available");
+        }
+    }
+
+    /// Extract just the command line entered by the user (between command
+    /// start and output start).
+    fn extract_command_text(&self, region: &termeric_core::CommandRegion) -> String {
+        let Some(tabs) = &self.tabs else { return String::new() };
+        let Some(tab) = tabs.active_tab() else { return String::new() };
+        let start = region.command_row.unwrap_or(region.prompt_row) as i32;
+        // End at the row just before output starts, or the prompt row if
+        // output never began.
+        let end = region
+            .output_row
+            .map(|r| r.saturating_sub(1) as i32)
+            .unwrap_or(start);
+        let end = end.max(start);
+        tab.terminal.rows_text(start, end)
+    }
+
+    /// Extract the output block of a command (between output start and
+    /// finish).
+    fn extract_output_text(&self, region: &termeric_core::CommandRegion) -> String {
+        let Some(tabs) = &self.tabs else { return String::new() };
+        let Some(tab) = tabs.active_tab() else { return String::new() };
+        let Some(start) = region.output_row else { return String::new() };
+        let end = region
+            .finish_row
+            .map(|r| r.saturating_sub(1) as i32)
+            .unwrap_or(start as i32);
+        let start = start as i32;
+        let end = end.max(start);
+        tab.terminal.rows_text(start, end)
+    }
+
+    /// Move focus to the adjacent pane in `dir`. No-op if no pane manager
+    /// or no pane in that direction; in the no-neighbor case we surface a
+    /// short info toast so the user knows the key was registered but the
+    /// layout has nowhere to go.
+    fn navigate_focused_pane(&mut self, dir: crate::panes::PaneDir) {
+        let moved = {
+            let mut moved = false;
+            if let Some(tabs) = &mut self.tabs {
+                if let Some(tab) = tabs.active_tab_mut() {
+                    if let Some(ref mut pm) = tab.pane_manager {
+                        moved = pm.navigate(dir);
+                    }
+                }
+            }
+            moved
+        };
+        if !moved {
+            use crate::panes::PaneDir;
+            let label = match dir {
+                PaneDir::Up => "No pane above",
+                PaneDir::Down => "No pane below",
+                PaneDir::Left => "No pane to the left",
+                PaneDir::Right => "No pane to the right",
+            };
+            self.toasts.info(label);
         }
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -2662,23 +3001,102 @@ impl App {
         window.request_redraw();
     }
 
-    fn load_theme_from_config(config: &Config) -> Theme {
+    /// Load a theme from the config, returning it along with a human-readable
+    /// error description if any of the attempted loads failed. The caller is
+    /// expected to surface that description to the user.
+    fn load_theme_from_config_with_error(config: &Config) -> (Theme, Option<String>) {
         if let Some(path) = &config.theme.path {
             match Theme::load(path) {
-                Ok(theme) => return theme,
+                Ok(theme) => return (theme, None),
                 Err(err) => {
-                    log::warn!("Failed to load theme at {}: {}", path.display(), err);
+                    let msg = format!("Failed to load theme at {}: {}", path.display(), err);
+                    log::warn!("{}", msg);
+                    // Fall through to the named builtin lookup, but keep the
+                    // message so the user sees the original failure.
+                    match Theme::load_builtin(&config.theme.name) {
+                        Ok(theme) => return (theme, Some(msg)),
+                        Err(_) => return (Theme::default(), Some(msg)),
+                    }
                 }
             }
         }
 
         match Theme::load_builtin(&config.theme.name) {
-            Ok(theme) => theme,
+            Ok(theme) => (theme, None),
             Err(err) => {
-                log::warn!("Failed to load theme '{}': {}", config.theme.name, err);
-                Theme::default()
+                let msg = format!("Failed to load theme '{}': {}", config.theme.name, err);
+                log::warn!("{}", msg);
+                (Theme::default(), Some(msg))
             }
         }
+    }
+
+    fn load_theme_from_config(config: &Config) -> Theme {
+        Self::load_theme_from_config_with_error(config).0
+    }
+
+    /// Poll the config file's mtime; if it changed since our last load,
+    /// reload + re-apply + toast. Called once per frame but only hits the
+    /// filesystem at most every 750ms.
+    fn poll_config_for_hot_reload(&mut self) {
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
+        if self.last_config_check.elapsed() < POLL_INTERVAL {
+            return;
+        }
+        self.last_config_check = Instant::now();
+
+        let path = crate::config::Config::config_path();
+        let current_mtime = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+            Ok(t) => Some(t),
+            Err(_) => None,
+        };
+
+        // Nothing to do if neither side has a timestamp or they match.
+        if current_mtime == self.last_config_mtime {
+            return;
+        }
+        self.last_config_mtime = current_mtime;
+
+        // Only reload if the file exists (avoid racing with editors that
+        // briefly delete + rewrite).
+        if !path.exists() {
+            return;
+        }
+
+        match crate::config::Config::load_or_default() {
+            Ok(config) => {
+                self.config = config;
+                self.apply_config_side_effects();
+                log::info!("Config hot-reloaded");
+                self.toasts.info("Config reloaded");
+            }
+            Err(e) => {
+                log::warn!("Config hot-reload failed: {}", e);
+                self.toasts.warning(format!("Config reload failed: {}", e));
+            }
+        }
+    }
+
+    /// Re-apply every piece of `self.config` to the live renderer, tabs, and
+    /// shortcut registry. Call after swapping `self.config` (reload, reset).
+    fn apply_config_side_effects(&mut self) {
+        self.default_font_size = self.config.font.size;
+        self.set_font_family(self.config.font.family.clone());
+        self.set_font_size(self.config.font.size);
+        self.set_padding(self.config.window.padding);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_ligatures(self.config.font.ligatures);
+        }
+        let (theme, theme_err) = Self::load_theme_from_config_with_error(&self.config);
+        self.apply_theme(theme);
+        if let Some(msg) = theme_err {
+            // Keep it as a toast — startup shouldn't demand a modal dismiss.
+            self.toasts.warning(format!("Theme: {}", msg));
+        }
+        if let Some(tabs) = &mut self.tabs {
+            tabs.set_scrollback_limit(self.config.scrollback.lines);
+        }
+        self.shortcut_registry.apply_overrides(&self.config.shortcuts);
     }
 
     fn apply_theme(&mut self, theme: Theme) {
@@ -2704,10 +3122,17 @@ impl App {
                 self.set_font_family(family);
             }
             SettingsAction::SetTheme(name) => {
-                if let Ok(theme) = Theme::load_builtin(&name) {
-                    self.config.theme.name = name;
-                    self.config.theme.path = None;
-                    self.apply_theme(theme);
+                match Theme::load_builtin(&name) {
+                    Ok(theme) => {
+                        let display = name.clone();
+                        self.config.theme.name = name;
+                        self.config.theme.path = None;
+                        self.apply_theme(theme);
+                        self.toasts.info(format!("Theme: {}", display));
+                    }
+                    Err(err) => {
+                        self.toasts.error(format!("Theme '{}' failed: {}", name, err));
+                    }
                 }
             }
             SettingsAction::SetPadding(padding) => {
@@ -2790,15 +3215,7 @@ impl App {
             }
             SettingsAction::ResetConfig => {
                 self.config = Config::default();
-                self.default_font_size = self.config.font.size;
-                self.set_font_family(self.config.font.family.clone());
-                self.set_font_size(self.config.font.size);
-                self.set_padding(self.config.window.padding);
-                let theme = Self::load_theme_from_config(&self.config);
-                self.apply_theme(theme);
-                if let Some(tabs) = &mut self.tabs {
-                    tabs.set_scrollback_limit(self.config.scrollback.lines);
-                }
+                self.apply_config_side_effects();
             }
             SettingsAction::SetSessionAutoSave(enabled) => {
                 self.config.session.auto_save = enabled;
@@ -2931,21 +3348,26 @@ impl App {
         }
     }
 
-    /// Copy selection to clipboard
-    fn copy_selection(&mut self) {
-        let Some(tabs) = &self.tabs else { return };
-        let Some(tab) = tabs.active_tab() else { return };
-        let Some(text) = tab.terminal.get_selection_text() else { return };
+    /// Copy selection to clipboard. Returns true if anything was copied so
+    /// the caller can decide whether to consume the keybinding.
+    fn copy_selection(&mut self) -> bool {
+        let Some(tabs) = &self.tabs else { return false };
+        let Some(tab) = tabs.active_tab() else { return false };
+        let Some(text) = tab.terminal.get_selection_text() else { return false };
+        if text.is_empty() {
+            return false;
+        }
 
         if let Some(clipboard) = &mut self.clipboard {
             if let Err(e) = clipboard.set_text(&text) {
                 log::error!("Failed to copy to clipboard: {}", e);
-            } else {
-                log::debug!("Copied {} bytes to clipboard", text.len());
-                // Start copy flash animation
-                self.copy_flash_start = Some(Instant::now());
+                return false;
             }
+            log::debug!("Copied {} bytes to clipboard", text.len());
+            self.copy_flash_start = Some(Instant::now());
+            return true;
         }
+        false
     }
 
     /// Calculate copy flash intensity (0.0 = no flash, 1.0 = full flash)
@@ -2990,15 +3412,24 @@ impl App {
 
     /// Paste from clipboard
     fn paste_clipboard(&mut self) {
-        let Some(clipboard) = &mut self.clipboard else { return };
-
-        match clipboard.get_text() {
-            Ok(text) => {
-                self.write_to_pty(text.as_bytes());
-            }
-            Err(e) => {
+        let text = match self.clipboard.as_mut().map(|c| c.get_text()) {
+            Some(Ok(text)) => text,
+            Some(Err(e)) => {
                 log::error!("Failed to paste from clipboard: {}", e);
+                self.toasts.error(format!("Paste failed: {}", e));
+                return;
             }
+            None => {
+                self.toasts.warning("Clipboard not available");
+                return;
+            }
+        };
+        self.write_to_pty(text.as_bytes());
+        // Clear any active selection — users expect paste to replace the
+        // visual selection state, not leave it dangling.
+        self.mouse_state.clear_selection();
+        if let Some(terminal) = self.active_terminal_mut() {
+            terminal.set_selection(None);
         }
     }
 
@@ -3262,7 +3693,7 @@ impl App {
     }
 
     /// Save current configuration to file
-    fn save_config(&self) -> Result<String> {
+    fn save_config(&mut self) -> Result<String> {
         let config_path = Config::config_path();
 
         // Ensure config directory exists
@@ -3280,6 +3711,11 @@ impl App {
         let config_content = toml::to_string_pretty(&config)?;
 
         std::fs::write(&config_path, config_content)?;
+        // Capture the new mtime so the hot-reload poller doesn't treat
+        // our own write as an external change.
+        self.last_config_mtime = std::fs::metadata(&config_path)
+            .and_then(|m| m.modified())
+            .ok();
         Ok(config_path.display().to_string())
     }
 
@@ -3414,8 +3850,22 @@ impl App {
                                             let name = self.config.commands[idx].name.clone();
                                             self.config.commands.remove(idx);
                                             log::info!("Deleted custom command '{}'", name);
-                                            if let Ok(msg) = self.save_config() {
-                                                log::info!("{}", msg);
+                                            match self.save_config() {
+                                                Ok(msg) => {
+                                                    log::info!("{}", msg);
+                                                    self.toasts.success(format!(
+                                                        "Deleted command '{}'", name
+                                                    ));
+                                                }
+                                                Err(e) => {
+                                                    log::error!(
+                                                        "Deleted '{}' but save failed: {}",
+                                                        name, e
+                                                    );
+                                                    self.toasts.error(format!(
+                                                        "Save failed: {}", e
+                                                    ));
+                                                }
                                             }
                                         }
                                     }
@@ -3423,10 +3873,29 @@ impl App {
                                         if name == "SAVE" && command == "SAVE" {
                                             // Save button clicked
                                             if let Some(cmd) = self.commands_panel.try_submit() {
+                                                let cmd_name = cmd.name.clone();
                                                 self.config.commands.push(cmd);
-                                                if let Ok(msg) = self.save_config() {
-                                                    log::info!("{}", msg);
+                                                match self.save_config() {
+                                                    Ok(msg) => {
+                                                        log::info!("{}", msg);
+                                                        self.toasts.success(format!(
+                                                            "Saved command '{}'", cmd_name
+                                                        ));
+                                                    }
+                                                    Err(e) => {
+                                                        log::error!(
+                                                            "Failed to save custom command: {}", e
+                                                        );
+                                                        self.toasts.error(format!(
+                                                            "Save failed: {}", e
+                                                        ));
+                                                    }
                                                 }
+                                            } else {
+                                                // Form was incomplete — give feedback.
+                                                self.toasts.warning(
+                                                    "Both name and command are required",
+                                                );
                                             }
                                         } else if name.is_empty() && command.is_empty() {
                                             // Click on "+ New Command" button => start editing
@@ -3485,16 +3954,38 @@ impl App {
                                                     }
                                                 }
                                             }
-                                            Ok(None) => log::warn!("Session '{}' not found", name),
-                                            Err(e) => log::error!("Failed to load session: {}", e),
+                                            Ok(None) => {
+                                                log::warn!("Session '{}' not found", name);
+                                                self.toasts.warning(format!(
+                                                    "Session '{}' not found", name
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                log::error!("Failed to load session: {}", e);
+                                                self.toasts.error(format!(
+                                                    "Load failed: {}", e
+                                                ));
+                                            }
                                         }
                                         self.session_panel.close();
                                     }
                                     SessionPanelAction::Delete(name) => {
-                                        if let Err(e) = crate::session::delete_session(&name) {
-                                            log::error!("Failed to delete session '{}': {}", name, e);
-                                        } else {
-                                            log::info!("Deleted session '{}'", name);
+                                        match crate::session::delete_session(&name) {
+                                            Ok(()) => {
+                                                log::info!("Deleted session '{}'", name);
+                                                self.toasts.success(format!(
+                                                    "Deleted session '{}'", name
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                log::error!(
+                                                    "Failed to delete session '{}': {}",
+                                                    name, e
+                                                );
+                                                self.toasts.error(format!(
+                                                    "Delete failed: {}", e
+                                                ));
+                                            }
                                         }
                                         // Refresh the list
                                         self.session_panel.refresh_sessions();
@@ -3740,11 +4231,30 @@ impl App {
                     }
                 }
 
-                if let Some(selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
+                if let Some(mut selection) = self.mouse_state.handle_press(button, grid_pos, self.modifiers) {
                     self.mouse_pressed = true;
+                    // Double-click expands to the word under the cursor;
+                    // triple-click expands to the full line. Simple/Block
+                    // selections pass through unchanged.
                     if let Some(terminal) = self.active_terminal_mut() {
-                        terminal.set_selection(Some(selection));
+                        match selection.ty {
+                            termeric_core::SelectionType::Semantic => {
+                                let (start, end) = terminal.word_at(grid_pos);
+                                selection.start = start;
+                                selection.end = end;
+                            }
+                            termeric_core::SelectionType::Lines => {
+                                let (start, end) = terminal.line_at(grid_pos);
+                                selection.start = start;
+                                selection.end = end;
+                            }
+                            _ => {}
+                        }
+                        terminal.set_selection(Some(selection.clone()));
                     }
+                    // Keep mouse_state in sync so drags extend the expanded
+                    // selection. Written after the terminal borrow ends.
+                    self.mouse_state.selection = Some(selection);
                 }
             }
             ElementState::Released => {
@@ -4162,6 +4672,68 @@ impl App {
                 tab.terminal.grid_mut().set_scroll_offset(new_offset);
             }
         }
+    }
+}
+
+/// Minimal RFC 4648 base64 encoder (standard alphabet) used for the OSC 52
+/// clipboard reply. Keeps us off an external `base64` dependency.
+fn base64_encode_standard(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut chunks = input.chunks_exact(3);
+    for chunk in &mut chunks {
+        let n = ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | (chunk[2] as u32);
+        out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
+        out.push(ALPHABET[(n & 0x3F) as usize] as char);
+    }
+    let rem = chunks.remainder();
+    match rem.len() {
+        1 => {
+            let n = (rem[0] as u32) << 16;
+            out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        2 => {
+            let n = ((rem[0] as u32) << 16) | ((rem[1] as u32) << 8);
+            out.push(ALPHABET[((n >> 18) & 0x3F) as usize] as char);
+            out.push(ALPHABET[((n >> 12) & 0x3F) as usize] as char);
+            out.push(ALPHABET[((n >> 6) & 0x3F) as usize] as char);
+            out.push('=');
+        }
+        _ => {}
+    }
+    out
+}
+
+#[cfg(test)]
+mod base64_tests {
+    use super::base64_encode_standard;
+
+    #[test]
+    fn test_base64_empty() {
+        assert_eq!(base64_encode_standard(b""), "");
+    }
+
+    #[test]
+    fn test_base64_rfc_vectors() {
+        assert_eq!(base64_encode_standard(b"f"), "Zg==");
+        assert_eq!(base64_encode_standard(b"fo"), "Zm8=");
+        assert_eq!(base64_encode_standard(b"foo"), "Zm9v");
+        assert_eq!(base64_encode_standard(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode_standard(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode_standard(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn test_base64_binary() {
+        // 00 FF 80 → AP+A, 7F 01 → fwE=
+        let bytes = [0x00, 0xff, 0x80, 0x7f, 0x01];
+        assert_eq!(base64_encode_standard(&bytes), "AP+AfwE=");
     }
 }
 

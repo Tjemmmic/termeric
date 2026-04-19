@@ -208,6 +208,10 @@ impl ContextPicker {
 
     /// Dismiss the overlay
     pub fn dismiss(&mut self) {
+        // Clear transient state so stale status/result doesn't bleed into
+        // the next open.
+        self.status = None;
+        self.assembled = None;
         self.animation.close();
     }
 

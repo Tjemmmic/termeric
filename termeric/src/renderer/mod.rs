@@ -23,6 +23,7 @@ mod sessions;
 mod settings_render;
 mod shortcuts_render;
 mod tab_bar;
+mod toasts;
 pub mod types;
 
 pub use types::*;
@@ -241,6 +242,8 @@ pub struct Renderer {
     context_picker: Option<ContextPickerInfo>,
     guardrail: Option<GuardrailInfo>,
     chrome_bar: Option<crate::ui::claude_chrome::ChromeBarInfo>,
+    /// Transient toast notifications for the current frame
+    toasts: Vec<crate::ui::toast::ToastInfo>,
     /// Pane dividers for the current frame
     pane_dividers: Vec<crate::panes::Divider>,
     /// Visual bell intensity (0.0 = off, 1.0 = full flash)
@@ -348,6 +351,7 @@ impl Renderer {
             context_picker: None,
             guardrail: None,
             chrome_bar: None,
+            toasts: Vec::new(),
             pane_dividers: Vec::new(),
             bell_intensity: 0.0,
             url_cache: None,
@@ -499,6 +503,11 @@ impl Renderer {
     /// Set info overlay data for rendering
     pub fn set_info_overlay(&mut self, info: Option<InfoOverlayInfo>) {
         self.info_overlay = info;
+    }
+
+    /// Update the toast stack for the current frame. Empty vec clears.
+    pub fn set_toasts(&mut self, toasts: Vec<crate::ui::toast::ToastInfo>) {
+        self.toasts = toasts;
     }
 
     pub fn set_diff_review(&mut self, info: Option<DiffReviewInfo>) {
@@ -944,6 +953,14 @@ impl Renderer {
                 self.build_guardrail_confirmation(info, window_width, window_height);
             }
         }
+
+        // ── LAYER 16: Toasts (always on top — transient status notices) ──
+        self.rect_pipeline.mark_layer();
+        self.text_pipeline.mark_layer();
+        if !self.toasts.is_empty() {
+            let toasts = self.toasts.clone();
+            self.build_toasts(&toasts, window_width, window_height);
+        }
     }
 
     /// Render a single terminal grid within a pane viewport.
@@ -1157,8 +1174,10 @@ impl Renderer {
                     scrollbar_x, scrollbar_top, scrollbar_width, scrollbar_height, track_color, 3.0,
                 );
 
+                // Minimum thumb size of 32px keeps it targetable on HiDPI
+                // displays even when scrollback vastly exceeds the viewport.
                 let thumb_ratio = (visible_rows as f32) / (total_rows as f32);
-                let thumb_height = (scrollbar_height * thumb_ratio).max(20.0).min(scrollbar_height);
+                let thumb_height = (scrollbar_height * thumb_ratio).max(32.0).min(scrollbar_height);
                 let max_offset = scrollback_len;
                 let scroll_fraction = if max_offset > 0 {
                     scroll_offset as f32 / max_offset as f32

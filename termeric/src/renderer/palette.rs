@@ -2,7 +2,7 @@
 
 use super::{Renderer, adjust_alpha};
 use crate::ui::constants::*;
-use crate::ui::command_palette::PaletteInfo;
+use crate::ui::command_palette::{PaletteInfo, PaletteLayout};
 
 impl Renderer {
     /// Build command palette render data — centered modal with scrim
@@ -15,27 +15,24 @@ impl Renderer {
         let scrim = adjust_alpha(self.ui.palette_scrim, self.ui.palette_scrim[3] * anim);
         self.rect_pipeline.push_rect(0.0, 0.0, window_width, window_height, scrim);
 
-        // ── Panel geometry ──
-        let panel_width = (cell_width * 55.0).max(450.0).min(window_width * 0.65);
-        let panel_x = (window_width - panel_width) / 2.0;
-        let padding = cell_width * 1.5;
-        let row_height = cell_height * 2.2;
-        let input_height = cell_height * 2.0;
-        let footer_height = cell_height * 1.6;
-        let gap = 6.0;
-        let separator_height = 1.0;
-        let header_area = padding + input_height + gap + separator_height + gap;
-        let footer_area = footer_height + padding * 0.5;
-        let max_panel_height = window_height * 0.75;
-        // Calculate how many rows actually fit
-        let max_list_height = max_panel_height - header_area - footer_area;
-        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
-        let visible_count = info.entries.len().min(rows_that_fit);
-        let list_height = visible_count as f32 * row_height;
-        let panel_height = header_area + list_height + footer_area;
-
-        // Animate: slide in from top with fade
-        let panel_y = (window_height * 0.12) + (1.0 - anim) * -30.0;
+        // ── Geometry via the shared layout struct ──
+        let layout = PaletteLayout::calculate(
+            window_width, window_height,
+            cell_width, cell_height,
+            anim, info.entries.len(),
+        );
+        let panel_x = layout.panel_x;
+        let panel_y = layout.panel_y;
+        let panel_width = layout.panel_width;
+        let panel_height = layout.panel_height;
+        let padding = layout.padding;
+        let row_height = layout.row_height;
+        let input_height = layout.input_height;
+        let footer_height = layout.footer_height;
+        let gap = layout.gap;
+        let separator_height = layout.separator_height;
+        let list_height = layout.list_height;
+        let visible_count = layout.visible_count;
 
         // ── Panel background (rounded) ──
         let panel_bg = adjust_alpha(self.ui.palette_bg, anim);

@@ -169,14 +169,31 @@ impl Renderer {
             let _ = right_x; // Silence unused warning
         }
 
-        // Show regex error if any
+        // Show regex error if any. Truncate at a word boundary rather than
+        // mid-word so the error stays readable when it gets cut off.
         if let Some(error) = &info.regex_error {
             let error_x = text_x + self.cell_width;
             let error_text = format!("Error: {}", error);
             let error_color = self.ui.search_error;
 
             let max_chars = ((window_width - error_x - padding * 2.0) / self.cell_width) as usize;
-            for (i, c) in error_text.chars().take(max_chars.saturating_sub(3)).enumerate() {
+            let cap = max_chars.saturating_sub(3);
+            let display: String = if error_text.chars().count() <= cap {
+                error_text.clone()
+            } else if cap == 0 {
+                String::new()
+            } else {
+                let truncated: String = error_text.chars().take(cap - 1).collect();
+                // Back up to the last whitespace to avoid slicing a word.
+                let cut = truncated
+                    .rfind(|c: char| c.is_whitespace())
+                    .map(|i| i)
+                    .unwrap_or(truncated.len());
+                let base = if cut > 0 { &truncated[..cut] } else { &truncated };
+                format!("{}…", base.trim_end())
+            };
+
+            for (i, c) in display.chars().enumerate() {
                 self.text_pipeline.push_char(c, error_x + i as f32 * self.cell_width, text_y, error_color);
             }
         }

@@ -58,6 +58,97 @@ pub enum PaletteResult {
     Cancelled,
 }
 
+/// Geometry for the centered command palette modal — single source of truth
+/// shared by the renderer, click hit-test, and scroll logic.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Several fields are exposed for symmetry / future callers.
+pub struct PaletteLayout {
+    pub panel_x: f32,
+    pub panel_y: f32,
+    pub panel_width: f32,
+    pub panel_height: f32,
+    pub padding: f32,
+    pub gap: f32,
+    pub separator_height: f32,
+    pub row_height: f32,
+    pub input_height: f32,
+    pub footer_height: f32,
+    pub header_area: f32,
+    pub footer_area: f32,
+    pub list_y: f32,
+    pub list_height: f32,
+    pub rows_that_fit: usize,
+    pub visible_count: usize,
+    pub cell_width: f32,
+    pub cell_height: f32,
+}
+
+impl PaletteLayout {
+    pub fn calculate(
+        window_width: f32,
+        window_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+        animation: f32,
+        entry_count: usize,
+    ) -> Self {
+        let panel_width = (cell_width * 55.0).max(450.0).min(window_width * 0.65);
+        let panel_x = (window_width - panel_width) / 2.0;
+        let padding = cell_width * 1.5;
+        let row_height = cell_height * 2.2;
+        let input_height = cell_height * 2.0;
+        let footer_height = cell_height * 1.6;
+        let gap = 6.0;
+        let separator_height = 1.0;
+        let header_area = padding + input_height + gap + separator_height + gap;
+        let footer_area = footer_height + padding * 0.5;
+        let max_panel_height = window_height * 0.75;
+        let max_list_height = (max_panel_height - header_area - footer_area).max(row_height);
+        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
+        let visible_count = entry_count.min(rows_that_fit);
+        let list_height = visible_count as f32 * row_height;
+        let panel_height = header_area + list_height + footer_area;
+        let panel_y = (window_height * 0.12) + (1.0 - animation) * -30.0;
+        let list_y = panel_y + header_area;
+        Self {
+            panel_x,
+            panel_y,
+            panel_width,
+            panel_height,
+            padding,
+            gap,
+            separator_height,
+            row_height,
+            input_height,
+            footer_height,
+            header_area,
+            footer_area,
+            list_y,
+            list_height,
+            rows_that_fit,
+            visible_count,
+            cell_width,
+            cell_height,
+        }
+    }
+
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.panel_x
+            && x <= self.panel_x + self.panel_width
+            && y >= self.panel_y
+            && y <= self.panel_y + self.panel_height
+    }
+
+    /// Map a y-coordinate to the 0-based visible row, if inside the list area.
+    pub fn visible_row_at(&self, y: f32) -> Option<usize> {
+        if y < self.list_y || y >= self.list_y + self.list_height {
+            return None;
+        }
+        let row = ((y - self.list_y) / self.row_height) as usize;
+        if row < self.visible_count { Some(row) } else { None }
+    }
+}
+
 /// Display snapshot for the renderer
 #[derive(Debug, Clone)]
 pub struct PaletteInfo {
@@ -224,6 +315,31 @@ impl CommandPalette {
                 self.selected = self.scroll_offset;
             }
         }
+    }
+
+    /// Resolve a click against the modal. Returns a result when it should
+    /// drive a state change in the app:
+    /// - click outside the panel → `Cancelled` (caller should close)
+    /// - click on a visible entry → selects + executes that entry
+    /// - click inside the panel but not on an entry → `None` (absorb)
+    pub fn handle_click(
+        &mut self,
+        x: f32,
+        y: f32,
+        layout: &PaletteLayout,
+    ) -> Option<PaletteResult> {
+        if !layout.contains(x, y) {
+            self.close();
+            return Some(PaletteResult::Cancelled);
+        }
+        if let Some(row) = layout.visible_row_at(y) {
+            let abs_idx = self.scroll_offset + row;
+            if abs_idx < self.entries.len() {
+                self.selected = abs_idx;
+                return Some(self.execute());
+            }
+        }
+        None
     }
 
     /// Execute the currently selected command
