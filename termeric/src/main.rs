@@ -15,6 +15,8 @@ mod renderer;
 mod session;
 mod tabs;
 mod terminal;
+#[cfg(test)]
+mod test_support;
 mod ui;
 
 use anyhow::Result;

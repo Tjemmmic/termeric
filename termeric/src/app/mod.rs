@@ -2,6 +2,8 @@
 
 mod event_loop;
 pub mod state;
+#[cfg(test)]
+mod tests;
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -181,7 +183,24 @@ pub struct App {
 impl App {
     /// Create a new application instance
     pub fn new() -> Result<Self> {
-        let (mut config, mut startup_config_warning) = Config::load_for_startup();
+        let (config, startup_config_warning) = Config::load_for_startup();
+        Self::from_config(config, startup_config_warning, true)
+    }
+
+    /// Construct the controller without a window, renderer, PTY, clipboard,
+    /// or persisted app-state dependency. This is the integration-test spine
+    /// for dispatch and live configuration behavior.
+    #[cfg(test)]
+    fn new_headless(config: Config) -> Result<Self> {
+        config.validate()?;
+        Self::from_config(config, None, false)
+    }
+
+    fn from_config(
+        mut config: Config,
+        mut startup_config_warning: Option<String>,
+        use_system_state: bool,
+    ) -> Result<Self> {
         let default_font_size = config.font.size;
         let cursor_blink_period = (config.cursor.blink_rate as f32 / 1000.0) * 2.0;
         let (theme, active_theme_path) =
@@ -212,7 +231,11 @@ impl App {
         });
 
         // Initialize clipboard (may fail on some systems)
-        let clipboard = arboard::Clipboard::new().ok();
+        let clipboard = use_system_state
+            .then(arboard::Clipboard::new)
+            .transpose()
+            .ok()
+            .flatten();
 
         // Initialize unified shortcut registry with defaults + user overrides
         let mut shortcut_registry = ShortcutRegistry::new();
@@ -236,9 +259,10 @@ impl App {
             cursor_display_row: 0.0,
             last_frame_time: Instant::now(),
             last_config_check: Instant::now(),
-            last_config_mtime: std::fs::metadata(crate::config::Config::config_path())
-                .and_then(|m| m.modified())
-                .ok(),
+            last_config_mtime: use_system_state
+                .then(|| std::fs::metadata(crate::config::Config::config_path()))
+                .and_then(Result::ok)
+                .and_then(|metadata| metadata.modified().ok()),
             active_theme_path,
             last_theme_mtime,
             last_cursor_visible: true,
@@ -263,7 +287,11 @@ impl App {
             bell,
             shortcut_registry,
             keybinding_manager,
-            app_state: AppState::load(),
+            app_state: if use_system_state {
+                AppState::load()
+            } else {
+                AppState::default()
+            },
             session_dropdown_open: false,
             session_dropdown_items: Vec::new(),
             session_dropdown_hovered: None,
