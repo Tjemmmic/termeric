@@ -106,6 +106,39 @@ impl SettingsModalLayout {
         }
     }
 
+    /// Horizontal origin of setting values. Keeping this calculation here
+    /// prevents the renderer and mouse hit-test from drifting apart.
+    pub fn value_text_x(&self) -> f32 {
+        self.value_x + self.cell_width * 2.0
+    }
+
+    /// Horizontal origin of the numeric decrement button.
+    pub fn numeric_decrement_x(&self) -> f32 {
+        self.value_x
+    }
+
+    /// Horizontal origin of the numeric increment button.
+    pub fn numeric_increment_x(&self, value_char_count: usize) -> f32 {
+        self.value_text_x() + value_char_count as f32 * self.cell_width + self.cell_width
+    }
+
+    /// Resolve a click against the two rendered numeric arrow buttons.
+    /// The half-cell padding makes the small glyphs comfortable to click
+    /// without treating the displayed value itself as an increment button.
+    pub fn numeric_adjustment_at(&self, x: f32, value_char_count: usize) -> Option<i32> {
+        let hit_padding = self.cell_width * 0.5;
+        let contains =
+            |origin: f32| x >= origin - hit_padding && x < origin + self.cell_width + hit_padding;
+
+        if contains(self.numeric_decrement_x()) {
+            Some(-1)
+        } else if contains(self.numeric_increment_x(value_char_count)) {
+            Some(1)
+        } else {
+            None
+        }
+    }
+
     /// Geometry of the dropdown overlay anchored below the selected entry.
     /// Returns None if the selected entry is scrolled out of view.
     pub fn dropdown_rect(
@@ -341,6 +374,10 @@ pub struct SettingsPanel {
     scroll_offset: usize,
     /// Max visible rows the list can show (updated each frame from the layout)
     max_visible: usize,
+    /// Whether the next render should bring the keyboard selection into view.
+    /// Mouse-wheel scrolling deliberately clears this so the viewport can
+    /// move independently of the selected row.
+    selection_visibility_pending: bool,
     /// Whether a dropdown overlay is currently open
     dropdown_open: bool,
     /// Which option is highlighted in the open dropdown
@@ -369,6 +406,7 @@ impl SettingsPanel {
             selected: 0,
             scroll_offset: 0,
             max_visible: 12,
+            selection_visibility_pending: true,
             dropdown_open: false,
             dropdown_highlight: 0,
             available_fonts: vec![DEFAULT_FONT.to_string()],
@@ -401,6 +439,7 @@ impl SettingsPanel {
             self.filter_cursor = 0;
             self.selected = 0;
             self.scroll_offset = 0;
+            self.selection_visibility_pending = true;
             self.dropdown_open = false;
             self.animation.open();
         } else {
@@ -414,6 +453,7 @@ impl SettingsPanel {
         self.filter.clear();
         self.filter_cursor = 0;
         self.scroll_offset = 0;
+        self.selection_visibility_pending = true;
         self.dropdown_open = false;
         self.animation.open();
         // Find the first selectable entry in the target section.
@@ -423,7 +463,11 @@ impl SettingsPanel {
 
     /// Update the max visible rows (called by the renderer each frame).
     pub fn set_max_visible(&mut self, rows: usize) {
-        self.max_visible = rows.max(1);
+        let rows = rows.max(1);
+        if self.max_visible != rows {
+            self.max_visible = rows;
+            self.selection_visibility_pending = true;
+        }
     }
 
     /// Close the panel
@@ -1145,6 +1189,7 @@ impl SettingsPanel {
 
         // Keep the selected entry visible after any navigation.
         self.ensure_selection_visible(&entries);
+        self.selection_visibility_pending = false;
         action
     }
 
@@ -1487,10 +1532,12 @@ impl SettingsPanel {
                 SettingsAction::None
             }
             SettingKind::Numeric { .. } => {
-                // Clicking left half = decrease, right half = increase
-                let mid = layout.panel_x + layout.panel_width / 2.0;
-                let direction = if x < mid { -1 } else { 1 };
-                self.adjust_selected_value(&entries, direction)
+                let value_char_count = entry.value.chars().count();
+                layout
+                    .numeric_adjustment_at(x, value_char_count)
+                    .map_or(SettingsAction::None, |direction| {
+                        self.adjust_selected_value(&entries, direction)
+                    })
             }
             SettingKind::ReadOnly => SettingsAction::None,
         }
@@ -1526,12 +1573,14 @@ impl SettingsPanel {
     /// Scroll up by n rows
     pub fn scroll_up(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
+        self.selection_visibility_pending = false;
     }
 
     /// Scroll down by n rows (bounded so the list still fills the viewport).
     pub fn scroll_down(&mut self, n: usize, total_entries: usize) {
         let max = total_entries.saturating_sub(self.max_visible);
         self.scroll_offset = (self.scroll_offset + n).min(max);
+        self.selection_visibility_pending = false;
     }
 
     /// Update hover state from mouse position
@@ -1602,10 +1651,14 @@ impl SettingsPanel {
         if let Some(section) = self.pending_section_jump.take() {
             if let Some(idx) = Self::first_selectable_in_section(&entries, section) {
                 self.selected = idx;
+                self.selection_visibility_pending = true;
             }
         }
 
-        self.ensure_selection_visible(&entries);
+        if self.selection_visibility_pending {
+            self.ensure_selection_visible(&entries);
+            self.selection_visibility_pending = false;
+        }
         self.clamp_scroll(entries.len());
 
         SettingsPanelInfo {
@@ -1630,6 +1683,7 @@ impl SettingsPanel {
         self.filter_cursor = 0;
         self.selected = 0;
         self.scroll_offset = 0;
+        self.selection_visibility_pending = true;
         self.dropdown_open = false;
         self.animation.open();
     }
@@ -1862,6 +1916,83 @@ mod tests {
         let abs = SettingsPanel::nth_selectable_abs_index(&entries, panel.selected).unwrap();
         assert!(abs >= panel.scroll_offset);
         assert!(abs < panel.scroll_offset + panel.max_visible);
+    }
+
+    #[test]
+    fn mouse_scroll_is_not_undone_by_render_info() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        panel.set_max_visible(5);
+
+        let config = Config::default();
+        let registry = default_registry();
+        let total = panel.build_entries(&config, &registry).len();
+
+        // Resolve the initial keyboard-selection visibility request, then
+        // scroll the viewport independently with the mouse wheel.
+        let _ = panel.build_info(&config, &registry);
+        panel.scroll_down(4, total);
+        assert_eq!(panel.scroll_offset, 4);
+
+        let info = panel.build_info(&config, &registry);
+        assert_eq!(info.scroll_offset, 4);
+    }
+
+    #[test]
+    fn numeric_mouse_controls_use_rendered_arrow_geometry() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+
+        let config = Config::default();
+        let registry = default_registry();
+        let entries = panel.build_entries(&config, &registry);
+        let layout = SettingsModalLayout::calculate(
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+            panel.animation_progress(),
+            entries.len(),
+        );
+        // The first visible row is the Font header; Size is the next row.
+        let y = layout.list_y + layout.row_height * 1.5;
+        let value_char_count = entries[1].value.chars().count();
+
+        let decrease = panel.handle_click(
+            layout.numeric_decrement_x() + layout.cell_width * 0.5,
+            y,
+            &config,
+            &registry,
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+        );
+        assert!(matches!(decrease, SettingsAction::SetFontSize(13.0)));
+
+        let increase = panel.handle_click(
+            layout.numeric_increment_x(value_char_count) + layout.cell_width * 0.5,
+            y,
+            &config,
+            &registry,
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+        );
+        assert!(matches!(increase, SettingsAction::SetFontSize(15.0)));
+
+        let value_click = panel.handle_click(
+            layout.value_text_x() + layout.cell_width * 0.5,
+            y,
+            &config,
+            &registry,
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+        );
+        assert!(matches!(value_click, SettingsAction::None));
     }
 
     #[test]

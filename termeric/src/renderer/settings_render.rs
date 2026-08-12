@@ -245,10 +245,14 @@ impl Renderer {
                     crate::ui::settings::SettingKind::Numeric { .. } => {
                         if is_selected {
                             let arrow_color = adjust_alpha(self.ui.palette_accent, anim);
-                            self.text_pipeline
-                                .push_char('<', layout.value_x, text_cy, arrow_color);
+                            self.text_pipeline.push_char(
+                                '<',
+                                layout.numeric_decrement_x(),
+                                text_cy,
+                                arrow_color,
+                            );
                         }
-                        let val_start = layout.value_x + cell_width * 2.0;
+                        let val_start = layout.value_text_x();
                         for (ci, c) in entry.value.chars().enumerate() {
                             let cx = val_start + ci as f32 * cell_width;
                             if cx + cell_width > max_value_x {
@@ -257,8 +261,7 @@ impl Renderer {
                             self.text_pipeline.push_char(c, cx, text_cy, value_color);
                         }
                         if is_selected {
-                            let arrow_x =
-                                val_start + entry.value.len() as f32 * cell_width + cell_width;
+                            let arrow_x = layout.numeric_increment_x(entry.value.chars().count());
                             if arrow_x + cell_width <= max_value_x {
                                 let arrow_color = adjust_alpha(self.ui.palette_accent, anim);
                                 self.text_pipeline
@@ -268,7 +271,7 @@ impl Renderer {
                     }
                     crate::ui::settings::SettingKind::Dropdown { .. }
                     | crate::ui::settings::SettingKind::SteppedList { .. } => {
-                        let val_start = layout.value_x + cell_width * 2.0;
+                        let val_start = layout.value_text_x();
                         for (ci, c) in entry.value.chars().enumerate() {
                             let cx = val_start + ci as f32 * cell_width;
                             if cx + cell_width > max_value_x {
@@ -276,8 +279,7 @@ impl Renderer {
                             }
                             self.text_pipeline.push_char(c, cx, text_cy, value_color);
                         }
-                        let chevron_x =
-                            val_start + entry.value.len() as f32 * cell_width + cell_width;
+                        let chevron_x = layout.numeric_increment_x(entry.value.chars().count());
                         if chevron_x + cell_width <= max_value_x {
                             let chevron_color = if is_selected {
                                 adjust_alpha(self.ui.palette_accent, anim)
@@ -289,7 +291,7 @@ impl Renderer {
                         }
                     }
                     crate::ui::settings::SettingKind::ReadOnly => {
-                        let val_start = layout.value_x + cell_width * 2.0;
+                        let val_start = layout.value_text_x();
                         let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
                         for (ci, c) in entry.value.chars().enumerate() {
                             let cx = val_start + ci as f32 * cell_width;
