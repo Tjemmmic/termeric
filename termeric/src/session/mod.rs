@@ -16,6 +16,10 @@ pub mod transcript;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// A saved terminal session (single tab)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,80 +85,60 @@ impl Session {
     }
 }
 
-/// Generate a timestamp-based session ID
-///
-/// Format: "2026-02-24_21h59m43_123" — the trailing fragment is the
-/// current-millisecond component, which makes back-to-back saves within
-/// the same second still produce distinct IDs.
+/// Generate a sortable, collision-resistant session ID. Nanoseconds, process
+/// ID, and a process-local atomic sequence avoid same-tick collisions.
 pub fn generate_session_id() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    let secs = now.as_secs();
-    let millis_frac = now.subsec_millis();
-
-    // Convert to broken-down time manually (UTC)
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hours = time_of_day / 3600;
-    let minutes = (time_of_day % 3600) / 60;
-    let seconds = time_of_day % 60;
-
-    // Days since epoch to Y-M-D (simplified leap year calculation)
-    let mut year = 1970i64;
-    let mut remaining_days = days as i64;
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let month_days = if is_leap_year(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 0;
-    for (i, &d) in month_days.iter().enumerate() {
-        if remaining_days < d {
-            month = i + 1;
-            break;
-        }
-        remaining_days -= d;
-    }
-    let day = remaining_days + 1;
-
+    let sequence = SESSION_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!(
-        "{:04}-{:02}-{:02}_{:02}h{:02}m{:02}_{:03}",
-        year, month, day, hours, minutes, seconds, millis_frac
+        "{}_{}_{:010}_{:06}",
+        format_unix_timestamp(duration.as_secs(), None).replace([':', 'T', 'Z'], ""),
+        duration.subsec_nanos(),
+        std::process::id(),
+        sequence % 1_000_000,
     )
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 /// Get current time as ISO 8601 string
 fn now_iso8601() -> String {
-    use std::time::SystemTime;
     let duration = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    // Reuse the ID generator logic for the timestamp
-    let id = generate_session_id();
-    // Convert to ISO format: "2026-02-24T21:59:43Z"
-    let parts: Vec<&str> = id.splitn(2, '_').collect();
-    if parts.len() == 2 {
-        let time_part = parts[1].replace('h', ":").replace('m', ":");
-        format!("{}T{}Z", parts[0], time_part)
-    } else {
-        format!("{}Z", duration.as_secs())
+    format_unix_timestamp(duration.as_secs(), Some(duration.subsec_millis()))
+}
+
+/// Format a non-negative Unix timestamp as UTC RFC 3339.
+pub fn format_unix_timestamp(seconds: u64, millis: Option<u32>) -> String {
+    let days = (seconds / 86_400) as i64;
+    let seconds_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    match millis {
+        Some(millis) => {
+            format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z")
+        }
+        None => format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"),
     }
+}
+
+// Howard Hinnant's civil-from-days algorithm, with day zero at 1970-01-01.
+fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month as u32, day as u32)
 }
 
 /// Get the base sessions directory
@@ -264,13 +248,51 @@ pub fn delete_session(name: &str) -> anyhow::Result<()> {
     let dir = session_dir(name)
         .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
 
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir)?;
-        log::info!("Deleted session '{}' at {:?}", name, dir);
+    if !dir.exists() {
+        anyhow::bail!("Session {name:?} was not found");
     }
+
+    std::fs::remove_dir_all(&dir)?;
+    log::info!("Deleted session '{}' at {:?}", name, dir);
 
     Ok(())
 }
 
 /// Maximum scrollback file size (5 MB)
 pub const MAX_SCROLLBACK_FILE_SIZE: usize = 5 * 1024 * 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utc_format_handles_epoch_leap_day_and_milliseconds() {
+        assert_eq!(format_unix_timestamp(0, None), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            format_unix_timestamp(1_582_934_400, Some(7)),
+            "2020-02-29T00:00:00.007Z"
+        );
+    }
+
+    #[test]
+    fn generated_ids_are_unique_within_one_process() {
+        let ids: std::collections::HashSet<_> =
+            (0..10_000).map(|_| generate_session_id()).collect();
+        assert_eq!(ids.len(), 10_000);
+    }
+
+    #[test]
+    fn deleting_a_missing_session_is_reported() {
+        let id = format!("missing-{}", generate_session_id());
+        let error = delete_session(&id).unwrap_err().to_string();
+        assert!(error.contains("was not found"));
+    }
+
+    #[test]
+    fn session_timestamps_are_valid_utc_shapes() {
+        let session = Session::new("test".into(), None);
+        assert!(session.created_at.ends_with('Z'));
+        assert_eq!(session.created_at.len(), 24);
+        assert_eq!(session.created_at.as_bytes()[10], b'T');
+    }
+}

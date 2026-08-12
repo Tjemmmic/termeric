@@ -12,6 +12,12 @@ use crate::session::Session;
 use std::collections::HashMap;
 use termeric_core::TerminalEvent;
 
+#[derive(Debug, Clone)]
+pub enum PersistenceNotice {
+    Saved { id: String, truncated: bool },
+    SaveFailed { tab_id: usize, error: String },
+}
+
 /// Manager for multiple tabs
 pub struct TabManager {
     /// All tabs
@@ -27,6 +33,7 @@ pub struct TabManager {
     shell: ShellConfig,
     /// Scrollback limit for new tabs
     scrollback_lines: usize,
+    persistence_notices: Vec<PersistenceNotice>,
 }
 
 impl TabManager {
@@ -40,6 +47,7 @@ impl TabManager {
             rows,
             shell,
             scrollback_lines,
+            persistence_notices: Vec::new(),
         }
     }
 
@@ -335,10 +343,25 @@ impl TabManager {
             if tab.closed || tab.is_close_complete() {
                 if tab.has_content() {
                     match tab.save_as_session(save_scrollback) {
-                        Some(id) => {
-                            log::info!("Auto-saved closing tab {} as session '{}'", tab.id, id)
+                        Ok(outcome) => {
+                            log::info!(
+                                "Auto-saved closing tab {} as session '{}'",
+                                tab.id,
+                                outcome.id
+                            );
+                            self.persistence_notices.push(PersistenceNotice::Saved {
+                                id: outcome.id,
+                                truncated: outcome.scrollback_truncated,
+                            });
                         }
-                        None => log::error!("Failed to auto-save closing tab {}", tab.id),
+                        Err(error) => {
+                            log::error!("Failed to auto-save closing tab {}: {error:#}", tab.id);
+                            self.persistence_notices
+                                .push(PersistenceNotice::SaveFailed {
+                                    tab_id: tab.id,
+                                    error: format!("{error:#}"),
+                                });
+                        }
                     }
                 } else {
                     log::debug!("Skipping empty closing tab {} (no content)", tab.id);
@@ -459,7 +482,10 @@ impl TabManager {
 
         // Replay scrollback
         if let Some(ref scrollback_file) = session.scrollback_file {
-            let lines = crate::session::restore::load_scrollback_text(&session.id, scrollback_file);
+            let lines = crate::session::restore::load_scrollback_text(&session.id, scrollback_file)
+                .map_err(|error| anyhow::anyhow!(
+                    "Session metadata restored, but scrollback could not be recovered: {error:#}"
+                ))?;
             if !lines.is_empty() {
                 // Join lines with \r\n and add a trailing \r\n so the shell's
                 // new prompt appears on a fresh line below the scrollback.
@@ -494,10 +520,34 @@ impl TabManager {
             }
 
             match tab.save_as_session(save_scrollback) {
-                Some(id) => log::info!("Saved tab {} as session '{}'", tab.id, id),
-                None => log::error!("Failed to save tab {}", tab.id),
+                Ok(outcome) => {
+                    log::info!("Saved tab {} as session '{}'", tab.id, outcome.id);
+                    self.persistence_notices.push(PersistenceNotice::Saved {
+                        id: outcome.id,
+                        truncated: outcome.scrollback_truncated,
+                    });
+                }
+                Err(error) => {
+                    log::error!("Failed to save tab {}: {error:#}", tab.id);
+                    self.persistence_notices
+                        .push(PersistenceNotice::SaveFailed {
+                            tab_id: tab.id,
+                            error: format!("{error:#}"),
+                        });
+                }
             }
         }
+    }
+
+    pub fn drain_persistence_notices(&mut self) -> Vec<PersistenceNotice> {
+        std::mem::take(&mut self.persistence_notices)
+    }
+
+    pub fn drain_user_notices(&mut self) -> Vec<String> {
+        self.tabs
+            .iter_mut()
+            .flat_map(Tab::drain_user_notices)
+            .collect()
     }
 }
 

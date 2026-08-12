@@ -15,10 +15,15 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
     let contents =
         fs::read_to_string(jsonl_path).map_err(|e| format!("Failed to read transcript: {}", e))?;
 
-    let entries: Vec<TranscriptEntry> = contents
+    let entries: Result<Vec<TranscriptEntry>, String> = contents
         .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .enumerate()
+        .map(|(index, line)| {
+            serde_json::from_str(line)
+                .map_err(|error| format!("Malformed transcript at line {}: {error}", index + 1))
+        })
         .collect();
+    let entries = entries?;
 
     if entries.is_empty() {
         return Err("Empty transcript".to_string());
@@ -27,7 +32,7 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
     let mut md = String::new();
 
     // Header
-    md.push_str("# Claude Code Session Transcript\n\n");
+    md.push_str("# AI Session Transcript\n\n");
 
     // Metadata from first entry
     if let Some(meta) = entries.iter().find(|e| e.kind == EntryKind::Meta) {
@@ -75,18 +80,11 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
                     "### 💬 Output `{}`\n\n",
                     format_unix_ts(entry.timestamp / 1000)
                 ));
-                // Truncate very long output blocks
-                if entry.content.len() > 5000 {
-                    let truncated = &entry.content[..5000];
-                    md.push_str(truncated);
-                    md.push_str("\n\n*... (truncated)*\n\n");
-                } else {
-                    md.push_str(&entry.content);
-                    if !entry.content.ends_with('\n') {
-                        md.push('\n');
-                    }
+                md.push_str(&entry.content);
+                if !entry.content.ends_with('\n') {
                     md.push('\n');
                 }
+                md.push('\n');
             }
             EntryKind::Diff => {
                 let filename = entry
@@ -128,11 +126,7 @@ pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
 
 /// Simple Unix timestamp formatter (UTC, no timezone dependency)
 fn format_unix_ts(secs: u64) -> String {
-    // Basic timestamp display without external dependencies
-    let hours = (secs % 86400) / 3600;
-    let minutes = (secs % 3600) / 60;
-    let seconds = secs % 60;
-    format!("{:02}:{:02}:{:02} UTC", hours, minutes, seconds)
+    super::format_unix_timestamp(secs, None)
 }
 
 #[cfg(test)]
@@ -201,7 +195,7 @@ mod tests {
         let path = write_test_transcript(&dir);
         let md = export_to_markdown(&path).unwrap();
 
-        assert!(md.contains("# Claude Code Session Transcript"));
+        assert!(md.contains("# AI Session Transcript"));
         assert!(md.contains("| Repository | termeric |"));
         assert!(md.contains("| Branch | main |"));
         assert!(md.contains("📝 Input"));
@@ -230,7 +224,29 @@ mod tests {
 
     #[test]
     fn test_format_unix_ts() {
-        assert_eq!(format_unix_ts(0), "00:00:00 UTC");
-        assert_eq!(format_unix_ts(3661), "01:01:01 UTC");
+        assert_eq!(format_unix_ts(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_unix_ts(3661), "1970-01-01T01:01:01Z");
+    }
+
+    #[test]
+    fn markdown_export_is_complete_and_rejects_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_test_transcript(dir.path());
+        let large = "x".repeat(6_000);
+        let entry = TranscriptEntry {
+            timestamp: 1_700_000_005_000,
+            kind: EntryKind::Output,
+            content: large.clone(),
+            metadata: None,
+        };
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&entry).unwrap()).unwrap();
+        let md = export_to_markdown(&path).unwrap();
+        assert!(md.contains(&large));
+        assert!(!md.contains("truncated"));
+
+        writeln!(file, "not-json").unwrap();
+        let error = export_to_markdown(&path).unwrap_err();
+        assert!(error.contains("Malformed transcript"));
     }
 }

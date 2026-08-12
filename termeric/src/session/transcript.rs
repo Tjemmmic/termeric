@@ -1,7 +1,8 @@
 //! Transcript recording for Claude Code sessions
 //!
 //! Records input/output events to a JSONL file with timestamps,
-//! secret redaction, and metadata. Each line is a self-contained
+//! best-effort token-prefix redaction, and metadata. Redaction is not a
+//! comprehensive secret scanner. Each line is a self-contained
 //! JSON object for easy streaming and recovery.
 
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,13 @@ pub struct TranscriptRecorder {
     cap_reached: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptWrite {
+    Written,
+    CapReached,
+    DroppedAtCap,
+}
+
 impl std::fmt::Debug for TranscriptRecorder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TranscriptRecorder")
@@ -121,7 +129,7 @@ impl TranscriptRecorder {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        let filename = format!("transcript_{}.jsonl", timestamp);
+        let filename = format!("transcript_{}.jsonl", super::generate_session_id());
         let path = dir.join(&filename);
 
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -154,31 +162,29 @@ impl TranscriptRecorder {
         })
     }
 
-    /// Whether the transcript has hit its size cap and is dropping writes.
-    /// Once true it stays true for the lifetime of this recorder.
-    pub fn cap_reached(&self) -> bool {
-        self.cap_reached
-    }
-
     /// Record an input event (user typed something)
-    pub fn record_input(&mut self, data: &str) {
-        self.write_entry(EntryKind::Input, data, None);
+    pub fn record_input(&mut self, data: &str) -> std::io::Result<TranscriptWrite> {
+        self.write_entry(EntryKind::Input, data, None)
     }
 
     /// Record an output event (terminal output)
-    pub fn record_output(&mut self, data: &str) {
-        self.write_entry(EntryKind::Output, data, None);
+    pub fn record_output(&mut self, data: &str) -> std::io::Result<TranscriptWrite> {
+        self.write_entry(EntryKind::Output, data, None)
     }
 
     /// Record a detected diff
-    pub fn record_diff(&mut self, filename: &str, diff_content: &str) {
+    pub fn record_diff(
+        &mut self,
+        filename: &str,
+        diff_content: &str,
+    ) -> std::io::Result<TranscriptWrite> {
         self.write_entry(
             EntryKind::Diff,
             diff_content,
             Some(serde_json::json!({
                 "filename": filename,
             })),
-        );
+        )
     }
 
     /// Get the path to the transcript file
@@ -186,21 +192,15 @@ impl TranscriptRecorder {
         &self.path
     }
 
-    fn write_entry(&mut self, kind: EntryKind, content: &str, metadata: Option<serde_json::Value>) {
-        // Skip if over size limit
-        if let Ok(md) = fs::metadata(&self.path) {
-            if md.len() as usize >= self.max_size {
-                if !self.cap_reached {
-                    log::warn!(
-                        "Transcript reached size cap ({} bytes); further writes will be dropped",
-                        self.max_size
-                    );
-                }
-                self.cap_reached = true;
-                return;
-            }
+    fn write_entry(
+        &mut self,
+        kind: EntryKind,
+        content: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> std::io::Result<TranscriptWrite> {
+        if self.cap_reached {
+            return Ok(TranscriptWrite::DroppedAtCap);
         }
-
         let content = if self.redact {
             redact_secrets(content)
         } else {
@@ -219,18 +219,28 @@ impl TranscriptRecorder {
             metadata,
         };
 
-        if let Ok(line) = serde_json::to_string(&entry) {
-            let _ = writeln!(self.writer, "{}", line);
-            let _ = self.writer.flush();
-            self.entry_count += 1;
+        let line = serde_json::to_string(&entry)
+            .map_err(|error| std::io::Error::other(format!("serialize transcript: {error}")))?;
+        let current_size = fs::metadata(&self.path)?.len() as usize;
+        if current_size.saturating_add(line.len() + 1) > self.max_size {
+            log::warn!(
+                "Transcript reached size cap ({} bytes); further writes will be dropped",
+                self.max_size
+            );
+            self.cap_reached = true;
+            return Ok(TranscriptWrite::CapReached);
         }
+        writeln!(self.writer, "{}", line)?;
+        self.writer.flush()?;
+        self.entry_count += 1;
+        Ok(TranscriptWrite::Written)
     }
 }
 
 #[cfg(test)]
 impl TranscriptRecorder {
     fn record_command(&mut self, command: &str, exit_code: Option<i32>) {
-        self.write_entry(
+        let _ = self.write_entry(
             EntryKind::Command,
             command,
             Some(serde_json::json!({
@@ -295,9 +305,11 @@ mod tests {
 
         let mut recorder = TranscriptRecorder::new(&dir, None, None, "Local", "default").unwrap();
 
-        recorder.record_input("Hello Claude");
-        recorder.record_output("I'll help you with that.");
-        recorder.record_diff("src/main.rs", "+new line\n-old line");
+        recorder.record_input("Hello Claude").unwrap();
+        recorder.record_output("I'll help you with that.").unwrap();
+        recorder
+            .record_diff("src/main.rs", "+new line\n-old line")
+            .unwrap();
         recorder.record_command("cargo test", Some(0));
 
         assert_eq!(recorder.entry_count, 5); // 1 meta + 4 entries
@@ -324,7 +336,9 @@ mod tests {
 
         let mut recorder = TranscriptRecorder::new(&dir, None, None, "Local", "default").unwrap();
 
-        recorder.record_input("export API_KEY=sk-abc123xyz456");
+        recorder
+            .record_input("export API_KEY=sk-abc123xyz456")
+            .unwrap();
 
         let contents = fs::read_to_string(recorder.path()).unwrap();
         let input_line = contents.lines().nth(1).unwrap();
@@ -333,5 +347,29 @@ mod tests {
         assert!(!entry.content.contains("abc123"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cap_is_reported_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder =
+            TranscriptRecorder::new(dir.path(), None, None, "Local", "default").unwrap();
+        recorder.max_size = fs::metadata(recorder.path()).unwrap().len() as usize + 2;
+        assert_eq!(
+            recorder.record_output("too large").unwrap(),
+            TranscriptWrite::CapReached
+        );
+        assert_eq!(
+            recorder.record_output("also dropped").unwrap(),
+            TranscriptWrite::DroppedAtCap
+        );
+    }
+
+    #[test]
+    fn recorder_reports_unavailable_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = temp.path().join("not-a-directory");
+        fs::write(&blocked, "file").unwrap();
+        assert!(TranscriptRecorder::new(&blocked, None, None, "Local", "default").is_err());
     }
 }

@@ -5,10 +5,12 @@
 use crate::config::ShellConfig;
 use crate::session::Session;
 use crate::session::transcript::TranscriptRecorder;
+use crate::session::transcript::TranscriptWrite;
 use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
 use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
 use crate::ui::claude_chrome::AiSessionState;
+use anyhow::Context;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -16,6 +18,12 @@ use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
 use super::title::{abbreviate_path, dir_name_from_path, get_foreground_process, get_process_cwd};
+
+#[derive(Debug, Clone)]
+pub struct SessionSaveOutcome {
+    pub id: String,
+    pub scrollback_truncated: bool,
+}
 
 /// What kind of tab this is
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +78,8 @@ pub struct Tab {
     pub harvest: crate::harvest::HarvestTerminalState,
     /// Whether Termeric installed semantic prompt hooks for this shell.
     pub shell_integration: ShellIntegrationSupport,
+    user_notices: Vec<String>,
+    transcript_failure_reported: bool,
 }
 
 impl Tab {
@@ -120,6 +130,8 @@ impl Tab {
             pane_manager: None,
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
+            user_notices: Vec::new(),
+            transcript_failure_reported: false,
         })
     }
 
@@ -184,6 +196,8 @@ impl Tab {
             shell_integration: ShellIntegrationSupport::Unavailable(
                 "Direct command tabs do not provide shell prompt marks".into(),
             ),
+            user_notices: Vec::new(),
+            transcript_failure_reported: false,
         })
     }
 
@@ -206,7 +220,8 @@ impl Tab {
                     // Record to transcript if active
                     if let Some(ref mut recorder) = self.transcript {
                         if let Ok(text) = std::str::from_utf8(&data) {
-                            recorder.record_output(text);
+                            let result = recorder.record_output(text);
+                            self.handle_transcript_write(result);
                         }
                     }
                     self.terminal.process(&data);
@@ -234,7 +249,8 @@ impl Tab {
                 if self.diff_detector.unreviewed_count() > pre_count {
                     if let Some(ref mut recorder) = self.transcript {
                         if let Some(diff) = self.diff_detector.latest_unreviewed() {
-                            recorder.record_diff(&diff.filename, &diff.raw);
+                            let result = recorder.record_diff(&diff.filename, &diff.raw);
+                            self.handle_transcript_write(result);
                         }
                     }
                 }
@@ -271,7 +287,8 @@ impl Tab {
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
         if let Some(ref mut recorder) = self.transcript {
             if let Ok(text) = std::str::from_utf8(data) {
-                recorder.record_input(text);
+                let result = recorder.record_input(text);
+                self.handle_transcript_write(result);
             }
         }
         self.pty.write_all(data)
@@ -359,12 +376,43 @@ impl Tab {
             pane_manager: None,
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
+            user_notices: Vec::new(),
+            transcript_failure_reported: false,
         })
     }
 
     /// Get the current working directory of this tab's shell process
     pub fn working_directory(&self) -> Option<String> {
         self.pty.child_id().and_then(get_process_cwd)
+    }
+
+    fn handle_transcript_write(&mut self, result: std::io::Result<TranscriptWrite>) {
+        match result {
+            Ok(TranscriptWrite::CapReached) => self.user_notices.push(
+                "Transcript reached 50 MB; recording stopped before data was truncated".into(),
+            ),
+            Err(error) if !self.transcript_failure_reported => {
+                self.transcript_failure_reported = true;
+                self.user_notices
+                    .push(format!("Transcript recording failed: {error}"));
+            }
+            _ => {}
+        }
+    }
+
+    /// Attach a fresh recorder and reset per-recorder error reporting.
+    pub fn start_transcript(&mut self, recorder: TranscriptRecorder) {
+        self.transcript = Some(recorder);
+        self.transcript_failure_reported = false;
+    }
+
+    /// Stop recording and return the recorder so the caller can report its path.
+    pub fn stop_transcript(&mut self) -> Option<TranscriptRecorder> {
+        self.transcript.take()
+    }
+
+    pub fn drain_user_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.user_notices)
     }
 
     /// Check if this tab has meaningful content worth saving
@@ -380,8 +428,8 @@ impl Tab {
     ///
     /// If the tab already has a session_id, updates that session.
     /// Otherwise, creates a new session with a generated ID.
-    /// Returns the session ID on success.
-    pub fn save_as_session(&mut self, save_scrollback: bool) -> Option<String> {
+    /// Returns a report that includes any scrollback truncation.
+    pub fn save_as_session(&mut self, save_scrollback: bool) -> anyhow::Result<SessionSaveOutcome> {
         let working_dir = self.working_directory();
 
         // Build session title: "~/path | last_command" or "~/path"
@@ -408,20 +456,20 @@ impl Tab {
         session.last_command = self.last_command.clone();
 
         let session_id = session.id.clone();
+        let mut scrollback_truncated = false;
 
         // Save scrollback
         if save_scrollback {
             let lines = self.terminal.grid().export_scrollback_text();
             if !lines.is_empty() {
                 match crate::session::save::save_scrollback_text(&session_id, &lines) {
-                    Ok(filename) => {
-                        session.scrollback_file = Some(filename);
+                    Ok(report) => {
+                        session.scrollback_file = Some(report.filename);
+                        scrollback_truncated = report.truncated;
                     }
                     Err(e) => {
-                        log::error!(
-                            "Failed to save scrollback for session '{}': {}",
-                            session_id,
-                            e
+                        return Err(
+                            e.context(format!("save scrollback for session '{session_id}'"))
                         );
                     }
                 }
@@ -429,13 +477,12 @@ impl Tab {
         }
 
         // Save session metadata
-        match crate::session::save::save_session(&session) {
-            Ok(()) => Some(session_id),
-            Err(e) => {
-                log::error!("Failed to save session '{}': {}", session_id, e);
-                None
-            }
-        }
+        crate::session::save::save_session(&session)
+            .context(format!("save metadata for session '{session_id}'"))?;
+        Ok(SessionSaveOutcome {
+            id: session_id,
+            scrollback_truncated,
+        })
     }
 
     /// Get slide-in animation progress (0.0 = just created, 1.0 = fully visible)

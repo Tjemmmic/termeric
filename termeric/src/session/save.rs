@@ -7,6 +7,13 @@ use std::path::Path;
 
 use super::{MAX_SCROLLBACK_FILE_SIZE, Session, session_dir};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrollbackSave {
+    pub filename: String,
+    pub bytes_written: usize,
+    pub truncated: bool,
+}
+
 /// Save a session to its directory (determined by session ID)
 pub fn save_session(session: &Session) -> Result<()> {
     let dir = session_dir(&session.id).ok_or_else(|| {
@@ -24,8 +31,15 @@ pub fn save_session_to_dir(session: &Session, dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)?;
 
     // Write session metadata as TOML
-    let toml_string = toml::to_string_pretty(session)?;
     let session_file = dir.join("session.toml");
+    let mut persisted = session.clone();
+    if let Ok(existing) = fs::read_to_string(&session_file)
+        && let Ok(existing) = toml::from_str::<Session>(&existing)
+        && existing.id == session.id
+    {
+        persisted.created_at = existing.created_at;
+    }
+    let toml_string = toml::to_string_pretty(&persisted)?;
     let temp_file = dir.join("session.toml.tmp");
 
     // Write to temp file first
@@ -42,9 +56,8 @@ pub fn save_session_to_dir(session: &Session, dir: &Path) -> Result<()> {
 
 /// Save scrollback text for a session to a file within the session directory
 ///
-/// Returns the relative filename (e.g., "scrollback.txt") on success.
-/// Truncates if the text would exceed MAX_SCROLLBACK_FILE_SIZE.
-pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<String> {
+/// Returns an explicit report so callers can surface truncation.
+pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<ScrollbackSave> {
     let dir = session_dir(session_id)
         .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
 
@@ -55,6 +68,7 @@ pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<String
 
     let mut file = fs::File::create(&filepath)?;
     let mut bytes_written: usize = 0;
+    let mut truncated = false;
 
     for line in lines {
         let line_bytes = line.as_bytes();
@@ -66,6 +80,7 @@ pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<String
                 bytes_written,
                 MAX_SCROLLBACK_FILE_SIZE
             );
+            truncated = true;
             break;
         }
         file.write_all(line_bytes)?;
@@ -81,7 +96,37 @@ pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<String
         filepath
     );
 
-    Ok(filename)
+    Ok(ScrollbackSave {
+        filename,
+        bytes_written,
+        truncated,
+    })
+}
+
+#[cfg(test)]
+fn save_scrollback_to_path(
+    filepath: &Path,
+    lines: &[String],
+    max_size: usize,
+) -> Result<ScrollbackSave> {
+    let mut file = fs::File::create(filepath)?;
+    let mut bytes_written = 0;
+    let mut truncated = false;
+    for line in lines {
+        let needed = line.len() + 1;
+        if bytes_written + needed > max_size {
+            truncated = true;
+            break;
+        }
+        writeln!(file, "{line}")?;
+        bytes_written += needed;
+    }
+    file.flush()?;
+    Ok(ScrollbackSave {
+        filename: filepath.file_name().unwrap().to_string_lossy().into_owned(),
+        bytes_written,
+        truncated,
+    })
 }
 
 #[cfg(test)]
@@ -120,5 +165,40 @@ mod tests {
         let content = std::fs::read_to_string(&filepath).unwrap();
         assert!(content.contains("$ ls"));
         assert!(content.contains("/home/user"));
+    }
+
+    #[test]
+    fn scrollback_report_exposes_truncation_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scrollback.txt");
+        let report = save_scrollback_to_path(&path, &["1234".into(), "5678".into()], 6).unwrap();
+        assert_eq!(report.bytes_written, 5);
+        assert!(report.truncated);
+        assert_eq!(fs::read_to_string(path).unwrap(), "1234\n");
+    }
+
+    #[test]
+    fn updating_metadata_preserves_original_creation_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut original = Session::new("first".into(), None);
+        original.created_at = "2020-01-01T00:00:00.000Z".into();
+        save_session_to_dir(&original, dir.path()).unwrap();
+        let update = Session::with_id(original.id.clone(), "second".into(), None);
+        save_session_to_dir(&update, dir.path()).unwrap();
+        let persisted: Session =
+            toml::from_str(&fs::read_to_string(dir.path().join("session.toml")).unwrap()).unwrap();
+        assert_eq!(persisted.created_at, original.created_at);
+        assert_eq!(persisted.title, "second");
+    }
+
+    #[test]
+    fn save_reports_unavailable_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocked = temp.path().join("not-a-directory");
+        fs::write(&blocked, "file").unwrap();
+        let error = save_session_to_dir(&Session::new("test".into(), None), &blocked)
+            .unwrap_err()
+            .to_string();
+        assert!(!error.is_empty());
     }
 }

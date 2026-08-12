@@ -63,6 +63,18 @@ friendly approval modes map to current Codex policies as follows: `suggest`
 uses `untrusted`, `auto-edit` uses `on-request`, and `full-auto` uses `never`.
 See the starter config for the corresponding sandbox options.
 
+### Sessions and transcripts
+
+Saved sessions include metadata and up to 5 MB of terminal scrollback. Termeric
+shows a warning when that scrollback limit is reached, and reports save,
+restore, deletion, corruption, and partial-recovery failures in the UI.
+
+AI transcript recording writes JSONL up to 50 MB and reports the first cap or
+write failure instead of silently discarding data. Export produces complete
+Markdown and preserves the source JSONL beside it. Automatic redaction covers
+common credential prefixes, but it is best-effort and is not a complete secret
+scanner; review transcripts before sharing them.
+
 ### Harvest and shell integration
 
 Harvest is an experimental beta and remains disabled by default. When enabled,

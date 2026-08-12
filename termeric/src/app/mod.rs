@@ -414,13 +414,44 @@ impl App {
             self.config.scrollback.lines,
         );
 
-        // Always start with a fresh tab (sessions are per-tab, loaded on demand)
-        tabs.new_tab()?;
+        let mut restored = false;
+        if self.config.session.enabled
+            && self.config.session.auto_restore
+            && let Some(latest) = crate::session::list_sessions().into_iter().next()
+        {
+            match crate::session::restore::restore_named_session(&latest) {
+                Ok(Some(session)) => match tabs.new_tab_from_session(&session) {
+                    Ok(_) => {
+                        restored = true;
+                        self.toasts
+                            .success(format!("Restored latest session '{}'", latest));
+                    }
+                    Err(error) => {
+                        self.toasts
+                            .error(format!("Latest session recovery failed: {error:#}"));
+                    }
+                },
+                Ok(None) => {
+                    self.toasts
+                        .warning(format!("Latest session '{}' disappeared", latest));
+                }
+                Err(error) => {
+                    self.toasts.error(format!(
+                        "Latest session is corrupt or incompatible: {error:#}"
+                    ));
+                }
+            }
+        }
+        if !restored {
+            tabs.new_tab()?;
+        }
 
         self.tabs = Some(tabs);
 
         // Show splash screen based on configuration
-        self.maybe_show_splash(false);
+        if !restored {
+            self.maybe_show_splash(false);
+        }
 
         log::info!("Tab manager initialized: {}x{}", self.cols, self.rows);
 
@@ -482,17 +513,15 @@ impl App {
     fn force_save_session(&mut self) {
         let Some(tabs) = &mut self.tabs else { return };
         let save_scrollback = self.config.session.save_scrollback;
-        let count = tabs.count();
         tabs.save_all_sessions(save_scrollback);
-        log::info!("Sessions saved");
-        let label = if count == 1 { "session" } else { "sessions" };
-        self.toasts.success(format!("Saved {} {}", count, label));
+        let notices = tabs.drain_persistence_notices();
+        self.show_persistence_notices(notices, false);
     }
 
     /// Process PTY events for all tabs and panes
     fn process_pty_events(&mut self) {
         // Process events and collect results
-        let (events, quick_exits, should_exit) = {
+        let (events, quick_exits, persistence_notices, user_notices, should_exit) = {
             let Some(tabs) = &mut self.tabs else { return };
             let (_, events) = tabs.process_all_events();
 
@@ -501,8 +530,21 @@ impl App {
 
             let should_exit =
                 tabs.cleanup_closed(self.config.session.save_scrollback) && tabs.is_empty();
-            (events, quick_exits, should_exit)
+            let persistence_notices = tabs.drain_persistence_notices();
+            let user_notices = tabs.drain_user_notices();
+            (
+                events,
+                quick_exits,
+                persistence_notices,
+                user_notices,
+                should_exit,
+            )
         };
+
+        self.show_persistence_notices(persistence_notices, true);
+        for notice in user_notices {
+            self.toasts.warning(notice);
+        }
 
         // Show overlay for any plugin that exited immediately
         for (plugin_id, output_lines) in quick_exits {
@@ -601,6 +643,40 @@ impl App {
         if should_exit {
             log::info!("All tabs closed, exiting");
             self.should_exit = true;
+        }
+    }
+
+    fn show_persistence_notices(
+        &mut self,
+        notices: Vec<crate::tabs::PersistenceNotice>,
+        automatic: bool,
+    ) {
+        if notices.is_empty() {
+            if !automatic {
+                self.toasts.info("No session content to save");
+            }
+            return;
+        }
+        let mut saved = 0;
+        for notice in notices {
+            match notice {
+                crate::tabs::PersistenceNotice::Saved { id, truncated } => {
+                    saved += 1;
+                    if truncated {
+                        self.toasts.warning(format!(
+                            "Session {id} saved, but scrollback exceeded 5 MB and was truncated"
+                        ));
+                    }
+                }
+                crate::tabs::PersistenceNotice::SaveFailed { tab_id, error } => {
+                    self.toasts
+                        .error(format!("Could not save tab {}: {}", tab_id + 1, error));
+                }
+            }
+        }
+        if saved > 0 && !automatic {
+            let label = if saved == 1 { "session" } else { "sessions" };
+            self.toasts.success(format!("Saved {saved} {label}"));
         }
     }
 
@@ -1898,6 +1974,8 @@ impl App {
                             self.export_plugin_session(&id);
                         } else {
                             log::info!("No plugin tab active for export");
+                            self.toasts
+                                .warning("Activate an AI plugin tab before exporting");
                         }
                         return;
                     }
@@ -2229,8 +2307,16 @@ impl App {
                         let dest = base.join(&filename);
                         match std::fs::write(&dest, &md) {
                             Ok(()) => {
+                                let raw_dest =
+                                    base.join(format!("{}-{}-export.jsonl", plugin_id, id));
+                                if let Err(error) = std::fs::copy(path, &raw_dest) {
+                                    self.toasts.error(format!(
+                                        "Markdown exported, but full JSONL copy failed: {error}"
+                                    ));
+                                    return;
+                                }
                                 log::info!("Exported transcript to {}", dest.display());
-                                self.announce_session_export(&dest);
+                                self.announce_session_export(&dest, true);
                             }
                             Err(e) => {
                                 log::error!("Failed to write export: {}", e);
@@ -2276,7 +2362,7 @@ impl App {
                 match std::fs::write(&path, &md) {
                     Ok(()) => {
                         log::info!("Exported session to {}", path.display());
-                        self.announce_session_export(&path);
+                        self.announce_session_export(&path, false);
                     }
                     Err(e) => {
                         log::error!("Failed to export session: {}", e);
@@ -2289,15 +2375,20 @@ impl App {
         }
     }
 
-    fn announce_session_export(&mut self, path: &std::path::Path) {
+    fn announce_session_export(&mut self, path: &std::path::Path, includes_jsonl: bool) {
         let path_text = path.display().to_string();
         let copied = self
             .clipboard
             .as_mut()
             .is_some_and(|clipboard| clipboard.set_text(path_text.clone()).is_ok());
         let suffix = if copied { " (path copied)" } else { "" };
+        let format = if includes_jsonl {
+            "Exported complete Markdown + JSONL"
+        } else {
+            "Exported scrollback Markdown"
+        };
         self.toasts
-            .success(format!("Exported session to {path_text}{suffix}"));
+            .success(format!("{format} to {path_text}{suffix}"));
     }
 
     /// Scroll the plugin tab to the last line containing an error-like pattern.
@@ -2519,7 +2610,7 @@ impl App {
                                         ) {
                                             Ok(recorder) => {
                                                 let path = recorder.path().display().to_string();
-                                                tab.transcript = Some(recorder);
+                                                tab.start_transcript(recorder);
                                                 log::info!(
                                                     "Transcript recording started: {}",
                                                     path
@@ -2529,6 +2620,11 @@ impl App {
                                                     vec![
                                                         "Recording session output to:".into(),
                                                         format!("  {}", path),
+                                                        String::new(),
+                                                        "Common token prefixes are redacted, but"
+                                                            .into(),
+                                                        "this is not a complete secret scanner."
+                                                            .into(),
                                                     ],
                                                 );
                                             }
@@ -2553,7 +2649,7 @@ impl App {
                                     }
                                 } else {
                                     // Stop recording — drop the recorder
-                                    if let Some(recorder) = tab.transcript.take() {
+                                    if let Some(recorder) = tab.stop_transcript() {
                                         let path = recorder.path().display().to_string();
                                         drop(recorder);
                                         log::info!("Transcript recording stopped: {}", path);
@@ -4391,14 +4487,25 @@ impl App {
                                             Ok(Some(session)) => {
                                                 if let Some(tabs) = &mut self.tabs {
                                                     match tabs.new_tab_from_session(&session) {
-                                                        Ok(_) => log::info!(
-                                                            "Loaded session '{}' from panel",
-                                                            name
-                                                        ),
-                                                        Err(e) => log::error!(
-                                                            "Failed to restore session: {}",
-                                                            e
-                                                        ),
+                                                        Ok(_) => {
+                                                            log::info!(
+                                                                "Loaded session '{}' from panel",
+                                                                name
+                                                            );
+                                                            self.toasts.success(format!(
+                                                                "Restored session '{}'",
+                                                                name
+                                                            ));
+                                                        }
+                                                        Err(e) => {
+                                                            log::error!(
+                                                                "Failed to restore session: {}",
+                                                                e
+                                                            );
+                                                            self.toasts.error(format!(
+                                                                "Restore failed: {e:#}"
+                                                            ));
+                                                        }
                                                     }
                                                 }
                                             }
@@ -4467,17 +4574,35 @@ impl App {
                                                 if let Some(tabs) = &mut self.tabs {
                                                     match tabs.new_tab_from_session(&session) {
                                                         Ok(_) => {
-                                                            log::info!("Loaded session '{}'", name)
+                                                            log::info!("Loaded session '{}'", name);
+                                                            self.toasts.success(format!(
+                                                                "Restored session '{}'",
+                                                                name
+                                                            ));
                                                         }
-                                                        Err(e) => log::error!(
-                                                            "Failed to restore session: {}",
-                                                            e
-                                                        ),
+                                                        Err(e) => {
+                                                            log::error!(
+                                                                "Failed to restore session: {}",
+                                                                e
+                                                            );
+                                                            self.toasts.error(format!(
+                                                                "Restore failed: {e:#}"
+                                                            ));
+                                                        }
                                                     }
                                                 }
                                             }
-                                            Ok(None) => log::warn!("Session '{}' not found", name),
-                                            Err(e) => log::error!("Failed to load session: {}", e),
+                                            Ok(None) => {
+                                                log::warn!("Session '{}' not found", name);
+                                                self.toasts.warning(format!(
+                                                    "Session '{}' not found",
+                                                    name
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                log::error!("Failed to load session: {}", e);
+                                                self.toasts.error(format!("Load failed: {e:#}"));
+                                            }
                                         }
                                         self.session_dropdown_open = false;
                                     }
