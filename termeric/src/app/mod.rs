@@ -37,7 +37,7 @@ use crate::terminal::search::Search;
 use crate::terminal::splash::show_splash;
 use crate::terminal::url::{UrlCache, UrlDetector};
 use crate::ui::command_palette::palette::core_commands;
-use crate::ui::command_palette::{CommandPalette, CommandSource, PaletteResult, RegisteredCommand};
+use crate::ui::command_palette::{CommandPalette, PaletteResult};
 use crate::ui::context_picker::ContextPicker;
 use crate::ui::diff_review::DiffReviewOverlay;
 use crate::ui::info_overlay::InfoOverlay;
@@ -182,8 +182,9 @@ pub struct App {
 impl App {
     /// Create a new application instance
     pub fn new() -> Result<Self> {
-        let config = Config::load_or_default()?;
+        let (config, startup_config_warning) = Config::load_for_startup();
         let default_font_size = config.font.size;
+        let cursor_blink_period = (config.cursor.blink_rate as f32 / 1000.0) * 2.0;
         let theme = Self::load_theme_from_config(&config);
 
         // Initialize bell from config
@@ -214,7 +215,7 @@ impl App {
             cols: 80,
             rows: 24,
             cursor_blink_start: Instant::now(),
-            cursor_blink_period: 1.0, // 1 second full cycle (fade out + fade in)
+            cursor_blink_period,
             cursor_display_col: 0.0,
             cursor_display_row: 0.0,
             last_frame_time: Instant::now(),
@@ -276,109 +277,13 @@ impl App {
 
         let mut app = result?;
 
-        // Register enabled plugins
-        let plugin_ctx = PluginContext {
-            cwd: None,
-            tab_count: 0,
-            active_tab: 0,
-            terminal_size: (app.cols, app.rows),
-        };
-
-        if app.config.plugins.claude_code.enabled {
-            let plugin = ClaudeCodePlugin::new(app.config.plugins.claude_code.clone());
-            if let Err(e) = app.plugin_manager.register(Box::new(plugin), &plugin_ctx) {
-                log::error!("Failed to register Claude Code plugin: {}", e);
-            }
-        }
-
-        if app.config.plugins.codex.enabled {
-            let plugin = CodexPlugin::new(app.config.plugins.codex.clone());
-            if let Err(e) = app.plugin_manager.register(Box::new(plugin), &plugin_ctx) {
-                log::error!("Failed to register Codex plugin: {}", e);
-            }
-        }
-
-        log::info!("Loaded {} plugin(s)", app.plugin_manager.count());
-
-        // Initialize harvest mode if enabled in config
-        if app.config.harvest.enabled {
-            app.harvest = Some(HarvestMode::with_capacity(app.config.harvest.max_history));
-            log::info!("Harvest mode enabled");
-        }
-
-        // Register plugin keybindings with the keybinding manager
-        let plugin_keybindings = app.plugin_manager.all_keybindings();
-        if !plugin_keybindings.is_empty() {
-            let mut all_bindings = app.config.keybindings.clone();
-            for pk in &plugin_keybindings {
-                all_bindings.push(crate::input::keybindings::KeyBinding {
-                    key: pk.key.clone(),
-                    modifiers: crate::input::keybindings::KeyModifiers {
-                        ctrl: pk.ctrl,
-                        alt: pk.alt,
-                        shift: pk.shift,
-                        super_key: false,
-                    },
-                    action: crate::input::keybindings::KeyAction::PluginCommand {
-                        command_id: pk.command_id.clone(),
-                    },
-                });
-            }
-            app.keybinding_manager.load(all_bindings);
-            log::info!(
-                "Registered {} plugin keybinding(s)",
-                plugin_keybindings.len()
-            );
-        }
-
-        // Initialize command palette with core commands
+        // Initialize command palette and apply all runtime config through the
+        // same path used by reload, settings changes, and reset.
         app.command_palette.register_commands(core_commands());
-
-        // Register plugin commands in the palette
-        let plugin_commands = app.plugin_manager.all_commands();
-        if !plugin_commands.is_empty() {
-            for pc in &plugin_commands {
-                log::debug!("Plugin command: {} - {}", pc.id, pc.description);
-            }
-            let keybindings = app.plugin_manager.all_keybindings();
-            let palette_cmds: Vec<RegisteredCommand> = plugin_commands
-                .iter()
-                .map(|pc| {
-                    let shortcut = keybindings.iter().find(|k| k.command_id == pc.id).map(|k| {
-                        let mut parts = Vec::new();
-                        if k.ctrl {
-                            parts.push("Ctrl".to_string());
-                        }
-                        if k.alt {
-                            parts.push("Alt".to_string());
-                        }
-                        if k.shift {
-                            parts.push("Shift".to_string());
-                        }
-                        parts.push(k.key.to_uppercase());
-                        parts.join("+")
-                    });
-                    let plugin_source = pc
-                        .id
-                        .split_once('.')
-                        .map(|(prefix, _)| prefix.to_string())
-                        .unwrap_or_else(|| "plugin".to_string());
-                    RegisteredCommand {
-                        id: pc.id.clone(),
-                        title: pc.name.clone(),
-                        category: pc.category.clone().unwrap_or_else(|| "Plugins".to_string()),
-                        shortcut,
-                        icon: None,
-                        source: CommandSource::Plugin(plugin_source),
-                        destructive: false,
-                    }
-                })
-                .collect();
-            app.command_palette.register_commands(palette_cmds);
-            log::info!(
-                "Registered {} plugin command(s) in palette",
-                plugin_commands.len()
-            );
+        app.apply_config_side_effects();
+        if let Some(warning) = startup_config_warning {
+            log::error!("{}", warning);
+            app.toasts.error(warning);
         }
 
         Ok(app)
@@ -425,6 +330,8 @@ impl App {
             window.clone(),
             self.config.font.size,
             &self.config.font.family,
+            &self.config.font.fallback,
+            self.config.font.line_height,
             self.config.window.padding as f32,
             scale_factor,
             &self.theme,
@@ -1554,12 +1461,7 @@ impl App {
     /// Returns a value between 0.0 (invisible) and 1.0 (fully visible)
     fn cursor_opacity(&self) -> f32 {
         let elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
-        let phase = (elapsed / self.cursor_blink_period) * std::f32::consts::TAU;
-        // Use cosine for smooth fade: cos goes from 1 to -1
-        // We want 1.0 (visible) -> 0.3 (dim but visible) -> 1.0
-        // Map cos [-1, 1] to [0.3, 1.0] for a subtle blink
-        let cos_val = phase.cos();
-        0.65 + 0.35 * cos_val // Range: 0.3 to 1.0
+        cursor_opacity_at(self.config.cursor.blink, elapsed, self.cursor_blink_period)
     }
 
     /// Reset cursor blink animation (e.g., after typing)
@@ -1901,10 +1803,12 @@ impl App {
                     "core.reload-config" => {
                         match crate::config::Config::load_or_default() {
                             Ok(config) => {
-                                self.config = config;
-                                self.apply_config_side_effects();
-                                log::info!("Configuration reloaded");
-                                self.toasts.success("Configuration reloaded");
+                                if let Err(error) = self.apply_config(config) {
+                                    self.toasts.error(format!("Reload failed: {error}"));
+                                } else {
+                                    log::info!("Configuration reloaded");
+                                    self.toasts.success("Configuration reloaded");
+                                }
                             }
                             Err(e) => {
                                 log::error!("Failed to reload config: {}", e);
@@ -1914,9 +1818,17 @@ impl App {
                         return;
                     }
                     "core.reset-config" => {
-                        self.config = crate::config::Config::default();
-                        if let Ok(msg) = self.save_config() {
-                            log::info!("Config reset: {}", msg);
+                        if let Err(error) = self.apply_config(Config::default()) {
+                            self.toasts.error(format!("Reset failed: {error}"));
+                        } else {
+                            match self.save_config() {
+                                Ok(path) => {
+                                    self.toasts.success(format!("Configuration reset: {path}"))
+                                }
+                                Err(error) => self
+                                    .toasts
+                                    .error(format!("Reset could not be saved: {error}")),
+                            };
                         }
                         return;
                     }
@@ -3122,7 +3034,7 @@ impl App {
         let Some(window) = &self.window else { return };
 
         self.config.font.family = family.clone();
-        renderer.set_font_family(family);
+        renderer.set_font_families(family, &self.config.font.fallback);
         // Sync ligature setting and log resolved font info
         renderer.set_ligatures(self.config.font.ligatures);
         log::debug!(
@@ -3164,6 +3076,43 @@ impl App {
             }
         }
 
+        window.request_redraw();
+    }
+
+    /// Set line-height multiplier and propagate the resulting cell geometry.
+    fn set_line_height(&mut self, multiplier: f32) {
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let Some(window) = &self.window else { return };
+
+        self.config.font.line_height = multiplier;
+        renderer.set_line_height(multiplier);
+        let window_size = window.inner_size();
+        let (new_cols, new_rows) =
+            renderer.calculate_grid_size(window_size.width, window_size.height);
+        if new_cols != self.cols || new_rows != self.rows {
+            self.cols = new_cols;
+            self.rows = new_rows;
+            if let Some(tabs) = &mut self.tabs {
+                tabs.resize(self.cols, self.rows);
+            }
+        }
+
+        let cell_width = renderer.cell_width();
+        let cell_height = renderer.cell_height();
+        if let Some(tabs) = &mut self.tabs {
+            for tab in tabs.all_tabs_mut() {
+                if let Some(ref mut panes) = tab.pane_manager {
+                    panes.resize(
+                        self.cols as f32 * cell_width,
+                        self.rows as f32 * cell_height,
+                        cell_width,
+                        cell_height,
+                    );
+                }
+            }
+        }
         window.request_redraw();
     }
 
@@ -3276,10 +3225,14 @@ impl App {
 
         match crate::config::Config::load_or_default() {
             Ok(config) => {
-                self.config = config;
-                self.apply_config_side_effects();
-                log::info!("Config hot-reloaded");
-                self.toasts.info("Config reloaded");
+                if let Err(error) = self.apply_config(config) {
+                    log::warn!("Config hot-reload rejected: {}", error);
+                    self.toasts
+                        .warning(format!("Config reload rejected: {error}"));
+                } else {
+                    log::info!("Config hot-reloaded");
+                    self.toasts.info("Config reloaded");
+                }
             }
             Err(e) => {
                 log::warn!("Config hot-reload failed: {}", e);
@@ -3288,16 +3241,39 @@ impl App {
         }
     }
 
-    /// Re-apply every piece of `self.config` to the live renderer, tabs, and
-    /// shortcut registry. Call after swapping `self.config` (reload, reset).
+    /// Validate and atomically select a new configuration before applying it
+    /// to all live subsystems. Invalid reloads leave the previous config live.
+    fn apply_config(&mut self, config: Config) -> std::result::Result<(), String> {
+        config.validate().map_err(|error| format!("{error:#}"))?;
+        self.config = config;
+        self.apply_config_side_effects();
+        Ok(())
+    }
+
+    /// Re-apply every runtime-owned piece of `self.config`. This is the single
+    /// application path for startup, settings, reset, manual reload, and hot
+    /// reload. Existing PTYs keep their process; shell changes affect new tabs.
     fn apply_config_side_effects(&mut self) {
         self.default_font_size = self.config.font.size;
         self.set_font_family(self.config.font.family.clone());
         self.set_font_size(self.config.font.size);
+        self.set_line_height(self.config.font.line_height);
         self.set_padding(self.config.window.padding);
         if let Some(renderer) = &mut self.renderer {
             renderer.set_ligatures(self.config.font.ligatures);
+            renderer.set_opacity(self.config.window.opacity);
         }
+        if let Some(window) = &self.window {
+            window.set_decorations(self.config.window.decorations);
+        }
+        self.cursor_blink_period = (self.config.cursor.blink_rate as f32 / 1000.0) * 2.0;
+        self.reset_cursor_blink();
+        self.bell.set_config(BellConfig {
+            visual: self.config.bell.visual,
+            audio: self.config.bell.audio,
+            visual_duration_ms: self.config.bell.visual_duration_ms,
+            ..Default::default()
+        });
         let (theme, theme_err) = Self::load_theme_from_config_with_error(&self.config);
         self.apply_theme(theme);
         if let Some(msg) = theme_err {
@@ -3306,9 +3282,75 @@ impl App {
         }
         if let Some(tabs) = &mut self.tabs {
             tabs.set_scrollback_limit(self.config.scrollback.lines);
+            tabs.set_shell_config(self.config.shell.clone());
         }
+        self.shortcut_registry = ShortcutRegistry::new();
         self.shortcut_registry
             .apply_overrides(&self.config.shortcuts);
+        self.sync_plugins_from_config();
+        self.sync_harvest_from_config();
+        self.reload_dynamic_keybindings();
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn sync_plugins_from_config(&mut self) {
+        let ctx = self.build_plugin_context();
+        self.plugin_manager.deregister("claude-code");
+        self.plugin_manager.deregister("codex");
+        if self.config.plugins.claude_code.enabled {
+            let plugin = ClaudeCodePlugin::new(self.config.plugins.claude_code.clone());
+            if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
+                log::error!("Failed to register Claude Code plugin: {error}");
+                self.toasts
+                    .error(format!("Claude Code plugin failed: {error}"));
+            }
+        }
+        if self.config.plugins.codex.enabled {
+            let plugin = CodexPlugin::new(self.config.plugins.codex.clone());
+            if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
+                log::error!("Failed to register Codex plugin: {error}");
+                self.toasts.error(format!("Codex plugin failed: {error}"));
+            }
+        }
+        self.refresh_plugin_commands();
+        log::info!("Loaded {} plugin(s)", self.plugin_manager.count());
+    }
+
+    fn sync_harvest_from_config(&mut self) {
+        if self.config.harvest.enabled {
+            if let Some(harvest) = &mut self.harvest {
+                harvest
+                    .cellar
+                    .set_max_commands(self.config.harvest.max_history);
+            } else {
+                self.harvest = Some(HarvestMode::with_capacity(self.config.harvest.max_history));
+            }
+        } else {
+            self.harvest = None;
+            self.harvest_region_cursor = 0;
+            self.harvest_active_prompt_row = None;
+        }
+    }
+
+    fn reload_dynamic_keybindings(&mut self) {
+        let mut bindings = self.config.keybindings.clone();
+        for plugin_binding in self.plugin_manager.all_keybindings() {
+            bindings.push(crate::input::keybindings::KeyBinding {
+                key: plugin_binding.key,
+                modifiers: crate::input::keybindings::KeyModifiers {
+                    ctrl: plugin_binding.ctrl,
+                    alt: plugin_binding.alt,
+                    shift: plugin_binding.shift,
+                    super_key: false,
+                },
+                action: KeyAction::PluginCommand {
+                    command_id: plugin_binding.command_id,
+                },
+            });
+        }
+        self.keybinding_manager.load(bindings);
     }
 
     fn apply_theme(&mut self, theme: Theme) {
@@ -3418,13 +3460,27 @@ impl App {
                     window.request_redraw();
                 }
             }
-            SettingsAction::SaveConfig => match self.save_config() {
-                Ok(path) => log::info!("Config saved to: {}", path),
-                Err(e) => log::error!("Failed to save config: {}", e),
-            },
+            SettingsAction::SaveConfig => {
+                match self.save_config() {
+                    Ok(path) => self.toasts.success(format!("Configuration saved: {path}")),
+                    Err(error) => self
+                        .toasts
+                        .error(format!("Configuration save failed: {error}")),
+                };
+                return;
+            }
             SettingsAction::ResetConfig => {
-                self.config = Config::default();
-                self.apply_config_side_effects();
+                if let Err(error) = self.apply_config(Config::default()) {
+                    self.toasts.error(format!("Reset failed: {error}"));
+                } else {
+                    match self.save_config() {
+                        Ok(path) => self.toasts.success(format!("Configuration reset: {path}")),
+                        Err(error) => self
+                            .toasts
+                            .error(format!("Reset could not be saved: {error}")),
+                    };
+                }
+                return;
             }
             SettingsAction::SetSessionAutoSave(enabled) => {
                 self.config.session.auto_save = enabled;
@@ -3435,93 +3491,15 @@ impl App {
             SettingsAction::SetSessionSaveScrollback(enabled) => {
                 self.config.session.save_scrollback = enabled;
             }
-            SettingsAction::SetPluginEnabled { plugin_id, enabled } => {
-                // Helper: test if a binary actually works by running --version
-                let binary_works = |binary: &str| -> bool {
-                    std::process::Command::new(binary)
-                        .arg("--version")
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false)
-                };
-
-                match plugin_id.as_str() {
-                    "claude-code" => {
-                        self.config.plugins.claude_code.enabled = enabled;
-                        if enabled {
-                            let binary = &self.config.plugins.claude_code.binary;
-                            if !binary_works(binary) {
-                                self.info_overlay.show(
-                                    "Claude Code not available",
-                                    vec![
-                                        format!("'{}' could not be found or is not", binary),
-                                        "working correctly.".into(),
-                                        String::new(),
-                                        "Plugin enabled in config — install the".into(),
-                                        "binary to use it.".into(),
-                                        String::new(),
-                                        "https://docs.anthropic.com/en/docs/claude-code".into(),
-                                    ],
-                                );
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                            }
-                            let plugin = crate::plugin::claude_code::ClaudeCodePlugin::new(
-                                self.config.plugins.claude_code.clone(),
-                            );
-                            let ctx = self.build_plugin_context();
-                            if let Err(e) = self.plugin_manager.register(Box::new(plugin), &ctx) {
-                                log::error!("Failed to register claude-code: {}", e);
-                            } else {
-                                self.refresh_plugin_commands();
-                            }
-                        } else {
-                            self.plugin_manager.deregister("claude-code");
-                            self.refresh_plugin_commands();
-                        }
-                    }
-                    "codex" => {
-                        self.config.plugins.codex.enabled = enabled;
-                        if enabled {
-                            let binary = &self.config.plugins.codex.binary;
-                            if !binary_works(binary) {
-                                self.info_overlay.show(
-                                    "Codex not available",
-                                    vec![
-                                        format!("'{}' could not be found or is not", binary),
-                                        "working correctly.".into(),
-                                        String::new(),
-                                        "Plugin enabled in config — install the".into(),
-                                        "binary to use it.".into(),
-                                        String::new(),
-                                        "https://github.com/openai/codex".into(),
-                                    ],
-                                );
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                            }
-                            let plugin = crate::plugin::codex::CodexPlugin::new(
-                                self.config.plugins.codex.clone(),
-                            );
-                            let ctx = self.build_plugin_context();
-                            if let Err(e) = self.plugin_manager.register(Box::new(plugin), &ctx) {
-                                log::error!("Failed to register codex: {}", e);
-                            } else {
-                                self.refresh_plugin_commands();
-                            }
-                        } else {
-                            self.plugin_manager.deregister("codex");
-                            self.refresh_plugin_commands();
-                        }
-                    }
-                    _ => log::warn!("Unknown plugin: {}", plugin_id),
+            SettingsAction::SetPluginEnabled { plugin_id, enabled } => match plugin_id.as_str() {
+                "claude-code" => {
+                    self.config.plugins.claude_code.enabled = enabled;
                 }
-                let _ = self.save_config();
-            }
+                "codex" => {
+                    self.config.plugins.codex.enabled = enabled;
+                }
+                _ => log::warn!("Unknown plugin: {}", plugin_id),
+            },
             SettingsAction::SetPluginModel { plugin_id, model } => {
                 let model_val = if model == "(default)" {
                     None
@@ -3533,25 +3511,27 @@ impl App {
                     "codex" => self.config.plugins.codex.model = model_val,
                     _ => {}
                 }
-                let _ = self.save_config();
             }
-            SettingsAction::SetPluginApprovalMode { plugin_id, mode } => {
-                match plugin_id.as_str() {
-                    "claude-code" => {
-                        self.config.plugins.claude_code.approval_mode = if mode == "(interactive)" {
-                            None
-                        } else {
-                            Some(mode)
-                        };
-                    }
-                    "codex" => {
-                        self.config.plugins.codex.approval_mode = mode;
-                    }
-                    _ => {}
+            SettingsAction::SetPluginApprovalMode { plugin_id, mode } => match plugin_id.as_str() {
+                "claude-code" => {
+                    self.config.plugins.claude_code.approval_mode = if mode == "(interactive)" {
+                        None
+                    } else {
+                        Some(mode)
+                    };
                 }
-                let _ = self.save_config();
-            }
-            SettingsAction::None => {}
+                "codex" => {
+                    self.config.plugins.codex.approval_mode = mode;
+                }
+                _ => {}
+            },
+            SettingsAction::None => return,
+        }
+
+        let config = self.config.clone();
+        if let Err(error) = self.apply_config(config) {
+            self.toasts
+                .error(format!("Setting could not be applied: {error}"));
         }
     }
 
@@ -3908,15 +3888,7 @@ impl App {
             })
             .collect();
 
-        // Clear all plugin commands then re-add current ones
-        // register_commands replaces from same source, but we need to handle
-        // the case where a plugin is fully removed (no commands to re-register).
-        // The simplest approach: re-register core commands then plugin commands.
-        self.command_palette
-            .register_commands(crate::ui::command_palette::palette::core_commands());
-        if !palette_cmds.is_empty() {
-            self.command_palette.register_commands(palette_cmds);
-        }
+        self.command_palette.replace_plugin_commands(palette_cmds);
 
         log::info!(
             "Refreshed plugin commands: {} plugin(s), {} command(s)",
@@ -3940,6 +3912,7 @@ impl App {
             config.font.size = renderer.font_size();
         }
         config.shortcuts = self.shortcut_registry.user_overrides();
+        config.validate()?;
 
         let config_content = toml::to_string_pretty(&config)?;
 
@@ -4983,6 +4956,14 @@ impl App {
     }
 }
 
+fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> f32 {
+    if !blink {
+        return 1.0;
+    }
+    let phase = (elapsed_seconds / period_seconds) * std::f32::consts::TAU;
+    0.65 + 0.35 * phase.cos()
+}
+
 /// Minimal RFC 4648 base64 encoder (standard alphabet) used for the OSC 52
 /// clipboard reply. Keeps us off an external `base64` dependency.
 fn base64_encode_standard(input: &[u8]) -> String {
@@ -5019,7 +5000,18 @@ fn base64_encode_standard(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod base64_tests {
-    use super::base64_encode_standard;
+    use super::{base64_encode_standard, cursor_opacity_at};
+
+    #[test]
+    fn disabled_cursor_blink_is_fully_opaque() {
+        assert_eq!(cursor_opacity_at(false, 50.0, 0.2), 1.0);
+    }
+
+    #[test]
+    fn cursor_blink_rate_controls_the_cycle() {
+        assert!((cursor_opacity_at(true, 0.0, 1.0) - 1.0).abs() < f32::EPSILON);
+        assert!((cursor_opacity_at(true, 0.5, 1.0) - 0.3).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn test_base64_empty() {

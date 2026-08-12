@@ -30,7 +30,8 @@ impl ApplicationHandler for App {
             .with_inner_size(LogicalSize::new(
                 self.config.window.width,
                 self.config.window.height,
-            ));
+            ))
+            .with_decorations(self.config.window.decorations);
 
         // Load and set window icon if available
         if let Some(icon) = Self::load_icon() {

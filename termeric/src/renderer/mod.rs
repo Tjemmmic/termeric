@@ -258,6 +258,8 @@ impl Renderer {
         window: Arc<Window>,
         font_size: f32,
         font_family: &str,
+        fallback_families: &[String],
+        line_height_multiplier: f32,
         padding: f32,
         scale_factor: f32,
         theme: &Theme,
@@ -325,8 +327,15 @@ impl Renderer {
 
         // Create glyph cache
         let scaled_font_size = (font_size * scale_factor).max(1.0);
-        let glyph_cache =
-            GlyphCache::new(&device, &queue, scaled_font_size, font_family, ligatures)?;
+        let glyph_cache = GlyphCache::new(
+            &device,
+            &queue,
+            scaled_font_size,
+            font_family,
+            fallback_families,
+            line_height_multiplier,
+            ligatures,
+        )?;
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
@@ -421,9 +430,18 @@ impl Renderer {
         self.cell_height = cell_height;
     }
 
-    /// Change font family
-    pub fn set_font_family(&mut self, font_family: String) {
-        self.glyph_cache.set_font_family(font_family, &self.queue);
+    /// Apply a primary font and ordered configured fallbacks.
+    pub fn set_font_families(&mut self, primary: String, fallbacks: &[String]) {
+        self.glyph_cache
+            .set_font_families(primary, fallbacks, &self.queue);
+        let (cell_width, cell_height) = self.glyph_cache.cell_size();
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+    }
+
+    /// Change the configured line-height multiplier.
+    pub fn set_line_height(&mut self, multiplier: f32) {
+        self.glyph_cache.set_line_height(multiplier, &self.queue);
         let (cell_width, cell_height) = self.glyph_cache.cell_size();
         self.cell_width = cell_width;
         self.cell_height = cell_height;

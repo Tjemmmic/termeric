@@ -3,7 +3,6 @@
 //! This module handles font loading, glyph rasterization, and texture atlas management.
 //! Supports font ligatures through cosmic-text's advanced shaping.
 
-use crate::ui::constants::LINE_HEIGHT_MULTIPLIER;
 use anyhow::Result;
 use cosmic_text::{
     Attrs, Buffer, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, SwashCache,
@@ -114,6 +113,8 @@ pub struct GlyphCache {
     cell_height: f32,
     /// Font size
     font_size: f32,
+    /// Configured line-height multiplier
+    line_height_multiplier: f32,
     /// Font family name (as requested by user)
     font_family: String,
     /// Whether to use system monospace fallback (when requested font not found/not monospace)
@@ -129,18 +130,21 @@ impl GlyphCache {
         queue: &Queue,
         font_size: f32,
         font_family: &str,
+        fallback_families: &[String],
+        line_height_multiplier: f32,
         ligatures: bool,
     ) -> Result<Self> {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
+        let font_family = resolve_configured_family(&font_system, font_family, fallback_families);
 
         // Calculate metrics
-        let line_height = font_size * LINE_HEIGHT_MULTIPLIER;
+        let line_height = font_size * line_height_multiplier;
         let metrics = Metrics::new(font_size, line_height);
 
         // Measure a character to get cell dimensions and check if font was found
         let (cell_width, cell_height, use_monospace_fallback) =
-            measure_cell(&mut font_system, &metrics, font_family);
+            measure_cell(&mut font_system, &metrics, &font_family);
 
         // Create atlas texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -207,7 +211,8 @@ impl GlyphCache {
             cell_width,
             cell_height,
             font_size,
-            font_family: font_family.to_string(),
+            line_height_multiplier,
+            font_family,
             use_monospace_fallback,
             ligatures_enabled: ligatures,
         })
@@ -564,7 +569,7 @@ impl GlyphCache {
         self.font_size = font_size;
 
         // Recalculate metrics
-        let line_height = font_size * LINE_HEIGHT_MULTIPLIER;
+        let line_height = font_size * self.line_height_multiplier;
         self.metrics = Metrics::new(font_size, line_height);
 
         // Remeasure cell dimensions
@@ -606,6 +611,28 @@ impl GlyphCache {
             cell_width,
             cell_height
         );
+    }
+
+    /// Apply primary/fallback family selection. The first installed configured
+    /// family wins; cosmic-text continues to handle per-glyph fallback.
+    pub fn set_font_families(&mut self, primary: String, fallbacks: &[String], queue: &Queue) {
+        let resolved = resolve_configured_family(&self.font_system, &primary, fallbacks);
+        self.set_font_family(resolved, queue);
+    }
+
+    /// Change line-height metrics, clearing cached layout/raster data.
+    pub fn set_line_height(&mut self, multiplier: f32, queue: &Queue) {
+        if (self.line_height_multiplier - multiplier).abs() < 0.001 {
+            return;
+        }
+        self.line_height_multiplier = multiplier;
+        self.metrics = Metrics::new(self.font_size, self.font_size * multiplier);
+        let (cell_width, cell_height, use_fallback) =
+            measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+        self.use_monospace_fallback = use_fallback;
+        self.clear_atlas(queue);
     }
 
     /// Clear the glyph atlas, entry caches, and reset packing cursor.
@@ -784,5 +811,63 @@ fn family_for(font_family: &str) -> Family<'_> {
         Family::Monospace
     } else {
         Family::Name(trimmed)
+    }
+}
+
+fn resolve_configured_family(
+    font_system: &FontSystem,
+    primary: &str,
+    fallbacks: &[String],
+) -> String {
+    let is_generic = |name: &str| {
+        matches!(
+            name.trim().to_ascii_lowercase().as_str(),
+            "monospace" | "mono" | "default"
+        )
+    };
+    let installed = |name: &str| {
+        font_system.db().faces().any(|face| {
+            face.families
+                .iter()
+                .any(|(family, _)| family.eq_ignore_ascii_case(name.trim()))
+        })
+    };
+
+    std::iter::once(primary)
+        .chain(fallbacks.iter().map(String::as_str))
+        .find(|name| is_generic(name) || installed(name))
+        .unwrap_or("monospace")
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_font_resolution_keeps_generic_primary() {
+        let font_system = FontSystem::new();
+        assert_eq!(
+            resolve_configured_family(&font_system, "monospace", &[]),
+            "monospace"
+        );
+    }
+
+    #[test]
+    fn configured_font_resolution_uses_ordered_generic_fallback() {
+        let font_system = FontSystem::new();
+        let fallbacks = vec!["also-not-installed".into(), "monospace".into()];
+        assert_eq!(
+            resolve_configured_family(&font_system, "definitely-not-installed", &fallbacks),
+            "monospace"
+        );
+    }
+
+    #[test]
+    fn cell_height_uses_configured_line_height() {
+        let mut font_system = FontSystem::new();
+        let metrics = Metrics::new(14.0, 21.0);
+        let (_, height, _) = measure_cell(&mut font_system, &metrics, "monospace");
+        assert_eq!(height, 21.0);
     }
 }

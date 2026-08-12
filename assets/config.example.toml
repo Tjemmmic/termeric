@@ -3,7 +3,8 @@
 
 # Shell configuration
 [shell]
-# Path to shell program (leave empty for default shell)
+# Path to shell program (leave empty for default shell). Reload affects new tabs;
+# existing PTYs keep running their current shell.
 # program = "/bin/zsh"
 # Arguments to pass to shell
 # args = ["-l"]
@@ -14,13 +15,20 @@
 family = "monospace"
 # Font size in points
 size = 14.0
-# Fallback fonts (tried in order if primary font doesn't have a glyph)
+# Line-height multiplier (0.8 - 3.0)
+line_height = 1.2
+# Fallback families (first installed family is used if primary is unavailable;
+# cosmic-text provides per-glyph fallback after family selection)
 # fallback = ["Noto Sans Mono", "DejaVu Sans Mono"]
+# Enable shaping of common programming ligatures
+ligatures = true
 
 # Scrollback configuration
 [scrollback]
 # Maximum number of lines to keep in scrollback buffer
 lines = 10000
+# Lines moved per wheel event (0.1 - 100)
+scroll_speed = 6.0
 
 # Theme configuration
 [theme]
@@ -31,14 +39,40 @@ name = "turmeric"
 
 # Window configuration
 [window]
-# Initial window width
+# Initial window width (applies to newly created windows)
 width = 800
-# Initial window height
+# Initial window height (applies to newly created windows)
 height = 600
-# Window opacity (0.0 - 1.0, may not work on all platforms)
+# Window opacity (0.1 - 1.0, may not work on all platforms)
 opacity = 1.0
 # Padding around terminal content in pixels
 padding = 8
+# Use operating-system window borders and title bar
+decorations = true
+
+[cursor]
+# Options: block, underline, beam
+style = "block"
+blink = true
+# One fade interval in milliseconds (100 - 5000)
+blink_rate = 530
+
+[bell]
+visual = true
+audio = false
+visual_duration_ms = 100
+
+[session]
+enabled = true
+auto_restore = true
+auto_save = true
+save_scrollback = true
+
+# Experimental command-history visualization. Requires OSC 133 shell marks.
+[harvest]
+enabled = false
+show_indicators = true
+max_history = 100
 
 # OpenAI Codex CLI integration (tested with codex-cli 0.137.0)
 [plugins.codex]

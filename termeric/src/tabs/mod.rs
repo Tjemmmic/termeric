@@ -420,6 +420,12 @@ impl TabManager {
         }
     }
 
+    /// Update the shell used by tabs created after a config reload.
+    /// Existing PTYs are intentionally left running.
+    pub fn set_shell_config(&mut self, shell: ShellConfig) {
+        self.shell = shell;
+    }
+
     /// Create a tab from a saved session (single-tab) and add it
     ///
     /// The new tab inherits the session's ID so subsequent saves update

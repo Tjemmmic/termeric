@@ -236,6 +236,21 @@ impl CommandPalette {
         });
     }
 
+    /// Replace every plugin-owned command while preserving core/theme entries.
+    pub fn replace_plugin_commands(&mut self, commands: Vec<RegisteredCommand>) {
+        self.registry
+            .retain(|command| !matches!(command.source, CommandSource::Plugin(_)));
+        self.registry.extend(commands);
+        self.registry.sort_by(|a, b| {
+            a.category
+                .cmp(&b.category)
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        if self.animation.is_active() {
+            self.update_entries();
+        }
+    }
+
     /// Open the palette
     pub fn open(&mut self) {
         self.input.clear();
@@ -967,6 +982,41 @@ mod tests {
         // Should find claude command
         let info = palette.build_info();
         assert!(info.entries.iter().any(|e| e.title.contains("Claude")));
+    }
+
+    #[test]
+    fn replace_plugin_commands_removes_disabled_plugin_sources() {
+        let mut palette = CommandPalette::new();
+        palette.register_commands(core_commands());
+        palette.replace_plugin_commands(vec![RegisteredCommand {
+            id: "codex.open".into(),
+            title: "Open Codex".into(),
+            category: "Plugins".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Plugin("codex".into()),
+            destructive: false,
+        }]);
+        assert!(
+            palette
+                .registry
+                .iter()
+                .any(|command| command.id == "codex.open")
+        );
+
+        palette.replace_plugin_commands(Vec::new());
+        assert!(
+            !palette
+                .registry
+                .iter()
+                .any(|command| matches!(command.source, CommandSource::Plugin(_)))
+        );
+        assert!(
+            palette
+                .registry
+                .iter()
+                .any(|command| command.id == "core.new-tab")
+        );
     }
 
     #[test]
