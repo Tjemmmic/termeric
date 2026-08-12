@@ -505,7 +505,7 @@ impl CommandPalette {
                     Some(PaletteEntry {
                         registry_index: i,
                         score: *score as i64 + prefix_bonus + recency_bonus,
-                        match_positions: positions.iter().copied().collect(),
+                        match_positions: positions.to_vec(),
                     })
                 })
                 .collect();

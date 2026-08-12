@@ -31,7 +31,7 @@ impl Renderer {
         let right_buttons_width = gear_button_width + session_button_width + commands_button_width;
         let available_tab_width = window_width - right_buttons_width - add_button_width;
         let tab_count = tabs.len().max(1);
-        let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
+        let full_tab_width = (available_tab_width / tab_count as f32).clamp(80.0, 200.0);
         let tab_padding = 8.0;
         let tab_height = tab_bar_height - 4.0; // Leave some margin
         let show_close_buttons = true;
@@ -422,9 +422,8 @@ impl Renderer {
                 self.ui.tab_text_inactive[3],
             ];
             let widths = [base_w * 0.8, base_w, base_w * 0.8];
-            for i in 0..3 {
+            for (i, w) in widths.into_iter().enumerate() {
                 let y = top_y + i as f32 * gap;
-                let w = widths[i];
                 self.rect_pipeline
                     .push_line(cx - w, y, cx + w, y, line_w, color);
             }
@@ -473,7 +472,7 @@ impl Renderer {
         // ── Compute tab layout to find where + button sits ──
         let available_tab_width = window_width - right_buttons_width - add_button_width;
         let tab_count = tabs.len().max(1);
-        let full_tab_width = ((available_tab_width / tab_count as f32).min(200.0)).max(80.0);
+        let full_tab_width = (available_tab_width / tab_count as f32).clamp(80.0, 200.0);
         let tab_height = tab_bar_height - 4.0;
         let show_close_buttons = true;
         let close_btn_size = self.cell_height;

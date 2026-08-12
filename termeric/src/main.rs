@@ -2,6 +2,11 @@
 //!
 //! This is the main entry point for the Termeric terminal emulator.
 
+// UI dispatch intentionally uses nested conditions to preserve input-priority
+// boundaries and short borrow scopes. Renderer builders intentionally receive
+// explicit geometry/state rather than hiding unrelated inputs in generic bags.
+#![allow(clippy::collapsible_if, clippy::too_many_arguments)]
+
 mod app;
 mod config;
 mod git;

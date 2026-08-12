@@ -148,7 +148,7 @@ impl ApplicationHandler for App {
                                 if let Some(digit) =
                                     c.as_str().chars().next().and_then(|ch| ch.to_digit(10))
                                 {
-                                    if digit >= 1 && digit <= 9 {
+                                    if (1..=9).contains(&digit) {
                                         let idx = (digit - 1) as usize;
                                         if let Some((ref plugin_id, ref profiles)) =
                                             self.pending_profile_selection
@@ -742,20 +742,19 @@ impl ApplicationHandler for App {
                     {
                         if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
                         {
-                            let cw = renderer.cell_width();
+                            use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
                             let (sw, sh) = renderer.window_size();
-                            let (ww, wh) = (sw as f32, sh as f32);
-                            // Must match build_shortcuts_panel geometry
-                            let panel_width = (cw * 60.0_f32).max(500.0).min(ww * 0.7);
-                            let panel_x = (ww - panel_width) / 2.0;
-                            let panel_y = wh * 0.10;
-                            let panel_height = wh * 0.75;
+                            let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
+                            let layout = ShortcutsPanelLayout::calculate(
+                                sw as f32,
+                                sh as f32,
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                                info.animation,
+                                info.entries.len(),
+                            );
                             let (mx, my) = (pos.0 as f32, pos.1 as f32);
-                            if mx < panel_x
-                                || mx > panel_x + panel_width
-                                || my < panel_y
-                                || my > panel_y + panel_height
-                            {
+                            if !layout.contains(mx, my) {
                                 self.shortcuts_panel.close();
                             }
                         } else {

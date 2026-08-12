@@ -194,11 +194,7 @@ impl DiffDetector {
                         };
                     } else if trimmed.starts_with(' ') || trimmed.is_empty() {
                         // Context line
-                        let ctx = if trimmed.starts_with(' ') {
-                            &trimmed[1..]
-                        } else {
-                            trimmed
-                        };
+                        let ctx = trimmed.strip_prefix(' ').unwrap_or(trimmed);
                         hunk.lines.push(DiffLine::Context(ctx.to_string()));
                         self.state = ScanState::InDiff {
                             minus_line,

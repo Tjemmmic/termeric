@@ -1300,7 +1300,7 @@ impl Renderer {
                 let is_detected_url = self
                     .url_cache
                     .as_ref()
-                    .map_or(false, |c| c.is_url(visual_row, col));
+                    .is_some_and(|c| c.is_url(visual_row, col));
                 if (is_hyperlink || is_detected_url) && !cell.attrs.has_underline() {
                     let link_color = apply_brightness(self.ui.url, brightness);
                     let underline_y = y + cell_height - 2.0;
@@ -1335,8 +1335,8 @@ impl Renderer {
                                 cc,
                                 2.0,
                             );
-                            let cursor_row = cursor.row as usize;
-                            let cursor_col = cursor.col as usize;
+                            let cursor_row = cursor.row;
+                            let cursor_col = cursor.col;
                             if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
                                 if let Some(c) = cell.content.char() {
                                     if !c.is_whitespace() {

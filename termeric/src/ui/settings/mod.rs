@@ -1168,7 +1168,7 @@ impl SettingsPanel {
             return;
         };
         // Prefer keeping the section header visible above the selected row.
-        let desired_top = if abs > 0 && entries.get(abs - 1).map_or(false, |e| e.is_header) {
+        let desired_top = if abs > 0 && entries.get(abs - 1).is_some_and(|e| e.is_header) {
             abs - 1
         } else {
             abs
@@ -1774,7 +1774,7 @@ mod tests {
         let entries = panel.build_entries(&config, &registry);
         // Should have Window header + Opacity item (at minimum)
         let selectable: Vec<_> = entries.iter().filter(|e| !e.is_header).collect();
-        assert!(selectable.len() >= 1);
+        assert!(!selectable.is_empty());
         assert!(selectable.iter().any(|e| e.label == "Opacity"));
     }
 

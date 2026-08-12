@@ -106,11 +106,11 @@ impl PaneNode {
 
                 // Recursively try children
                 if let Some(replacement) = first.remove_leaf(target) {
-                    *first = Box::new(replacement);
+                    **first = replacement;
                     return None;
                 }
                 if let Some(replacement) = second.remove_leaf(target) {
-                    *second = Box::new(replacement);
+                    **second = replacement;
                     return None;
                 }
                 None

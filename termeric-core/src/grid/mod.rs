@@ -302,11 +302,11 @@ impl Grid {
         while let Some(last) = lines.last() {
             let plain = strip_ansi_escapes(last);
             let trimmed = plain.trim();
-            if trimmed.is_empty() {
-                lines.pop();
-            } else if trimmed == "logout" || trimmed == "exit" {
-                lines.pop();
-            } else if is_bare_prompt(trimmed) {
+            if trimmed.is_empty()
+                || trimmed == "logout"
+                || trimmed == "exit"
+                || is_bare_prompt(trimmed)
+            {
                 lines.pop();
             } else {
                 break;

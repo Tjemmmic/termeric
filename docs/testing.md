@@ -6,6 +6,7 @@ The default verification lane is deterministic and does not require a window:
 cargo fmt --all -- --check
 cargo test --workspace
 cargo build --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The test suite includes a headless `App` controller, direct terminal fixtures,
@@ -32,3 +33,12 @@ an adapter is a hard failure; without it, the test prints why it was skipped.
 A full window/surface acceptance check remains a release-lane test under a
 virtual display because creating a Winit window is platform-event-loop work,
 not a unit-test-safe operation.
+
+## Clippy policy
+
+Strict Clippy is part of the default quality gate. The application crate has
+two narrow, documented exceptions: nested conditions are retained where UI
+dispatch priority or short Rust borrow scopes are clearer that way, and
+renderer builders may take explicit geometry/state parameters rather than
+hiding unrelated inputs inside generic parameter bags. New exceptions require
+a local rationale; broad lint-family suppression is not accepted.

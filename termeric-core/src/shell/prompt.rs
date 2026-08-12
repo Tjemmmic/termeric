@@ -178,8 +178,8 @@ impl PromptTracker {
     pub fn previous_prompt(&self, from_row: i32) -> Option<usize> {
         self.marks
             .iter()
-            .filter(|m| m.mark_type == PromptType::PromptStart && (m.row as i32) < from_row)
-            .last()
+            .rev()
+            .find(|m| m.mark_type == PromptType::PromptStart && (m.row as i32) < from_row)
             .map(|m| m.row)
     }
 

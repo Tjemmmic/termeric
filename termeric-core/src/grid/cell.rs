@@ -104,20 +104,15 @@ bitflags! {
 }
 
 /// Content of a cell
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum CellContent {
     /// Empty cell
+    #[default]
     Empty,
     /// Single character (common case, optimized)
     Char(char),
     /// Grapheme cluster (multiple codepoints)
     Grapheme(Box<str>),
-}
-
-impl Default for CellContent {
-    fn default() -> Self {
-        Self::Empty
-    }
 }
 
 impl CellContent {
@@ -154,20 +149,15 @@ impl CellContent {
 ///
 /// Preserving this allows session restore to re-resolve indexed colors
 /// through the current theme, so sessions adapt to theme changes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColorSpec {
     /// Terminal default color (fg or bg)
+    #[default]
     Default,
     /// ANSI palette color (0-7 normal, 8-15 bright, 16-255 extended)
     Indexed(u8),
     /// Explicit 24-bit RGB color
     TrueColor(Color),
-}
-
-impl Default for ColorSpec {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 /// A single cell in the terminal grid

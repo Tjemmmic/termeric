@@ -160,8 +160,7 @@ impl Row {
         self.dirty = true;
     }
 
-    /// Get the string content of the row (for selection/copying)
-    pub fn to_string(&self) -> String {
+    fn plain_text(&self) -> String {
         let mut s = String::new();
 
         for cell in &self.cells {
@@ -307,6 +306,12 @@ impl Row {
                 params.push(format!("48;2;{};{};{}", c.r, c.g, c.b));
             }
         }
+    }
+}
+
+impl std::fmt::Display for Row {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.plain_text())
     }
 }
 

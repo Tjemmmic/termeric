@@ -187,11 +187,6 @@ impl PanelAnimation {
         self.open || self.raw_progress() > ANIM_EPSILON
     }
 
-    /// Whether the panel is fully open and ready for interaction.
-    pub fn is_active(&self) -> bool {
-        self.open && self.raw_progress() > 0.9
-    }
-
     /// Whether animation is still in progress (needs redraw).
     pub fn needs_redraw(&self) -> bool {
         if self.open {
@@ -265,7 +260,7 @@ mod tests {
         let mut anim = OverlayAnimation::new();
         anim.open();
         let p = anim.progress();
-        assert!(p >= 0.0 && p <= 1.0);
+        assert!((0.0..=1.0).contains(&p));
 
         thread::sleep(Duration::from_millis(200));
         let p = anim.progress();

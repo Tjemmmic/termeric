@@ -151,7 +151,7 @@ impl UrlDetector {
 
         // Strip trailing punctuation that's likely not part of the URL
         let url_text = &text[..end];
-        let trimmed = url_text.trim_end_matches(|c| matches!(c, '.' | ',' | ':' | ';' | '!' | '?'));
+        let trimmed = url_text.trim_end_matches(['.', ',', ':', ';', '!', '?']);
         trimmed.len()
     }
 

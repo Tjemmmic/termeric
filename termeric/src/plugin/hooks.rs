@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_hook_variants() {
-        let hooks = vec![
+        let hooks = [
             Hook::AppReady,
             Hook::TabCreated { tab_id: 1 },
             Hook::TabClosed { tab_id: 1 },
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_plugin_action_variants() {
-        let actions = vec![
+        let actions = [
             PluginAction::OpenTab {
                 program: "claude".to_string(),
                 args: vec![],

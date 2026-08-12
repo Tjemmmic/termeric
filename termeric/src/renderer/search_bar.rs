@@ -200,7 +200,6 @@ impl Renderer {
                 // Back up to the last whitespace to avoid slicing a word.
                 let cut = truncated
                     .rfind(|c: char| c.is_whitespace())
-                    .map(|i| i)
                     .unwrap_or(truncated.len());
                 let base = if cut > 0 {
                     &truncated[..cut]

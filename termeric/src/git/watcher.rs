@@ -76,7 +76,7 @@ impl GitWatcher {
 
     /// Check if working tree is dirty
     pub fn is_dirty(&self) -> bool {
-        self.status.as_ref().map_or(false, |s| s.dirty)
+        self.status.as_ref().is_some_and(|s| s.dirty)
     }
 
     /// Get branch completions for the given partial input.

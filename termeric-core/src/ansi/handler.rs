@@ -51,7 +51,7 @@ impl Perform for Handler<'_> {
                 // HT - horizontal tab
                 self.terminal.horizontal_tab();
             }
-            0x0A | 0x0B | 0x0C => {
+            0x0A..=0x0C => {
                 // LF, VT, FF - line feed
                 self.terminal.linefeed();
             }
@@ -373,19 +373,19 @@ impl Perform for Handler<'_> {
         match command {
             // Set window title
             0 | 2 => {
-                if params.len() > 1 {
-                    if let Ok(title) = std::str::from_utf8(params[1]) {
-                        log::debug!("Set window title: {}", title);
-                    }
+                if params.len() > 1
+                    && let Ok(title) = std::str::from_utf8(params[1])
+                {
+                    log::debug!("Set window title: {}", title);
                 }
             }
 
             // Set icon name
             1 => {
-                if params.len() > 1 {
-                    if let Ok(name) = std::str::from_utf8(params[1]) {
-                        log::trace!("Set icon name: {}", name);
-                    }
+                if params.len() > 1
+                    && let Ok(name) = std::str::from_utf8(params[1])
+                {
+                    log::trace!("Set icon name: {}", name);
                 }
             }
 
@@ -419,16 +419,15 @@ impl Perform for Handler<'_> {
             // Desktop notification (OSC 9) - iTerm2 style
             // Format: OSC 9 ; message ST
             9 => {
-                if params.len() > 1 {
-                    if let Ok(message) = std::str::from_utf8(params[1]) {
-                        log::info!("Desktop notification: {}", message);
-                        self.terminal.push_event(TerminalEvent::Notification(
-                            NotificationRequest {
-                                title: None,
-                                body: message.to_string(),
-                            },
-                        ));
-                    }
+                if params.len() > 1
+                    && let Ok(message) = std::str::from_utf8(params[1])
+                {
+                    log::info!("Desktop notification: {}", message);
+                    self.terminal
+                        .push_event(TerminalEvent::Notification(NotificationRequest {
+                            title: None,
+                            body: message.to_string(),
+                        }));
                 }
             }
 
@@ -526,7 +525,7 @@ impl Handler<'_> {
         // Process each semicolon-separated parameter group
         for subparams in params.iter() {
             // Each subparams is a colon-separated group (e.g., [4, 3] for "4:3")
-            let values: Vec<u16> = subparams.iter().copied().collect();
+            let values: Vec<u16> = subparams.to_vec();
 
             if values.is_empty() {
                 continue;

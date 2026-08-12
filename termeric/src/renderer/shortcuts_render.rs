@@ -2,7 +2,7 @@
 
 use super::{Renderer, adjust_alpha};
 use crate::ui::constants::*;
-use crate::ui::shortcuts_panel::ShortcutsPanelInfo;
+use crate::ui::shortcuts_panel::{ShortcutsPanelInfo, ShortcutsPanelLayout};
 
 impl Renderer {
     /// Build shortcuts panel render data — centered modal with scrim
@@ -22,26 +22,26 @@ impl Renderer {
             .push_rect(0.0, 0.0, window_width, window_height, scrim);
 
         // ── Panel geometry ──
-        let panel_width = (cell_width * 60.0).max(500.0).min(window_width * 0.7);
-        let panel_x = (window_width - panel_width) / 2.0;
-        let padding = cell_width * 1.5;
-        let row_height = cell_height * 2.0;
-        let input_height = cell_height * 2.0;
-        let footer_height = cell_height * 1.6;
-        let gap = 6.0;
-        let separator_height = 1.0;
-        let header_area =
-            padding + cell_height * 1.4 + gap + input_height + gap + separator_height + gap;
-        let footer_area = footer_height + padding * 0.5;
-        let max_panel_height = window_height * 0.75;
-        let max_list_height = max_panel_height - header_area - footer_area;
-        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
-        let visible_count = info.entries.len().min(rows_that_fit);
-        let list_height = visible_count as f32 * row_height;
-        let panel_height = header_area + list_height + footer_area;
-
-        // Animate: slide in from top with fade
-        let panel_y = (window_height * 0.10) + (1.0 - anim) * -30.0;
+        let layout = ShortcutsPanelLayout::calculate(
+            window_width,
+            window_height,
+            cell_width,
+            cell_height,
+            anim,
+            info.entries.len(),
+        );
+        let panel_width = layout.panel_width;
+        let panel_x = layout.panel_x;
+        let panel_y = layout.panel_y;
+        let panel_height = layout.panel_height;
+        let padding = layout.padding;
+        let row_height = layout.row_height;
+        let input_height = layout.input_height;
+        let footer_height = layout.footer_height;
+        let gap = layout.gap;
+        let separator_height = layout.separator_height;
+        let list_height = layout.list_height;
+        let rows_that_fit = layout.rows_that_fit;
 
         // ── Panel background ──
         let panel_bg = adjust_alpha(self.ui.palette_bg, anim);

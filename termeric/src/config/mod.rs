@@ -11,7 +11,7 @@ use crate::plugin::claude_code::ClaudeCodeConfig;
 use crate::plugin::codex::CodexConfig;
 
 /// Application configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     /// Shell configuration
@@ -61,27 +61,6 @@ pub struct CustomCommand {
     /// Optional short alias for command palette (e.g. "prod")
     #[serde(default)]
     pub alias: Option<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            shell: ShellConfig::default(),
-            font: FontConfig::default(),
-            scrollback: ScrollbackConfig::default(),
-            theme: ThemeConfig::default(),
-            window: WindowConfig::default(),
-            cursor: CursorConfig::default(),
-            bell: BellConfigFile::default(),
-            keybindings: Vec::new(),
-            shortcuts: Vec::new(),
-            session: SessionConfig::default(),
-            splash: SplashConfig::default(),
-            commands: Vec::new(),
-            plugins: PluginsConfig::default(),
-            harvest: HarvestConfig::default(),
-        }
-    }
 }
 
 impl Config {
@@ -215,22 +194,13 @@ impl Default for HarvestConfig {
 }
 
 /// Shell configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShellConfig {
     /// Path to shell program
     pub program: Option<String>,
     /// Arguments to pass to shell
     pub args: Vec<String>,
-}
-
-impl Default for ShellConfig {
-    fn default() -> Self {
-        Self {
-            program: None, // Use default shell
-            args: vec![],
-        }
-    }
 }
 
 /// Font configuration
@@ -328,9 +298,10 @@ impl Default for WindowConfig {
 }
 
 /// Cursor style
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorStyle {
+    #[default]
     Block,
     Underline,
     Beam,
@@ -346,12 +317,6 @@ impl CursorStyle {
     }
 
     pub const ALL: &[CursorStyle] = &[Self::Block, Self::Underline, Self::Beam];
-}
-
-impl Default for CursorStyle {
-    fn default() -> Self {
-        Self::Block
-    }
 }
 
 /// Cursor configuration
@@ -424,23 +389,18 @@ impl Default for SessionConfig {
 }
 
 /// When to show the splash screen
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SplashMode {
     /// Never show splash screen
     Never,
     /// Only on first launch ever
+    #[default]
     FirstBoot,
     /// Each new window/session (but not restored sessions)
     NewWindow,
     /// Every new tab
     NewTab,
-}
-
-impl Default for SplashMode {
-    fn default() -> Self {
-        Self::FirstBoot
-    }
 }
 
 impl SplashMode {

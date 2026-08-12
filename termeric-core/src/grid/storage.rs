@@ -270,19 +270,19 @@ impl GridStorage {
 
             if in_logical_line {
                 // Check if cursor is in this row of the logical line
-                if let Some((cr, cc)) = cursor {
-                    if cr == row_idx && cursor_cell_offset.is_none() {
-                        cursor_cell_offset =
-                            Some(line_cells.len() + cc.min(row_len.saturating_sub(1)));
-                    }
+                if let Some((cr, cc)) = cursor
+                    && cr == row_idx
+                    && cursor_cell_offset.is_none()
+                {
+                    cursor_cell_offset = Some(line_cells.len() + cc.min(row_len.saturating_sub(1)));
                 }
                 line_cells.extend(cells);
             } else {
                 // Check if cursor is in this row
-                if let Some((cr, cc)) = cursor {
-                    if cr == row_idx {
-                        cursor_cell_offset = Some(cc.min(row_len.saturating_sub(1)));
-                    }
+                if let Some((cr, cc)) = cursor
+                    && cr == row_idx
+                {
+                    cursor_cell_offset = Some(cc.min(row_len.saturating_sub(1)));
                 }
                 line_cells = cells;
             }

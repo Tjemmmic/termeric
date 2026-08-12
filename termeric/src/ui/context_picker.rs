@@ -177,7 +177,7 @@ impl ContextPicker {
                         parts.push(format!("=== File Tree ===\n{}", truncate(&tree, 5_000)));
                     }
                 }
-                ContextKind::TerminalOutput { .. } => {
+                ContextKind::TerminalOutput => {
                     if let Some(ref output) = terminal_output {
                         if !output.trim().is_empty() {
                             parts.push(format!(

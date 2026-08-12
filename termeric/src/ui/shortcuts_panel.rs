@@ -47,8 +47,6 @@ pub struct ShortcutEntry {
     pub action: BindableAction,
     /// Whether this is a category header (non-selectable separator)
     pub is_header: bool,
-    /// Category label (for headers)
-    pub category: &'static str,
 }
 
 /// Display snapshot for the renderer
@@ -72,6 +70,73 @@ pub struct ShortcutsPanelInfo {
     pub recording: bool,
     /// Conflict label after reassignment
     pub conflict_label: Option<String>,
+}
+
+/// Shared shortcuts-modal geometry for rendering and outside-click routing.
+#[derive(Debug, Clone, Copy)]
+pub struct ShortcutsPanelLayout {
+    pub panel_x: f32,
+    pub panel_y: f32,
+    pub panel_width: f32,
+    pub panel_height: f32,
+    pub padding: f32,
+    pub row_height: f32,
+    pub input_height: f32,
+    pub footer_height: f32,
+    pub gap: f32,
+    pub separator_height: f32,
+    pub list_height: f32,
+    pub rows_that_fit: usize,
+}
+
+impl ShortcutsPanelLayout {
+    pub fn calculate(
+        window_width: f32,
+        window_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+        animation: f32,
+        entry_count: usize,
+    ) -> Self {
+        let panel_width = (cell_width * 60.0).max(500.0).min(window_width * 0.7);
+        let panel_x = (window_width - panel_width) / 2.0;
+        let padding = cell_width * 1.5;
+        let row_height = cell_height * 2.0;
+        let input_height = cell_height * 2.0;
+        let footer_height = cell_height * 1.6;
+        let gap = 6.0;
+        let separator_height = 1.0;
+        let header_area =
+            padding + cell_height * 1.4 + gap + input_height + gap + separator_height + gap;
+        let footer_area = footer_height + padding * 0.5;
+        let max_list_height = window_height * 0.75 - header_area - footer_area;
+        let rows_that_fit = (max_list_height / row_height).floor().max(1.0) as usize;
+        let list_height = entry_count.min(rows_that_fit) as f32 * row_height;
+        let panel_height = header_area + list_height + footer_area;
+        let panel_y = window_height * 0.10 + (1.0 - animation) * -30.0;
+
+        Self {
+            panel_x,
+            panel_y,
+            panel_width,
+            panel_height,
+            padding,
+            row_height,
+            input_height,
+            footer_height,
+            gap,
+            separator_height,
+            list_height,
+            rows_that_fit,
+        }
+    }
+
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.panel_x
+            && x <= self.panel_x + self.panel_width
+            && y >= self.panel_y
+            && y <= self.panel_y + self.panel_height
+    }
 }
 
 /// The shortcuts panel state
@@ -133,6 +198,7 @@ impl ShortcutsPanel {
     }
 
     /// Close immediately (no animation)
+    #[cfg(test)]
     pub fn close_immediately(&mut self) {
         self.animation.close_immediately();
         self.recording = false;
@@ -217,7 +283,6 @@ impl ShortcutsPanel {
                     binding: String::new(),
                     action,
                     is_header: true,
-                    category: meta.category.label(),
                 });
                 last_category = Some(meta.category);
             }
@@ -232,7 +297,6 @@ impl ShortcutsPanel {
                 binding,
                 action,
                 is_header: false,
-                category: meta.category.label(),
             });
         }
         entries
@@ -255,15 +319,6 @@ impl ShortcutsPanel {
             }
         }
         entries.len().saturating_sub(1)
-    }
-
-    /// Get the selectable ordinal for an entries index
-    fn selectable_ordinal(&self, entries: &[ShortcutEntry], idx: usize) -> usize {
-        entries[..=idx.min(entries.len().saturating_sub(1))]
-            .iter()
-            .filter(|e| !e.is_header)
-            .count()
-            .saturating_sub(1)
     }
 
     /// Handle a key press. Returns a ShortcutsAction.
@@ -450,11 +505,6 @@ impl ShortcutsPanel {
             conflict_label: self.conflict_label.clone(),
         }
     }
-
-    /// Update max_visible based on window geometry (called during render)
-    pub fn set_max_visible(&mut self, max: usize) {
-        self.max_visible = max.max(1);
-    }
 }
 
 #[cfg(test)]
@@ -483,6 +533,20 @@ mod tests {
         assert!(entries.len() > BindableAction::all().len());
         // First entry should be a header
         assert!(entries[0].is_header);
+    }
+
+    #[test]
+    fn shared_layout_uses_rendered_height_for_outside_clicks() {
+        let layout = ShortcutsPanelLayout::calculate(1200.0, 800.0, 10.0, 20.0, 1.0, 2);
+        assert!(layout.contains(
+            layout.panel_x + layout.panel_width / 2.0,
+            layout.panel_y + layout.panel_height - 1.0,
+        ));
+        assert!(!layout.contains(
+            layout.panel_x + layout.panel_width / 2.0,
+            layout.panel_y + layout.panel_height + 1.0,
+        ));
+        assert!(layout.panel_height < 800.0 * 0.75);
     }
 
     #[test]

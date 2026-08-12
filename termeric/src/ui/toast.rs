@@ -35,7 +35,6 @@ impl ToastSeverity {
 /// One toast entry.
 #[derive(Debug, Clone)]
 pub struct Toast {
-    pub id: u64,
     pub severity: ToastSeverity,
     pub message: String,
     pub created: Instant,
@@ -70,7 +69,6 @@ impl Toast {
 /// entries and learn whether a redraw is needed.
 pub struct ToastManager {
     toasts: VecDeque<Toast>,
-    next_id: u64,
     max_visible: usize,
 }
 
@@ -84,16 +82,12 @@ impl ToastManager {
     pub fn new() -> Self {
         Self {
             toasts: VecDeque::new(),
-            next_id: 1,
             max_visible: 4,
         }
     }
 
-    fn push_inner(&mut self, severity: ToastSeverity, message: String) -> u64 {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+    fn push_inner(&mut self, severity: ToastSeverity, message: String) {
         let toast = Toast {
-            id,
             severity,
             message,
             created: Instant::now(),
@@ -104,19 +98,18 @@ impl ToastManager {
         while self.toasts.len() > self.max_visible {
             self.toasts.pop_front();
         }
-        id
     }
 
-    pub fn info(&mut self, message: impl Into<String>) -> u64 {
+    pub fn info(&mut self, message: impl Into<String>) {
         self.push_inner(ToastSeverity::Info, message.into())
     }
-    pub fn success(&mut self, message: impl Into<String>) -> u64 {
+    pub fn success(&mut self, message: impl Into<String>) {
         self.push_inner(ToastSeverity::Success, message.into())
     }
-    pub fn warning(&mut self, message: impl Into<String>) -> u64 {
+    pub fn warning(&mut self, message: impl Into<String>) {
         self.push_inner(ToastSeverity::Warning, message.into())
     }
-    pub fn error(&mut self, message: impl Into<String>) -> u64 {
+    pub fn error(&mut self, message: impl Into<String>) {
         self.push_inner(ToastSeverity::Error, message.into())
     }
 
@@ -132,10 +125,7 @@ impl ToastManager {
         changed || animating
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.toasts.is_empty()
-    }
-
+    #[cfg(test)]
     pub fn iter(&self) -> impl Iterator<Item = &Toast> {
         self.toasts.iter()
     }
@@ -173,8 +163,7 @@ mod tests {
     #[test]
     fn test_push_and_expire() {
         let mut tm = ToastManager::new();
-        let id = tm.info("hello");
-        assert!(id > 0);
+        tm.info("hello");
         assert_eq!(tm.iter().count(), 1);
 
         // Override duration to something short, then let it expire.

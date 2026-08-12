@@ -46,8 +46,6 @@ impl Renderer {
         let title_height = layout.title_height;
         let line_height = layout.line_height;
         let content_height = layout.content_height;
-        let hint_text = "Esc / Enter to dismiss  \u{00b7}  C to copy";
-
         // ── Drop shadow (layered for softness) ──
         let shadow_layers = 3;
         for i in 0..shadow_layers {

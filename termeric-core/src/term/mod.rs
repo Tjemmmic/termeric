@@ -200,17 +200,15 @@ impl Terminal {
         // the last column, wrap_pending is set. Now that a new printable char
         // arrives, perform the actual wrap (mark the row as soft-wrapped,
         // carriage-return, and linefeed).
-        if cursor.wrap_pending {
-            if self.mode.contains(TerminalMode::AUTOWRAP) {
-                // Mark the row we're leaving as soft-wrapped
-                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                    row.set_wrapped(true);
-                }
-                self.grid_mut().set_cursor(cursor.row, 0);
-                self.linefeed();
+        if cursor.wrap_pending && self.mode.contains(TerminalMode::AUTOWRAP) {
+            // Mark the row we're leaving as soft-wrapped
+            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                row.set_wrapped(true);
             }
-            // If not autowrap, cursor stays at last column (overwrite mode)
+            self.grid_mut().set_cursor(cursor.row, 0);
+            self.linefeed();
         }
+        // If not autowrap, cursor stays at last column (overwrite mode)
 
         let cursor = self.grid().cursor();
         let fg = self.current_fg;
@@ -219,10 +217,10 @@ impl Terminal {
         let bg_spec = self.current_bg_spec;
         let attrs = self.current_attrs;
 
-        if self.mode.contains(TerminalMode::INSERT) {
-            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                row.insert_cells(cursor.col, 1);
-            }
+        if self.mode.contains(TerminalMode::INSERT)
+            && let Some(row) = self.grid_mut().row_mut(cursor.row)
+        {
+            row.insert_cells(cursor.col, 1);
         }
 
         // Write the character

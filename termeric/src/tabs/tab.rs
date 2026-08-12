@@ -348,7 +348,7 @@ impl Tab {
         // Use provided title or derive from working directory
         let tab_title = title
             .map(|t| t.to_string())
-            .or_else(|| working_dir.map(|cwd| dir_name_from_path(cwd)))
+            .or_else(|| working_dir.map(dir_name_from_path))
             .or_else(|| {
                 handle
                     .child_id()

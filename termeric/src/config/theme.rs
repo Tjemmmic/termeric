@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 /// A complete color theme
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Theme {
     /// Theme metadata
     pub meta: ThemeMeta,
@@ -17,18 +17,6 @@ pub struct Theme {
     pub bright: BrightColors,
     /// UI colors
     pub ui: UiColors,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        // Hardcoded turmeric default — avoids recursion via load_builtin
-        Self {
-            meta: ThemeMeta::default(),
-            primary: PrimaryColors::default(),
-            bright: BrightColors::default(),
-            ui: UiColors::default(),
-        }
-    }
 }
 
 /// Single source of truth for built-in theme names. Used by
@@ -482,7 +470,7 @@ impl Color {
     }
 
     /// Convert to float array for GPU
-    pub fn to_f32_array(&self) -> [f32; 4] {
+    pub fn to_f32_array(self) -> [f32; 4] {
         [
             self.r as f32 / 255.0,
             self.g as f32 / 255.0,
@@ -492,7 +480,7 @@ impl Color {
     }
 
     /// Convert to wgpu Color
-    pub fn to_wgpu(&self) -> wgpu::Color {
+    pub fn to_wgpu(self) -> wgpu::Color {
         wgpu::Color {
             r: self.r as f64 / 255.0,
             g: self.g as f64 / 255.0,
