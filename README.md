@@ -53,6 +53,11 @@ Settings are also editable live from within the terminal — press the gear icon
 
 Themes live under [`termeric/themes/`](termeric/themes/). Drop a new `.toml` file into `termeric/themes/community/` (or point `[theme].path` at an absolute path) and it shows up in the theme picker.
 
+The built-in Codex integration is tested against `codex-cli 0.137.0`. Its
+friendly approval modes map to current Codex policies as follows: `suggest`
+uses `untrusted`, `auto-edit` uses `on-request`, and `full-auto` uses `never`.
+See the starter config for the corresponding sandbox options.
+
 ## Project layout
 
 ```

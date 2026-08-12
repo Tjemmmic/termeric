@@ -39,3 +39,14 @@ height = 600
 opacity = 1.0
 # Padding around terminal content in pixels
 padding = 8
+
+# OpenAI Codex CLI integration (tested with codex-cli 0.137.0)
+[plugins.codex]
+enabled = false
+binary = "codex"
+inherit_cwd = true
+# Termeric maps suggest -> untrusted, auto-edit -> on-request, full-auto -> never.
+approval_mode = "suggest"
+# Options: read-only, workspace-write, full-access
+sandbox_mode = "workspace-write"
+copy_lines = 50

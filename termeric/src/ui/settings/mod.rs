@@ -915,7 +915,7 @@ impl SettingsPanel {
                         },
                     },
                     SettingItem {
-                        label: "Codex Approval",
+                        label: "Codex Approval Policy",
                         value: config.plugins.codex.approval_mode.clone(),
                         kind: SettingKind::Dropdown {
                             options: codex_approval_opts,
@@ -1266,7 +1266,7 @@ impl SettingsPanel {
                         plugin_id: "codex".into(),
                         model: new_val,
                     },
-                    (SettingsSection::Plugins, "Codex Approval") => {
+                    (SettingsSection::Plugins, "Codex Approval Policy") => {
                         SettingsAction::SetPluginApprovalMode {
                             plugin_id: "codex".into(),
                             mode: new_val,

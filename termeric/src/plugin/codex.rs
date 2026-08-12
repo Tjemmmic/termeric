@@ -11,7 +11,7 @@
 //! | Command | Description |
 //! |---------|-------------|
 //! | `Open Codex` | Launch Codex in the active terminal's cwd |
-//! | `Codex: Resume` | Resume the last conversation (`--continue`) |
+//! | `Codex: Resume` | Resume the last conversation (`resume --last`) |
 //!
 //! ## Default Keybinding
 //!
@@ -42,7 +42,8 @@ pub struct CodexConfig {
     /// Additional CLI arguments to pass to codex
     #[serde(default)]
     pub args: Vec<String>,
-    /// Approval mode: "suggest" (default), "auto-edit", "full-auto"
+    /// Approval mode: "suggest" (default), "auto-edit", "full-auto".
+    /// These map to Codex policies "untrusted", "on-request", and "never".
     #[serde(default = "default_approval_mode")]
     pub approval_mode: String,
     /// Sandbox mode: "read-only", "workspace-write" (default), "full-access"
@@ -99,23 +100,27 @@ impl CodexPlugin {
         Self { config }
     }
 
-    /// Map an approval mode string to the corresponding Codex CLI flag.
-    fn approval_mode_flag(mode: &str) -> Option<&'static str> {
+    /// Map Termeric's friendly approval modes to Codex CLI policies.
+    fn approval_mode_policy(mode: &str) -> Result<&'static str, String> {
         match mode {
-            "suggest" => Some("--suggest"),
-            "auto-edit" => Some("--auto-edit"),
-            "full-auto" => Some("--full-auto"),
-            _ => None,
+            "suggest" => Ok("untrusted"),
+            "auto-edit" => Ok("on-request"),
+            "full-auto" => Ok("never"),
+            _ => Err(format!(
+                "Unknown Codex approval mode '{mode}'. Expected suggest, auto-edit, or full-auto."
+            )),
         }
     }
 
     /// Map a sandbox mode string to the corresponding Codex CLI arguments.
-    fn sandbox_mode_args(mode: &str) -> Option<(&'static str, &'static str)> {
+    fn sandbox_mode_args(mode: &str) -> Result<(&'static str, &'static str), String> {
         match mode {
-            "read-only" => Some(("--sandbox", "read-only")),
-            "workspace-write" => Some(("--sandbox", "workspace-write")),
-            "full-access" => Some(("--sandbox", "danger-full-access")),
-            _ => None,
+            "read-only" => Ok(("--sandbox", "read-only")),
+            "workspace-write" => Ok(("--sandbox", "workspace-write")),
+            "full-access" => Ok(("--sandbox", "danger-full-access")),
+            _ => Err(format!(
+                "Unknown Codex sandbox mode '{mode}'. Expected read-only, workspace-write, or full-access."
+            )),
         }
     }
 
@@ -130,20 +135,20 @@ impl CodexPlugin {
         profile_extra_args: &[String],
         profile_approval_mode: Option<&str>,
         profile_sandbox_mode: Option<&str>,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, String> {
         let effective_approval =
             profile_approval_mode.unwrap_or(self.config.approval_mode.as_str());
         let effective_sandbox = profile_sandbox_mode.or(self.config.sandbox_mode.as_deref());
 
         let mut combined_extra: Vec<String> = Vec::new();
 
-        // Add approval mode flag
-        if let Some(flag) = Self::approval_mode_flag(effective_approval) {
-            combined_extra.push(flag.to_string());
-        }
+        // Codex CLI 0.137.0 uses an option/value pair for approval policy.
+        combined_extra.push("--ask-for-approval".to_string());
+        combined_extra.push(Self::approval_mode_policy(effective_approval)?.to_string());
 
         // Add sandbox mode flags
-        if let Some((flag, value)) = effective_sandbox.and_then(Self::sandbox_mode_args) {
+        if let Some(mode) = effective_sandbox {
+            let (flag, value) = Self::sandbox_mode_args(mode)?;
             combined_extra.push(flag.to_string());
             combined_extra.push(value.to_string());
         }
@@ -151,11 +156,11 @@ impl CodexPlugin {
         combined_extra.extend(profile_extra_args.iter().cloned());
         combined_extra.extend(extra.iter().map(|s| s.to_string()));
 
-        ai_common::build_args_with_model(
+        Ok(ai_common::build_args_with_model(
             self.config.model.as_deref(),
             &self.config.args,
             &combined_extra,
-        )
+        ))
     }
 
     /// Resolve the working directory: use context cwd if inherit_cwd is enabled.
@@ -226,14 +231,25 @@ impl CodexPlugin {
                 });
             }
         }
+        let args = match self.build_args(
+            extra_cli_args,
+            profile_extra_args,
+            profile_approval,
+            profile_sandbox,
+        ) {
+            Ok(args) => args,
+            Err(error) => {
+                actions.push(PluginAction::ShowNotice {
+                    title: "Invalid Codex configuration".into(),
+                    lines: vec![error, "Codex was not started.".into()],
+                });
+                return actions;
+            }
+        };
+
         actions.push(PluginAction::OpenTab {
             program: self.config.binary.clone(),
-            args: self.build_args(
-                extra_cli_args,
-                profile_extra_args,
-                profile_approval,
-                profile_sandbox,
-            ),
+            args,
             cwd: cwd.map(|s| s.to_string()),
             title: Some(title.to_string()),
             plugin_id: Some("codex".to_string()),
@@ -258,7 +274,7 @@ impl Plugin for CodexPlugin {
                 "codex.open" => HookResponse::Actions(self.build_launch_actions(ctx, &[], "Codex")),
                 "codex.resume" => HookResponse::Actions(self.build_launch_actions(
                     ctx,
-                    &["--continue"],
+                    &["resume", "--last"],
                     "Codex (resume)",
                 )),
                 "codex.copy-last" => HookResponse::Action(PluginAction::CopyFromPluginTab {
@@ -412,30 +428,27 @@ mod tests {
     #[test]
     fn test_approval_mode_suggest() {
         assert_eq!(
-            CodexPlugin::approval_mode_flag("suggest"),
-            Some("--suggest")
+            CodexPlugin::approval_mode_policy("suggest"),
+            Ok("untrusted")
         );
     }
 
     #[test]
     fn test_approval_mode_auto_edit() {
         assert_eq!(
-            CodexPlugin::approval_mode_flag("auto-edit"),
-            Some("--auto-edit")
+            CodexPlugin::approval_mode_policy("auto-edit"),
+            Ok("on-request")
         );
     }
 
     #[test]
     fn test_approval_mode_full_auto() {
-        assert_eq!(
-            CodexPlugin::approval_mode_flag("full-auto"),
-            Some("--full-auto")
-        );
+        assert_eq!(CodexPlugin::approval_mode_policy("full-auto"), Ok("never"));
     }
 
     #[test]
     fn test_approval_mode_unknown() {
-        assert_eq!(CodexPlugin::approval_mode_flag("unknown"), None);
+        assert!(CodexPlugin::approval_mode_policy("unknown").is_err());
     }
 
     // --- Sandbox mode mapping tests ---
@@ -444,7 +457,7 @@ mod tests {
     fn test_sandbox_mode_read_only() {
         assert_eq!(
             CodexPlugin::sandbox_mode_args("read-only"),
-            Some(("--sandbox", "read-only"))
+            Ok(("--sandbox", "read-only"))
         );
     }
 
@@ -452,7 +465,7 @@ mod tests {
     fn test_sandbox_mode_workspace_write() {
         assert_eq!(
             CodexPlugin::sandbox_mode_args("workspace-write"),
-            Some(("--sandbox", "workspace-write"))
+            Ok(("--sandbox", "workspace-write"))
         );
     }
 
@@ -460,13 +473,13 @@ mod tests {
     fn test_sandbox_mode_full_access() {
         assert_eq!(
             CodexPlugin::sandbox_mode_args("full-access"),
-            Some(("--sandbox", "danger-full-access"))
+            Ok(("--sandbox", "danger-full-access"))
         );
     }
 
     #[test]
     fn test_sandbox_mode_unknown() {
-        assert_eq!(CodexPlugin::sandbox_mode_args("unknown"), None);
+        assert!(CodexPlugin::sandbox_mode_args("unknown").is_err());
     }
 
     // --- build_args tests ---
@@ -474,9 +487,16 @@ mod tests {
     #[test]
     fn test_build_args_defaults() {
         let plugin = CodexPlugin::new(CodexConfig::default());
-        let args = plugin.build_args(&[], &[], None, None);
-        // Default: --suggest + --sandbox workspace-write
-        assert_eq!(args, vec!["--suggest", "--sandbox", "workspace-write"]);
+        let args = plugin.build_args(&[], &[], None, None).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "--ask-for-approval",
+                "untrusted",
+                "--sandbox",
+                "workspace-write"
+            ]
+        );
     }
 
     #[test]
@@ -485,13 +505,14 @@ mod tests {
             model: Some("o4-mini".to_string()),
             ..Default::default()
         });
-        let args = plugin.build_args(&[], &[], None, None);
+        let args = plugin.build_args(&[], &[], None, None).unwrap();
         assert_eq!(
             args,
             vec![
                 "--model",
                 "o4-mini",
-                "--suggest",
+                "--ask-for-approval",
+                "untrusted",
                 "--sandbox",
                 "workspace-write"
             ]
@@ -505,8 +526,16 @@ mod tests {
             sandbox_mode: Some("full-access".to_string()),
             ..Default::default()
         });
-        let args = plugin.build_args(&[], &[], None, None);
-        assert_eq!(args, vec!["--full-auto", "--sandbox", "danger-full-access"]);
+        let args = plugin.build_args(&[], &[], None, None).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "--ask-for-approval",
+                "never",
+                "--sandbox",
+                "danger-full-access"
+            ]
+        );
     }
 
     #[test]
@@ -515,9 +544,9 @@ mod tests {
             sandbox_mode: None,
             ..Default::default()
         });
-        let args = plugin.build_args(&[], &[], None, None);
+        let args = plugin.build_args(&[], &[], None, None).unwrap();
         // Only approval mode flag, no sandbox
-        assert_eq!(args, vec!["--suggest"]);
+        assert_eq!(args, vec!["--ask-for-approval", "untrusted"]);
     }
 
     #[test]
@@ -526,15 +555,19 @@ mod tests {
             args: vec!["--notify".to_string()],
             ..Default::default()
         });
-        let args = plugin.build_args(&["--continue"], &[], None, None);
+        let args = plugin
+            .build_args(&["resume", "--last"], &[], None, None)
+            .unwrap();
         assert_eq!(
             args,
             vec![
                 "--notify",
-                "--suggest",
+                "--ask-for-approval",
+                "untrusted",
                 "--sandbox",
                 "workspace-write",
-                "--continue"
+                "resume",
+                "--last"
             ]
         );
     }
@@ -542,15 +575,22 @@ mod tests {
     #[test]
     fn test_build_args_profile_overrides_approval() {
         let plugin = CodexPlugin::new(CodexConfig::default());
-        let args = plugin.build_args(&[], &[], Some("full-auto"), None);
-        assert!(args.contains(&"--full-auto".to_string()));
-        assert!(!args.contains(&"--suggest".to_string()));
+        let args = plugin
+            .build_args(&[], &[], Some("full-auto"), None)
+            .unwrap();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--ask-for-approval", "never"])
+        );
+        assert!(!args.contains(&"untrusted".to_string()));
     }
 
     #[test]
     fn test_build_args_profile_overrides_sandbox() {
         let plugin = CodexPlugin::new(CodexConfig::default());
-        let args = plugin.build_args(&[], &[], None, Some("full-access"));
+        let args = plugin
+            .build_args(&[], &[], None, Some("full-access"))
+            .unwrap();
         assert!(args.contains(&"danger-full-access".to_string()));
         assert!(!args.contains(&"workspace-write".to_string()));
     }
@@ -559,7 +599,7 @@ mod tests {
     fn test_build_args_profile_extra_args() {
         let plugin = CodexPlugin::new(CodexConfig::default());
         let profile_args = vec!["--notify".to_string(), "--no-color".to_string()];
-        let args = plugin.build_args(&[], &profile_args, None, None);
+        let args = plugin.build_args(&[], &profile_args, None, None).unwrap();
         assert!(args.contains(&"--notify".to_string()));
         assert!(args.contains(&"--no-color".to_string()));
     }
@@ -593,7 +633,10 @@ mod tests {
                 env,
             }) => {
                 assert_eq!(program, "codex");
-                assert!(args.contains(&"--suggest".to_string()));
+                assert!(
+                    args.windows(2)
+                        .any(|pair| pair == ["--ask-for-approval", "untrusted"])
+                );
                 assert!(args.contains(&"--sandbox".to_string()));
                 assert!(args.contains(&"workspace-write".to_string()));
                 assert_eq!(cwd, Some("/tmp/project".to_string()));
@@ -625,11 +668,71 @@ mod tests {
 
         match extract_open_tab(response) {
             Some(PluginAction::OpenTab { args, title, .. }) => {
-                assert!(args.contains(&"--continue".to_string()));
+                assert!(args.windows(2).any(|pair| pair == ["resume", "--last"]));
                 assert_eq!(title, Some("Codex (resume)".to_string()));
             }
-            _ => panic!("Expected OpenTab with --continue"),
+            _ => panic!("Expected OpenTab with resume --last"),
         }
+    }
+
+    #[test]
+    fn test_invalid_approval_mode_rejects_launch_with_notice() {
+        let mut plugin = CodexPlugin::new(CodexConfig {
+            approval_mode: "anything-goes".to_string(),
+            ..Default::default()
+        });
+        let ctx = PluginContext {
+            cwd: None,
+            tab_count: 1,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+
+        let response = plugin.on_hook(
+            &Hook::CommandInvoked {
+                command_id: "codex.open".to_string(),
+            },
+            &ctx,
+        );
+
+        match response {
+            HookResponse::Actions(actions) => {
+                assert!(
+                    !actions
+                        .iter()
+                        .any(|action| matches!(action, PluginAction::OpenTab { .. }))
+                );
+                assert!(actions.iter().any(|action| matches!(
+                    action,
+                    PluginAction::ShowNotice { title, .. }
+                        if title == "Invalid Codex configuration"
+                )));
+            }
+            _ => panic!("Expected a visible configuration error"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_sandbox_mode_rejects_launch_with_notice() {
+        let mut plugin = CodexPlugin::new(CodexConfig {
+            sandbox_mode: Some("host-write".to_string()),
+            ..Default::default()
+        });
+        let ctx = PluginContext {
+            cwd: None,
+            tab_count: 1,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+
+        let response = plugin.on_hook(
+            &Hook::CommandInvoked {
+                command_id: "codex.open".to_string(),
+            },
+            &ctx,
+        );
+
+        assert!(extract_open_tab(response).is_none());
     }
 
     #[test]
@@ -916,8 +1019,11 @@ mod tests {
             }) => {
                 assert_eq!(tab_env.get("OPENAI_API_KEY"), Some(&"test-key".to_string()));
                 assert_eq!(tab_env.get("CUSTOM_VAR"), Some(&"custom-val".to_string()));
-                assert!(args.contains(&"--full-auto".to_string()));
-                assert!(!args.contains(&"--suggest".to_string()));
+                assert!(
+                    args.windows(2)
+                        .any(|pair| pair == ["--ask-for-approval", "never"])
+                );
+                assert!(!args.contains(&"untrusted".to_string()));
                 assert!(args.contains(&"danger-full-access".to_string()));
                 assert!(!args.contains(&"workspace-write".to_string()));
                 assert!(args.contains(&"--notify".to_string()));
@@ -992,9 +1098,42 @@ mod tests {
                 args, env: tab_env, ..
             }) => {
                 assert_eq!(tab_env.get("MY_VAR"), Some(&"my-val".to_string()));
-                assert!(args.contains(&"--continue".to_string()));
+                assert!(args.windows(2).any(|pair| pair == ["resume", "--last"]));
             }
-            _ => panic!("Expected OpenTab with --continue"),
+            _ => panic!("Expected OpenTab with resume --last"),
+        }
+    }
+
+    /// Optional executable contract probe. It checks parsing only (`--help`),
+    /// so it neither requires authentication nor starts an interactive session.
+    #[test]
+    fn installed_codex_accepts_generated_launch_args() {
+        use std::process::Command;
+
+        let available = Command::new("codex").arg("--version").output();
+        let Ok(version) = available else {
+            eprintln!("skipping Codex CLI contract probe: codex is not installed");
+            return;
+        };
+        if !version.status.success() {
+            eprintln!("skipping Codex CLI contract probe: codex --version failed");
+            return;
+        }
+
+        let plugin = CodexPlugin::new(CodexConfig::default());
+        for extra in [&[][..], &["resume", "--last"][..]] {
+            let mut args = plugin.build_args(extra, &[], None, None).unwrap();
+            args.push("--help".to_string());
+            let output = Command::new("codex")
+                .args(&args)
+                .output()
+                .expect("installed Codex should be executable");
+            assert!(
+                output.status.success(),
+                "Codex rejected generated args {:?}: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 }

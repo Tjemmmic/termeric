@@ -17,7 +17,8 @@ pub struct CodexProfile {
     #[serde(default)]
     pub description: String,
 
-    /// Approval mode override: "suggest", "auto-edit", "full-auto"
+    /// Approval mode override: "suggest", "auto-edit", "full-auto". These map
+    /// to Codex policies "untrusted", "on-request", and "never", respectively.
     #[serde(default)]
     pub approval_mode: Option<String>,
 
