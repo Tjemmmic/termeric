@@ -19,6 +19,8 @@ pub struct SavedCursor {
     pub fg_spec: ColorSpec,
     /// Saved background color specification
     pub bg_spec: ColorSpec,
+    /// Saved underline color (None means follow foreground)
+    pub underline_color: Option<Color>,
 }
 
 impl Default for SavedCursor {
@@ -31,6 +33,7 @@ impl Default for SavedCursor {
             bg: Color::default_bg(),
             fg_spec: ColorSpec::Default,
             bg_spec: ColorSpec::Default,
+            underline_color: None,
         }
     }
 }

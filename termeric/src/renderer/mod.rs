@@ -40,7 +40,8 @@ use crate::terminal::url::UrlCache;
 use crate::ui::settings::SettingsPanelInfo;
 use anyhow::Result;
 use std::sync::Arc;
-use termeric_core::{CellAttrs, CellFlags, Color as TermColor, Grid, Selection};
+use termeric_core::grid::ColorSpec;
+use termeric_core::{Cell, CellAttrs, CellFlags, Color as TermColor, Grid, Selection};
 use wgpu::*;
 use winit::window::Window;
 
@@ -205,6 +206,43 @@ fn contrast_text(bg: [f32; 4]) -> [f32; 4] {
     }
 }
 
+#[derive(Clone)]
+struct TerminalPalette {
+    default_fg: TermColor,
+    default_bg: TermColor,
+    ansi: [TermColor; 16],
+}
+
+impl TerminalPalette {
+    fn from_theme(theme: &Theme) -> Self {
+        let convert =
+            |color: crate::config::theme::Color| TermColor::rgb(color.r, color.g, color.b);
+        Self {
+            default_fg: convert(theme.ui.foreground),
+            default_bg: convert(theme.ui.background),
+            ansi: std::array::from_fn(|index| convert(theme.ansi_color(index as u8))),
+        }
+    }
+
+    fn resolve(&self, spec: ColorSpec, resolved: TermColor, default: TermColor) -> TermColor {
+        match spec {
+            ColorSpec::Default => default,
+            ColorSpec::Indexed(index @ 0..=15) => self.ansi[index as usize],
+            ColorSpec::Indexed(_) | ColorSpec::TrueColor(_) => resolved,
+        }
+    }
+
+    fn resolve_cell(&self, cell: &Cell) -> (TermColor, TermColor) {
+        let fg = self.resolve(cell.fg_spec, cell.fg, self.default_fg);
+        let bg = self.resolve(cell.bg_spec, cell.bg, self.default_bg);
+        if cell.attrs.contains(CellAttrs::INVERSE) {
+            (bg, fg)
+        } else {
+            (fg, bg)
+        }
+    }
+}
+
 /// Main renderer that manages all GPU resources
 pub struct Renderer {
     #[allow(dead_code)]
@@ -230,6 +268,8 @@ pub struct Renderer {
     font_size: f32,
     // Theme-driven UI palette
     ui: UiPalette,
+    // Theme-resolved terminal defaults and ANSI 0-15 colors
+    terminal_palette: TerminalPalette,
     // Window opacity (0.0 - 1.0)
     opacity: f32,
     // Tab bar hover state for icon animations
@@ -364,6 +404,7 @@ impl Renderer {
             scale_factor,
             font_size,
             ui: UiPalette::from_theme(theme),
+            terminal_palette: TerminalPalette::from_theme(theme),
             opacity: 1.0,
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
@@ -513,6 +554,7 @@ impl Renderer {
     /// Set the active theme for UI rendering
     pub fn set_theme(&mut self, theme: &Theme) {
         self.ui = UiPalette::from_theme(theme);
+        self.terminal_palette = TerminalPalette::from_theme(theme);
     }
 
     /// Set window opacity (0.0 = fully transparent, 1.0 = fully opaque)
@@ -1134,7 +1176,7 @@ impl Renderer {
 
         let scroll_offset = grid.scroll_offset();
         let scroll_offset_i32 = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
-        let default_bg = TermColor::default_bg();
+        let default_bg = self.terminal_palette.default_bg;
 
         let max_grid_y = window_height - self.padding;
 
@@ -1184,7 +1226,7 @@ impl Renderer {
                 let is_search_match = search.is_match(grid_row, col);
                 let is_current_match = search.is_current_match(grid_row, col);
 
-                let (fg, bg) = cell.apply_inverse();
+                let (fg, bg) = self.terminal_palette.resolve_cell(cell);
 
                 // Draw background
                 if is_selected {
@@ -1249,7 +1291,7 @@ impl Renderer {
 
                 // Draw underline styles
                 if cell.attrs.has_underline() {
-                    let underline_color = cell.underline_color.unwrap_or(cell.fg);
+                    let underline_color = cell.underline_color.unwrap_or(fg);
                     let ul_color = apply_brightness(
                         [
                             underline_color.r as f32 / 255.0,
@@ -1421,5 +1463,42 @@ impl Renderer {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_palette_tests {
+    use super::*;
+
+    fn term_color(color: crate::config::theme::Color) -> TermColor {
+        TermColor::rgb(color.r, color.g, color.b)
+    }
+
+    #[test]
+    fn terminal_palette_resolves_theme_defaults_and_indexed_colors() {
+        let theme = Theme::load_builtin("nord").unwrap();
+        let palette = TerminalPalette::from_theme(&theme);
+        let mut cell = Cell::with_char('x');
+
+        assert_eq!(
+            palette.resolve_cell(&cell),
+            (
+                term_color(theme.ui.foreground),
+                term_color(theme.ui.background)
+            )
+        );
+
+        cell.fg_spec = ColorSpec::Indexed(1);
+        cell.fg = TermColor::rgb(205, 0, 0);
+        assert_eq!(palette.resolve_cell(&cell).0, term_color(theme.primary.red));
+
+        cell.attrs.insert(CellAttrs::INVERSE);
+        assert_eq!(
+            palette.resolve_cell(&cell),
+            (
+                term_color(theme.ui.background),
+                term_color(theme.primary.red)
+            )
+        );
     }
 }

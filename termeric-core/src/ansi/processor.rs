@@ -35,6 +35,7 @@ impl Default for Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::{CellAttrs, Color, ColorSpec};
 
     #[test]
     fn test_processor_creation() {
@@ -94,5 +95,48 @@ mod tests {
         // After clear, cursor position is preserved but content is cleared
         let grid = terminal.grid();
         assert!(grid.cell(0, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn semicolon_and_colon_extended_colors_are_consumed_atomically() {
+        let mut processor = Processor::new();
+        let mut terminal = Terminal::new(10, 2);
+
+        processor.process(
+            &mut terminal,
+            b"\x1b[38;2;12;34;56mA\x1b[48;5;196mB\x1b[38:2::90:80:70mC",
+        );
+
+        let grid = terminal.grid();
+        let a = grid.cell(0, 0).unwrap();
+        assert_eq!(a.fg, Color::rgb(12, 34, 56));
+        assert_eq!(a.fg_spec, ColorSpec::TrueColor(Color::rgb(12, 34, 56)));
+        assert!(!a.attrs.contains(CellAttrs::DIM));
+
+        let b = grid.cell(0, 1).unwrap();
+        assert_eq!(b.bg_spec, ColorSpec::Indexed(196));
+
+        let c = grid.cell(0, 2).unwrap();
+        assert_eq!(c.fg, Color::rgb(90, 80, 70));
+        assert_eq!(c.fg_spec, ColorSpec::TrueColor(Color::rgb(90, 80, 70)));
+    }
+
+    #[test]
+    fn alternate_screen_restores_cursor_and_rendition_state() {
+        let mut processor = Processor::new();
+        let mut terminal = Terminal::new(10, 2);
+
+        processor.process(
+            &mut terminal,
+            b"A\x1b[?1049h\x1b[7;48;2;90;80;70mB\x1b[?1049lC",
+        );
+
+        let grid = terminal.grid();
+        assert_eq!(grid.cell(0, 0).unwrap().content.char(), Some('A'));
+        let c = grid.cell(0, 1).unwrap();
+        assert_eq!(c.content.char(), Some('C'));
+        assert_eq!(c.fg_spec, ColorSpec::Default);
+        assert_eq!(c.bg_spec, ColorSpec::Default);
+        assert!(!c.attrs.contains(CellAttrs::INVERSE));
     }
 }

@@ -680,6 +680,7 @@ impl Terminal {
             bg: self.current_bg,
             fg_spec: self.current_fg_spec,
             bg_spec: self.current_bg_spec,
+            underline_color: self.current_underline_color,
         };
 
         if self.alt_screen_active {
@@ -704,6 +705,7 @@ impl Terminal {
             self.current_bg = saved.bg;
             self.current_fg_spec = saved.fg_spec;
             self.current_bg_spec = saved.bg_spec;
+            self.current_underline_color = saved.underline_color;
         }
     }
 

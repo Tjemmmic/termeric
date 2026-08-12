@@ -522,12 +522,19 @@ impl Handler<'_> {
             return;
         }
 
-        // Process each semicolon-separated parameter group
-        for subparams in params.iter() {
+        let groups: Vec<Vec<u16>> = params.iter().map(|group| group.to_vec()).collect();
+        let mut group_index = 0;
+
+        // Process each semicolon-separated parameter group. Extended colors
+        // consume following groups in the common `38;2;r;g;b` / `48;5;n`
+        // forms, while colon forms stay within one group.
+        while group_index < groups.len() {
+            let subparams = &groups[group_index];
             // Each subparams is a colon-separated group (e.g., [4, 3] for "4:3")
-            let values: Vec<u16> = subparams.to_vec();
+            let values = subparams.as_slice();
 
             if values.is_empty() {
+                group_index += 1;
                 continue;
             }
 
@@ -581,10 +588,15 @@ impl Handler<'_> {
 
                 // Extended foreground color (38:2:R:G:B or 38:5:N)
                 38 => {
-                    if let Some((color, spec)) =
+                    let parsed = if values.len() > 1 {
                         self.parse_extended_color_spec_from_subparams(&values[1..])
-                    {
+                            .map(|color| (color, 0))
+                    } else {
+                        self.parse_semicolon_extended_color(&groups, group_index)
+                    };
+                    if let Some(((color, spec), consumed)) = parsed {
                         self.terminal.set_fg(color, spec);
+                        group_index += consumed;
                     }
                 }
 
@@ -601,10 +613,15 @@ impl Handler<'_> {
 
                 // Extended background color (48:2:R:G:B or 48:5:N)
                 48 => {
-                    if let Some((color, spec)) =
+                    let parsed = if values.len() > 1 {
                         self.parse_extended_color_spec_from_subparams(&values[1..])
-                    {
+                            .map(|color| (color, 0))
+                    } else {
+                        self.parse_semicolon_extended_color(&groups, group_index)
+                    };
+                    if let Some(((color, spec), consumed)) = parsed {
                         self.terminal.set_bg(color, spec);
+                        group_index += consumed;
                     }
                 }
 
@@ -615,8 +632,15 @@ impl Handler<'_> {
 
                 // Extended underline color (58:2:R:G:B or 58:5:N)
                 58 => {
-                    if let Some(color) = self.parse_extended_color_from_subparams(&values[1..]) {
+                    let parsed = if values.len() > 1 {
+                        self.parse_extended_color_spec_from_subparams(&values[1..])
+                            .map(|color| (color, 0))
+                    } else {
+                        self.parse_semicolon_extended_color(&groups, group_index)
+                    };
+                    if let Some(((color, _), consumed)) = parsed {
                         self.terminal.set_underline_color(color);
+                        group_index += consumed;
                     }
                 }
 
@@ -639,14 +663,42 @@ impl Handler<'_> {
                     log::trace!("Unknown SGR parameter: {}", primary);
                 }
             }
+            group_index += 1;
         }
     }
 
-    /// Parse extended color from colon-separated subparameters
-    /// Handles formats like: 2:R:G:B (RGB) or 5:N (256-color)
-    fn parse_extended_color_from_subparams(&self, subparams: &[u16]) -> Option<Color> {
-        self.parse_extended_color_spec_from_subparams(subparams)
-            .map(|(c, _)| c)
+    /// Parse the groups following a semicolon-form 38/48/58 parameter.
+    /// Returns the color and number of additional groups consumed.
+    fn parse_semicolon_extended_color(
+        &self,
+        groups: &[Vec<u16>],
+        start: usize,
+    ) -> Option<((Color, ColorSpec), usize)> {
+        let mode = *groups.get(start + 1)?.first()?;
+        match mode {
+            2 => {
+                let r = *groups.get(start + 2)?.first()?;
+                let g = *groups.get(start + 3)?.first()?;
+                let b = *groups.get(start + 4)?.first()?;
+                if r > 255 || g > 255 || b > 255 {
+                    return None;
+                }
+                let color = Color::rgb(r as u8, g as u8, b as u8);
+                Some(((color, ColorSpec::TrueColor(color)), 4))
+            }
+            5 => {
+                let index = *groups.get(start + 2)?.first()?;
+                if index > 255 {
+                    return None;
+                }
+                let index = index as u8;
+                Some((
+                    (super::color::color_256(index), ColorSpec::Indexed(index)),
+                    2,
+                ))
+            }
+            _ => None,
+        }
     }
 
     /// Parse extended color with its spec from colon-separated subparameters
@@ -662,23 +714,23 @@ impl Handler<'_> {
             2 => {
                 // RGB color: 2:R:G:B (may have additional empty : separators)
                 // Some terminals send 2::R:G:B (with colorspace placeholder)
-                let rgb: Vec<u16> = subparams[1..]
-                    .iter()
-                    .copied()
-                    .filter(|&v| v <= 255) // Filter valid color values
-                    .take(3)
-                    .collect();
-
-                if rgb.len() >= 3 {
-                    let color = Color::rgb(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8);
-                    Some((color, ColorSpec::TrueColor(color)))
+                let rgb = if subparams.len() >= 5 {
+                    &subparams[subparams.len() - 3..]
                 } else {
-                    None
+                    subparams.get(1..4)?
+                };
+                if rgb.iter().any(|component| *component > 255) {
+                    return None;
                 }
+                let color = Color::rgb(rgb[0] as u8, rgb[1] as u8, rgb[2] as u8);
+                Some((color, ColorSpec::TrueColor(color)))
             }
             5 => {
                 // 256-color palette: 5:N
                 if subparams.len() > 1 {
+                    if subparams[1] > 255 {
+                        return None;
+                    }
                     let idx = subparams[1] as u8;
                     Some((super::color::color_256(idx), ColorSpec::Indexed(idx)))
                 } else {
@@ -744,12 +796,31 @@ impl Handler<'_> {
                         // SGR mouse encoding
                         self.terminal.set_mode(TerminalMode::MOUSE_SGR, enable);
                     }
-                    1049 => {
-                        // Alternate screen buffer
+                    47 | 1047 => {
+                        // Alternate screen buffer without cursor save/restore.
                         if enable {
                             self.terminal.enter_alt_screen();
                         } else {
                             self.terminal.exit_alt_screen();
+                        }
+                    }
+                    1048 => {
+                        // Save/restore cursor and rendition state.
+                        if enable {
+                            self.terminal.save_cursor();
+                        } else {
+                            self.terminal.restore_cursor();
+                        }
+                    }
+                    1049 => {
+                        // Save cursor/rendition, use a cleared alternate screen,
+                        // then restore the primary state when leaving.
+                        if enable {
+                            self.terminal.save_cursor();
+                            self.terminal.enter_alt_screen();
+                        } else {
+                            self.terminal.exit_alt_screen();
+                            self.terminal.restore_cursor();
                         }
                     }
                     2004 => {
