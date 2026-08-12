@@ -30,8 +30,11 @@ For development:
 
 ```bash
 cargo build              # optimized + debuginfo
-cargo test               # ~320 tests, runs in <1s
+cargo test               # 378 tests, runs in <1s
 ```
+
+For packaged installation, upgrades, uninstall steps, configuration paths,
+and Linux troubleshooting, see [`docs/install.md`](docs/install.md).
 
 ## Configuration
 
@@ -122,6 +125,8 @@ termeric-core/      Library crate — terminal emulation
 - [`CLAUDE.md`](CLAUDE.md) — architecture overview, critical patterns, module map
 - [`STYLE_GUIDE.md`](STYLE_GUIDE.md) — UI / theming style guide (read before touching user-facing code)
 - [`AGENTS.md`](AGENTS.md) — rules and conventions for AI agents working in this repo
+- [`CHANGELOG.md`](CHANGELOG.md) — release-facing changes and known limitations
+- [`docs/install.md`](docs/install.md) — install, upgrade, uninstall, and troubleshooting
 
 ## License
 

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Termeric
+Comment=GPU-accelerated terminal emulator with integrated AI workflows
+Exec=termeric
+Icon=termeric
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;command;developer;
+StartupNotify=true
+StartupWMClass=termeric

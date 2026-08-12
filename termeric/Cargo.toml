@@ -2,9 +2,14 @@
 name = "termeric"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "A GPU-accelerated terminal emulator with a warm, turmeric-inspired theme"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [[bin]]
 name = "termeric"
@@ -12,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Internal crates
-termeric-core = { path = "../termeric-core" }
+termeric-core = { version = "0.1.0", path = "../termeric-core" }
 
 # Windowing
 winit = "0.30"
@@ -69,8 +74,8 @@ thiserror.workspace = true
 tempfile = "3"
 
 [package.metadata.deb]
-maintainer = "Termeric Contributors"
-copyright = "2025, Termeric Contributors <termeric@example.com>"
+maintainer = "Termeric Contributors <Tjemmmic@users.noreply.github.com>"
+copyright = "2026, Termeric Contributors"
 license-file = ["../LICENSE", "4"]
 extended-description = """\
 Termeric is a modern, GPU-accelerated terminal emulator built with Rust.

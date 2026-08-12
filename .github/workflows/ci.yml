@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, improvements]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
+            libvulkan-dev mesa-vulkan-drivers
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked
+      - name: Verify crate packages
+        run: |
+          cargo package -p termeric-core --locked
+          # The app depends on the not-yet-published workspace core crate.
+          # Package both together; full app verification becomes possible
+          # after termeric-core 0.1.0 exists in the target registry.
+          cargo package --workspace --locked --no-verify
+      - name: Build Debian package
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p termeric --locked
+          package="$(find target/debian -maxdepth 1 -name 'termeric_*.deb' -print -quit)"
+          test -n "$package"
+          dpkg-deb --contents "$package" | grep -q './usr/bin/termeric'
+          dpkg-deb --contents "$package" | grep -q './usr/share/doc/termeric/copyright'
+          dpkg-deb --contents "$package" | grep -q './usr/share/applications/termeric.desktop'
+          dpkg-deb --contents "$package" | grep -q './usr/share/icons/hicolor/1024x1024/apps/termeric.png'
+          test -n "$(dpkg-deb --field "$package" Depends)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: termeric-debian
+          path: target/debian/*.deb
+          if-no-files-found: error
+
+  linux-gpu-smoke:
+    runs-on: ubuntu-latest
+    env:
+      TERMERIC_GPU_SMOKE: "1"
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software-renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
+            libvulkan-dev mesa-vulkan-drivers
+      - name: Submit headless WGPU render pass
+        run: >-
+          cargo test -p termeric --locked
+          linux_headless_gpu_render_smoke_when_requested -- --nocapture
