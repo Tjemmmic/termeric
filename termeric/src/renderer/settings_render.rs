@@ -286,8 +286,34 @@ impl Renderer {
                             } else {
                                 adjust_alpha(self.ui.palette_text_dim, 0.5 * anim)
                             };
-                            self.text_pipeline
-                                .push_char('v', chevron_x, text_cy, chevron_color);
+                            let center_x = chevron_x + cell_width * 0.5;
+                            let center_y = text_cy + cell_height * 0.5;
+                            let half_width = (cell_width * 0.32).clamp(2.5, 4.5);
+                            let half_height = (cell_height * 0.12).clamp(1.5, 3.0);
+                            let direction = if is_selected && info.dropdown_open {
+                                -1.0
+                            } else {
+                                1.0
+                            };
+                            let outer_y = center_y - direction * half_height;
+                            let point_y = center_y + direction * half_height;
+                            let line_width = if is_selected { 1.8 } else { 1.4 };
+                            self.rect_pipeline.push_line(
+                                center_x - half_width,
+                                outer_y,
+                                center_x,
+                                point_y,
+                                line_width,
+                                chevron_color,
+                            );
+                            self.rect_pipeline.push_line(
+                                center_x,
+                                point_y,
+                                center_x + half_width,
+                                outer_y,
+                                line_width,
+                                chevron_color,
+                            );
                         }
                     }
                     crate::ui::settings::SettingKind::ReadOnly => {
