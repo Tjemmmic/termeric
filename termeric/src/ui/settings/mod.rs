@@ -188,6 +188,7 @@ pub enum SettingsSection {
     Startup,
     Shell,
     Sessions,
+    Harvest,
     Plugins,
 }
 
@@ -203,12 +204,13 @@ impl SettingsSection {
             Self::Startup => "Startup",
             Self::Shell => "Shell",
             Self::Sessions => "Sessions",
+            Self::Harvest => "Harvest (Experimental)",
             Self::Plugins => "Plugins",
         }
     }
 
     pub fn all() -> &'static [SettingsSection] {
-        static ALL: [SettingsSection; 10] = [
+        static ALL: [SettingsSection; 11] = [
             SettingsSection::Font,
             SettingsSection::Theme,
             SettingsSection::Window,
@@ -218,6 +220,7 @@ impl SettingsSection {
             SettingsSection::Startup,
             SettingsSection::Shell,
             SettingsSection::Sessions,
+            SettingsSection::Harvest,
             SettingsSection::Plugins,
         ];
         ALL.as_slice()
@@ -304,6 +307,12 @@ pub enum SettingsAction {
     SetSessionAutoRestore(bool),
     /// Toggle session save scrollback
     SetSessionSaveScrollback(bool),
+    /// Enable or disable the experimental Harvest beta.
+    SetHarvestEnabled(bool),
+    /// Show or hide Harvest growth indicators.
+    SetHarvestIndicators(bool),
+    /// Change the Harvest history capacity.
+    SetHarvestMaxHistory(usize),
     /// Enable or disable a plugin
     SetPluginEnabled { plugin_id: String, enabled: bool },
     /// Change a plugin's model
@@ -790,6 +799,47 @@ impl SettingsPanel {
                     },
                 ],
             ));
+
+            result.push((
+                SettingsSection::Harvest,
+                vec![
+                    SettingItem {
+                        label: "Status",
+                        value: "Experimental beta".into(),
+                        kind: SettingKind::ReadOnly,
+                    },
+                    SettingItem {
+                        label: "Enabled",
+                        value: if config.harvest.enabled { "On" } else { "Off" }.into(),
+                        kind: SettingKind::Dropdown {
+                            options: vec!["On".into(), "Off".into()],
+                            selected: if config.harvest.enabled { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "Growth Indicators",
+                        value: if config.harvest.show_indicators {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                        .into(),
+                        kind: SettingKind::Dropdown {
+                            options: vec!["On".into(), "Off".into()],
+                            selected: if config.harvest.show_indicators { 0 } else { 1 },
+                        },
+                    },
+                    SettingItem {
+                        label: "History Limit",
+                        value: config.harvest.max_history.to_string(),
+                        kind: SettingKind::Numeric {
+                            min: 1.0,
+                            max: 10_000.0,
+                            step: 25.0,
+                        },
+                    },
+                ],
+            ));
         }
 
         // Plugins
@@ -1241,6 +1291,12 @@ impl SettingsPanel {
                     (SettingsSection::Sessions, "Save Scrollback") => {
                         SettingsAction::SetSessionSaveScrollback(new_val == "On")
                     }
+                    (SettingsSection::Harvest, "Enabled") => {
+                        SettingsAction::SetHarvestEnabled(new_val == "On")
+                    }
+                    (SettingsSection::Harvest, "Growth Indicators") => {
+                        SettingsAction::SetHarvestIndicators(new_val == "On")
+                    }
                     (SettingsSection::Plugins, "Claude Code") => SettingsAction::SetPluginEnabled {
                         plugin_id: "claude-code".into(),
                         enabled: new_val == "Enabled",
@@ -1318,6 +1374,9 @@ impl SettingsPanel {
                     }
                     (SettingsSection::Bell, "Flash Duration") => {
                         SettingsAction::SetBellDuration(new_val as u64)
+                    }
+                    (SettingsSection::Harvest, "History Limit") => {
+                        SettingsAction::SetHarvestMaxHistory(new_val as usize)
                     }
                     _ => SettingsAction::None,
                 }

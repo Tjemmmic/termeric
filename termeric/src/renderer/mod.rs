@@ -15,6 +15,7 @@ mod chrome;
 pub(crate) mod draw;
 mod git;
 mod harvest;
+pub use harvest::sprout_menu_hit_test;
 mod overlays;
 mod palette;
 mod panels;

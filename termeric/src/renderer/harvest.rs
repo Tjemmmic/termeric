@@ -9,6 +9,28 @@ use super::draw::DrawCtx;
 use super::{Renderer, adjust_alpha};
 use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRenderInfo};
 
+/// Return the sprout action row under a pointer. Geometry intentionally uses
+/// the same padding and item-height math as `build_sprout_menu`.
+pub fn sprout_menu_hit_test(
+    menu: &SproutMenuRenderInfo,
+    x: f32,
+    y: f32,
+    cell_width: f32,
+    cell_height: f32,
+) -> Option<usize> {
+    if x < menu.x || x >= menu.x + menu.width || y < menu.y || y >= menu.y + menu.height {
+        return None;
+    }
+    let padding = cell_width * 0.5;
+    let item_height = cell_height * 1.4;
+    let local_y = y - menu.y - padding;
+    if local_y < 0.0 {
+        return None;
+    }
+    let index = (local_y / item_height) as usize;
+    (index < menu.actions.len()).then_some(index)
+}
+
 impl Renderer {
     /// Draw growth indicators in the left gutter next to terminal rows.
     ///
@@ -242,5 +264,26 @@ impl Renderer {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sprout_hit_test_matches_rendered_rows() {
+        let menu = SproutMenuRenderInfo {
+            x: 10.0,
+            y: 20.0,
+            actions: vec![("Copy".into(), 'c'), ("Run".into(), 'r')],
+            selected: 0,
+            opacity: 1.0,
+            width: 100.0,
+            height: 38.0,
+        };
+        assert_eq!(sprout_menu_hit_test(&menu, 20.0, 27.0, 10.0, 10.0), Some(0));
+        assert_eq!(sprout_menu_hit_test(&menu, 20.0, 41.0, 10.0, 10.0), Some(1));
+        assert_eq!(sprout_menu_hit_test(&menu, 5.0, 27.0, 10.0, 10.0), None);
     }
 }

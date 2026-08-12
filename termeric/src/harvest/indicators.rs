@@ -3,6 +3,8 @@
 //! Plant-growth animations for long-running processes.
 //! Displays a small vine/sprout animation while commands are running.
 
+use std::time::Instant;
+
 /// Growth phase of the indicator
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrowthPhase {
@@ -57,16 +59,16 @@ pub struct GrowthIndicator {
     pub prompt_row: usize,
     /// Current growth phase
     pub phase: GrowthPhase,
-    /// Time since command started (seconds)
-    pub elapsed: f32,
+    /// Monotonic command start time.
+    started_at: Instant,
     /// Animation progress within current phase (0.0 to 1.0)
     pub progress: f32,
     /// Whether the command completed
     pub completed: bool,
     /// Whether the command was successful
     pub success: bool,
-    /// Time to fade out after completion
-    pub fade_timer: f32,
+    /// Monotonic completion time.
+    completed_at: Option<Instant>,
 }
 
 #[allow(dead_code)]
@@ -76,54 +78,40 @@ impl GrowthIndicator {
         Self {
             prompt_row,
             phase: GrowthPhase::Seed,
-            elapsed: 0.0,
+            started_at: Instant::now(),
             progress: 0.0,
             completed: false,
             success: false,
-            fade_timer: 0.0,
+            completed_at: None,
         }
     }
 
     /// Update the indicator
-    pub fn update(&mut self, dt: f32) {
-        self.elapsed += dt;
+    pub fn update(&mut self) {
+        self.update_at(Instant::now());
+    }
 
-        if self.completed {
-            // Handle completion animation
-            self.fade_timer += dt;
-            self.progress = (self.progress + dt * 3.0).min(1.0);
-
-            // Transition through completion phases
-            match self.phase {
-                GrowthPhase::Blooming | GrowthPhase::Withering => {
-                    if self.fade_timer > 2.0 {
-                        self.phase = GrowthPhase::Finished;
-                    }
-                }
-                _ => {
-                    self.phase = if self.success {
-                        GrowthPhase::Blooming
-                    } else {
-                        GrowthPhase::Withering
-                    };
-                }
-            }
+    fn update_at(&mut self, now: Instant) {
+        let elapsed = now.duration_since(self.started_at).as_secs_f32();
+        if let Some(completed_at) = self.completed_at {
+            let completion_elapsed = now.duration_since(completed_at).as_secs_f32();
+            self.progress = (completion_elapsed * 3.0).min(1.0);
+            self.phase = if completion_elapsed > 2.0 {
+                GrowthPhase::Finished
+            } else if self.success {
+                GrowthPhase::Blooming
+            } else {
+                GrowthPhase::Withering
+            };
         } else {
-            // Update growth phase based on elapsed time
-            let new_phase = match self.elapsed {
+            let new_phase = match elapsed {
                 t if t < 0.5 => GrowthPhase::Seed,
                 t if t < 2.0 => GrowthPhase::Sprouting,
                 t if t < 5.0 => GrowthPhase::Growing,
                 _ => GrowthPhase::FullGrowth,
             };
-
-            if new_phase != self.phase {
-                self.phase = new_phase;
-                self.progress = 0.0;
-            } else {
-                // Animate within phase
-                self.progress = (self.progress + dt * 2.0).min(1.0);
-            }
+            self.phase = new_phase;
+            self.progress = phase_progress(elapsed);
         }
     }
 
@@ -132,6 +120,7 @@ impl GrowthIndicator {
         self.completed = true;
         self.success = success;
         self.progress = 0.0;
+        self.completed_at = Some(Instant::now());
     }
 
     /// Check if the indicator animation is finished
@@ -141,28 +130,33 @@ impl GrowthIndicator {
 
     /// Get the current scale (for pulsing animation)
     pub fn scale(&self) -> f32 {
-        if self.completed {
+        let now = Instant::now();
+        if let Some(completed_at) = self.completed_at {
             // Shrink when complete
-            1.0 - self.fade_timer.min(1.0) * 0.5
+            1.0 - now.duration_since(completed_at).as_secs_f32().min(1.0) * 0.5
         } else {
             // Pulse while running
-            1.0 + (self.elapsed * 3.0).sin() * 0.1
+            1.0 + (now.duration_since(self.started_at).as_secs_f32() * 3.0).sin() * 0.1
         }
     }
 
     /// Get the current rotation (for growth animation)
     pub fn rotation(&self) -> f32 {
         // Gentle swaying motion
-        (self.elapsed * 2.0).sin() * 0.1
+        (self.started_at.elapsed().as_secs_f32() * 2.0).sin() * 0.1
     }
 
     /// Get the current color with animation
     pub fn color(&self) -> [f32; 4] {
         let base = self.phase.color();
 
-        if self.completed && self.fade_timer > 1.0 {
+        let fade_elapsed = self
+            .completed_at
+            .map(|completed_at| completed_at.elapsed().as_secs_f32())
+            .unwrap_or(0.0);
+        if self.completed && fade_elapsed > 1.0 {
             // Fade out
-            let fade = 1.0 - (self.fade_timer - 1.0).min(1.0);
+            let fade = 1.0 - (fade_elapsed - 1.0).min(1.0);
             [base[0], base[1], base[2], base[3] * fade]
         } else {
             base
@@ -170,9 +164,23 @@ impl GrowthIndicator {
     }
 }
 
+fn phase_progress(elapsed: f32) -> f32 {
+    let (start, duration) = if elapsed < 0.5 {
+        (0.0, 0.5)
+    } else if elapsed < 2.0 {
+        (0.5, 1.5)
+    } else if elapsed < 5.0 {
+        (2.0, 3.0)
+    } else {
+        (5.0, 1.0)
+    };
+    ((elapsed - start) / duration).clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_growth_phases() {
@@ -180,10 +188,7 @@ mod tests {
 
         assert_eq!(indicator.phase, GrowthPhase::Seed);
 
-        // Simulate time passing
-        for _ in 0..10 {
-            indicator.update(0.5);
-        }
+        indicator.update_at(indicator.started_at + Duration::from_secs(5));
 
         // Should have grown
         assert!(indicator.phase != GrowthPhase::Seed);
@@ -198,10 +203,8 @@ mod tests {
         assert!(indicator.completed);
         assert!(indicator.success);
 
-        // After enough time, should be finished
-        for _ in 0..20 {
-            indicator.update(0.2);
-        }
+        let completed_at = indicator.completed_at.unwrap();
+        indicator.update_at(completed_at + Duration::from_secs(3));
 
         assert!(indicator.is_finished());
     }

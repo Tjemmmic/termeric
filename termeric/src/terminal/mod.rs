@@ -9,5 +9,6 @@ pub mod container;
 pub mod diff_detector;
 pub mod guardrails;
 pub mod search;
+pub mod shell_integration;
 pub mod splash;
 pub mod url;

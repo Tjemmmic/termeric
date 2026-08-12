@@ -69,7 +69,10 @@ auto_restore = true
 auto_save = true
 save_scrollback = true
 
-# Experimental command-history visualization. Requires OSC 133 shell marks.
+# Experimental beta command-history visualization. Disabled by default.
+# Interactive Bash, Zsh, and Fish tabs receive OSC 133 marks automatically.
+# Custom shells and script/-c launches are not modified; Harvest will explain
+# when semantic prompt marks are unavailable.
 [harvest]
 enabled = false
 show_indicators = true

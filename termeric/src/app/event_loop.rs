@@ -282,13 +282,13 @@ impl ApplicationHandler for App {
                                         .sprout_menu
                                         .as_ref()
                                         .and_then(|m| m.selected_action().cloned());
-                                    let target_row = harvest
+                                    let target = harvest
                                         .sprout_menu
                                         .as_ref()
-                                        .and_then(|m| m.command.as_ref().map(|c| c.row));
+                                        .and_then(|m| m.command.clone());
                                     harvest.hide_sprout_menu();
                                     if let Some(action) = action {
-                                        self.execute_sprout_action(action, target_row);
+                                        self.execute_sprout_action(action, target);
                                     }
                                 }
                                 _ => {}
@@ -650,6 +650,50 @@ impl ApplicationHandler for App {
                                     window.request_redraw();
                                 }
                             }
+                        }
+                    }
+                    return;
+                }
+                // Sprout menu is an input-blocking context menu. Click an
+                // action to execute it, or click outside to dismiss.
+                if self
+                    .harvest
+                    .as_ref()
+                    .is_some_and(|harvest| harvest.sprout_menu.is_some())
+                {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                    {
+                        let hit = self.last_cursor_pos.and_then(|pos| {
+                            let renderer = self.renderer.as_ref()?;
+                            let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
+                            let info = super::sprout_menu_render_info(
+                                menu,
+                                renderer.padding(),
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                                renderer.tab_bar_height() + renderer.chrome_bar_height(),
+                            );
+                            crate::renderer::sprout_menu_hit_test(
+                                &info,
+                                pos.0 as f32,
+                                pos.1 as f32,
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                            )
+                        });
+                        let selected = hit.and_then(|index| {
+                            let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
+                            Some((menu.actions.get(index).copied()?, menu.command.clone()))
+                        });
+                        if let Some(harvest) = &mut self.harvest {
+                            harvest.hide_sprout_menu();
+                        }
+                        if let Some((action, target)) = selected {
+                            self.execute_sprout_action(action, target);
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
                         }
                     }
                     return;

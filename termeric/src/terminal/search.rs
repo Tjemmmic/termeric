@@ -4,6 +4,7 @@
 //! Supports both literal and regex search modes.
 
 use regex::Regex;
+use std::ops::RangeInclusive;
 use termeric_core::{CellContent, Grid};
 
 /// A search match in the terminal
@@ -46,6 +47,8 @@ pub struct Search {
     active: bool,
     /// Rows that contain matches (for filter mode) - sorted and deduplicated
     matching_rows: Vec<i32>,
+    /// Optional inclusive row scope (used by Harvest's Search Output).
+    row_scope: Option<RangeInclusive<i32>>,
 }
 
 impl Default for Search {
@@ -68,11 +71,25 @@ impl Search {
             current_match: None,
             active: false,
             matching_rows: Vec::new(),
+            row_scope: None,
         }
     }
 
     /// Start a new search
     pub fn start(&mut self) {
+        self.start_with_scope(None);
+    }
+
+    pub fn start_in_rows(&mut self, first_row: i32, last_row: i32) {
+        let (first, last) = if first_row <= last_row {
+            (first_row, last_row)
+        } else {
+            (last_row, first_row)
+        };
+        self.start_with_scope(Some(first..=last));
+    }
+
+    fn start_with_scope(&mut self, row_scope: Option<RangeInclusive<i32>>) {
         self.active = true;
         self.query.clear();
         self.matches.clear();
@@ -80,6 +97,7 @@ impl Search {
         self.current_match = None;
         self.compiled_regex = None;
         self.regex_error = None;
+        self.row_scope = row_scope;
         // Keep filter_mode state - user might want to continue filtering
     }
 
@@ -93,6 +111,7 @@ impl Search {
         self.current_match = None;
         self.compiled_regex = None;
         self.regex_error = None;
+        self.row_scope = None;
     }
 
     /// Confirm the search (keep highlights, exit search input mode)
@@ -263,6 +282,9 @@ impl Search {
         for i in 0..scrollback_len {
             // Convert to negative row index: scrollback[0] is oldest, becomes row -(scrollback_len)
             let row_index = -((scrollback_len - i) as i32);
+            if !self.row_is_in_scope(row_index) {
+                continue;
+            }
             if let Some(row) = grid.row_at_offset(row_index) {
                 let line = Self::extract_row_text(row, grid.cols());
                 self.find_matches_in_line(&line, row_index);
@@ -271,6 +293,9 @@ impl Search {
 
         // Search visible rows (0 to rows-1)
         for row in 0..grid.rows() {
+            if !self.row_is_in_scope(row as i32) {
+                continue;
+            }
             let line = self.extract_line_text(grid, row);
             self.find_matches_in_line(&line, row as i32);
         }
@@ -282,6 +307,12 @@ impl Search {
 
         // Build the matching_rows list (sorted, deduplicated)
         self.rebuild_matching_rows();
+    }
+
+    fn row_is_in_scope(&self, row: i32) -> bool {
+        self.row_scope
+            .as_ref()
+            .is_none_or(|scope| scope.contains(&row))
     }
 
     /// Rebuild the matching_rows list from current matches
@@ -428,6 +459,17 @@ mod tests {
 
         search.cancel();
         assert!(!search.is_active());
+    }
+
+    #[test]
+    fn scoped_search_normalizes_and_clears_its_row_range() {
+        let mut search = Search::new();
+        search.start_in_rows(8, 3);
+        assert!(search.row_is_in_scope(3));
+        assert!(search.row_is_in_scope(8));
+        assert!(!search.row_is_in_scope(2));
+        search.start();
+        assert!(search.row_is_in_scope(-100));
     }
 
     #[test]

@@ -229,6 +229,8 @@ impl TabManager {
                         tab.terminal = remaining.terminal;
                         tab.pty = remaining.pty;
                         tab.pty_rx = remaining.pty_rx;
+                        tab.harvest = remaining.harvest;
+                        tab.shell_integration = remaining.shell_integration;
                     }
                     tab.pane_manager = None;
                     // Resize the transplanted terminal/PTY back to full tab dimensions

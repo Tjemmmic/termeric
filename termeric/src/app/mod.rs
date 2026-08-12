@@ -172,11 +172,6 @@ pub struct App {
     pending_profile_selection: Option<(String, Vec<String>)>,
     /// Harvest mode (command visualization)
     harvest: Option<HarvestMode>,
-    /// Number of command regions already processed by harvest
-    harvest_region_cursor: usize,
-    /// Prompt row of the command currently running (used to drive the growth
-    /// indicator). None when the shell is at a fresh prompt with no command.
-    harvest_active_prompt_row: Option<usize>,
     /// URL detector for auto-detecting URLs in terminal output
     url_detector: UrlDetector,
     /// Cached URL lookup table, reused between frames
@@ -292,8 +287,6 @@ impl App {
 
             pending_profile_selection: None,
             harvest: None,
-            harvest_region_cursor: 0,
-            harvest_active_prompt_row: None,
             url_detector: UrlDetector::new(),
             url_cache: UrlCache::new(0),
         });
@@ -302,7 +295,8 @@ impl App {
 
         // Initialize command palette and apply all runtime config through the
         // same path used by reload, settings changes, and reset.
-        app.command_palette.register_commands(core_commands());
+        app.command_palette
+            .register_commands(core_commands(app.config.harvest.enabled));
         app.apply_config_side_effects();
         if let Some(warning) = startup_config_warning {
             log::error!("{}", warning);
@@ -523,68 +517,48 @@ impl App {
             self.handle_terminal_event(event);
         }
 
-        // Feed newly completed command regions to harvest mode and notify
-        // plugins. Also track the currently-running command so growth
-        // indicators have time to animate before the completion pulse.
+        // Observe every terminal independently so inactive tabs and panes do
+        // not lose or duplicate semantic command regions.
         let mut completed_hooks: Vec<Option<i32>> = Vec::new();
-        let show_indicators = self.config.harvest.show_indicators;
-        if let Some(tabs) = &self.tabs {
-            if let Some(tab) = tabs.active_tab() {
-                let tracker = &tab.terminal.shell_integration().prompt_tracker;
-
-                // 1. Start indicator for the in-progress command (if any)
-                //    whose output has actually begun. We skip the idle prompt
-                //    state (no command typed yet) so the indicator only
-                //    appears for running work, not every empty prompt.
-                let active_row = tracker
-                    .active_region()
-                    .filter(|r| r.output_row.is_some())
-                    .map(|r| r.prompt_row);
-                if active_row != self.harvest_active_prompt_row {
-                    // If we previously had an active row that never reached
-                    // `completed_region`, clear it — the shell probably
-                    // didn't emit OSC 133;D. Harmless.
-                    self.harvest_active_prompt_row = active_row;
-                    if let (Some(row), Some(ref mut harvest)) = (active_row, self.harvest.as_mut())
-                    {
-                        if show_indicators {
-                            harvest.start_command(row);
-                        }
-                    }
-                }
-
-                // 2. Drain any newly-completed regions.
-                let total = tracker.completed_count();
-                while self.harvest_region_cursor < total {
-                    if let Some(region) = tracker.completed_region(self.harvest_region_cursor) {
-                        if let Some(ref mut harvest) = self.harvest {
-                            harvest.record_command(region);
-                            if show_indicators {
-                                // If we never saw it in the "active" state
-                                // (e.g. instant command), emit start first
-                                // so the indicator has something to animate
-                                // out of.
-                                if harvest
-                                    .indicators
-                                    .iter()
-                                    .all(|i| i.prompt_row != region.prompt_row)
-                                {
-                                    harvest.start_command(region.prompt_row);
-                                }
-                                harvest.complete_command(
-                                    region.prompt_row,
-                                    region.exit_code == Some(0),
+        let show_indicators = self.harvest.is_some() && self.config.harvest.show_indicators;
+        if let Some(tabs) = &mut self.tabs {
+            for tab in tabs.all_tabs_mut() {
+                if let Some(panes) = &mut tab.pane_manager {
+                    for pane in panes.all_panes_mut() {
+                        let regions = pane.harvest.observe(
+                            &pane.terminal.shell_integration().prompt_tracker,
+                            show_indicators,
+                        );
+                        for region in regions {
+                            if let Some(harvest) = &mut self.harvest {
+                                harvest.record_command(
+                                    crate::harvest::HarvestSource {
+                                        tab_id: tab.id,
+                                        pane_id: Some(pane.id.0),
+                                    },
+                                    &region,
                                 );
                             }
+                            completed_hooks.push(region.exit_code);
                         }
-                        // The command whose indicator was active just
-                        // finished — clear the watch.
-                        if self.harvest_active_prompt_row == Some(region.prompt_row) {
-                            self.harvest_active_prompt_row = None;
+                    }
+                } else {
+                    let regions = tab.harvest.observe(
+                        &tab.terminal.shell_integration().prompt_tracker,
+                        show_indicators,
+                    );
+                    for region in regions {
+                        if let Some(harvest) = &mut self.harvest {
+                            harvest.record_command(
+                                crate::harvest::HarvestSource {
+                                    tab_id: tab.id,
+                                    pane_id: None,
+                                },
+                                &region,
+                            );
                         }
                         completed_hooks.push(region.exit_code);
                     }
-                    self.harvest_region_cursor += 1;
                 }
             }
         }
@@ -969,9 +943,6 @@ impl App {
             }
         };
 
-        // Compute frame delta time for animations
-        let frame_dt = self.last_frame_time.elapsed().as_secs_f32();
-
         // Hot-reload the config if the file changed on disk.
         self.poll_config_for_hot_reload();
 
@@ -1011,6 +982,15 @@ impl App {
         };
         let Some(tabs) = &self.tabs else { return };
         let Some(tab) = tabs.active_tab() else { return };
+        let harvest_indicators: &[crate::harvest::GrowthIndicator] =
+            if let Some(panes) = &tab.pane_manager {
+                panes
+                    .focused_pane()
+                    .map(|pane| pane.harvest.indicators.as_slice())
+                    .unwrap_or_default()
+            } else {
+                &tab.harvest.indicators
+            };
 
         let terminal = &tab.terminal;
         let tab_info = tabs.tab_info();
@@ -1101,21 +1081,16 @@ impl App {
         }
 
         // Update harvest mode animations
+        let has_active_harvest_indicator = !harvest_indicators.is_empty();
         if let Some(ref mut harvest) = self.harvest {
-            harvest.update(frame_dt);
-            harvest.cellar.update(frame_dt);
-            if harvest.has_active_indicators()
+            if harvest.cellar.update()
                 || harvest.cellar.is_visible()
                 || harvest.sprout_menu.is_some()
+                || has_active_harvest_indicator
             {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
-            }
-
-            // Update sprout menu animation
-            if let Some(ref mut menu) = harvest.sprout_menu {
-                menu.update(frame_dt);
             }
         }
 
@@ -1363,8 +1338,7 @@ impl App {
         let harvest_render_info = self.harvest.as_ref().map(|harvest| {
             // Growth indicators (respect the config toggle)
             let indicators: Vec<IndicatorRenderInfo> = if show_indicators {
-                harvest
-                    .indicators
+                harvest_indicators
                     .iter()
                     .filter(|ind| !ind.is_finished())
                     .map(|ind| IndicatorRenderInfo {
@@ -1404,22 +1378,13 @@ impl App {
 
             // Sprout menu (if visible)
             let sprout_menu = harvest.sprout_menu.as_ref().map(|menu| {
-                let cell_width = renderer.cell_width();
-                let cell_height = renderer.cell_height();
-                let content_top = renderer.tab_bar_height() + renderer.chrome_bar_height();
-                SproutMenuRenderInfo {
-                    x: renderer.padding() + menu.col as f32 * cell_width,
-                    y: content_top + renderer.padding() + menu.row as f32 * cell_height,
-                    actions: menu
-                        .actions
-                        .iter()
-                        .map(|a| (a.name().to_string(), a.icon()))
-                        .collect(),
-                    selected: menu.selected,
-                    opacity: menu.opacity(),
-                    width: menu.width() as f32 * cell_width,
-                    height: menu.height() as f32 * cell_height,
-                }
+                sprout_menu_render_info(
+                    menu,
+                    renderer.padding(),
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                    renderer.tab_bar_height() + renderer.chrome_bar_height(),
+                )
             });
 
             HarvestRenderInfo {
@@ -1919,21 +1884,28 @@ impl App {
                         // so the actions target something the user can
                         // reason about. If no command has completed yet
                         // (e.g. fresh shell), fall back to cursor row.
-                        let (anchor_row, anchor_col, entry) = if let Some(ref h) = self.harvest {
-                            if let Some(latest) = h.cellar.latest().cloned() {
-                                let col = 0;
-                                (latest.row, col, Some(latest))
+                        let source = self.active_harvest_source();
+                        let (anchor_row, anchor_col, entry) =
+                            if let (Some(h), Some(source)) = (self.harvest.as_ref(), source) {
+                                if let Some(latest) = h.cellar.latest_for_source(source).cloned() {
+                                    let col = 0;
+                                    (latest.row, col, Some(latest))
+                                } else {
+                                    let cur = self
+                                        .active_terminal_mut()
+                                        .map(|t| t.grid().cursor())
+                                        .map(|c| (c.row, c.col))
+                                        .unwrap_or((0, 0));
+                                    (cur.0, cur.1, None)
+                                }
                             } else {
-                                let cur = self
-                                    .active_terminal_mut()
-                                    .map(|t| t.grid().cursor())
-                                    .map(|c| (c.row, c.col))
-                                    .unwrap_or((0, 0));
-                                (cur.0, cur.1, None)
-                            }
-                        } else {
-                            (0, 0, None)
-                        };
+                                (0, 0, None)
+                            };
+                        if entry.is_none() {
+                            let message = self.active_shell_integration_message();
+                            self.toasts.warning(message);
+                            return;
+                        }
                         if let Some(ref mut harvest) = self.harvest {
                             harvest.show_sprout_menu(anchor_row, anchor_col, entry);
                         }
@@ -2851,6 +2823,8 @@ impl App {
                         std::mem::swap(&mut tab.terminal, &mut pane0.terminal);
                         std::mem::swap(&mut tab.pty, &mut pane0.pty);
                         std::mem::swap(&mut tab.pty_rx, &mut pane0.pty_rx);
+                        std::mem::swap(&mut tab.harvest, &mut pane0.harvest);
+                        std::mem::swap(&mut tab.shell_integration, &mut pane0.shell_integration);
                     }
                     match pm.split(direction) {
                         Ok(new_id) => {
@@ -2870,45 +2844,49 @@ impl App {
         }
     }
 
-    /// Run a sprout-menu action against the command anchored at
-    /// `target_row` (falls back to the latest recorded cellar entry if
-    /// row is unknown).
+    /// Run a sprout-menu action against the terminal that produced it.
     fn execute_sprout_action(
         &mut self,
         action: crate::harvest::sprouts::SproutAction,
-        target_row: Option<usize>,
+        target: Option<crate::harvest::CommandEntry>,
     ) {
         use crate::harvest::sprouts::SproutAction;
-        // Resolve the target command row. Prefer the explicit target, then
-        // fall back to the latest cellar entry.
-        let row = target_row.or_else(|| {
+        let target = target.or_else(|| {
+            let source = self.active_harvest_source()?;
             self.harvest
-                .as_ref()
-                .and_then(|h| h.cellar.latest().map(|e| e.row))
+                .as_ref()?
+                .cellar
+                .latest_for_source(source)
+                .cloned()
         });
-        let Some(row) = row else {
+        let Some(target) = target else {
             self.toasts.warning("No command under cursor");
             return;
         };
 
-        // Pull the command region from the active tab's shell integration.
-        let region = {
-            let Some(tabs) = &self.tabs else { return };
-            let Some(tab) = tabs.active_tab() else { return };
-            tab.terminal
+        let (region, command_text, output_text) = {
+            let Some(terminal) = self.terminal_for_harvest_source(target.source) else {
+                self.toasts
+                    .warning("The command's terminal is no longer open");
+                return;
+            };
+            let Some(region) = terminal
                 .shell_integration()
-                .command_at(row as i32)
+                .command_at(target.row as i32)
                 .cloned()
-        };
-        let Some(region) = region else {
-            self.toasts
-                .warning("No shell-integration data for that command");
-            return;
+            else {
+                self.toasts
+                    .warning("No shell-integration data for that command");
+                return;
+            };
+            let command = Self::extract_command_text(terminal, &region);
+            let output = Self::extract_output_text(terminal, &region);
+            (region, command, output)
         };
 
         match action {
             SproutAction::CopyCommand => {
-                let text = self.extract_command_text(&region);
+                let text = command_text;
                 if text.trim().is_empty() {
                     self.toasts.warning("Command text is empty");
                     return;
@@ -2916,7 +2894,7 @@ impl App {
                 self.copy_to_clipboard(text, "Copied command");
             }
             SproutAction::CopyOutput => {
-                let text = self.extract_output_text(&region);
+                let text = output_text;
                 if text.trim().is_empty() {
                     self.toasts.warning("Output is empty");
                     return;
@@ -2924,16 +2902,12 @@ impl App {
                 self.copy_to_clipboard(text, "Copied output");
             }
             SproutAction::Rerun => {
-                let text = self.extract_command_text(&region);
-                let trimmed = text.trim();
+                let trimmed = command_text.trim();
                 if trimmed.is_empty() {
                     self.toasts.warning("Nothing to rerun");
                     return;
                 }
-                // Send the command + newline to the active PTY.
-                let mut payload = trimmed.as_bytes().to_vec();
-                payload.push(b'\n');
-                self.write_to_pty(&payload);
+                self.run_custom_command(trimmed);
                 self.toasts.info("Re-ran command");
             }
             SproutAction::ScrollTo => {
@@ -2946,8 +2920,8 @@ impl App {
                     // older than the current viewport requires a positive
                     // offset.
                     let rows_on_screen = terminal.rows() as i32;
-                    let target = (row as i32).max(0);
-                    let offset = (scrollback_len + rows_on_screen - 1 - target).max(0) as usize;
+                    let target_row = (target.row as i32).max(0);
+                    let offset = (scrollback_len + rows_on_screen - 1 - target_row).max(0) as usize;
                     terminal.grid_mut().set_scroll_offset(offset);
                 }
                 if let Some(window) = &self.window {
@@ -2955,19 +2929,20 @@ impl App {
                 }
             }
             SproutAction::SearchOutput => {
-                // Open search (scoping to output region is a follow-up —
-                // for now we just activate the search bar so the user can
-                // type a query over the full scrollback).
-                if !self.search.is_active() {
-                    self.search.start();
-                }
+                let first = region
+                    .output_row
+                    .or(region.command_row)
+                    .unwrap_or(region.prompt_row);
+                let last = region.finish_row.unwrap_or(first);
+                self.search.start_in_rows(first as i32, last as i32);
+                self.toasts.info("Search scoped to command output");
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
             SproutAction::Explain => {
-                let cmd = self.extract_command_text(&region);
-                let out = self.extract_output_text(&region);
+                let cmd = command_text;
+                let out = output_text;
                 if cmd.trim().is_empty() {
                     self.toasts.warning("No command to explain");
                     return;
@@ -2989,6 +2964,54 @@ impl App {
                     text: context,
                 }]);
             }
+        }
+    }
+
+    fn active_harvest_source(&self) -> Option<crate::harvest::HarvestSource> {
+        let tab = self.tabs.as_ref()?.active_tab()?;
+        Some(crate::harvest::HarvestSource {
+            tab_id: tab.id,
+            pane_id: tab.pane_manager.as_ref().map(|panes| panes.focused_id().0),
+        })
+    }
+
+    fn terminal_for_harvest_source(
+        &self,
+        source: crate::harvest::HarvestSource,
+    ) -> Option<&termeric_core::Terminal> {
+        let (_, tab) = self
+            .tabs
+            .as_ref()?
+            .iter()
+            .find(|(_, tab)| tab.id == source.tab_id)?;
+        match source.pane_id {
+            Some(pane_id) => Some(
+                &tab.pane_manager
+                    .as_ref()?
+                    .get_pane(PaneId(pane_id))?
+                    .terminal,
+            ),
+            None => Some(&tab.terminal),
+        }
+    }
+
+    fn active_shell_integration_message(&self) -> String {
+        let Some(tab) = self.tabs.as_ref().and_then(|tabs| tabs.active_tab()) else {
+            return "Open a shell tab before using Harvest".into();
+        };
+        let support = if let Some(panes) = &tab.pane_manager {
+            panes.focused_pane().map(|pane| &pane.shell_integration)
+        } else {
+            Some(&tab.shell_integration)
+        };
+        match support {
+            Some(crate::terminal::shell_integration::ShellIntegrationSupport::Enabled(shell)) => {
+                format!("No completed command yet; {shell} integration is active")
+            }
+            Some(crate::terminal::shell_integration::ShellIntegrationSupport::Unavailable(
+                reason,
+            )) => reason.clone(),
+            None => "The focused terminal is unavailable".into(),
         }
     }
 
@@ -3032,13 +3055,10 @@ impl App {
 
     /// Extract just the command line entered by the user (between command
     /// start and output start).
-    fn extract_command_text(&self, region: &termeric_core::CommandRegion) -> String {
-        let Some(tabs) = &self.tabs else {
-            return String::new();
-        };
-        let Some(tab) = tabs.active_tab() else {
-            return String::new();
-        };
+    fn extract_command_text(
+        terminal: &termeric_core::Terminal,
+        region: &termeric_core::CommandRegion,
+    ) -> String {
         let start = region.command_row.unwrap_or(region.prompt_row) as i32;
         // End at the row just before output starts, or the prompt row if
         // output never began.
@@ -3047,18 +3067,15 @@ impl App {
             .map(|r| r.saturating_sub(1) as i32)
             .unwrap_or(start);
         let end = end.max(start);
-        tab.terminal.rows_text(start, end)
+        terminal.rows_text(start, end)
     }
 
     /// Extract the output block of a command (between output start and
     /// finish).
-    fn extract_output_text(&self, region: &termeric_core::CommandRegion) -> String {
-        let Some(tabs) = &self.tabs else {
-            return String::new();
-        };
-        let Some(tab) = tabs.active_tab() else {
-            return String::new();
-        };
+    fn extract_output_text(
+        terminal: &termeric_core::Terminal,
+        region: &termeric_core::CommandRegion,
+    ) -> String {
         let Some(start) = region.output_row else {
             return String::new();
         };
@@ -3068,7 +3085,7 @@ impl App {
             .unwrap_or(start as i32);
         let start = start as i32;
         let end = end.max(start);
-        tab.terminal.rows_text(start, end)
+        terminal.rows_text(start, end)
     }
 
     /// Move focus to the adjacent pane in `dir`. No-op if no pane manager
@@ -3114,6 +3131,8 @@ impl App {
                             tab.terminal = remaining.terminal;
                             tab.pty = remaining.pty;
                             tab.pty_rx = remaining.pty_rx;
+                            tab.harvest = remaining.harvest;
+                            tab.shell_integration = remaining.shell_integration;
                         }
                         tab.pane_manager = None;
                         if let Err(e) = tab.resize(self.cols, self.rows) {
@@ -3472,6 +3491,8 @@ impl App {
     }
 
     fn sync_harvest_from_config(&mut self) {
+        self.command_palette
+            .register_commands(core_commands(self.config.harvest.enabled));
         if self.config.harvest.enabled {
             if let Some(harvest) = &mut self.harvest {
                 harvest
@@ -3482,8 +3503,6 @@ impl App {
             }
         } else {
             self.harvest = None;
-            self.harvest_region_cursor = 0;
-            self.harvest_active_prompt_row = None;
         }
     }
 
@@ -3649,6 +3668,15 @@ impl App {
             }
             SettingsAction::SetSessionSaveScrollback(enabled) => {
                 self.config.session.save_scrollback = enabled;
+            }
+            SettingsAction::SetHarvestEnabled(enabled) => {
+                self.config.harvest.enabled = enabled;
+            }
+            SettingsAction::SetHarvestIndicators(enabled) => {
+                self.config.harvest.show_indicators = enabled;
+            }
+            SettingsAction::SetHarvestMaxHistory(limit) => {
+                self.config.harvest.max_history = limit;
             }
             SettingsAction::SetPluginEnabled { plugin_id, enabled } => match plugin_id.as_str() {
                 "claude-code" => {
@@ -5146,6 +5174,29 @@ fn command_keystrokes(command: &str) -> [Vec<u8>; 3] {
         command.trim_end_matches(['\r', '\n']).as_bytes().to_vec(),
         b"\r".to_vec(),
     ]
+}
+
+fn sprout_menu_render_info(
+    menu: &crate::harvest::SproutMenu,
+    padding: f32,
+    cell_width: f32,
+    cell_height: f32,
+    content_top: f32,
+) -> SproutMenuRenderInfo {
+    let action_count = menu.actions.len() as f32;
+    SproutMenuRenderInfo {
+        x: padding + menu.col as f32 * cell_width,
+        y: content_top + padding + menu.row as f32 * cell_height,
+        actions: menu
+            .actions
+            .iter()
+            .map(|action| (action.name().to_string(), action.icon()))
+            .collect(),
+        selected: menu.selected,
+        opacity: menu.opacity(),
+        width: menu.width() as f32 * cell_width,
+        height: action_count * cell_height * 1.4 + cell_width,
+    }
 }
 
 /// Minimal RFC 4648 base64 encoder (standard alphabet) used for the OSC 52

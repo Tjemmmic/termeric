@@ -7,6 +7,7 @@
 //! - Explain (future AI integration)
 
 use super::cellar::CommandEntry;
+use std::time::Instant;
 
 /// An action available in the sprout menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,8 +78,8 @@ pub struct SproutMenu {
     pub selected: usize,
     /// Available actions
     pub actions: Vec<SproutAction>,
-    /// Animation progress (0.0 to 1.0)
-    pub animation: f32,
+    /// Monotonic start time for the grow-in animation.
+    opened_at: Instant,
 }
 
 impl SproutMenu {
@@ -91,7 +92,7 @@ impl SproutMenu {
             command,
             selected: 0,
             actions,
-            animation: 0.0,
+            opened_at: Instant::now(),
         }
     }
 
@@ -114,19 +115,14 @@ impl SproutMenu {
         self.actions.get(self.selected)
     }
 
-    /// Update animation
-    pub fn update(&mut self, dt: f32) {
-        // Grow animation
-        if self.animation < 1.0 {
-            self.animation += dt * 4.0; // 0.25 second animation
-            self.animation = self.animation.min(1.0);
-        }
+    pub fn animation_progress(&self) -> f32 {
+        (self.opened_at.elapsed().as_secs_f32() / 0.25).min(1.0)
     }
 
     /// Get visual opacity based on animation
     pub fn opacity(&self) -> f32 {
         // Ease-out animation
-        let t = self.animation;
+        let t = self.animation_progress();
         1.0 - (1.0 - t).powi(3)
     }
 
@@ -137,11 +133,6 @@ impl SproutMenu {
             .map(|a| a.name().len() + 3) // +3 for icon and spacing
             .max()
             .unwrap_or(10)
-    }
-
-    /// Get menu height in lines
-    pub fn height(&self) -> usize {
-        self.actions.len()
     }
 }
 

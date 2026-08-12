@@ -11,6 +11,7 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 - **Command palette** (Ctrl+P) with fuzzy search, plus a customizable keyboard shortcuts panel
 - **Plugins** — built-in Claude Code and Codex integrations with guardrails, diff review, and context picker
 - **Graphics & hyperlinks** — Kitty image protocol, OSC 8 hyperlinks, shell integration, font ligatures
+- **Harvest (experimental beta)** — opt-in semantic command history, per-terminal growth indicators, scoped output search, rerun/copy, and AI explanation
 
 ## Status
 
@@ -61,6 +62,27 @@ The built-in Codex integration is tested against `codex-cli 0.137.0`. Its
 friendly approval modes map to current Codex policies as follows: `suggest`
 uses `untrusted`, `auto-edit` uses `on-request`, and `full-auto` uses `never`.
 See the starter config for the corresponding sandbox options.
+
+### Harvest and shell integration
+
+Harvest is an experimental beta and remains disabled by default. When enabled,
+its commands appear in the command palette and its history is populated from
+OSC 133 semantic prompt marks. Normal interactive Bash, Zsh, and Fish tabs get
+those marks automatically; Termeric writes small generated integration files
+under `~/.config/termeric/shell-integration/` for Bash and Zsh and uses Fish's
+init-command hook. The generated files load the user's normal shell rc first.
+
+Custom shells and shell configurations that execute a script or `-c` command
+are left untouched. Harvest then explains that prompt marks are unavailable
+instead of showing an empty menu. Existing tabs keep their launch environment
+when shell configuration changes; open a new tab to pick up the new setup.
+
+```toml
+[harvest]
+enabled = true
+show_indicators = true
+max_history = 100
+```
 
 ## Project layout
 

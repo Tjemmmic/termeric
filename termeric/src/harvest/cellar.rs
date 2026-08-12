@@ -3,6 +3,7 @@
 //! Displays commands as "roots" growing from a timeline,
 //! with branching for piped commands and color-coding by exit status.
 
+use super::HarvestSource;
 use std::collections::VecDeque;
 use std::time::Instant;
 use termeric_core::CommandRegion;
@@ -15,6 +16,8 @@ const DEFAULT_MAX_COMMANDS: usize = 100;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct CommandEntry {
+    /// Terminal that produced this command.
+    pub source: HarvestSource,
     /// Row where the command started
     pub row: usize,
     /// Exit code (None if still running)
@@ -40,9 +43,22 @@ pub struct CommandVisualState {
 
 impl CommandEntry {
     /// Create a new command entry
+    #[cfg(test)]
     pub fn new(row: usize, exit_code: Option<i32>) -> Self {
+        Self::new_for_source(
+            HarvestSource {
+                tab_id: 0,
+                pane_id: None,
+            },
+            row,
+            exit_code,
+        )
+    }
+
+    pub fn new_for_source(source: HarvestSource, row: usize, exit_code: Option<i32>) -> Self {
         let success = exit_code == Some(0);
         Self {
+            source,
             row,
             exit_code,
             timestamp: Instant::now(),
@@ -125,8 +141,8 @@ impl RootCellar {
     }
 
     /// Add a command entry from a shell integration region
-    pub fn add_from_region(&mut self, region: &CommandRegion) {
-        let entry = CommandEntry::new(region.prompt_row, region.exit_code);
+    pub fn add_from_region(&mut self, source: HarvestSource, region: &CommandRegion) {
+        let entry = CommandEntry::new_for_source(source, region.prompt_row, region.exit_code);
         self.add(entry);
     }
 
@@ -147,6 +163,13 @@ impl RootCellar {
     /// Get the most recent entry
     pub fn latest(&self) -> Option<&CommandEntry> {
         self.entries.back()
+    }
+
+    pub fn latest_for_source(&self, source: HarvestSource) -> Option<&CommandEntry> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.source == source)
     }
 
     /// Get entry at a specific row
@@ -187,13 +210,12 @@ impl RootCellar {
 
     /// Update animations (call each frame). Returns true if anything is
     /// still animating (caller should keep scheduling redraws).
-    pub fn update(&mut self, dt: f32) -> bool {
+    pub fn update(&mut self) -> bool {
         let mut any_active = false;
         for entry in &mut self.entries {
-            // Animate progress towards 1.0
-            if entry.visual_state.progress < 1.0 {
-                entry.visual_state.progress += dt * 2.0; // 0.5 second animation
-                entry.visual_state.progress = entry.visual_state.progress.min(1.0);
+            let progress = (entry.timestamp.elapsed().as_secs_f32() / 0.5).min(1.0);
+            entry.visual_state.progress = progress;
+            if progress < 1.0 {
                 any_active = true;
             }
         }

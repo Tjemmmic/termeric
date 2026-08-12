@@ -7,6 +7,7 @@ use crate::session::Session;
 use crate::session::transcript::TranscriptRecorder;
 use crate::terminal::container::TerminalContainer;
 use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
+use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
 use crate::ui::claude_chrome::AiSessionState;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -65,6 +66,10 @@ pub struct Tab {
     pub transcript: Option<TranscriptRecorder>,
     /// Pane manager for split panes (None = single terminal, no splits)
     pub pane_manager: Option<crate::panes::PaneManager>,
+    /// Harvest cursor/indicator state owned by this terminal.
+    pub harvest: crate::harvest::HarvestTerminalState,
+    /// Whether Termeric installed semantic prompt hooks for this shell.
+    pub shell_integration: ShellIntegrationSupport,
 }
 
 impl Tab {
@@ -78,11 +83,13 @@ impl Tab {
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(cols, rows);
         terminal.grid_mut().set_scrollback_limit(scrollback_lines);
-        let pty = Pty::new_with_command(
+        let launch = prepare_shell_launch(shell);
+        let pty = Pty::new_with_env(
             cols as u16,
             rows as u16,
-            shell.program.as_deref(),
-            &shell.args,
+            launch.program.as_deref(),
+            &launch.args,
+            &launch.env,
         )?;
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
@@ -111,6 +118,8 @@ impl Tab {
             ai_session: None,
             transcript: None,
             pane_manager: None,
+            harvest: crate::harvest::HarvestTerminalState::default(),
+            shell_integration: launch.integration,
         })
     }
 
@@ -171,6 +180,10 @@ impl Tab {
             },
             transcript: None,
             pane_manager: None,
+            harvest: crate::harvest::HarvestTerminalState::default(),
+            shell_integration: ShellIntegrationSupport::Unavailable(
+                "Direct command tabs do not provide shell prompt marks".into(),
+            ),
         })
     }
 
@@ -298,16 +311,18 @@ impl Tab {
         let mut terminal = Terminal::new(cols, rows);
         terminal.grid_mut().set_scrollback_limit(scrollback_lines);
 
+        let mut launch = prepare_shell_launch(shell);
         // Build environment variables for session restore
-        let env: Vec<(String, String)> = working_dir
+        let mut env: Vec<(String, String)> = working_dir
             .map(|pwd| vec![("PWD".to_string(), pwd.to_string())])
             .unwrap_or_default();
+        env.append(&mut launch.env);
 
         let pty = Pty::new_with_env(
             cols as u16,
             rows as u16,
-            shell.program.as_deref(),
-            &shell.args,
+            launch.program.as_deref(),
+            &launch.args,
             &env,
         )?;
         let (handle, reader) = pty.take_reader();
@@ -342,6 +357,8 @@ impl Tab {
             ai_session: None,
             transcript: None,
             pane_manager: None,
+            harvest: crate::harvest::HarvestTerminalState::default(),
+            shell_integration: launch.integration,
         })
     }
 

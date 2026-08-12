@@ -517,7 +517,7 @@ impl CommandPalette {
 }
 
 /// Build the default set of core commands
-pub fn core_commands() -> Vec<RegisteredCommand> {
+pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
     let mut commands = vec![
         // ── Core ──
         RegisteredCommand {
@@ -710,43 +710,46 @@ pub fn core_commands() -> Vec<RegisteredCommand> {
         },
     ];
 
-    // ── Harvest ──
-    commands.push(RegisteredCommand {
-        id: "core.harvest-cellar".into(),
-        title: "Show Harvest Cellar".into(),
-        category: "Harvest".into(),
-        shortcut: None,
-        icon: None,
-        source: CommandSource::Core,
-        destructive: false,
-    });
-    commands.push(RegisteredCommand {
-        id: "core.show-sprout-menu".into(),
-        title: "Show Sprout Menu".into(),
-        category: "Harvest".into(),
-        shortcut: None,
-        icon: None,
-        source: CommandSource::Core,
-        destructive: false,
-    });
-    commands.push(RegisteredCommand {
-        id: "core.hide-sprout-menu".into(),
-        title: "Hide Sprout Menu".into(),
-        category: "Harvest".into(),
-        shortcut: None,
-        icon: None,
-        source: CommandSource::Core,
-        destructive: false,
-    });
-    commands.push(RegisteredCommand {
-        id: "core.clear-harvest".into(),
-        title: "Clear Harvest History".into(),
-        category: "Harvest".into(),
-        shortcut: None,
-        icon: None,
-        source: CommandSource::Core,
-        destructive: true,
-    });
+    // Harvest is an experimental beta and stays out of the palette unless
+    // explicitly enabled in configuration.
+    if harvest_enabled {
+        commands.push(RegisteredCommand {
+            id: "core.harvest-cellar".into(),
+            title: "Show Harvest Cellar".into(),
+            category: "Harvest".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        });
+        commands.push(RegisteredCommand {
+            id: "core.show-sprout-menu".into(),
+            title: "Show Sprout Menu".into(),
+            category: "Harvest".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        });
+        commands.push(RegisteredCommand {
+            id: "core.hide-sprout-menu".into(),
+            title: "Hide Sprout Menu".into(),
+            category: "Harvest".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        });
+        commands.push(RegisteredCommand {
+            id: "core.clear-harvest".into(),
+            title: "Clear Harvest History".into(),
+            category: "Harvest".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: true,
+        });
+    }
     // ── Transcript ──
     commands.push(RegisteredCommand {
         id: "core.toggle-transcript".into(),
@@ -861,7 +864,7 @@ mod tests {
 
     fn test_palette() -> CommandPalette {
         let mut palette = CommandPalette::new();
-        palette.register_commands(core_commands());
+        palette.register_commands(core_commands(true));
         palette
     }
 
@@ -871,6 +874,14 @@ mod tests {
         palette.open();
         assert!(palette.is_active());
         assert_eq!(palette.entry_count(), palette.registry.len());
+    }
+
+    #[test]
+    fn harvest_commands_are_hidden_until_enabled() {
+        let disabled = core_commands(false);
+        assert!(disabled.iter().all(|command| command.category != "Harvest"));
+        let enabled = core_commands(true);
+        assert!(enabled.iter().any(|command| command.category == "Harvest"));
     }
 
     #[test]
@@ -987,7 +998,7 @@ mod tests {
     #[test]
     fn replace_plugin_commands_removes_disabled_plugin_sources() {
         let mut palette = CommandPalette::new();
-        palette.register_commands(core_commands());
+        palette.register_commands(core_commands(true));
         palette.replace_plugin_commands(vec![RegisteredCommand {
             id: "codex.open".into(),
             title: "Open Codex".into(),

@@ -11,6 +11,7 @@ pub use tree::{PaneId, PaneTree, SplitDirection};
 
 use crate::config::ShellConfig;
 use crate::terminal::container::{SplitContainer, TerminalContainer};
+use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
 use std::collections::HashMap;
 use std::io;
 use std::sync::mpsc::Receiver;
@@ -53,6 +54,8 @@ pub struct Pane {
     pub closed: bool,
     /// Current pane dimensions (cols, rows)
     pub size: (usize, usize),
+    pub harvest: crate::harvest::HarvestTerminalState,
+    pub shell_integration: ShellIntegrationSupport,
 }
 
 impl Pane {
@@ -66,11 +69,13 @@ impl Pane {
     ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(cols, rows);
         terminal.grid_mut().set_scrollback_limit(scrollback_lines);
-        let pty = Pty::new_with_command(
+        let launch = prepare_shell_launch(shell);
+        let pty = Pty::new_with_env(
             cols as u16,
             rows as u16,
-            shell.program.as_deref(),
-            &shell.args,
+            launch.program.as_deref(),
+            &launch.args,
+            &launch.env,
         )?;
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
@@ -82,6 +87,8 @@ impl Pane {
             pty_rx: rx,
             closed: false,
             size: (cols, rows),
+            harvest: crate::harvest::HarvestTerminalState::default(),
+            shell_integration: launch.integration,
         })
     }
 
@@ -479,6 +486,10 @@ impl PaneManager {
         self.panes
             .values()
             .filter_map(move |pane| layout.get(&pane.id).map(|&rect| (pane, rect)))
+    }
+
+    pub fn all_panes_mut(&mut self) -> impl Iterator<Item = &mut Pane> {
+        self.panes.values_mut()
     }
 
     /// Remove closed panes and resize remaining panes to fill the space.
