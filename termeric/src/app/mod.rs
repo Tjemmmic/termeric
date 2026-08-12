@@ -69,6 +69,8 @@ pub struct App {
     tabs: Option<TabManager>,
     /// Whether the application should exit
     should_exit: bool,
+    /// Surface rendering is paused until a real resize safely reconfigures it.
+    surface_lost: bool,
     /// Terminal dimensions
     cols: usize,
     rows: usize,
@@ -257,6 +259,7 @@ impl App {
             renderer: None,
             tabs: None,
             should_exit: false,
+            surface_lost: false,
             cols: 80,
             rows: 24,
             cursor_blink_start: Instant::now(),
@@ -612,6 +615,12 @@ impl App {
 
     /// Render the terminal
     fn render(&mut self) {
+        // Do not run animation/update paths that enqueue more redraws while a
+        // lost surface is waiting for Winit's next real resize event.
+        if self.surface_lost {
+            return;
+        }
+
         // Skip rendering if synchronized output mode is active (Mode 2026)
         // This prevents partial frames during batch terminal updates
         if let Some(tabs) = &self.tabs {
@@ -1164,10 +1173,14 @@ impl App {
         ) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
-                if let Some(window) = &self.window {
-                    let size = window.inner_size();
-                    renderer.resize(size.width, size.height);
+                // A final X11 redraw can race WM_DELETE after the drawable is
+                // already gone. Reconfiguring then is a WGPU validation error.
+                // A live surface receives a subsequent Resized event, whose
+                // normal path safely reconfigures it with current dimensions.
+                if !self.surface_lost {
+                    log::warn!("GPU surface lost; waiting for a resize event to reconfigure it");
                 }
+                self.surface_lost = true;
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
                 log::error!("Out of GPU memory");

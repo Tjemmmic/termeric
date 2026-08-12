@@ -30,6 +30,8 @@ Versioning once public beta tags begin.
   clipboard, plugin, session, and transcript failure feedback.
 - Correct UTC session timestamps, collision-resistant identifiers, and visible
   5 MB scrollback / 50 MB transcript limits.
+- Avoid X11 close/surface-loss races that could panic or continuously redraw an
+  already-destroyed native window.
 
 ### Known limitations
 

@@ -15,7 +15,10 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 
 ## Status
 
-Active development — expect churn. Works day-to-day on Linux; macOS and Windows are best-effort until we get broader testing.
+Active Linux beta-candidate development — expect churn. Wayland and X11 launch
+smokes pass, but the remaining manual release matrix is tracked in
+[`docs/release-acceptance.md`](docs/release-acceptance.md). macOS and Windows
+are best-effort until we get broader testing.
 
 ## Building
 
@@ -127,6 +130,7 @@ termeric-core/      Library crate — terminal emulation
 - [`AGENTS.md`](AGENTS.md) — rules and conventions for AI agents working in this repo
 - [`CHANGELOG.md`](CHANGELOG.md) — release-facing changes and known limitations
 - [`docs/install.md`](docs/install.md) — install, upgrade, uninstall, and troubleshooting
+- [`docs/release-acceptance.md`](docs/release-acceptance.md) — measured Linux release evidence and open gates
 
 ## License
 

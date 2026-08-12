@@ -76,17 +76,25 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
+                self.should_exit = true;
                 event_loop.exit();
             }
 
             WindowEvent::Resized(size) => {
                 self.handle_resize(size.width, size.height);
+                self.surface_lost = false;
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let size = self.window.as_ref().map(|window| window.inner_size());
+                // Use renderer-owned dimensions rather than querying the native
+                // window. X11 may deliver a final scale event after WM_DELETE;
+                // XGetGeometry on that already-destroyed handle panics in Winit.
+                let size = self.renderer.as_ref().map(|renderer| {
+                    let (width, height) = renderer.window_size();
+                    winit::dpi::PhysicalSize::new(width, height)
+                });
                 if let Some(size) = size {
                     self.handle_scale_factor_change(scale_factor, size);
                 }
@@ -873,11 +881,16 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.should_exit {
+            return;
+        }
         // Process PTY events before waiting
         self.process_pty_events();
 
         // Request redraw if we have new content
-        if let Some(window) = &self.window {
+        if !self.surface_lost
+            && let Some(window) = &self.window
+        {
             window.request_redraw();
         }
     }

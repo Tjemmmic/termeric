@@ -34,6 +34,21 @@ A full window/surface acceptance check remains a release-lane test under a
 virtual display because creating a Winit window is platform-event-loop work,
 not a unit-test-safe operation.
 
+## Release performance lane
+
+The opt-in release checks enforce initial beta budgets of three seconds for
+processing 100,000 styled output lines and three seconds for 200 large-history
+reflows:
+
+```bash
+TERMERIC_PERF_ACCEPTANCE=1 cargo test -p termeric-core --release --locked \
+  --test performance_acceptance -- --nocapture
+```
+
+These generous regression ceilings are machine-independent safety rails, not
+claims about interactive latency. Record actual release-machine measurements
+in [`release-acceptance.md`](release-acceptance.md).
+
 ## Clippy policy
 
 Strict Clippy is part of the default quality gate. The application crate has
