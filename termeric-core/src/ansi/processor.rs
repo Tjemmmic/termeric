@@ -139,4 +139,20 @@ mod tests {
         assert_eq!(c.bg_spec, ColorSpec::Default);
         assert!(!c.attrs.contains(CellAttrs::INVERSE));
     }
+
+    #[test]
+    fn claude_keyboard_protocol_reset_does_not_enable_underline() {
+        let mut processor = Processor::new();
+        let mut terminal = Terminal::new(10, 2);
+
+        // Claude Code emits CSI > 4 m immediately after leaving its alternate
+        // screen. This is an xterm modifyOtherKeys reset, not SGR underline.
+        processor.process(&mut terminal, b"A\x1b[?1049hB\x1b[?1049l\x1b[>4mC");
+
+        let grid = terminal.grid();
+        assert_eq!(grid.cell(0, 0).unwrap().content.char(), Some('A'));
+        let c = grid.cell(0, 1).unwrap();
+        assert_eq!(c.content.char(), Some('C'));
+        assert!(!c.attrs.has_underline());
+    }
 }

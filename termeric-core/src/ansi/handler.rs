@@ -196,8 +196,19 @@ impl Perform for Handler<'_> {
 
             // SGR - Select Graphic Rendition
             'm' => {
-                // Handle SGR with proper subparameter support
-                self.handle_sgr_raw(raw_params);
+                // SGR has no private/intermediate prefix. Xterm keyboard
+                // protocols also use final `m` (for example `CSI > 4 m` to
+                // reset modifyOtherKeys); treating those parameters as SGR
+                // would incorrectly enable underline on application exit.
+                if intermediates.is_empty() {
+                    self.handle_sgr_raw(raw_params);
+                } else {
+                    log::trace!(
+                        "Unhandled private CSI m: params={:?}, intermediates={:?}",
+                        params,
+                        intermediates
+                    );
+                }
             }
 
             // Cursor save/restore
