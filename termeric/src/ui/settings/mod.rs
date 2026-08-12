@@ -327,10 +327,10 @@ pub enum SettingsAction {
     None,
 }
 
-/// The settings panel state — now a centered modal overlay
+/// State for the centered settings panel.
 pub struct SettingsPanel {
-    /// Animation state (overlay = centered modal with scrim)
-    animation: super::animation::OverlayAnimation,
+    /// Panel animation releases input immediately while retaining close motion.
+    animation: super::animation::PanelAnimation,
     /// Search filter text
     filter: String,
     /// Cursor position in filter text (byte offset)
@@ -361,7 +361,7 @@ pub struct SettingsPanel {
 impl SettingsPanel {
     pub fn new() -> Self {
         Self {
-            animation: super::animation::OverlayAnimation::with_duration(
+            animation: super::animation::PanelAnimation::with_duration(
                 super::animation::DEFAULT_PANEL_DURATION,
             ),
             filter: String::new(),
@@ -395,7 +395,7 @@ impl SettingsPanel {
 
     /// Toggle the panel open/closed
     pub fn toggle(&mut self) {
-        if !self.animation.is_active() {
+        if !self.animation.is_open() {
             // Reset state when opening
             self.filter.clear();
             self.filter_cursor = 0;
@@ -438,7 +438,7 @@ impl SettingsPanel {
 
     /// Whether the overlay is logically active (accepting input)
     pub fn is_active(&self) -> bool {
-        self.animation.is_active()
+        self.animation.is_open()
     }
 
     /// Update animation state. Returns true if still animating (needs redraw).
@@ -448,7 +448,7 @@ impl SettingsPanel {
 
     /// Get current animation progress with ease-out
     pub fn animation_progress(&self) -> f32 {
-        self.animation.eased()
+        self.animation.progress()
     }
 
     /// Whether the dropdown overlay is currently open
@@ -1660,10 +1660,28 @@ mod tests {
         assert!(panel.is_active());
 
         panel.toggle();
+        assert!(!panel.is_active());
+        assert!(panel.is_visible());
         // Wait for close animation to complete
         thread::sleep(Duration::from_millis(250));
         panel.update_animation();
         assert!(!panel.is_visible());
+    }
+
+    #[test]
+    fn close_releases_input_and_toggle_reopens_during_animation() {
+        let mut panel = SettingsPanel::new();
+        panel.toggle();
+        assert!(panel.is_active());
+        thread::sleep(Duration::from_millis(20));
+
+        panel.close();
+        assert!(!panel.is_active());
+        assert!(panel.is_visible());
+
+        panel.toggle();
+        assert!(panel.is_active());
+        assert!(panel.is_visible());
     }
 
     #[test]

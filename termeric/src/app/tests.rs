@@ -52,10 +52,9 @@ fn headless_overlay_close_states_do_not_block_future_input() {
     app.settings_panel.toggle();
     assert!(app.settings_panel.is_active());
     app.settings_panel.close();
-    assert!(app.settings_panel.is_active());
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    app.settings_panel.update_animation();
     assert!(!app.settings_panel.is_active());
+    app.settings_panel.toggle();
+    assert!(app.settings_panel.is_active());
 
     app.commands_panel.toggle();
     assert!(app.commands_panel.is_open());
