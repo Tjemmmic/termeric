@@ -61,3 +61,19 @@ fn headless_overlay_close_states_do_not_block_future_input() {
     app.commands_panel.close();
     assert!(!app.commands_panel.is_open());
 }
+
+#[test]
+fn settings_toggle_switches_directly_from_peer_side_panels() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+
+    app.commands_panel.toggle();
+    assert!(app.commands_panel.is_open());
+    app.toggle_settings_surface();
+    assert!(!app.commands_panel.is_open());
+    assert!(app.settings_panel.is_active());
+
+    app.toggle_settings_surface();
+    assert!(!app.settings_panel.is_active());
+    app.toggle_settings_surface();
+    assert!(app.settings_panel.is_active());
+}

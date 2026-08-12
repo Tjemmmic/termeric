@@ -427,6 +427,20 @@ impl ApplicationHandler for App {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
 
+                        // The same shortcut opens and closes Settings. Check it
+                        // before treating character keys as filter input.
+                        if self
+                            .shortcut_registry
+                            .check(&event.logical_key, self.modifiers)
+                            == Some(crate::input::keybindings::BindableAction::ToggleSettings)
+                        {
+                            self.toggle_settings_surface();
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return;
+                        }
+
                         let settings_key = match &event.logical_key {
                             Key::Named(NamedKey::Escape) => Some(SettingsKey::Escape),
                             Key::Named(NamedKey::ArrowUp) => Some(SettingsKey::Up),

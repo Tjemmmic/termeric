@@ -126,6 +126,27 @@ impl App {
                         let px = position.0 as f32;
                         let py = position.1 as f32;
 
+                        // The Settings button is a global tab-bar control. Let
+                        // it switch directly from Commands/Sessions to Settings
+                        // instead of making the first click close the old panel
+                        // and requiring another click to open the new one.
+                        if py < renderer.tab_bar_height() {
+                            let window_size = self.window.as_ref().map(|w| w.inner_size());
+                            if let Some(size) = window_size {
+                                let tab_infos =
+                                    self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
+                                if renderer.tab_bar_hit_test(px, py, &tab_infos, size.width as f32)
+                                    == crate::renderer::TabBarClick::Gear
+                                {
+                                    self.toggle_settings_surface();
+                                    if let Some(window) = &self.window {
+                                        window.request_redraw();
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+
                         // If commands panel is open, intercept all clicks
                         if self.commands_panel.is_open() {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
@@ -431,7 +452,7 @@ impl App {
                                 );
                                 match click {
                                     TabBarClick::Gear => {
-                                        self.settings_panel.toggle();
+                                        self.toggle_settings_surface();
                                     }
                                     TabBarClick::NewTab => {
                                         if let Some(tabs) = &mut self.tabs {

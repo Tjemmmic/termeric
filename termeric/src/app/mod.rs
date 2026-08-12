@@ -1447,7 +1447,7 @@ impl App {
                 }
             }
             Action::ToggleSettings => {
-                self.settings_panel.toggle();
+                self.toggle_settings_surface();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -1525,6 +1525,21 @@ impl App {
             }
         }
         true
+    }
+
+    /// Toggle Settings as an exclusive chrome surface. Side panels can cover
+    /// the settings button and previously consumed the first click merely to
+    /// close themselves, making Settings appear intermittently unresponsive.
+    fn toggle_settings_surface(&mut self) {
+        if self.settings_panel.is_active() {
+            self.settings_panel.close();
+            return;
+        }
+
+        self.commands_panel.close();
+        self.session_panel.close();
+        self.session_dropdown_open = false;
+        self.settings_panel.toggle();
     }
 
     /// Handle the result of executing a command from the palette
