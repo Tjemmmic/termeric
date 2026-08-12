@@ -268,45 +268,45 @@ impl BindableAction {
             // ── Panes ──
             SplitVertical => ActionMeta {
                 id: "split_vertical",
-                label: "Split Vertical",
+                label: "Split Pane Right",
                 category: Panes,
-                default_binding: None,
+                default_binding: Some(KeyChord::new("e", true, false, true, false)),
             },
             SplitHorizontal => ActionMeta {
                 id: "split_horizontal",
-                label: "Split Horizontal",
+                label: "Split Pane Down",
                 category: Panes,
-                default_binding: None,
+                default_binding: Some(KeyChord::new("o", true, false, true, false)),
             },
             NavigatePaneUp => ActionMeta {
                 id: "navigate_pane_up",
                 label: "Navigate Pane Up",
                 category: Panes,
-                default_binding: None,
+                default_binding: Some(KeyChord::new("up", false, true, true, false)),
             },
             NavigatePaneDown => ActionMeta {
                 id: "navigate_pane_down",
                 label: "Navigate Pane Down",
                 category: Panes,
-                default_binding: None,
+                default_binding: Some(KeyChord::new("down", false, true, true, false)),
             },
             NavigatePaneLeft => ActionMeta {
                 id: "navigate_pane_left",
                 label: "Navigate Pane Left",
                 category: Panes,
-                default_binding: None,
+                default_binding: Some(KeyChord::new("left", false, true, true, false)),
             },
             NavigatePaneRight => ActionMeta {
                 id: "navigate_pane_right",
                 label: "Navigate Pane Right",
                 category: Panes,
-                default_binding: None,
+                default_binding: Some(KeyChord::new("right", false, true, true, false)),
             },
             ClosePane => ActionMeta {
                 id: "close_pane",
                 label: "Close Pane",
                 category: Panes,
-                default_binding: None,
+                default_binding: Some(KeyChord::new("x", true, false, true, false)),
             },
 
             // ── Scrolling ──
@@ -952,8 +952,34 @@ mod tests {
         assert!(chord.shift);
         assert!(!chord.alt);
 
-        // SplitVertical should be unset
-        assert!(reg.binding_for(BindableAction::SplitVertical).is_none());
+        // Pane actions should be usable without first configuring shortcuts.
+        assert_eq!(
+            reg.binding_for(BindableAction::SplitVertical)
+                .unwrap()
+                .display_string(),
+            "Ctrl+Shift+E"
+        );
+        assert_eq!(
+            reg.binding_for(BindableAction::NavigatePaneLeft)
+                .unwrap()
+                .display_string(),
+            "Alt+Shift+Left"
+        );
+    }
+
+    #[test]
+    fn default_bindings_are_unique() {
+        let mut seen = HashMap::new();
+        for &action in BindableAction::all() {
+            let Some(chord) = action.meta().default_binding else {
+                continue;
+            };
+            assert!(
+                seen.insert(chord.clone(), action).is_none(),
+                "duplicate default binding {}",
+                chord.display_string()
+            );
+        }
     }
 
     #[test]

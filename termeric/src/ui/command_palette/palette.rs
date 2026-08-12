@@ -7,6 +7,7 @@ use sublime_fuzzy::FuzzySearch;
 
 use super::super::animation::OverlayAnimation;
 use super::super::text_input::TextInput;
+use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 
 /// Source of a registered command
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -516,15 +517,24 @@ impl CommandPalette {
     }
 }
 
-/// Build the default set of core commands
-pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
+/// Build the default set of core commands using the active shortcut registry,
+/// so command-palette hints stay correct after user overrides.
+pub fn core_commands(
+    harvest_enabled: bool,
+    shortcuts: &ShortcutRegistry,
+) -> Vec<RegisteredCommand> {
+    let shortcut = |action| {
+        shortcuts
+            .binding_for(action)
+            .map(|chord| chord.display_string())
+    };
     let mut commands = vec![
         // ── Core ──
         RegisteredCommand {
             id: "core.new-tab".into(),
             title: "New Tab".into(),
             category: "Core".into(),
-            shortcut: Some("Ctrl+Shift+T".into()),
+            shortcut: shortcut(BindableAction::NewTab),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -533,7 +543,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.close-tab".into(),
             title: "Close Tab".into(),
             category: "Core".into(),
-            shortcut: Some("Ctrl+Shift+W".into()),
+            shortcut: shortcut(BindableAction::CloseTab),
             icon: None,
             source: CommandSource::Core,
             destructive: true,
@@ -542,7 +552,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.next-tab".into(),
             title: "Next Tab".into(),
             category: "Core".into(),
-            shortcut: Some("Ctrl+Tab".into()),
+            shortcut: shortcut(BindableAction::NextTab),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -551,7 +561,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.prev-tab".into(),
             title: "Previous Tab".into(),
             category: "Core".into(),
-            shortcut: Some("Ctrl+Shift+Tab".into()),
+            shortcut: shortcut(BindableAction::PrevTab),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -561,7 +571,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.find".into(),
             title: "Find".into(),
             category: "Search".into(),
-            shortcut: Some("Ctrl+Shift+F".into()),
+            shortcut: shortcut(BindableAction::ToggleSearch),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -571,7 +581,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.settings".into(),
             title: "Open Settings".into(),
             category: "Config".into(),
-            shortcut: Some("Ctrl+,".into()),
+            shortcut: shortcut(BindableAction::ToggleSettings),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -665,7 +675,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.font-size-increase".into(),
             title: "Increase Font Size".into(),
             category: "Font".into(),
-            shortcut: Some("Ctrl+=".into()),
+            shortcut: shortcut(BindableAction::IncreaseFontSize),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -674,7 +684,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.font-size-decrease".into(),
             title: "Decrease Font Size".into(),
             category: "Font".into(),
-            shortcut: Some("Ctrl+-".into()),
+            shortcut: shortcut(BindableAction::DecreaseFontSize),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -683,7 +693,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.font-size-reset".into(),
             title: "Reset Font Size".into(),
             category: "Font".into(),
-            shortcut: Some("Ctrl+0".into()),
+            shortcut: shortcut(BindableAction::ResetFontSize),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -703,7 +713,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.copy".into(),
             title: "Copy Selection".into(),
             category: "Core".into(),
-            shortcut: Some("Ctrl+Shift+C".into()),
+            shortcut: shortcut(BindableAction::Copy),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -712,7 +722,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
             id: "core.paste".into(),
             title: "Paste from Clipboard".into(),
             category: "Core".into(),
-            shortcut: Some("Ctrl+Shift+V".into()),
+            shortcut: shortcut(BindableAction::Paste),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -775,7 +785,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
         id: "core.split-vertical".into(),
         title: "Split Pane Right".into(),
         category: "Panes".into(),
-        shortcut: None,
+        shortcut: shortcut(BindableAction::SplitVertical),
         icon: None,
         source: CommandSource::Core,
         destructive: false,
@@ -784,7 +794,7 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
         id: "core.split-horizontal".into(),
         title: "Split Pane Down".into(),
         category: "Panes".into(),
-        shortcut: None,
+        shortcut: shortcut(BindableAction::SplitHorizontal),
         icon: None,
         source: CommandSource::Core,
         destructive: false,
@@ -793,22 +803,38 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
         id: "core.close-pane".into(),
         title: "Close Pane".into(),
         category: "Panes".into(),
-        shortcut: None,
+        shortcut: shortcut(BindableAction::ClosePane),
         icon: None,
         source: CommandSource::Core,
         destructive: false,
     });
-    for (id, title) in [
-        ("core.navigate-pane-up", "Navigate Pane Up"),
-        ("core.navigate-pane-down", "Navigate Pane Down"),
-        ("core.navigate-pane-left", "Navigate Pane Left"),
-        ("core.navigate-pane-right", "Navigate Pane Right"),
+    for (id, title, action) in [
+        (
+            "core.navigate-pane-up",
+            "Navigate Pane Up",
+            BindableAction::NavigatePaneUp,
+        ),
+        (
+            "core.navigate-pane-down",
+            "Navigate Pane Down",
+            BindableAction::NavigatePaneDown,
+        ),
+        (
+            "core.navigate-pane-left",
+            "Navigate Pane Left",
+            BindableAction::NavigatePaneLeft,
+        ),
+        (
+            "core.navigate-pane-right",
+            "Navigate Pane Right",
+            BindableAction::NavigatePaneRight,
+        ),
     ] {
         commands.push(RegisteredCommand {
             id: id.into(),
             title: title.into(),
             category: "Panes".into(),
-            shortcut: None,
+            shortcut: shortcut(action),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -873,7 +899,7 @@ mod tests {
 
     fn test_palette() -> CommandPalette {
         let mut palette = CommandPalette::new();
-        palette.register_commands(core_commands(true));
+        palette.register_commands(core_commands(true, &ShortcutRegistry::new()));
         palette
     }
 
@@ -887,20 +913,59 @@ mod tests {
 
     #[test]
     fn harvest_commands_are_hidden_until_enabled() {
-        let disabled = core_commands(false);
+        let registry = ShortcutRegistry::new();
+        let disabled = core_commands(false, &registry);
         assert!(disabled.iter().all(|command| command.category != "Harvest"));
-        let enabled = core_commands(true);
+        let enabled = core_commands(true, &registry);
         assert!(enabled.iter().any(|command| command.category == "Harvest"));
     }
 
     #[test]
     fn manual_session_save_is_discoverable() {
-        let commands = core_commands(false);
+        let commands = core_commands(false, &ShortcutRegistry::new());
         assert!(commands.iter().any(|command| {
             command.id == "core.save-session"
                 && command.title == "Save Open Tabs as Sessions"
                 && command.category == "Sessions"
         }));
+    }
+
+    #[test]
+    fn pane_commands_show_their_default_shortcuts() {
+        let commands = core_commands(false, &ShortcutRegistry::new());
+        let pane_commands: Vec<_> = commands
+            .iter()
+            .filter(|command| command.category == "Panes")
+            .collect();
+
+        assert_eq!(pane_commands.len(), 7);
+        assert!(
+            pane_commands
+                .iter()
+                .all(|command| command.shortcut.is_some())
+        );
+        assert!(pane_commands.iter().any(|command| {
+            command.id == "core.split-vertical"
+                && command.shortcut.as_deref() == Some("Ctrl+Shift+E")
+        }));
+    }
+
+    #[test]
+    fn command_shortcut_hints_follow_user_overrides() {
+        let mut registry = ShortcutRegistry::new();
+        registry.set_binding(
+            BindableAction::SplitVertical,
+            Some(crate::input::keybindings::KeyChord::new(
+                "z", true, true, false, false,
+            )),
+        );
+
+        let commands = core_commands(false, &registry);
+        let split = commands
+            .iter()
+            .find(|command| command.id == "core.split-vertical")
+            .unwrap();
+        assert_eq!(split.shortcut.as_deref(), Some("Ctrl+Alt+Z"));
     }
 
     #[test]
@@ -1017,7 +1082,7 @@ mod tests {
     #[test]
     fn replace_plugin_commands_removes_disabled_plugin_sources() {
         let mut palette = CommandPalette::new();
-        palette.register_commands(core_commands(true));
+        palette.register_commands(core_commands(true, &ShortcutRegistry::new()));
         palette.replace_plugin_commands(vec![RegisteredCommand {
             id: "codex.open".into(),
             title: "Open Codex".into(),

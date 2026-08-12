@@ -344,8 +344,10 @@ impl App {
     }
 
     pub(super) fn sync_harvest_from_config(&mut self) {
-        self.command_palette
-            .register_commands(core_commands(self.config.harvest.enabled));
+        self.command_palette.register_commands(core_commands(
+            self.config.harvest.enabled,
+            &self.shortcut_registry,
+        ));
         if self.config.harvest.enabled {
             if let Some(harvest) = &mut self.harvest {
                 harvest
@@ -580,6 +582,10 @@ impl App {
         match action {
             ShortcutsAction::SetShortcut { action, chord } => {
                 self.shortcut_registry.set_binding(action, chord);
+                self.command_palette.register_commands(core_commands(
+                    self.config.harvest.enabled,
+                    &self.shortcut_registry,
+                ));
             }
             ShortcutsAction::None => {}
         }

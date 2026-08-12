@@ -332,8 +332,10 @@ impl App {
 
         // Initialize command palette and apply all runtime config through the
         // same path used by reload, settings changes, and reset.
-        app.command_palette
-            .register_commands(core_commands(app.config.harvest.enabled));
+        app.command_palette.register_commands(core_commands(
+            app.config.harvest.enabled,
+            &app.shortcut_registry,
+        ));
         app.apply_config_side_effects();
         if let Some(warning) = startup_config_warning {
             log::error!("{}", warning);
