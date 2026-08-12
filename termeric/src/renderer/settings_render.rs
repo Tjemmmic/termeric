@@ -246,7 +246,7 @@ impl Renderer {
                         if is_selected {
                             let arrow_color = adjust_alpha(self.ui.palette_accent, anim);
                             self.text_pipeline
-                                .push_char('◀', layout.value_x, text_cy, arrow_color);
+                                .push_char('<', layout.value_x, text_cy, arrow_color);
                         }
                         let val_start = layout.value_x + cell_width * 2.0;
                         for (ci, c) in entry.value.chars().enumerate() {
@@ -262,7 +262,7 @@ impl Renderer {
                             if arrow_x + cell_width <= max_value_x {
                                 let arrow_color = adjust_alpha(self.ui.palette_accent, anim);
                                 self.text_pipeline
-                                    .push_char('▶', arrow_x, text_cy, arrow_color);
+                                    .push_char('>', arrow_x, text_cy, arrow_color);
                             }
                         }
                     }
@@ -285,7 +285,7 @@ impl Renderer {
                                 adjust_alpha(self.ui.palette_text_dim, 0.5 * anim)
                             };
                             self.text_pipeline
-                                .push_char('▼', chevron_x, text_cy, chevron_color);
+                                .push_char('v', chevron_x, text_cy, chevron_color);
                         }
                     }
                     crate::ui::settings::SettingKind::ReadOnly => {
@@ -349,7 +349,7 @@ impl Renderer {
             footer_sep_color,
         );
 
-        let footer_text = "↑↓ Navigate  ←→ Adjust  ⏎ Dropdown  ⌃S Save  Esc Close";
+        let footer_text = "Arrows Navigate/Adjust  Enter Open  Ctrl+S Save  Esc Close";
         let footer_text_y = footer_y + (layout.footer_area - cell_height) / 2.0;
         let footer_color = adjust_alpha(self.ui.palette_text_dim, 0.5 * anim);
         let footer_scale = cell_width * 0.85;

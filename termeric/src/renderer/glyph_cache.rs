@@ -6,6 +6,7 @@
 use anyhow::Result;
 use cosmic_text::{
     Attrs, Buffer, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, SwashCache,
+    SwashContent,
 };
 use std::collections::HashMap;
 use wgpu::*;
@@ -117,6 +118,8 @@ pub struct GlyphCache {
     line_height_multiplier: f32,
     /// Font family name (as requested by user)
     font_family: String,
+    /// Ordered configured fallbacks to try when the primary has no glyph.
+    fallback_families: Vec<String>,
     /// Whether to use system monospace fallback (when requested font not found/not monospace)
     use_monospace_fallback: bool,
     /// Whether ligatures are enabled
@@ -136,7 +139,8 @@ impl GlyphCache {
     ) -> Result<Self> {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
-        let font_family = resolve_configured_family(&font_system, font_family, fallback_families);
+        let fallback_families = fallback_families.to_vec();
+        let font_family = resolve_configured_family(&font_system, font_family, &fallback_families);
 
         // Calculate metrics
         let line_height = font_size * line_height_multiplier;
@@ -213,6 +217,7 @@ impl GlyphCache {
             font_size,
             line_height_multiplier,
             font_family,
+            fallback_families,
             use_monospace_fallback,
             ligatures_enabled: ligatures,
         })
@@ -276,17 +281,37 @@ impl GlyphCache {
 
     /// Rasterize a character
     fn rasterize_char(&mut self, c: char) -> Option<RasterizedGlyph> {
-        // Create a buffer with just this character
-        // Use Shaping::Basic to match measure_cell() - this ensures consistent font selection
+        let mut named_candidates = Vec::with_capacity(1 + self.fallback_families.len());
+        named_candidates.push(self.font_family.clone());
+        named_candidates.extend(
+            self.fallback_families
+                .iter()
+                .filter(|family| *family != &self.font_family)
+                .cloned(),
+        );
+
+        for family in &named_candidates {
+            if let Some(glyph) = self.rasterize_char_with_family(c, family_for(family)) {
+                return Some(glyph);
+            }
+        }
+
+        for family in [Family::Monospace, Family::SansSerif] {
+            if let Some(glyph) = self.rasterize_char_with_family(c, family) {
+                return Some(glyph);
+            }
+        }
+
+        log::debug!("No installed font contains glyph U+{:04X}", c as u32);
+        None
+    }
+
+    fn rasterize_char_with_family(
+        &mut self,
+        c: char,
+        family: Family<'_>,
+    ) -> Option<RasterizedGlyph> {
         let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
-
-        // Use monospace fallback if the requested font wasn't found or isn't monospace
-        let family = if self.use_monospace_fallback {
-            Family::Monospace
-        } else {
-            family_for(&self.font_family)
-        };
-
         let attrs = Attrs::new().family(family);
         buffer.set_text(
             &mut self.font_system,
@@ -296,35 +321,24 @@ impl GlyphCache {
             None, // No alignment needed for single chars
         );
 
-        // Get the first glyph
-        for run in buffer.layout_runs() {
-            for glyph in run.glyphs.iter() {
-                // Get the cache key from cosmic-text
-                let physical = glyph.physical((0.0, 0.0), 1.0);
+        let cache_key = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .find(|glyph| glyph.glyph_id != 0)
+            .map(|glyph| glyph.physical((0.0, 0.0), 1.0).cache_key)?;
 
-                // Rasterize using swash
-                if let Some(image) = self
-                    .swash_cache
-                    .get_image(&mut self.font_system, physical.cache_key)
-                {
-                    return Some(RasterizedGlyph {
-                        width: image.placement.width,
-                        height: image.placement.height,
-                        bearing_x: image.placement.left,
-                        bearing_y: image.placement.top,
-                        data: image.data.clone(),
-                    });
-                }
-            }
-        }
-
-        // Return empty glyph for missing characters
+        let image = self
+            .swash_cache
+            .get_image(&mut self.font_system, cache_key)
+            .as_ref()?;
+        let pixel_count = image.placement.width as usize * image.placement.height as usize;
+        let data = glyph_alpha_mask(image.content, &image.data, pixel_count)?;
         Some(RasterizedGlyph {
-            width: 0,
-            height: 0,
-            bearing_x: 0,
-            bearing_y: 0,
-            data: vec![],
+            width: image.placement.width,
+            height: image.placement.height,
+            bearing_x: image.placement.left,
+            bearing_y: image.placement.top,
+            data,
         })
     }
 
@@ -616,8 +630,16 @@ impl GlyphCache {
     /// Apply primary/fallback family selection. The first installed configured
     /// family wins; cosmic-text continues to handle per-glyph fallback.
     pub fn set_font_families(&mut self, primary: String, fallbacks: &[String], queue: &Queue) {
+        let fallbacks_changed = self.fallback_families != fallbacks;
+        self.fallback_families = fallbacks.to_vec();
         let resolved = resolve_configured_family(&self.font_system, &primary, fallbacks);
-        self.set_font_family(resolved, queue);
+        if self.font_family == resolved {
+            if fallbacks_changed {
+                self.clear_atlas(queue);
+            }
+        } else {
+            self.set_font_family(resolved, queue);
+        }
     }
 
     /// Change line-height metrics, clearing cached layout/raster data.
@@ -664,6 +686,24 @@ impl GlyphCache {
                 depth_or_array_layers: 1,
             },
         );
+    }
+}
+
+fn glyph_alpha_mask(content: SwashContent, data: &[u8], pixel_count: usize) -> Option<Vec<u8>> {
+    match content {
+        SwashContent::Mask => (data.len() >= pixel_count).then(|| data[..pixel_count].to_vec()),
+        SwashContent::Color => (data.len() >= pixel_count.saturating_mul(4)).then(|| {
+            data.chunks_exact(4)
+                .take(pixel_count)
+                .map(|rgba| rgba[3])
+                .collect()
+        }),
+        SwashContent::SubpixelMask => (data.len() >= pixel_count.saturating_mul(4)).then(|| {
+            data.chunks_exact(4)
+                .take(pixel_count)
+                .map(|rgba| *rgba.iter().max().unwrap_or(&0))
+                .collect()
+        }),
     }
 }
 
@@ -869,5 +909,23 @@ mod tests {
         let metrics = Metrics::new(14.0, 21.0);
         let (_, height, _) = measure_cell(&mut font_system, &metrics, "monospace");
         assert_eq!(height, 21.0);
+    }
+
+    #[test]
+    fn rgba_glyphs_are_reduced_to_alpha_masks() {
+        let rgba = [10, 20, 30, 40, 50, 60, 70, 80];
+        assert_eq!(
+            glyph_alpha_mask(SwashContent::Color, &rgba, 2),
+            Some(vec![40, 80])
+        );
+        assert_eq!(
+            glyph_alpha_mask(SwashContent::SubpixelMask, &rgba, 2),
+            Some(vec![40, 80])
+        );
+        assert_eq!(
+            glyph_alpha_mask(SwashContent::Mask, &[12, 34], 2),
+            Some(vec![12, 34])
+        );
+        assert_eq!(glyph_alpha_mask(SwashContent::Color, &[1, 2, 3], 1), None);
     }
 }
