@@ -370,11 +370,16 @@ impl TabManager {
         )
     }
 
+    /// Get the first live tab owned by a plugin.
+    pub fn plugin_tab_mut(&mut self, plugin_id: &str) -> Option<&mut Tab> {
+        let index = self.find_plugin_tab_index(plugin_id)?;
+        self.tabs.get_mut(index)
+    }
+
     /// Write data to a plugin-owned tab's PTY
     pub fn write_to_plugin_tab(&mut self, plugin_id: &str, data: &[u8]) -> bool {
         if let Some(idx) = self.find_plugin_tab_index(plugin_id) {
-            let _ = self.tabs[idx].write(data);
-            true
+            self.tabs[idx].write(data).is_ok()
         } else {
             false
         }

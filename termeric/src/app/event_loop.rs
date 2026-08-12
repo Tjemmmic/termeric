@@ -141,9 +141,7 @@ impl ApplicationHandler for App {
                             Key::Character(c) if c.as_str() == "c" => {
                                 // Copy overlay text to clipboard
                                 let text = self.info_overlay.lines.join("\n");
-                                if let Some(clipboard) = &mut self.clipboard {
-                                    let _ = clipboard.set_text(&text);
-                                }
+                                self.copy_to_clipboard(text, "Copied notice to clipboard");
                             }
                             Key::Character(c) => {
                                 // Number key 1-9 for profile selection
@@ -212,10 +210,12 @@ impl ApplicationHandler for App {
                             Key::Character(c) if c == "c" => {
                                 // Copy raw diff to clipboard
                                 if let Some(raw) = self.diff_review.raw_text() {
-                                    if let Some(clipboard) = &mut self.clipboard {
-                                        let _ = clipboard.set_text(raw.to_string());
-                                        log::info!("Copied diff to clipboard");
-                                    }
+                                    self.copy_to_clipboard(
+                                        raw.to_string(),
+                                        "Copied diff to clipboard",
+                                    );
+                                } else {
+                                    self.toasts.warning("No diff is available to copy");
                                 }
                             }
                             _ => {}
@@ -636,16 +636,7 @@ impl ApplicationHandler for App {
                             // Hit-test Copy button
                             if layout.copy_button_contains(mx, my) {
                                 let text = self.info_overlay.lines.join("\n");
-                                if let Some(clipboard) = &mut self.clipboard {
-                                    match clipboard.set_text(&text) {
-                                        Ok(()) => {
-                                            self.toasts.success("Copied to clipboard");
-                                        }
-                                        Err(e) => {
-                                            self.toasts.error(format!("Copy failed: {}", e));
-                                        }
-                                    }
-                                }
+                                self.copy_to_clipboard(text, "Copied notice to clipboard");
                                 if let Some(window) = &self.window {
                                     window.request_redraw();
                                 }

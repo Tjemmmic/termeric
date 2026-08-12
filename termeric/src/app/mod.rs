@@ -1582,8 +1582,8 @@ impl App {
                 true
             }
             KeyAction::RunCommand { command } => {
-                log::info!("Run command requested: {}", command);
-                false
+                self.run_custom_command(&command);
+                true
             }
             _ => false,
         }
@@ -2121,26 +2121,36 @@ impl App {
             }
         }
         log::info!("No unreviewed diffs to show");
+        self.toasts.info("No unreviewed diffs");
     }
 
     /// Copy the latest detected diff to clipboard
     fn copy_latest_diff(&mut self) {
-        if let Some(tabs) = &self.tabs {
-            for (_, tab) in tabs.iter() {
-                if let Some(diff) = tab.diff_detector.latest_unreviewed() {
-                    if let Some(clipboard) = &mut self.clipboard {
-                        let _ = clipboard.set_text(diff.raw.clone());
-                        log::info!("Copied diff for '{}' to clipboard", diff.filename);
-                    }
-                    return;
-                }
-            }
+        let diff = self.tabs.as_ref().and_then(|tabs| {
+            tabs.iter()
+                .find_map(|(_, tab)| tab.diff_detector.latest_unreviewed().cloned())
+        });
+        if let Some(diff) = diff {
+            let filename = diff.filename.clone();
+            self.copy_to_clipboard(diff.raw, "Copied diff");
+            log::info!("Copied diff for '{}' to clipboard", filename);
+            return;
         }
         log::info!("No diffs to copy");
+        self.toasts.info("No unreviewed diffs to copy");
     }
 
     /// Open the context picker modal targeting a specific plugin tab
     fn open_context_picker_for(&mut self, plugin_id: &str) {
+        let plugin_is_open = self
+            .tabs
+            .as_ref()
+            .is_some_and(|tabs| tabs.find_plugin_tab_index(plugin_id).is_some());
+        if !plugin_is_open {
+            self.toasts
+                .warning(format!("Open {plugin_id} before inserting context"));
+            return;
+        }
         let cwd = if let Some(tabs) = &self.tabs {
             tabs.plugin_tab_cwd(plugin_id).or_else(|| {
                 tabs.iter()
@@ -2173,21 +2183,12 @@ impl App {
         let assembled = self.context_picker.gather(terminal_output);
 
         // Inject into the target plugin tab's PTY
-        let target = self
-            .context_picker
-            .target_plugin_id
-            .clone()
-            .unwrap_or_else(|| "claude-code".to_string());
-        if let Some(tabs) = &mut self.tabs {
-            // Wrap in a clear marker so the AI tool can parse it
-            let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", assembled);
-            tabs.write_to_plugin_tab(&target, injected.as_bytes());
-            log::info!(
-                "Injected {} chars of context into {}",
-                injected.len(),
-                target
-            );
-        }
+        let Some(target) = self.context_picker.target_plugin_id.clone() else {
+            self.toasts.warning("No plugin selected for context");
+            self.context_picker.dismiss();
+            return;
+        };
+        self.inject_context_to_plugin(&target, &assembled);
 
         self.context_picker.dismiss();
     }
@@ -2199,10 +2200,12 @@ impl App {
     fn export_plugin_session(&mut self, plugin_id: &str) {
         let Some(tabs) = &self.tabs else {
             log::info!("No {} tab found for export", plugin_id);
+            self.toasts.warning(format!("No {plugin_id} tab is open"));
             return;
         };
         let Some(idx) = tabs.find_plugin_tab_index(plugin_id) else {
             log::info!("No {} tab found for export", plugin_id);
+            self.toasts.warning(format!("No {plugin_id} tab is open"));
             return;
         };
 
@@ -2216,19 +2219,27 @@ impl App {
             match crate::session::export::export_to_markdown(path) {
                 Ok(md) => {
                     if let Some(base) = crate::session::sessions_base_dir() {
-                        let _ = std::fs::create_dir_all(&base);
+                        if let Err(error) = std::fs::create_dir_all(&base) {
+                            self.toasts
+                                .error(format!("Could not create session directory: {error}"));
+                            return;
+                        }
                         let id = crate::session::generate_session_id();
                         let filename = format!("{}-{}-export.md", plugin_id, id);
                         let dest = base.join(&filename);
                         match std::fs::write(&dest, &md) {
                             Ok(()) => {
                                 log::info!("Exported transcript to {}", dest.display());
-                                if let Some(clipboard) = &mut self.clipboard {
-                                    let _ = clipboard.set_text(dest.display().to_string());
-                                }
+                                self.announce_session_export(&dest);
                             }
-                            Err(e) => log::error!("Failed to write export: {}", e),
+                            Err(e) => {
+                                log::error!("Failed to write export: {}", e);
+                                self.toasts.error(format!("Session export failed: {e}"));
+                            }
                         }
+                        return;
+                    } else {
+                        self.toasts.error("Session data directory is unavailable");
                         return;
                     }
                 }
@@ -2248,10 +2259,16 @@ impl App {
         if let Some(text) = content {
             if text.trim().is_empty() {
                 log::info!("No session content to export for '{}'", plugin_id);
+                self.toasts
+                    .info(format!("No {plugin_id} session content to export"));
                 return;
             }
             if let Some(base) = crate::session::sessions_base_dir() {
-                let _ = std::fs::create_dir_all(&base);
+                if let Err(error) = std::fs::create_dir_all(&base) {
+                    self.toasts
+                        .error(format!("Could not create session directory: {error}"));
+                    return;
+                }
                 let id = crate::session::generate_session_id();
                 let filename = format!("{}-{}-export.md", plugin_id, id);
                 let path = base.join(&filename);
@@ -2259,14 +2276,28 @@ impl App {
                 match std::fs::write(&path, &md) {
                     Ok(()) => {
                         log::info!("Exported session to {}", path.display());
-                        if let Some(clipboard) = &mut self.clipboard {
-                            let _ = clipboard.set_text(path.display().to_string());
-                        }
+                        self.announce_session_export(&path);
                     }
-                    Err(e) => log::error!("Failed to export session: {}", e),
+                    Err(e) => {
+                        log::error!("Failed to export session: {}", e);
+                        self.toasts.error(format!("Session export failed: {e}"));
+                    }
                 }
+            } else {
+                self.toasts.error("Session data directory is unavailable");
             }
         }
+    }
+
+    fn announce_session_export(&mut self, path: &std::path::Path) {
+        let path_text = path.display().to_string();
+        let copied = self
+            .clipboard
+            .as_mut()
+            .is_some_and(|clipboard| clipboard.set_text(path_text.clone()).is_ok());
+        let suffix = if copied { " (path copied)" } else { "" };
+        self.toasts
+            .success(format!("Exported session to {path_text}{suffix}"));
     }
 
     /// Scroll the plugin tab to the last line containing an error-like pattern.
@@ -2281,6 +2312,7 @@ impl App {
             tabs.switch_to(idx);
         } else {
             log::info!("No '{}' tab found for jump-to-error", plugin_id);
+            self.toasts.warning(format!("No {plugin_id} tab is open"));
             return;
         }
 
@@ -2299,6 +2331,8 @@ impl App {
                 log::info!("Jumped to error at line {} in '{}'", pos, plugin_id);
             } else {
                 log::info!("No errors found in '{}' tab output", plugin_id);
+                self.toasts
+                    .info(format!("No errors found in {plugin_id} output"));
             }
         }
     }
@@ -2388,6 +2422,7 @@ impl App {
                 }
                 PluginAction::ShowMessage { message } => {
                     log::info!("Plugin message: {}", message);
+                    self.toasts.info(message);
                 }
                 PluginAction::ShowNotice { title, lines } => {
                     log::info!("Plugin notice [{}]: {}", title, lines.join(" / "));
@@ -2397,20 +2432,33 @@ impl App {
                     }
                 }
                 PluginAction::ClearPluginTab { plugin_id } => {
-                    if let Some(tabs) = &mut self.tabs {
+                    let cleared = if let Some(tabs) = &mut self.tabs {
                         // Send Ctrl+C then clear
-                        tabs.write_to_plugin_tab(&plugin_id, b"\x03");
-                        tabs.write_to_plugin_tab(&plugin_id, b"clear\n");
+                        tabs.write_to_plugin_tab(&plugin_id, b"\x03")
+                            && tabs.write_to_plugin_tab(&plugin_id, b"clear\r")
+                    } else {
+                        false
+                    };
+                    if cleared {
+                        self.toasts.success(format!("Cleared {plugin_id}"));
+                    } else {
+                        self.toasts
+                            .warning(format!("No writable {plugin_id} tab found"));
                     }
                 }
                 PluginAction::CopyFromPluginTab { plugin_id, lines } => {
-                    if let Some(tabs) = &self.tabs {
-                        if let Some(text) = tabs.copy_from_plugin_tab(&plugin_id, lines) {
-                            if let Some(clipboard) = &mut self.clipboard {
-                                let _ = clipboard.set_text(text);
-                                log::info!("Copied last {} lines from '{}' tab", lines, plugin_id);
-                            }
-                        }
+                    let text = self
+                        .tabs
+                        .as_ref()
+                        .and_then(|tabs| tabs.copy_from_plugin_tab(&plugin_id, lines));
+                    if let Some(text) = text.filter(|text| !text.is_empty()) {
+                        self.copy_to_clipboard(
+                            text,
+                            &format!("Copied last {lines} lines from {plugin_id}"),
+                        );
+                    } else {
+                        self.toasts
+                            .warning(format!("No output available from {plugin_id}"));
                     }
                 }
                 PluginAction::RestartPlugin { plugin_id } => {
@@ -2426,6 +2474,8 @@ impl App {
                     let actions = self.plugin_manager.execute_command(&open_cmd, &ctx);
                     if !actions.is_empty() {
                         self.execute_plugin_actions(actions);
+                    } else {
+                        self.toasts.warning(format!("{plugin_id} is not enabled"));
                     }
                 }
                 PluginAction::ApplyDiff { diff_content, cwd } => {
@@ -2437,10 +2487,20 @@ impl App {
                 PluginAction::RevertDiff { diff_content, cwd } => {
                     self.run_git_apply("revert", &["--reverse"], &diff_content, cwd.as_deref());
                 }
-                PluginAction::InjectContext { text } => {
-                    self.inject_context_to_plugin(&text);
+                PluginAction::InjectContext { plugin_id, text } => {
+                    self.inject_context_to_plugin(&plugin_id, &text);
                 }
                 PluginAction::ToggleTranscript => {
+                    let has_session = self
+                        .tabs
+                        .as_ref()
+                        .and_then(|tabs| tabs.active_tab())
+                        .is_some_and(|tab| tab.ai_session.is_some());
+                    if !has_session {
+                        self.toasts
+                            .warning("Activate an AI plugin tab to toggle its transcript");
+                        continue;
+                    }
                     if let Some(tabs) = &mut self.tabs {
                         if let Some(tab) = tabs.active_tab_mut() {
                             if let Some(ref mut session) = tab.ai_session {
@@ -2484,6 +2544,12 @@ impl App {
                                                 );
                                             }
                                         }
+                                    } else {
+                                        session.recording = false;
+                                        self.info_overlay.show(
+                                            "Transcript Error".to_string(),
+                                            vec!["Session data directory is unavailable".into()],
+                                        );
                                     }
                                 } else {
                                     // Stop recording — drop the recorder
@@ -2544,7 +2610,12 @@ impl App {
                         }
                         // Also show current profile
                         if let Some(tabs) = &self.tabs {
-                            if let Some(tab) = tabs.active_tab() {
+                            if let Some((_, tab)) = tabs.iter().find(|(_, tab)| {
+                                matches!(
+                                    &tab.tab_type,
+                                    crate::tabs::TabType::Plugin { plugin_id: id } if id == &plugin_id
+                                )
+                            }) {
                                 if let Some(ref session) = tab.ai_session {
                                     lines.push(String::new());
                                     lines.push(format!("Current: {}", session.profile));
@@ -2563,14 +2634,21 @@ impl App {
                     plugin_id,
                     profile_name,
                 } => {
-                    if let Some(tabs) = &mut self.tabs {
-                        if let Some(tab) = tabs.active_tab_mut() {
-                            if let Some(ref mut session) = tab.ai_session {
-                                session.profile = profile_name.clone();
-                                log::info!("Profile for '{}' set to '{}'", plugin_id, profile_name);
-                            }
-                        }
+                    let applied = self
+                        .tabs
+                        .as_mut()
+                        .and_then(|tabs| tabs.plugin_tab_mut(&plugin_id))
+                        .and_then(|tab| tab.ai_session.as_mut())
+                        .map(|session| {
+                            session.profile = profile_name.clone();
+                        })
+                        .is_some();
+                    if !applied {
+                        self.toasts
+                            .warning(format!("No active {plugin_id} session found"));
+                        continue;
                     }
+                    log::info!("Profile for '{}' set to '{}'", plugin_id, profile_name);
                     self.info_overlay.show(
                         "Profile Applied".to_string(),
                         vec![
@@ -2588,12 +2666,9 @@ impl App {
         }
     }
 
-    /// Run `git apply` with optional extra flags, piping diff_content via stdin.
-    ///
-    /// Change font size by delta
     /// Run `git apply` with optional extra args, piping diff_content to stdin.
     fn run_git_apply(
-        &self,
+        &mut self,
         label: &str,
         extra_args: &[&str],
         diff_content: &str,
@@ -2618,24 +2693,51 @@ impl App {
         match cmd.spawn() {
             Ok(mut child) => {
                 if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(diff_content.as_bytes());
+                    if let Err(error) = stdin.write_all(diff_content.as_bytes()) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        self.show_git_action_failure(
+                            label,
+                            format!("Could not send diff: {error}"),
+                        );
+                        return;
+                    }
                 }
                 match child.wait_with_output() {
                     Ok(output) if output.status.success() => {
                         log::info!("git {} succeeded", label);
+                        self.toasts.success(format!("Git {label} succeeded"));
                     }
                     Ok(output) => {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         log::error!("git {} failed: {}", label, stderr.trim());
+                        let detail = if stderr.trim().is_empty() {
+                            format!("git apply exited with {}", output.status)
+                        } else {
+                            stderr.trim().to_string()
+                        };
+                        self.show_git_action_failure(label, detail);
                     }
                     Err(e) => {
                         log::error!("git {} wait failed: {}", label, e);
+                        self.show_git_action_failure(label, e.to_string());
                     }
                 }
             }
             Err(e) => {
                 log::error!("Failed to spawn git {}: {}", label, e);
+                self.show_git_action_failure(label, e.to_string());
             }
+        }
+    }
+
+    fn show_git_action_failure(&mut self, label: &str, detail: String) {
+        self.toasts.error(format!("Git {label} failed"));
+        let mut lines = vec![format!("git {label} could not complete:"), String::new()];
+        lines.extend(detail.lines().take(8).map(str::to_string));
+        self.info_overlay.show("Git action failed", lines);
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
 
@@ -2644,16 +2746,25 @@ impl App {
         self.execute_plugin_actions(vec![crate::plugin::PluginAction::ToggleTranscript]);
     }
 
-    /// Inject context text into the active plugin tab
-    fn inject_context_to_plugin(&mut self, text: &str) {
-        if let Some(tabs) = &mut self.tabs {
-            let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
-            tabs.write_to_plugin_tab("claude-code", injected.as_bytes());
+    /// Inject context text into the explicitly selected plugin tab.
+    fn inject_context_to_plugin(&mut self, plugin_id: &str, text: &str) -> bool {
+        let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
+        let written = self
+            .tabs
+            .as_mut()
+            .is_some_and(|tabs| tabs.write_to_plugin_tab(plugin_id, injected.as_bytes()));
+        if written {
             log::info!(
-                "Injected {} chars of context into Claude Code",
-                injected.len()
+                "Injected {} chars of context into {}",
+                injected.len(),
+                plugin_id
             );
+            self.toasts.success(format!("Context sent to {plugin_id}"));
+        } else {
+            self.toasts
+                .warning(format!("No writable {plugin_id} tab found"));
         }
+        written
     }
 
     /// Get pane render info from the active tab's pane manager (if in pane mode)
@@ -2855,8 +2966,6 @@ impl App {
                 }
             }
             SproutAction::Explain => {
-                // Hand the command off to the Claude Code plugin with a
-                // short "explain this" preamble injected as context.
                 let cmd = self.extract_command_text(&region);
                 let out = self.extract_output_text(&region);
                 if cmd.trim().is_empty() {
@@ -2868,11 +2977,39 @@ impl App {
                     cmd.trim(),
                     out.trim(),
                 );
+                let plugin_id = match self.preferred_plugin_target() {
+                    Ok(plugin_id) => plugin_id,
+                    Err(message) => {
+                        self.toasts.warning(message);
+                        return;
+                    }
+                };
                 self.execute_plugin_actions(vec![crate::plugin::PluginAction::InjectContext {
+                    plugin_id,
                     text: context,
                 }]);
             }
         }
+    }
+
+    fn preferred_plugin_target(&self) -> std::result::Result<String, String> {
+        let Some(tabs) = &self.tabs else {
+            return Err("No plugin tab is open".into());
+        };
+        let active = tabs.active_tab().and_then(|tab| match &tab.tab_type {
+            crate::tabs::TabType::Plugin { plugin_id } => Some(plugin_id.as_str()),
+            crate::tabs::TabType::Shell => None,
+        });
+        let available: Vec<String> = tabs
+            .iter()
+            .filter_map(|(_, tab)| match &tab.tab_type {
+                crate::tabs::TabType::Plugin { plugin_id } if !tab.closed => {
+                    Some(plugin_id.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        select_plugin_target(active, &available)
     }
 
     /// Copy `text` to the clipboard, emit a success toast with `label`.
@@ -3855,12 +3992,9 @@ impl App {
 
     /// Run a custom command in the current terminal tab
     fn run_custom_command(&mut self, command: &str) {
-        if let Some(tabs) = &mut self.tabs {
-            if let Some(tab) = tabs.active_tab_mut() {
-                log::info!("Running custom command: {}", command);
-                let cmd_with_newline = format!("{}\n", command);
-                let _ = tab.write(cmd_with_newline.as_bytes());
-            }
+        log::info!("Running custom command: {}", command);
+        for chunk in command_keystrokes(command) {
+            self.write_to_pty(&chunk);
         }
     }
 
@@ -4986,6 +5120,34 @@ fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> 
     0.65 + 0.35 * phase.cos()
 }
 
+fn select_plugin_target(
+    active_plugin_id: Option<&str>,
+    available_plugin_ids: &[String],
+) -> std::result::Result<String, String> {
+    if let Some(active) = active_plugin_id {
+        if available_plugin_ids.iter().any(|id| id == active) {
+            return Ok(active.to_string());
+        }
+    }
+
+    let mut unique = available_plugin_ids.to_vec();
+    unique.sort();
+    unique.dedup();
+    match unique.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => Err("Open an AI plugin tab before using Explain".into()),
+        _ => Err("Multiple AI plugin tabs are open; activate the intended one first".into()),
+    }
+}
+
+fn command_keystrokes(command: &str) -> [Vec<u8>; 3] {
+    [
+        b"\x15".to_vec(),
+        command.trim_end_matches(['\r', '\n']).as_bytes().to_vec(),
+        b"\r".to_vec(),
+    ]
+}
+
 /// Minimal RFC 4648 base64 encoder (standard alphabet) used for the OSC 52
 /// clipboard reply. Keeps us off an external `base64` dependency.
 fn base64_encode_standard(input: &[u8]) -> String {
@@ -5022,7 +5184,9 @@ fn base64_encode_standard(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod base64_tests {
-    use super::{base64_encode_standard, cursor_opacity_at};
+    use super::{
+        base64_encode_standard, command_keystrokes, cursor_opacity_at, select_plugin_target,
+    };
 
     #[test]
     fn disabled_cursor_blink_is_fully_opaque() {
@@ -5033,6 +5197,33 @@ mod base64_tests {
     fn cursor_blink_rate_controls_the_cycle() {
         assert!((cursor_opacity_at(true, 0.0, 1.0) - 1.0).abs() < f32::EPSILON);
         assert!((cursor_opacity_at(true, 0.5, 1.0) - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn plugin_target_prefers_active_then_unambiguous_tab() {
+        let plugins = vec!["claude-code".to_string(), "codex".to_string()];
+        assert_eq!(
+            select_plugin_target(Some("codex"), &plugins).unwrap(),
+            "codex"
+        );
+        assert_eq!(
+            select_plugin_target(None, &["claude-code".to_string()]).unwrap(),
+            "claude-code"
+        );
+        assert!(select_plugin_target(None, &plugins).is_err());
+        assert!(select_plugin_target(None, &[]).is_err());
+    }
+
+    #[test]
+    fn dynamic_run_command_builds_single_enter_payload() {
+        assert_eq!(
+            command_keystrokes("cargo test"),
+            [b"\x15".to_vec(), b"cargo test".to_vec(), b"\r".to_vec()]
+        );
+        assert_eq!(
+            command_keystrokes("cargo test\n"),
+            [b"\x15".to_vec(), b"cargo test".to_vec(), b"\r".to_vec()]
+        );
     }
 
     #[test]

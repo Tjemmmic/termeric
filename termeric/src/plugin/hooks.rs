@@ -101,13 +101,13 @@ pub enum PluginAction {
         diff_content: String,
         cwd: Option<String>,
     },
-    /// Toggle transcript recording for the active Claude session
+    /// Toggle transcript recording for the active AI plugin session.
     ToggleTranscript,
-    /// Inject context text into the active plugin tab
-    InjectContext { text: String },
+    /// Inject context text into a specific plugin-owned tab.
+    InjectContext { plugin_id: String, text: String },
     /// List available profiles for a plugin (shows selection overlay)
     ListProfiles { plugin_id: String },
-    /// Apply a named profile to the active plugin session
+    /// Apply a named profile to a specific plugin session.
     ApplyProfile {
         plugin_id: String,
         profile_name: String,
