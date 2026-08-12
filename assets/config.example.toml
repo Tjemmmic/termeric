@@ -65,7 +65,7 @@ visual_duration_ms = 100
 
 [session]
 enabled = true
-auto_restore = true
+auto_restore = false
 auto_save = true
 save_scrollback = true
 

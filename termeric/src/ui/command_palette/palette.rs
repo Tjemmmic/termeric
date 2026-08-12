@@ -614,6 +614,15 @@ pub fn core_commands(harvest_enabled: bool) -> Vec<RegisteredCommand> {
         },
         // ── Sessions ──
         RegisteredCommand {
+            id: "core.save-session".into(),
+            title: "Save Open Tabs as Sessions".into(),
+            category: "Sessions".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
             id: "core.session-manager".into(),
             title: "Session Manager".into(),
             category: "Sessions".into(),
@@ -882,6 +891,16 @@ mod tests {
         assert!(disabled.iter().all(|command| command.category != "Harvest"));
         let enabled = core_commands(true);
         assert!(enabled.iter().any(|command| command.category == "Harvest"));
+    }
+
+    #[test]
+    fn manual_session_save_is_discoverable() {
+        let commands = core_commands(false);
+        assert!(commands.iter().any(|command| {
+            command.id == "core.save-session"
+                && command.title == "Save Open Tabs as Sessions"
+                && command.category == "Sessions"
+        }));
     }
 
     #[test]

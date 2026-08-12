@@ -417,11 +417,14 @@ impl Tab {
 
     /// Check if this tab has meaningful content worth saving
     ///
-    /// Returns true only if there are scrollback lines (content that scrolled
-    /// off the visible area), indicating the user actually ran commands.
-    /// This avoids false positives from splash screen art or an empty prompt.
+    /// Returns true when the tab has command history, prior session identity,
+    /// or scrolled-off output. Short commands that fit on screen still count.
+    /// This avoids false positives from splash art or a pristine prompt while
+    /// keeping useful working-directory/command state eligible for auto-save.
     pub fn has_content(&self) -> bool {
-        self.terminal.grid().scrollback_len() > 0
+        self.last_command.is_some()
+            || self.session_id.is_some()
+            || self.terminal.grid().scrollback_len() > 0
     }
 
     /// Save this tab as a session

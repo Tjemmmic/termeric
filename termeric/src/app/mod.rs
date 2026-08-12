@@ -424,8 +424,9 @@ impl App {
             // Detect plugin tabs that exited too quickly (< 5s) — before cleanup removes them
             let quick_exits = tabs.drain_quick_exit_plugin_info();
 
-            let should_exit =
-                tabs.cleanup_closed(self.config.session.save_scrollback) && tabs.is_empty();
+            let auto_save = self.config.session.enabled && self.config.session.auto_save;
+            let should_exit = tabs.cleanup_closed(auto_save, self.config.session.save_scrollback)
+                && tabs.is_empty();
             let persistence_notices = tabs.drain_persistence_notices();
             let user_notices = tabs.drain_user_notices();
             (
@@ -1589,6 +1590,10 @@ impl App {
                         if let Some(window) = &self.window {
                             window.request_redraw();
                         }
+                        return;
+                    }
+                    "core.save-session" => {
+                        self.force_save_session();
                         return;
                     }
                     "core.plugins" => {

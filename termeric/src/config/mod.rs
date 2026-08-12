@@ -381,7 +381,7 @@ impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            auto_restore: true,
+            auto_restore: false,
             auto_save: true,
             save_scrollback: true,
         }

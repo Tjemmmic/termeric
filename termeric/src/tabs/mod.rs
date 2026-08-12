@@ -333,15 +333,15 @@ impl TabManager {
     }
 
     /// Remove closed tabs and tabs with completed close animations.
-    /// Before removing, saves each non-empty tab as a session.
+    /// Before removing, saves each non-empty tab when auto-save is enabled.
     /// Returns true if any tabs were removed.
-    pub fn cleanup_closed(&mut self, save_scrollback: bool) -> bool {
+    pub fn cleanup_closed(&mut self, auto_save: bool, save_scrollback: bool) -> bool {
         let initial_count = self.tabs.len();
 
         // Save sessions for tabs about to be removed
         for tab in self.tabs.iter_mut() {
             if tab.closed || tab.is_close_complete() {
-                if tab.has_content() {
+                if auto_save && tab.has_content() {
                     match tab.save_as_session(save_scrollback) {
                         Ok(outcome) => {
                             log::info!(
@@ -363,7 +363,7 @@ impl TabManager {
                                 });
                         }
                     }
-                } else {
+                } else if auto_save {
                     log::debug!("Skipping empty closing tab {} (no content)", tab.id);
                 }
             }
@@ -510,11 +510,11 @@ impl TabManager {
 
     /// Save all non-empty tabs as individual sessions
     ///
-    /// Each tab with content gets its own session entry.
-    /// Empty tabs are skipped.
-    pub fn save_all_sessions(&mut self, save_scrollback: bool) {
+    /// Each eligible tab gets its own session entry. Automatic saves skip
+    /// pristine tabs; explicit saves may include them to preserve their cwd.
+    pub fn save_all_sessions(&mut self, save_scrollback: bool, include_empty: bool) {
         for tab in self.tabs.iter_mut() {
-            if !tab.has_content() {
+            if !include_empty && !tab.has_content() {
                 log::debug!("Skipping empty tab {} (no content)", tab.id);
                 continue;
             }

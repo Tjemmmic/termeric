@@ -104,16 +104,20 @@ impl App {
             return;
         }
 
-        self.force_save_session();
+        self.save_sessions(false, true);
     }
 
     /// Unconditionally save the current session (explicit user action)
     pub(super) fn force_save_session(&mut self) {
+        self.save_sessions(true, false);
+    }
+
+    fn save_sessions(&mut self, include_empty: bool, automatic: bool) {
         let Some(tabs) = &mut self.tabs else { return };
         let save_scrollback = self.config.session.save_scrollback;
-        tabs.save_all_sessions(save_scrollback);
+        tabs.save_all_sessions(save_scrollback, include_empty);
         let notices = tabs.drain_persistence_notices();
-        self.show_persistence_notices(notices, false);
+        self.show_persistence_notices(notices, automatic);
     }
 
     pub(super) fn show_persistence_notices(
