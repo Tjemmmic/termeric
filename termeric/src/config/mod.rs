@@ -526,4 +526,19 @@ mod tests {
         config.plugins.codex.approval_mode = "legacy".into();
         assert!(config.validate().is_err());
     }
+
+    #[test]
+    fn theme_name_and_explicit_path_survive_config_round_trip() {
+        let mut config = Config::default();
+        config.theme.name = "arrowroot".into();
+        config.theme.path = Some(PathBuf::from("/tmp/arrowroot.toml"));
+
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.theme.name, "arrowroot");
+        assert_eq!(
+            decoded.theme.path,
+            Some(PathBuf::from("/tmp/arrowroot.toml"))
+        );
+    }
 }

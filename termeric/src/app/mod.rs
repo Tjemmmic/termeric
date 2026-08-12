@@ -77,6 +77,10 @@ pub struct App {
     last_config_check: Instant,
     /// Last observed mtime of the config file (for change detection)
     last_config_mtime: Option<std::time::SystemTime>,
+    /// File backing the active custom/explicit theme, when applicable.
+    active_theme_path: Option<std::path::PathBuf>,
+    /// Last observed mtime of the active file-backed theme.
+    last_theme_mtime: Option<std::time::SystemTime>,
     /// Last known cursor visibility (for snap detection)
     last_cursor_visible: bool,
     /// Last active tab ID (for animation state)
@@ -182,10 +186,27 @@ pub struct App {
 impl App {
     /// Create a new application instance
     pub fn new() -> Result<Self> {
-        let (config, startup_config_warning) = Config::load_for_startup();
+        let (mut config, mut startup_config_warning) = Config::load_for_startup();
         let default_font_size = config.font.size;
         let cursor_blink_period = (config.cursor.blink_rate as f32 / 1000.0) * 2.0;
-        let theme = Self::load_theme_from_config(&config);
+        let (theme, active_theme_path) =
+            match Theme::resolve(&config.theme.name, config.theme.path.as_deref()) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    let warning = format!("Theme could not be loaded; using turmeric: {error:#}");
+                    startup_config_warning = Some(match startup_config_warning {
+                        Some(existing) => format!("{existing}\n{warning}"),
+                        None => warning,
+                    });
+                    config.theme = crate::config::ThemeConfig::default();
+                    (Theme::default(), None)
+                }
+            };
+        let last_theme_mtime = active_theme_path.as_ref().and_then(|path| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        });
 
         // Initialize bell from config
         let bell = Bell::new(BellConfig {
@@ -223,6 +244,8 @@ impl App {
             last_config_mtime: std::fs::metadata(crate::config::Config::config_path())
                 .and_then(|m| m.modified())
                 .ok(),
+            active_theme_path,
+            last_theme_mtime,
             last_cursor_visible: true,
             last_active_tab_id: None,
             max_seen_tab_id: None,
@@ -1962,10 +1985,11 @@ impl App {
                     }
                     id if id.starts_with("core.theme.") => {
                         let theme_name = id.strip_prefix("core.theme.").unwrap_or("");
-                        match Theme::load_by_name(theme_name) {
-                            Ok(theme) => {
+                        match Theme::resolve(theme_name, None) {
+                            Ok((theme, source)) => {
                                 self.config.theme.name = theme_name.to_string();
-                                self.apply_theme(theme);
+                                self.config.theme.path = None;
+                                self.apply_theme(theme, source);
                                 match self.save_config() {
                                     Ok(msg) => {
                                         log::info!("Theme changed to {}: {}", theme_name, msg);
@@ -3161,40 +3185,6 @@ impl App {
         window.request_redraw();
     }
 
-    /// Load a theme from the config, returning it along with a human-readable
-    /// error description if any of the attempted loads failed. The caller is
-    /// expected to surface that description to the user.
-    fn load_theme_from_config_with_error(config: &Config) -> (Theme, Option<String>) {
-        if let Some(path) = &config.theme.path {
-            match Theme::load(path) {
-                Ok(theme) => return (theme, None),
-                Err(err) => {
-                    let msg = format!("Failed to load theme at {}: {}", path.display(), err);
-                    log::warn!("{}", msg);
-                    // Fall through to the named builtin lookup, but keep the
-                    // message so the user sees the original failure.
-                    match Theme::load_builtin(&config.theme.name) {
-                        Ok(theme) => return (theme, Some(msg)),
-                        Err(_) => return (Theme::default(), Some(msg)),
-                    }
-                }
-            }
-        }
-
-        match Theme::load_builtin(&config.theme.name) {
-            Ok(theme) => (theme, None),
-            Err(err) => {
-                let msg = format!("Failed to load theme '{}': {}", config.theme.name, err);
-                log::warn!("{}", msg);
-                (Theme::default(), Some(msg))
-            }
-        }
-    }
-
-    fn load_theme_from_config(config: &Config) -> Theme {
-        Self::load_theme_from_config_with_error(config).0
-    }
-
     /// Poll the config file's mtime; if it changed since our last load,
     /// reload + re-apply + toast. Called once per frame but only hits the
     /// filesystem at most every 750ms.
@@ -3211,32 +3201,53 @@ impl App {
             Err(_) => None,
         };
 
-        // Nothing to do if neither side has a timestamp or they match.
-        if current_mtime == self.last_config_mtime {
-            return;
-        }
-        self.last_config_mtime = current_mtime;
+        if current_mtime != self.last_config_mtime {
+            self.last_config_mtime = current_mtime;
 
-        // Only reload if the file exists (avoid racing with editors that
-        // briefly delete + rewrite).
-        if !path.exists() {
-            return;
-        }
-
-        match crate::config::Config::load_or_default() {
-            Ok(config) => {
-                if let Err(error) = self.apply_config(config) {
-                    log::warn!("Config hot-reload rejected: {}", error);
-                    self.toasts
-                        .warning(format!("Config reload rejected: {error}"));
-                } else {
-                    log::info!("Config hot-reloaded");
-                    self.toasts.info("Config reloaded");
+            // Only reload if the file exists (avoid racing with editors that
+            // briefly delete + rewrite).
+            if path.exists() {
+                match crate::config::Config::load_or_default() {
+                    Ok(config) => {
+                        if let Err(error) = self.apply_config(config) {
+                            log::warn!("Config hot-reload rejected: {}", error);
+                            self.toasts
+                                .warning(format!("Config reload rejected: {error}"));
+                        } else {
+                            log::info!("Config hot-reloaded");
+                            self.toasts.info("Config reloaded");
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Config hot-reload failed: {}", e);
+                        self.toasts.warning(format!("Config reload failed: {}", e));
+                    }
                 }
             }
-            Err(e) => {
-                log::warn!("Config hot-reload failed: {}", e);
-                self.toasts.warning(format!("Config reload failed: {}", e));
+        }
+
+        let Some(theme_path) = self.active_theme_path.clone() else {
+            return;
+        };
+        let theme_mtime = std::fs::metadata(&theme_path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if theme_mtime == self.last_theme_mtime {
+            return;
+        }
+        self.last_theme_mtime = theme_mtime;
+
+        match Theme::load(&theme_path) {
+            Ok(theme) => {
+                self.apply_theme(theme, Some(theme_path.clone()));
+                self.toasts
+                    .info(format!("Theme reloaded: {}", theme_path.display()));
+            }
+            Err(error) => {
+                log::warn!("Theme hot-reload failed: {error:#}");
+                self.toasts.warning(format!(
+                    "Theme reload failed; keeping current theme: {error:#}"
+                ));
             }
         }
     }
@@ -3245,6 +3256,8 @@ impl App {
     /// to all live subsystems. Invalid reloads leave the previous config live.
     fn apply_config(&mut self, config: Config) -> std::result::Result<(), String> {
         config.validate().map_err(|error| format!("{error:#}"))?;
+        Theme::resolve(&config.theme.name, config.theme.path.as_deref())
+            .map_err(|error| format!("theme rejected: {error:#}"))?;
         self.config = config;
         self.apply_config_side_effects();
         Ok(())
@@ -3274,11 +3287,14 @@ impl App {
             visual_duration_ms: self.config.bell.visual_duration_ms,
             ..Default::default()
         });
-        let (theme, theme_err) = Self::load_theme_from_config_with_error(&self.config);
-        self.apply_theme(theme);
-        if let Some(msg) = theme_err {
-            // Keep it as a toast — startup shouldn't demand a modal dismiss.
-            self.toasts.warning(format!("Theme: {}", msg));
+        match Theme::resolve(&self.config.theme.name, self.config.theme.path.as_deref()) {
+            Ok((theme, source)) => self.apply_theme(theme, source),
+            Err(error) => {
+                log::warn!("Theme changed while applying config: {error:#}");
+                self.toasts.warning(format!(
+                    "Theme reload failed; keeping current theme: {error:#}"
+                ));
+            }
         }
         if let Some(tabs) = &mut self.tabs {
             tabs.set_scrollback_limit(self.config.scrollback.lines);
@@ -3353,9 +3369,15 @@ impl App {
         self.keybinding_manager.load(bindings);
     }
 
-    fn apply_theme(&mut self, theme: Theme) {
+    fn apply_theme(&mut self, theme: Theme, source: Option<std::path::PathBuf>) {
         self.settings_panel.set_theme_meta(theme.meta.clone());
         self.theme = theme;
+        self.last_theme_mtime = source.as_ref().and_then(|path| {
+            std::fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        });
+        self.active_theme_path = source;
         if let Some(renderer) = &mut self.renderer {
             renderer.set_theme(&self.theme);
             // Clear glyph cache so text is re-rasterized with new colors
@@ -3375,12 +3397,12 @@ impl App {
             SettingsAction::SetFontFamily(family) => {
                 self.set_font_family(family);
             }
-            SettingsAction::SetTheme(name) => match Theme::load_builtin(&name) {
-                Ok(theme) => {
+            SettingsAction::SetTheme(name) => match Theme::resolve(&name, None) {
+                Ok((theme, source)) => {
                     let display = name.clone();
                     self.config.theme.name = name;
                     self.config.theme.path = None;
-                    self.apply_theme(theme);
+                    self.apply_theme(theme, source);
                     self.toasts.info(format!("Theme: {}", display));
                 }
                 Err(err) => {

@@ -34,8 +34,9 @@ scroll_speed = 6.0
 [theme]
 # Theme name (built-in: turmeric, dracula, nord, solarized-dark, solarized-light)
 name = "turmeric"
-# Or explicit path to theme file
+# Or explicit path to a theme file. The active file is watched for changes.
 # path = "/path/to/custom-theme.toml"
+# Named custom themes are loaded from ~/.config/termeric/themes/<name>.toml.
 
 # Window configuration
 [window]

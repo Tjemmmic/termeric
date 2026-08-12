@@ -497,10 +497,7 @@ impl SettingsPanel {
 
         // Theme
         {
-            let options: Vec<String> = Theme::list_available()
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let options = Theme::list_all();
             let selected = options
                 .iter()
                 .position(|n| n == &config.theme.name)

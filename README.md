@@ -51,7 +51,11 @@ padding = 8
 
 Settings are also editable live from within the terminal — press the gear icon in the tab bar, or open the settings modal via the command palette.
 
-Themes live under [`termeric/themes/`](termeric/themes/). Drop a new `.toml` file into `termeric/themes/community/` (or point `[theme].path` at an absolute path) and it shows up in the theme picker.
+Bundled themes live under [`termeric/themes/`](termeric/themes/). Put personal
+themes in `~/.config/termeric/themes/` (or point `[theme].path` at an explicit
+file) and they appear in both theme pickers, survive restart, and reload when
+the active file changes. A malformed edit keeps the last valid colors active
+and reports the file error in-app.
 
 The built-in Codex integration is tested against `codex-cli 0.137.0`. Its
 friendly approval modes map to current Codex policies as follows: `suggest`

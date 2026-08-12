@@ -2,9 +2,9 @@
 //!
 //! Handles loading, parsing, and applying color themes.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A complete color theme
 #[derive(Debug, Clone, Deserialize)]
@@ -68,8 +68,11 @@ const BUILTIN_THEME_NAMES: [&str; 26] = [
 impl Theme {
     /// Load theme from a TOML file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let theme: Theme = toml::from_str(&content)?;
+        let path = path.as_ref();
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read theme {}", path.display()))?;
+        let theme: Theme = toml::from_str(&content)
+            .with_context(|| format!("failed to parse theme {}", path.display()))?;
         Ok(theme)
     }
 
@@ -124,9 +127,12 @@ impl Theme {
     /// Scans `Config::themes_dir()` for `.toml` files and returns their
     /// stem names (e.g., `my-theme.toml` -> `"my-theme"`).
     pub fn list_custom() -> Vec<String> {
-        let dir = super::Config::themes_dir();
+        Self::list_custom_in_dir(&super::Config::themes_dir())
+    }
+
+    fn list_custom_in_dir(dir: &Path) -> Vec<String> {
         let mut names = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&dir) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("toml") {
@@ -140,16 +146,38 @@ impl Theme {
         names
     }
 
-    /// Try to load a theme by name: first check the user's custom themes
-    /// directory (`Config::themes_dir()`), then fall back to built-in themes.
-    pub fn load_by_name(name: &str) -> Result<Self> {
-        // Check custom themes directory first
-        let custom_path = super::Config::themes_dir().join(format!("{}.toml", name));
-        if custom_path.exists() {
-            return Self::load(&custom_path);
+    /// List every selectable theme name, with custom themes appended and
+    /// duplicate names removed. Custom files take precedence during loading.
+    pub fn list_all() -> Vec<String> {
+        let mut names: Vec<String> = Self::list_available()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+        for custom in Self::list_custom() {
+            if !names.contains(&custom) {
+                names.push(custom);
+            }
         }
-        // Fall back to built-in
-        Self::load_builtin(name)
+        names
+    }
+
+    /// Resolve a configured theme and return the file that should be watched,
+    /// if the selected theme is file-backed.
+    pub fn resolve(name: &str, explicit_path: Option<&Path>) -> Result<(Self, Option<PathBuf>)> {
+        if let Some(path) = explicit_path {
+            return Self::load(path).map(|theme| (theme, Some(path.to_path_buf())));
+        }
+        Self::resolve_named_in_dir(name, &super::Config::themes_dir())
+    }
+
+    fn resolve_named_in_dir(name: &str, custom_dir: &Path) -> Result<(Self, Option<PathBuf>)> {
+        if Path::new(name).components().count() == 1 {
+            let custom_path = custom_dir.join(format!("{name}.toml"));
+            if custom_path.is_file() {
+                return Self::load(&custom_path).map(|theme| (theme, Some(custom_path)));
+            }
+        }
+        Self::load_builtin(name).map(|theme| (theme, None))
     }
 
     /// Get ANSI color by index (0-15)
@@ -540,5 +568,50 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn resolve_explicit_path_returns_watch_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("warm-root.toml");
+        std::fs::write(&path, include_str!("../../themes/roots/turmeric.toml")).unwrap();
+
+        let (theme, source) = Theme::resolve("ignored", Some(&path)).unwrap();
+        assert_eq!(theme.meta.name, "Turmeric");
+        assert_eq!(source, Some(path));
+    }
+
+    #[test]
+    fn resolve_custom_name_returns_watch_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("warm-root.toml");
+        std::fs::write(&path, include_str!("../../themes/roots/turmeric.toml")).unwrap();
+
+        let (_, source) = Theme::resolve_named_in_dir("warm-root", dir.path()).unwrap();
+        assert_eq!(source, Some(path));
+    }
+
+    #[test]
+    fn custom_theme_discovery_is_sorted_and_ignores_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("zinnia.toml"), "").unwrap();
+        std::fs::write(dir.path().join("arrowroot.toml"), "").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "").unwrap();
+
+        assert_eq!(
+            Theme::list_custom_in_dir(dir.path()),
+            vec!["arrowroot".to_string(), "zinnia".to_string()]
+        );
+    }
+
+    #[test]
+    fn malformed_theme_reports_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.toml");
+        std::fs::write(&path, "not = [valid").unwrap();
+
+        let error = Theme::resolve("ignored", Some(&path)).unwrap_err();
+        assert!(error.to_string().contains("failed to parse theme"));
+        assert!(format!("{error:#}").contains("broken.toml"));
     }
 }
