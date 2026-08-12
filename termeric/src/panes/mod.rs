@@ -19,7 +19,7 @@ use termeric_core::pty::{PtyEvent, PtyHandle, spawn_reader_thread};
 use termeric_core::{Pty, Terminal, TerminalEvent};
 
 /// Four-way direction for pane navigation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PaneDir {
     Up,
     Down,
@@ -36,6 +36,15 @@ impl PaneDir {
             "left" => Some(Self::Left),
             "right" => Some(Self::Right),
             _ => None,
+        }
+    }
+
+    fn opposite(self) -> Self {
+        match self {
+            Self::Up => Self::Down,
+            Self::Down => Self::Up,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
         }
     }
 }
@@ -140,6 +149,10 @@ pub struct PaneManager {
     panes: HashMap<PaneId, Pane>,
     /// Currently focused pane
     focused: PaneId,
+    /// Last intentional route from a pane in a direction. This makes crossing
+    /// an asymmetric split reversible: bottom-right -> left -> right returns
+    /// to bottom-right instead of re-running an ambiguous geometric tie.
+    navigation_memory: HashMap<(PaneId, PaneDir), PaneId>,
     /// Shell configuration for new panes
     shell: ShellConfig,
     /// Scrollback limit for new panes
@@ -178,6 +191,7 @@ impl PaneManager {
             tree: PaneTree::new(id),
             panes,
             focused: id,
+            navigation_memory: HashMap::new(),
             shell,
             scrollback_lines,
             next_id: 1,
@@ -222,6 +236,7 @@ impl PaneManager {
 
     /// Split the focused pane
     pub fn split(&mut self, direction: SplitDirection) -> anyhow::Result<PaneId> {
+        let previous_focus = self.focused;
         let new_id = PaneId(self.next_id);
         self.next_id += 1;
 
@@ -259,6 +274,14 @@ impl PaneManager {
 
         // Focus the new pane
         self.focused = new_id;
+        let direction = match direction {
+            SplitDirection::Vertical => PaneDir::Right,
+            SplitDirection::Horizontal => PaneDir::Down,
+        };
+        self.navigation_memory
+            .insert((previous_focus, direction), new_id);
+        self.navigation_memory
+            .insert((new_id, direction.opposite()), previous_focus);
 
         // Recalculate all pane sizes
         self.recalculate_sizes();
@@ -295,6 +318,8 @@ impl PaneManager {
         // Remove from tree and panes
         self.tree.remove(to_close);
         self.panes.remove(&to_close);
+        self.navigation_memory
+            .retain(|(from, _), to| *from != to_close && *to != to_close);
 
         // Recalculate sizes
         self.recalculate_sizes();
@@ -308,63 +333,20 @@ impl PaneManager {
     /// user a cue when they hit the edge of the layout.
     pub fn navigate(&mut self, dir: PaneDir) -> bool {
         let layout = self.calculate_layout();
-        let Some(current) = layout.get(&self.focused).copied() else {
+        if !layout.contains_key(&self.focused) {
             return false;
-        };
+        }
 
-        let target = layout
-            .iter()
-            .filter(|(id, _)| **id != self.focused)
-            .filter(|(_, rect)| match dir {
-                PaneDir::Right => {
-                    rect.x >= current.x + current.width - 1.0
-                        && rects_overlap_vertically(&current, rect)
-                }
-                PaneDir::Left => {
-                    rect.x + rect.width <= current.x + 1.0
-                        && rects_overlap_vertically(&current, rect)
-                }
-                PaneDir::Down => {
-                    rect.y >= current.y + current.height - 1.0
-                        && rects_overlap_horizontally(&current, rect)
-                }
-                PaneDir::Up => {
-                    rect.y + rect.height <= current.y + 1.0
-                        && rects_overlap_horizontally(&current, rect)
-                }
-            })
-            .min_by(|(_, a), (_, b)| {
-                // Primary: distance along the navigation axis (prefer adjacent neighbor).
-                let primary = |r: &PaneRect| match dir {
-                    PaneDir::Right => r.x - current.x,
-                    PaneDir::Left => current.x - r.x,
-                    PaneDir::Down => r.y - current.y,
-                    PaneDir::Up => current.y - r.y,
-                };
-                // Secondary: cross-axis center distance, so a T-split picks
-                // the pane whose other axis aligns most closely with current.
-                let cross = |r: &PaneRect| match dir {
-                    PaneDir::Right | PaneDir::Left => {
-                        ((r.y + r.height * 0.5) - (current.y + current.height * 0.5)).abs()
-                    }
-                    PaneDir::Up | PaneDir::Down => {
-                        ((r.x + r.width * 0.5) - (current.x + current.width * 0.5)).abs()
-                    }
-                };
-                primary(a)
-                    .partial_cmp(&primary(b))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| {
-                        cross(a)
-                            .partial_cmp(&cross(b))
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-            })
-            .map(|(id, _)| *id);
+        let remembered = self.navigation_memory.get(&(self.focused, dir)).copied();
+        let target = navigation_target(&layout, self.focused, dir, remembered);
 
         match target {
             Some(id) => {
+                let previous = self.focused;
                 self.focused = id;
+                self.navigation_memory.insert((previous, dir), id);
+                self.navigation_memory
+                    .insert((id, dir.opposite()), previous);
                 true
             }
             None => false,
@@ -514,6 +496,8 @@ impl PaneManager {
                 }
                 self.tree.remove(id);
                 self.panes.remove(&id);
+                self.navigation_memory
+                    .retain(|(from, _), to| *from != id && *to != id);
                 removed_any = true;
             }
         }
@@ -632,6 +616,64 @@ pub struct Divider {
     pub vertical: bool,
 }
 
+/// Pick a directional neighbor with stable geometric ordering. A remembered
+/// target wins when it is still a valid neighbor; otherwise ambiguous T-split
+/// ties resolve top-to-bottom or left-to-right, then by pane ID.
+fn navigation_target(
+    layout: &HashMap<PaneId, PaneRect>,
+    current_id: PaneId,
+    dir: PaneDir,
+    remembered: Option<PaneId>,
+) -> Option<PaneId> {
+    let current = layout.get(&current_id)?;
+    let is_neighbor = |rect: &PaneRect| match dir {
+        PaneDir::Right => {
+            rect.x >= current.right() - 1.0 && rects_overlap_vertically(current, rect)
+        }
+        PaneDir::Left => rect.right() <= current.x + 1.0 && rects_overlap_vertically(current, rect),
+        PaneDir::Down => {
+            rect.y >= current.bottom() - 1.0 && rects_overlap_horizontally(current, rect)
+        }
+        PaneDir::Up => {
+            rect.bottom() <= current.y + 1.0 && rects_overlap_horizontally(current, rect)
+        }
+    };
+
+    if let Some(id) = remembered
+        && id != current_id
+        && layout.get(&id).is_some_and(&is_neighbor)
+    {
+        return Some(id);
+    }
+
+    let primary_distance = |rect: &PaneRect| match dir {
+        PaneDir::Right => rect.x - current.right(),
+        PaneDir::Left => current.x - rect.right(),
+        PaneDir::Down => rect.y - current.bottom(),
+        PaneDir::Up => current.y - rect.bottom(),
+    };
+    let cross_distance = |rect: &PaneRect| match dir {
+        PaneDir::Right | PaneDir::Left => (rect.center_y() - current.center_y()).abs(),
+        PaneDir::Up | PaneDir::Down => (rect.center_x() - current.center_x()).abs(),
+    };
+    let cross_position = |rect: &PaneRect| match dir {
+        PaneDir::Right | PaneDir::Left => rect.y,
+        PaneDir::Up | PaneDir::Down => rect.x,
+    };
+
+    layout
+        .iter()
+        .filter(|(id, rect)| **id != current_id && is_neighbor(rect))
+        .min_by(|(id_a, a), (id_b, b)| {
+            primary_distance(a)
+                .total_cmp(&primary_distance(b))
+                .then_with(|| cross_distance(a).total_cmp(&cross_distance(b)))
+                .then_with(|| cross_position(a).total_cmp(&cross_position(b)))
+                .then_with(|| id_a.0.cmp(&id_b.0))
+        })
+        .map(|(id, _)| *id)
+}
+
 /// Check if two rectangles overlap vertically
 fn rects_overlap_vertically(a: &PaneRect, b: &PaneRect) -> bool {
     a.y < b.y + b.height && a.y + a.height > b.y
@@ -662,5 +704,34 @@ mod tests {
         assert_eq!(PaneDir::parse("right"), Some(PaneDir::Right));
         assert_eq!(PaneDir::parse("diagonal"), None);
         assert_eq!(PaneDir::parse(""), None);
+    }
+
+    fn asymmetric_three_pane_layout() -> HashMap<PaneId, PaneRect> {
+        HashMap::from([
+            (PaneId(0), PaneRect::new(0.0, 0.0, 500.0, 800.0)),
+            (PaneId(1), PaneRect::new(500.0, 0.0, 500.0, 400.0)),
+            (PaneId(2), PaneRect::new(500.0, 400.0, 500.0, 400.0)),
+        ])
+    }
+
+    #[test]
+    fn ambiguous_navigation_has_a_stable_visual_tiebreaker() {
+        let layout = asymmetric_three_pane_layout();
+        assert_eq!(
+            navigation_target(&layout, PaneId(0), PaneDir::Right, None),
+            Some(PaneId(1)),
+            "an equal T-split should consistently choose the top pane"
+        );
+    }
+
+    #[test]
+    fn remembered_reverse_route_wins_across_an_asymmetric_split() {
+        let layout = asymmetric_three_pane_layout();
+        // After bottom-right -> left, the reverse right route remembers the
+        // bottom pane rather than falling back to the top-pane tiebreaker.
+        assert_eq!(
+            navigation_target(&layout, PaneId(0), PaneDir::Right, Some(PaneId(2))),
+            Some(PaneId(2))
+        );
     }
 }

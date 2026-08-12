@@ -946,7 +946,7 @@ mod tests {
         );
         assert!(pane_commands.iter().any(|command| {
             command.id == "core.split-vertical"
-                && command.shortcut.as_deref() == Some("Ctrl+Shift+E")
+                && command.shortcut.as_deref() == Some("Alt+Shift+Right")
         }));
     }
 
