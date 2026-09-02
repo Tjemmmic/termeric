@@ -2,7 +2,7 @@
 
 use super::{Renderer, adjust_alpha};
 use crate::ui::constants::CARD_CORNER_RADIUS;
-use crate::ui::toast::{ToastInfo, ToastSeverity};
+use crate::ui::toast::{ToastInfo, ToastSeverity, toast_layout};
 
 impl Renderer {
     /// Draw the active toast stack in the bottom-right corner, newest at
@@ -19,30 +19,15 @@ impl Renderer {
 
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
-        let padding = cell_width * 1.0;
-        let row_h = cell_height * 2.0;
-        let gap = 6.0;
-        // Cap toast width at 50% of the window, but respect a sensible minimum
-        // so very short messages don't render in a cramped pill.
-        let max_w = (window_width * 0.5).min(cell_width * 48.0);
-        let min_w = (cell_width * 18.0).min(max_w);
-
-        // Stack from the bottom up, newest (last in iter) at the bottom.
-        let right_margin = cell_width * 1.5;
-        let bottom_margin = cell_height * 1.0;
-        let mut y = window_height - bottom_margin;
-
-        for toast in toasts.iter().rev() {
-            y -= row_h;
+        let padding = cell_width;
+        for placement in toast_layout(toasts, window_width, window_height, cell_width, cell_height)
+        {
+            let toast = &toasts[placement.toast_index];
+            let x = placement.rect.x;
+            let y = placement.rect.y;
+            let w = placement.rect.width;
+            let row_h = placement.rect.height;
             let opacity = toast.opacity;
-            // Width from message length, clamped.
-            let text_w = toast.message.chars().count() as f32 * cell_width;
-            let w = (text_w + padding * 2.0 + cell_width * 2.0).clamp(min_w, max_w);
-            let x = window_width - w - right_margin;
-
-            // Slide-in: offset horizontally until fully faded in.
-            let slide = (1.0 - opacity) * (cell_width * 2.0);
-            let tx = x + slide;
 
             // Severity colors — pull from the theme palette.
             let (border_color, accent_color) = match toast.severity {
@@ -85,7 +70,7 @@ impl Renderer {
 
             // Drop shadow
             self.rect_pipeline.push_rounded_rect(
-                tx + 2.0,
+                x + 2.0,
                 y + 3.0,
                 w,
                 row_h,
@@ -94,12 +79,12 @@ impl Renderer {
             );
             // Background
             self.rect_pipeline
-                .push_rounded_rect(tx, y, w, row_h, bg, CARD_CORNER_RADIUS);
+                .push_rounded_rect(x, y, w, row_h, bg, CARD_CORNER_RADIUS);
             // Border (outer)
             self.rect_pipeline
-                .push_rounded_rect(tx, y, w, row_h, border_color, CARD_CORNER_RADIUS);
+                .push_rounded_rect(x, y, w, row_h, border_color, CARD_CORNER_RADIUS);
             self.rect_pipeline.push_rounded_rect(
-                tx + 1.0,
+                x + 1.0,
                 y + 1.0,
                 w - 2.0,
                 row_h - 2.0,
@@ -108,7 +93,7 @@ impl Renderer {
             );
             // Left accent bar (severity indicator)
             self.rect_pipeline.push_rounded_rect(
-                tx + 3.0,
+                x + 3.0,
                 y + 4.0,
                 3.0,
                 row_h - 8.0,
@@ -117,7 +102,7 @@ impl Renderer {
             );
 
             // Message text
-            let text_x = tx + padding + cell_width * 0.8;
+            let text_x = x + padding + cell_width * 0.8;
             let text_y = y + (row_h - cell_height) / 2.0;
             let text_color = adjust_alpha(self.ui.palette_text, opacity);
             let max_chars = ((w - padding * 2.0 - cell_width) / cell_width) as usize;
@@ -131,8 +116,6 @@ impl Renderer {
                 self.text_pipeline.push_char(c, cx, text_y, text_color);
                 cx += cell_width;
             }
-
-            y -= gap;
         }
     }
 }

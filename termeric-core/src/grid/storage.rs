@@ -1,20 +1,520 @@
 //! Grid storage with scrollback buffer
 
-use super::cell::Cell;
+use super::cell::{Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec};
 use super::row::Row;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::fmt;
+use std::mem::size_of;
+use std::ops::Deref;
 
 /// Default maximum scrollback lines
 const DEFAULT_SCROLLBACK_LIMIT: usize = 10_000;
+
+/// Default per-terminal memory budget for archived scrollback.
+pub const DEFAULT_SCROLLBACK_MEMORY_BYTES: usize = 128 * 1024 * 1024;
+
+/// Estimated memory owned by the grid's visible and historical rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GridMemoryUsage {
+    pub visible_bytes: usize,
+    pub scrollback_bytes: usize,
+    pub grapheme_bytes: usize,
+    pub style_bytes: usize,
+    pub hyperlink_reference_bytes: usize,
+    pub scrollback_lines: usize,
+    pub scrollback_line_limit: usize,
+    pub scrollback_byte_limit: usize,
+}
+
+/// A cell borrowed from the mutable grid or reconstructed from compact history.
+pub enum CellRef<'a> {
+    Borrowed(&'a Cell),
+    Owned(Cell),
+}
+
+impl Deref for CellRef<'_> {
+    type Target = Cell;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(cell) => cell,
+            Self::Owned(cell) => cell,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CellStyle {
+    fg: Color,
+    bg: Color,
+    fg_spec: ColorSpec,
+    bg_spec: ColorSpec,
+    underline_color: Option<Color>,
+    underline_color_spec: Option<ColorSpec>,
+    attrs: CellAttrs,
+    flags: CellFlags,
+    /// Raw identifier; `CellFlags::HYPERLINK` is the compact Option tag.
+    hyperlink_id: u32,
+}
+
+impl CellStyle {
+    fn from_cell(cell: &Cell) -> Self {
+        // Structural width flags are encoded by CompactCellContent and DIRTY
+        // is transient. Hyperlink and DEC protection are durable cell state.
+        let mut flags = cell.flags
+            & (CellFlags::HYPERLINK
+                | CellFlags::PROTECTED
+                | CellFlags::DEC_SPECIAL_GRAPHICS
+                | CellFlags::DEC_UK_CHARSET);
+        flags.set(CellFlags::HYPERLINK, cell.hyperlink_id.is_some());
+        Self {
+            fg: cell.fg,
+            bg: cell.bg,
+            fg_spec: cell.fg_spec,
+            bg_spec: cell.bg_spec,
+            underline_color: cell.underline_color,
+            underline_color_spec: cell.underline_color_spec,
+            attrs: cell.attrs,
+            flags,
+            hyperlink_id: cell.hyperlink_id.unwrap_or_default(),
+        }
+    }
+
+    fn hyperlink_id(self) -> Option<u32> {
+        self.flags
+            .contains(CellFlags::HYPERLINK)
+            .then_some(self.hyperlink_id)
+    }
+
+    fn apply(&self, content: CompactCellContent) -> Cell {
+        let (content, structural_flags) = content.expand();
+        Cell {
+            content,
+            fg: self.fg,
+            bg: self.bg,
+            fg_spec: self.fg_spec,
+            bg_spec: self.bg_spec,
+            underline_color: self.underline_color,
+            underline_color_spec: self.underline_color_spec,
+            attrs: self.attrs,
+            flags: self.flags | structural_flags,
+            hyperlink_id: self.hyperlink_id(),
+        }
+    }
+}
+
+/// Cell text plus width structure. Keeping width out of `CellStyle` prevents
+/// every wide leader/spacer pair from fragmenting an otherwise uniform style
+/// run while retaining exact reconstruction without remeasuring Unicode.
+#[derive(Clone, Debug)]
+enum CompactCellContent {
+    Empty,
+    Char(char),
+    Grapheme(Box<str>),
+    WideEmpty,
+    WideChar(char),
+    WideGrapheme(Box<str>),
+    WideSpacer,
+}
+
+impl CompactCellContent {
+    fn from_cell(cell: Cell) -> Self {
+        if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+            return Self::WideSpacer;
+        }
+        let wide = cell.flags.contains(CellFlags::WIDE_CHAR);
+        match (wide, cell.content) {
+            (false, CellContent::Empty) => Self::Empty,
+            (false, CellContent::Char(character)) => Self::Char(character),
+            (false, CellContent::Grapheme(grapheme)) => Self::Grapheme(grapheme),
+            (true, CellContent::Empty) => Self::WideEmpty,
+            (true, CellContent::Char(character)) => Self::WideChar(character),
+            (true, CellContent::Grapheme(grapheme)) => Self::WideGrapheme(grapheme),
+        }
+    }
+
+    fn expand(self) -> (CellContent, CellFlags) {
+        match self {
+            Self::Empty => (CellContent::Empty, CellFlags::empty()),
+            Self::Char(character) => (CellContent::Char(character), CellFlags::empty()),
+            Self::Grapheme(grapheme) => (CellContent::Grapheme(grapheme), CellFlags::empty()),
+            Self::WideEmpty => (CellContent::Empty, CellFlags::WIDE_CHAR),
+            Self::WideChar(character) => (CellContent::Char(character), CellFlags::WIDE_CHAR),
+            Self::WideGrapheme(grapheme) => (CellContent::Grapheme(grapheme), CellFlags::WIDE_CHAR),
+            Self::WideSpacer => (CellContent::Empty, CellFlags::WIDE_CHAR_SPACER),
+        }
+    }
+
+    fn grapheme_bytes(&self) -> usize {
+        match self {
+            Self::Grapheme(grapheme) | Self::WideGrapheme(grapheme) => grapheme.len(),
+            _ => 0,
+        }
+    }
+
+    fn is_wide_leader(&self) -> bool {
+        matches!(
+            self,
+            Self::WideEmpty | Self::WideChar(_) | Self::WideGrapheme(_)
+        )
+    }
+
+    fn is_wide_spacer(&self) -> bool {
+        matches!(self, Self::WideSpacer)
+    }
+
+    fn has_unmarked_wide_content(&self) -> bool {
+        match self {
+            Self::Char(character) => {
+                let mut encoded = [0_u8; 4];
+                crate::unicode::grapheme_width(character.encode_utf8(&mut encoded)) == 2
+            }
+            Self::Grapheme(grapheme) => crate::unicode::grapheme_width(grapheme) == 2,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StyleRun {
+    start: usize,
+    style: CellStyle,
+}
+
+/// Immutable archival row. Content is trimmed and styles are run-length encoded.
+#[derive(Clone, Debug)]
+struct CompactRow {
+    content: Vec<CompactCellContent>,
+    styles: Vec<StyleRun>,
+    cols: usize,
+    wrapped: bool,
+}
+
+impl CompactRow {
+    fn from_row(row: Row) -> Self {
+        let cols = row.len();
+        let wrapped = row.is_wrapped();
+        let mut cells = row.into_cells();
+        while cells.last().is_some_and(Cell::is_history_default) {
+            cells.pop();
+        }
+
+        let mut content = Vec::with_capacity(cells.len());
+        let mut styles = Vec::new();
+        for (column, cell) in cells.into_iter().enumerate() {
+            let style = CellStyle::from_cell(&cell);
+            if styles
+                .last()
+                .is_none_or(|run: &StyleRun| run.style != style)
+            {
+                styles.push(StyleRun {
+                    start: column,
+                    style,
+                });
+            }
+            content.push(CompactCellContent::from_cell(cell));
+        }
+        content.shrink_to_fit();
+        styles.shrink_to_fit();
+
+        Self {
+            content,
+            styles,
+            cols,
+            wrapped,
+        }
+    }
+
+    /// Compact a row while retaining its full-width cell allocation for the
+    /// next empty viewport row. Steady output scrolls one row at a time, so
+    /// dropping this buffer and allocating an identical one creates avoidable
+    /// traffic proportional to all terminal output.
+    fn from_row_recycling(row: Row) -> (Self, Row) {
+        let cols = row.len();
+        let wrapped = row.is_wrapped();
+        let mut cells = row.into_cells();
+        let retained_len = cells
+            .iter()
+            .rposition(|cell| !cell.is_history_default())
+            .map_or(0, |column| column + 1);
+        let mut content = Vec::with_capacity(retained_len);
+        let mut styles = Vec::new();
+        for (column, slot) in cells.iter_mut().take(retained_len).enumerate() {
+            let cell = std::mem::take(slot);
+            let style = CellStyle::from_cell(&cell);
+            if styles
+                .last()
+                .is_none_or(|run: &StyleRun| run.style != style)
+            {
+                styles.push(StyleRun {
+                    start: column,
+                    style,
+                });
+            }
+            content.push(CompactCellContent::from_cell(cell));
+        }
+        content.shrink_to_fit();
+        styles.shrink_to_fit();
+
+        for cell in &mut cells {
+            *cell = Cell::default();
+        }
+        (
+            Self {
+                content,
+                styles,
+                cols,
+                wrapped,
+            },
+            Row::from_cells(cells, false),
+        )
+    }
+
+    fn get(&self, col: usize) -> Option<Cell> {
+        if col >= self.cols {
+            return None;
+        }
+        let Some(content) = self.content.get(col) else {
+            return Some(Cell::default());
+        };
+        let style = self
+            .styles
+            .iter()
+            .rev()
+            .find(|run| run.start <= col)
+            .expect("stored history content has a style run");
+        Some(style.style.apply(content.clone()))
+    }
+
+    fn into_reflow_cells(self) -> Vec<Cell> {
+        let Self {
+            content,
+            styles,
+            cols,
+            wrapped,
+        } = self;
+        let stored_len = content.len();
+        let mut cells = Vec::with_capacity(if wrapped { cols } else { stored_len });
+        let mut runs = styles.into_iter().peekable();
+        let mut style = runs
+            .next()
+            .map(|run| run.style)
+            .unwrap_or_else(|| CellStyle::from_cell(&Cell::default()));
+        for (column, content) in content.into_iter().enumerate() {
+            if runs.peek().is_some_and(|run| run.start == column) {
+                style = runs.next().expect("peeked style run exists").style;
+            }
+            cells.push(style.apply(content));
+        }
+        if wrapped {
+            cells.resize_with(cols, Cell::default);
+        }
+        cells
+    }
+
+    /// A hard-broken compact row that already fits the new width needs no
+    /// expansion into rich cells or recompression. Validate wide-cell
+    /// structure before taking this path so malformed defensive inputs still
+    /// flow through the repairing reference algorithm.
+    fn retarget_width_without_reflow(&mut self, new_cols: usize) -> bool {
+        if self.wrapped || self.content.len() > new_cols {
+            return false;
+        }
+        for (column, content) in self.content.iter().enumerate() {
+            if content.has_unmarked_wide_content()
+                || (content.is_wide_leader()
+                    && (column + 1 >= new_cols
+                        || !self
+                            .content
+                            .get(column + 1)
+                            .is_some_and(CompactCellContent::is_wide_spacer)))
+                || (content.is_wide_spacer()
+                    && (column == 0
+                        || !self
+                            .content
+                            .get(column - 1)
+                            .is_some_and(CompactCellContent::is_wide_leader)))
+            {
+                return false;
+            }
+        }
+        self.cols = new_cols;
+        true
+    }
+
+    fn to_row(&self) -> Row {
+        let mut cells = Vec::with_capacity(self.cols);
+        for col in 0..self.cols {
+            cells.push(self.get(col).expect("history cell is in bounds"));
+        }
+        Row::from_cells(cells, self.wrapped)
+    }
+
+    fn owned_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.content.capacity() * size_of::<CompactCellContent>()
+            + self.styles.capacity() * size_of::<StyleRun>()
+            + self
+                .content
+                .iter()
+                .map(CompactCellContent::grapheme_bytes)
+                .sum::<usize>()
+    }
+
+    fn grapheme_bytes(&self) -> usize {
+        self.content
+            .iter()
+            .map(CompactCellContent::grapheme_bytes)
+            .sum()
+    }
+
+    fn style_bytes(&self) -> usize {
+        self.styles.capacity() * size_of::<StyleRun>()
+    }
+
+    fn hyperlink_reference_bytes(&self) -> usize {
+        self.styles
+            .iter()
+            .filter(|run| run.style.hyperlink_id().is_some())
+            .count()
+            * size_of::<StyleRun>()
+    }
+
+    fn collect_hyperlink_ids(&self, identifiers: &mut HashSet<u32>) {
+        identifiers.extend(
+            self.styles
+                .iter()
+                .filter_map(|run| run.style.hyperlink_id()),
+        );
+    }
+}
+
+/// Read-only view over either a visible full-width row or compact history.
+pub struct RowView<'a> {
+    inner: RowViewInner<'a>,
+}
+
+enum RowViewInner<'a> {
+    Visible(&'a Row),
+    History(&'a CompactRow),
+}
+
+impl<'a> RowView<'a> {
+    fn visible(row: &'a Row) -> Self {
+        Self {
+            inner: RowViewInner::Visible(row),
+        }
+    }
+
+    fn history(row: &'a CompactRow) -> Self {
+        Self {
+            inner: RowViewInner::History(row),
+        }
+    }
+
+    pub fn get(&self, col: usize) -> Option<CellRef<'a>> {
+        match self.inner {
+            RowViewInner::Visible(row) => row.get(col).map(CellRef::Borrowed),
+            RowViewInner::History(row) => row.get(col).map(CellRef::Owned),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self.inner {
+            RowViewInner::Visible(row) => row.len(),
+            RowViewInner::History(row) => row.cols,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn is_wrapped(&self) -> bool {
+        match self.inner {
+            RowViewInner::Visible(row) => row.is_wrapped(),
+            RowViewInner::History(row) => row.wrapped,
+        }
+    }
+
+    pub fn iter(&self) -> RowViewCells<'_, 'a> {
+        RowViewCells {
+            row: self,
+            column: 0,
+        }
+    }
+
+    pub fn to_ansi_string(&self) -> String {
+        match self.inner {
+            RowViewInner::Visible(row) => row.to_ansi_string(),
+            RowViewInner::History(row) => row.to_row().to_ansi_string(),
+        }
+    }
+
+    /// Extract plain text without reconstructing historical style cells.
+    pub fn plain_text(&self, cols: usize) -> String {
+        let mut text = String::with_capacity(cols);
+        for cell in self.iter().take(cols) {
+            if !cell.is_wide_char_spacer() {
+                push_content(&mut text, &cell.content);
+            }
+        }
+        text
+    }
+}
+
+fn push_content(text: &mut String, content: &CellContent) {
+    match content {
+        CellContent::Empty => text.push(' '),
+        CellContent::Char(character) => text.push(*character),
+        CellContent::Grapheme(grapheme) => text.push_str(grapheme),
+    }
+}
+
+pub struct RowViewCells<'view, 'row> {
+    row: &'view RowView<'row>,
+    column: usize,
+}
+
+impl<'row> Iterator for RowViewCells<'_, 'row> {
+    type Item = CellRef<'row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let cell = self.row.get(self.column)?;
+        self.column += 1;
+        Some(cell)
+    }
+}
+
+impl fmt::Display for RowView<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut text = String::new();
+        for cell in self.iter() {
+            if cell.is_wide_char_spacer() {
+                continue;
+            }
+            match &cell.content {
+                CellContent::Empty => text.push(' '),
+                CellContent::Char(character) => text.push(*character),
+                CellContent::Grapheme(grapheme) => text.push_str(grapheme),
+            }
+        }
+        formatter.write_str(text.trim_end())
+    }
+}
 
 /// Grid storage manages the visible grid and scrollback buffer
 pub struct GridStorage {
     /// Visible rows
     rows: Vec<Row>,
     /// Scrollback buffer (historical lines)
-    scrollback: VecDeque<Row>,
+    scrollback: VecDeque<CompactRow>,
     /// Maximum scrollback lines
     scrollback_limit: usize,
+    /// Maximum estimated bytes owned by compact scrollback rows
+    scrollback_byte_limit: usize,
+    /// Cached estimated bytes owned by compact scrollback rows
+    scrollback_bytes: usize,
     /// Number of columns
     cols: usize,
 }
@@ -26,6 +526,8 @@ impl GridStorage {
             rows: (0..rows).map(|_| Row::new(cols)).collect(),
             scrollback: VecDeque::new(),
             scrollback_limit: DEFAULT_SCROLLBACK_LIMIT,
+            scrollback_byte_limit: DEFAULT_SCROLLBACK_MEMORY_BYTES,
+            scrollback_bytes: 0,
             cols,
         }
     }
@@ -33,9 +535,59 @@ impl GridStorage {
     /// Set the scrollback limit
     pub fn set_scrollback_limit(&mut self, limit: usize) {
         self.scrollback_limit = limit;
-        while self.scrollback.len() > limit {
-            self.scrollback.pop_front();
+        if self.enforce_scrollback_limits() > 0 {
+            self.scrollback.shrink_to_fit();
         }
+    }
+
+    /// Set the estimated byte budget for compact scrollback rows.
+    pub fn set_scrollback_byte_limit(&mut self, limit: usize) {
+        self.scrollback_byte_limit = limit;
+        if self.enforce_scrollback_limits() > 0 {
+            self.scrollback.shrink_to_fit();
+        }
+    }
+
+    fn push_scrollback(&mut self, row: Row) -> usize {
+        // A zero limit is used by viewport-only buffers such as the alternate
+        // screen. Avoid allocating a compact row merely to evict it again.
+        if self.scrollback_limit == 0 || self.scrollback_byte_limit == 0 {
+            return 1;
+        }
+        let compact = CompactRow::from_row(row);
+        self.scrollback_bytes = self.scrollback_bytes.saturating_add(compact.owned_bytes());
+        self.scrollback.push_back(compact);
+        self.enforce_scrollback_limits()
+    }
+
+    fn push_scrollback_recycling(&mut self, row: Row) -> (usize, Row) {
+        if self.scrollback_limit == 0 || self.scrollback_byte_limit == 0 {
+            let cols = row.len();
+            let mut cells = row.into_cells();
+            for cell in &mut cells {
+                *cell = Cell::default();
+            }
+            debug_assert_eq!(cells.len(), cols);
+            return (1, Row::from_cells(cells, false));
+        }
+        let (compact, recycled) = CompactRow::from_row_recycling(row);
+        self.scrollback_bytes = self.scrollback_bytes.saturating_add(compact.owned_bytes());
+        self.scrollback.push_back(compact);
+        (self.enforce_scrollback_limits(), recycled)
+    }
+
+    fn enforce_scrollback_limits(&mut self) -> usize {
+        let mut evicted = 0;
+        while self.scrollback.len() > self.scrollback_limit
+            || self.scrollback_bytes > self.scrollback_byte_limit
+        {
+            let Some(row) = self.scrollback.pop_front() else {
+                break;
+            };
+            self.scrollback_bytes = self.scrollback_bytes.saturating_sub(row.owned_bytes());
+            evicted += 1;
+        }
+        evicted
     }
 
     /// Get a reference to a cell
@@ -61,20 +613,16 @@ impl GridStorage {
     /// Scroll the grid up by one line
     ///
     /// The top line is pushed to scrollback, and a new empty line appears at the bottom.
-    pub fn scroll_up(&mut self) {
+    pub fn scroll_up(&mut self) -> usize {
         if self.rows.is_empty() {
-            return;
+            return 0;
         }
 
-        // Push top row to scrollback
         let top_row = self.rows.remove(0);
-        if self.scrollback.len() >= self.scrollback_limit {
-            self.scrollback.pop_front();
-        }
-        self.scrollback.push_back(top_row);
+        let (evicted, recycled) = self.push_scrollback_recycling(top_row);
 
-        // Add new empty row at bottom
-        self.rows.push(Row::new(self.cols));
+        self.rows.push(recycled);
+        evicted
     }
 
     /// Scroll the grid down by one line (reverse scroll)
@@ -93,9 +641,9 @@ impl GridStorage {
     }
 
     /// Scroll a region up by one line
-    pub fn scroll_region_up(&mut self, top: usize, bottom: usize) {
+    pub fn scroll_region_up(&mut self, top: usize, bottom: usize) -> usize {
         if top >= bottom || bottom > self.rows.len() {
-            return;
+            return 0;
         }
 
         // Remove the top line of the region
@@ -106,10 +654,9 @@ impl GridStorage {
 
         // Optionally push to scrollback if top == 0
         if top == 0 {
-            if self.scrollback.len() >= self.scrollback_limit {
-                self.scrollback.pop_front();
-            }
-            self.scrollback.push_back(removed);
+            self.push_scrollback(removed)
+        } else {
+            0
         }
     }
 
@@ -124,6 +671,52 @@ impl GridStorage {
 
         // Insert new line at top of region
         self.rows.insert(top, Row::new(self.cols));
+    }
+
+    /// Scroll a partial-width rectangle up by one row without affecting
+    /// scrollback or cells outside the rectangle.
+    pub fn scroll_rect_up(
+        &mut self,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
+        blank: &Cell,
+    ) {
+        let bottom = bottom.min(self.rows.len());
+        let right = right.min(self.cols);
+        if top >= bottom || left >= right {
+            return;
+        }
+        for row in top..bottom - 1 {
+            let (destinations, sources) = self.rows.split_at_mut(row + 1);
+            destinations[row].copy_range_from(&sources[0], left, right, blank);
+        }
+        self.rows[bottom - 1].erase_range(left, right, blank);
+        self.rows[bottom - 1].set_wrapped(false);
+    }
+
+    /// Scroll a partial-width rectangle down by one row without affecting
+    /// scrollback or cells outside the rectangle.
+    pub fn scroll_rect_down(
+        &mut self,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
+        blank: &Cell,
+    ) {
+        let bottom = bottom.min(self.rows.len());
+        let right = right.min(self.cols);
+        if top >= bottom || left >= right {
+            return;
+        }
+        for row in (top + 1..bottom).rev() {
+            let (sources, destinations) = self.rows.split_at_mut(row);
+            destinations[0].copy_range_from(&sources[row - 1], left, right, blank);
+        }
+        self.rows[top].erase_range(left, right, blank);
+        self.rows[top].set_wrapped(false);
     }
 
     /// Clear all visible cells
@@ -154,8 +747,9 @@ impl GridStorage {
 
         if new_cols != old_cols {
             // Reflow scrollback (no cursor tracking needed)
-            let old_scrollback: Vec<Row> = std::mem::take(&mut self.scrollback).into();
-            self.scrollback = Self::reflow_rows(old_scrollback, new_cols, None).into();
+            let old_scrollback = std::mem::take(&mut self.scrollback);
+            self.scrollback = Self::reflow_scrollback(old_scrollback, new_cols);
+            self.recalculate_scrollback_bytes();
 
             // Reflow visible rows with cursor tracking
             let old_visible = std::mem::take(&mut self.rows);
@@ -203,10 +797,7 @@ impl GridStorage {
             let max_push = excess.min(new_cursor.0);
             for _ in 0..max_push {
                 let row = self.rows.remove(0);
-                if self.scrollback.len() >= self.scrollback_limit {
-                    self.scrollback.pop_front();
-                }
-                self.scrollback.push_back(row);
+                self.push_scrollback(row);
                 rows_pushed_top += 1;
             }
         }
@@ -226,21 +817,41 @@ impl GridStorage {
         new_cursor.1 = new_cursor.1.min(new_cols.saturating_sub(1));
 
         // Enforce scrollback limit after reflow (reflow can change line count)
-        while self.scrollback.len() > self.scrollback_limit {
-            self.scrollback.pop_front();
-        }
+        self.enforce_scrollback_limits();
 
         self.cols = new_cols;
         new_cursor
     }
 
-    /// Reflow a sequence of rows to a new column width.
-    ///
-    /// Groups consecutive wrapped rows into logical lines, flattens their cells,
-    /// trims trailing empties, then re-wraps at the new width.
-    /// `_cursor` is unused — this is a convenience wrapper for scrollback.
-    fn reflow_rows(rows: Vec<Row>, new_cols: usize, _cursor: Option<(usize, usize)>) -> Vec<Row> {
-        Self::reflow_rows_with_cursor(rows, new_cols, None).0
+    /// Reflow compact history one logical line at a time. This avoids expanding
+    /// the complete archive into a second full-width rich-cell buffer.
+    fn reflow_scrollback(rows: VecDeque<CompactRow>, new_cols: usize) -> VecDeque<CompactRow> {
+        let mut result = VecDeque::new();
+        let mut logical_line = Vec::new();
+
+        for mut row in rows {
+            if logical_line.is_empty() && row.retarget_width_without_reflow(new_cols) {
+                result.push_back(row);
+                continue;
+            }
+            let wrapped = row.wrapped;
+            logical_line.extend(row.into_reflow_cells());
+            if !wrapped {
+                let mut reflowed = Vec::new();
+                Self::rewrap_line(&mut reflowed, std::mem::take(&mut logical_line), new_cols);
+                result.extend(reflowed.into_iter().map(CompactRow::from_row));
+            }
+        }
+        if !logical_line.is_empty() {
+            let mut reflowed = Vec::new();
+            Self::rewrap_line(&mut reflowed, logical_line, new_cols);
+            result.extend(reflowed.into_iter().map(CompactRow::from_row));
+        }
+        result
+    }
+
+    fn recalculate_scrollback_bytes(&mut self) {
+        self.scrollback_bytes = self.scrollback.iter().map(CompactRow::owned_bytes).sum();
     }
 
     /// Reflow rows with optional cursor tracking.
@@ -373,21 +984,32 @@ impl GridStorage {
             return;
         }
 
-        // Re-wrap the cells at new_cols
-        let mut pos = 0;
-        while pos < cells.len() {
+        if cols == 0 {
+            output.push(Row::new(0));
+            return;
+        }
+
+        // Re-wrap by moving cells into their new rows. History resize used to
+        // clone every rich cell here, doubling allocation traffic.
+        let mut cells = cells.into_iter().peekable();
+        while cells.peek().is_some() {
             let mut row_cells: Vec<Cell> = Vec::with_capacity(cols);
 
-            while row_cells.len() < cols && pos < cells.len() {
-                let cell = &cells[pos];
-
-                if cell.flags.contains(CellFlags::WIDE_CHAR) {
-                    // Wide char needs 2 cells. If it can never fit (cols < 2),
-                    // skip it entirely to avoid an infinite loop.
+            while row_cells.len() < cols && cells.peek().is_some() {
+                if cells.peek().is_some_and(|cell| {
+                    cell.flags.contains(CellFlags::WIDE_CHAR)
+                        || (!cell.content.is_empty()
+                            && crate::unicode::grapheme_width(&cell.content.to_text()) == 2)
+                }) {
+                    // A one-column grid cannot represent a pair. Preserve the
+                    // grapheme in its sole cell without a wide flag and consume
+                    // the old spacer; never discard user text during reflow.
                     if cols < 2 {
-                        pos += 1;
-                        if pos < cells.len() && cells[pos].is_wide_char_spacer() {
-                            pos += 1;
+                        let mut leader = cells.next().expect("peeked wide cell exists");
+                        leader.flags.remove(CellFlags::WIDE_CHAR);
+                        row_cells.push(leader);
+                        if cells.peek().is_some_and(|cell| cell.is_wide_char_spacer()) {
+                            cells.next();
                         }
                         continue;
                     }
@@ -396,28 +1018,27 @@ impl GridStorage {
                         row_cells.resize_with(cols, Cell::default);
                         break;
                     }
-                    row_cells.push(cells[pos].clone());
-                    pos += 1;
+                    let mut leader = cells.next().expect("peeked wide cell exists");
+                    leader.flags.insert(CellFlags::WIDE_CHAR);
+                    row_cells.push(leader);
                     // Push the spacer if it exists
-                    if pos < cells.len() && cells[pos].flags.contains(CellFlags::WIDE_CHAR_SPACER) {
-                        row_cells.push(cells[pos].clone());
-                        pos += 1;
+                    if cells.peek().is_some_and(|cell| cell.is_wide_char_spacer()) {
+                        row_cells.push(cells.next().expect("peeked spacer exists"));
                     } else {
                         // Create spacer if missing
                         let mut spacer = Cell::default();
                         spacer.flags.insert(CellFlags::WIDE_CHAR_SPACER);
                         row_cells.push(spacer);
                     }
-                } else if cell.is_wide_char_spacer() {
+                } else if cells.peek().is_some_and(|cell| cell.is_wide_char_spacer()) {
                     // Orphaned spacer (wide char was on previous row) — skip
-                    pos += 1;
+                    cells.next();
                 } else {
-                    row_cells.push(cells[pos].clone());
-                    pos += 1;
+                    row_cells.push(cells.next().expect("peeked cell exists"));
                 }
             }
 
-            let is_last = pos >= cells.len();
+            let is_last = cells.peek().is_none();
             // Pad row to full width
             row_cells.resize_with(cols, Cell::default);
             // All rows except the last are wrapped
@@ -431,40 +1052,82 @@ impl GridStorage {
     }
 
     /// Get a row from scrollback (0 = oldest)
-    pub fn scrollback_row(&self, idx: usize) -> Option<&Row> {
-        self.scrollback.get(idx)
+    #[cfg(test)]
+    fn scrollback_row(&self, idx: usize) -> Option<RowView<'_>> {
+        self.scrollback.get(idx).map(RowView::history)
     }
 
     /// Clear the scrollback buffer
     pub fn clear_scrollback(&mut self) {
         self.scrollback.clear();
+        self.scrollback.shrink_to_fit();
+        self.scrollback_bytes = 0;
     }
 
     /// Get a row, accounting for scroll offset
     ///
     /// - Positive offset: visible grid (0 = top visible row)
     /// - Negative offset: scrollback (-1 = most recent scrollback line)
-    pub fn row_at_offset(&self, offset: i32) -> Option<&Row> {
+    pub fn row_at_offset(&self, offset: i32) -> Option<RowView<'_>> {
         if offset >= 0 {
-            self.rows.get(offset as usize)
+            self.rows.get(offset as usize).map(RowView::visible)
         } else {
             let scrollback_idx = self.scrollback.len() as i32 + offset;
             if scrollback_idx >= 0 {
-                self.scrollback.get(scrollback_idx as usize)
+                self.scrollback
+                    .get(scrollback_idx as usize)
+                    .map(RowView::history)
             } else {
                 None
             }
         }
     }
 
+    pub fn scrollback_cell(&self, idx: usize, col: usize) -> Option<CellRef<'_>> {
+        self.scrollback.get(idx)?.get(col).map(CellRef::Owned)
+    }
+
     /// Iterate over all scrollback rows (oldest first)
-    pub fn iter_scrollback(&self) -> impl Iterator<Item = &Row> {
-        self.scrollback.iter()
+    pub fn iter_scrollback(&self) -> impl Iterator<Item = RowView<'_>> {
+        self.scrollback.iter().map(RowView::history)
     }
 
     /// Iterate over all visible rows
     pub fn iter_visible(&self) -> impl Iterator<Item = &Row> {
         self.rows.iter()
+    }
+
+    pub fn memory_usage(&self) -> GridMemoryUsage {
+        let visible_bytes = self
+            .rows
+            .iter()
+            .map(|row| size_of::<Row>() + row.capacity() * size_of::<Cell>())
+            .sum();
+        GridMemoryUsage {
+            visible_bytes,
+            scrollback_bytes: self.scrollback_bytes,
+            grapheme_bytes: self.scrollback.iter().map(CompactRow::grapheme_bytes).sum(),
+            style_bytes: self.scrollback.iter().map(CompactRow::style_bytes).sum(),
+            hyperlink_reference_bytes: self
+                .scrollback
+                .iter()
+                .map(CompactRow::hyperlink_reference_bytes)
+                .sum(),
+            scrollback_lines: self.scrollback.len(),
+            scrollback_line_limit: self.scrollback_limit,
+            scrollback_byte_limit: self.scrollback_byte_limit,
+        }
+    }
+
+    pub fn collect_hyperlink_ids(&self, identifiers: &mut HashSet<u32>) {
+        for row in &self.scrollback {
+            row.collect_hyperlink_ids(identifiers);
+        }
+        for cell in self.rows.iter().flat_map(Row::iter) {
+            if let Some(identifier) = cell.hyperlink_id {
+                identifiers.insert(identifier);
+            }
+        }
     }
 }
 
@@ -663,5 +1326,184 @@ mod tests {
             "cursor row {} is outside visible area",
             new_row
         );
+    }
+
+    #[test]
+    fn compact_history_preserves_sparse_rich_cells() {
+        let mut row = Row::new(32);
+        row.get_mut(0).unwrap().set_char('A');
+        row.get_mut(0)
+            .unwrap()
+            .flags
+            .insert(CellFlags::DEC_SPECIAL_GRAPHICS);
+        row.get_mut(3).unwrap().set_grapheme("e\u{301}");
+        row.get_mut(3)
+            .unwrap()
+            .flags
+            .insert(CellFlags::DEC_UK_CHARSET);
+        let styled = row.get_mut(7).unwrap();
+        styled.set_char('界');
+        styled.attrs = CellAttrs::BOLD | CellAttrs::CURLY_UNDERLINE;
+        styled.fg = Color::rgb(1, 2, 3);
+        styled.fg_spec = ColorSpec::TrueColor(styled.fg);
+        styled.hyperlink_id = Some(42);
+        styled.flags |= CellFlags::WIDE_CHAR | CellFlags::HYPERLINK;
+        row.get_mut(8)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER);
+
+        let original = row.clone();
+        let compact = CompactRow::from_row(row);
+        assert_eq!(compact.content.len(), 9);
+        assert!(compact.owned_bytes() < 32 * size_of::<Cell>());
+        for column in 0..32 {
+            let mut expected = original.get(column).unwrap().clone();
+            expected.flags.remove(CellFlags::DIRTY);
+            assert_eq!(compact.get(column).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn recycling_compaction_matches_standard_compaction_and_clears_the_row() {
+        let mut row = Row::new(12);
+        row.set_wrapped(true);
+        row.get_mut(0).unwrap().set_char('A');
+        row.get_mut(1).unwrap().set_char('界');
+        row.get_mut(1)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR | CellFlags::HYPERLINK);
+        row.get_mut(1).unwrap().hyperlink_id = Some(7);
+        row.get_mut(2)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::HYPERLINK);
+        row.get_mut(2).unwrap().hyperlink_id = Some(7);
+        row.get_mut(5).unwrap().attrs.insert(CellAttrs::ITALIC);
+
+        let expected = CompactRow::from_row(row.clone());
+        let (actual, recycled) = CompactRow::from_row_recycling(row);
+
+        assert_eq!(actual.cols, expected.cols);
+        assert_eq!(actual.wrapped, expected.wrapped);
+        assert_eq!(actual.owned_bytes(), expected.owned_bytes());
+        for column in 0..actual.cols {
+            assert_eq!(actual.get(column), expected.get(column));
+            assert_eq!(recycled.get(column), Some(&Cell::default()));
+        }
+        assert!(!recycled.is_wrapped());
+    }
+
+    #[test]
+    fn wide_cell_structure_does_not_fragment_uniform_style_runs() {
+        let mut row = Row::new(4);
+        for cell in row.iter_mut() {
+            cell.fg = Color::rgb(1, 2, 3);
+            cell.fg_spec = ColorSpec::TrueColor(cell.fg);
+        }
+        row.get_mut(0).unwrap().set_char('A');
+        row.get_mut(1).unwrap().set_char('界');
+        row.get_mut(1).unwrap().flags.insert(CellFlags::WIDE_CHAR);
+        row.get_mut(2)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER);
+        row.get_mut(3).unwrap().set_char('B');
+
+        let compact = CompactRow::from_row(row);
+        assert_eq!(compact.styles.len(), 1);
+        assert!(compact.get(1).unwrap().flags.contains(CellFlags::WIDE_CHAR));
+        assert!(
+            compact
+                .get(2)
+                .unwrap()
+                .flags
+                .contains(CellFlags::WIDE_CHAR_SPACER)
+        );
+    }
+
+    #[test]
+    fn byte_budget_evicts_even_below_line_limit_and_releases_accounting() {
+        let mut storage = GridStorage::new(80, 1);
+        storage.set_scrollback_limit(10_000);
+        storage.set_scrollback_byte_limit(4 * 1024);
+        for line in 0..200 {
+            fill_row(&mut storage, 0, &format!("line-{line:04}"));
+            storage.scroll_up();
+        }
+
+        let usage = storage.memory_usage();
+        assert!(usage.scrollback_bytes <= 4 * 1024);
+        assert!(usage.scrollback_lines < 200);
+        assert!(usage.style_bytes > 0);
+
+        storage.set_scrollback_byte_limit(1);
+        let usage = storage.memory_usage();
+        assert_eq!(usage.scrollback_lines, 0);
+        assert_eq!(usage.scrollback_bytes, 0);
+    }
+
+    #[test]
+    fn compact_reflow_matches_full_row_reference_across_generated_cases() {
+        let mut state = 0x8d26_75a3_u64;
+        for new_cols in [3, 5, 9, 17, 31] {
+            let mut rows = Vec::new();
+            for row_index in 0..64 {
+                let mut row = Row::new(24);
+                for column in 0..24 {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1);
+                    if state % 5 != 0 {
+                        let cell = row.get_mut(column).unwrap();
+                        cell.set_char(char::from(b'a' + (state % 26) as u8));
+                        if state % 7 == 0 {
+                            cell.attrs.insert(CellAttrs::ITALIC);
+                            cell.fg_spec = ColorSpec::Indexed((state % 16) as u8);
+                        }
+                    }
+                }
+                row.set_wrapped(row_index % 4 == 0);
+                rows.push(row);
+            }
+
+            let reference = GridStorage::reflow_rows_with_cursor(rows.clone(), new_cols, None).0;
+            let compact = rows.into_iter().map(CompactRow::from_row).collect();
+            let actual = GridStorage::reflow_scrollback(compact, new_cols);
+            assert_eq!(actual.len(), reference.len());
+            for (actual, expected) in actual.iter().zip(reference) {
+                assert_eq!(actual.wrapped, expected.is_wrapped());
+                for column in 0..new_cols {
+                    let mut expected_cell = expected.get(column).unwrap().clone();
+                    expected_cell.flags.remove(CellFlags::DIRTY);
+                    assert_eq!(actual.get(column).unwrap(), expected_cell);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fitting_hard_broken_compact_rows_reuse_owned_buffers_during_resize() {
+        let mut row = Row::new(24);
+        for (column, character) in "styled retained row".chars().enumerate() {
+            let cell = row.get_mut(column).unwrap();
+            cell.set_char(character);
+            cell.attrs.insert(CellAttrs::ITALIC);
+            cell.fg_spec = ColorSpec::Indexed(3);
+        }
+        let compact = CompactRow::from_row(row);
+        let content_pointer = compact.content.as_ptr();
+        let style_pointer = compact.styles.as_ptr();
+
+        let resized = GridStorage::reflow_scrollback(VecDeque::from([compact]), 80);
+        let row = resized.front().unwrap();
+
+        assert_eq!(row.cols, 80);
+        assert!(!row.wrapped);
+        assert_eq!(row.content.as_ptr(), content_pointer);
+        assert_eq!(row.styles.as_ptr(), style_pointer);
+        assert_eq!(row.get(0).unwrap().content, CellContent::Char('s'));
+        assert_eq!(row.get(79).unwrap(), Cell::default());
     }
 }

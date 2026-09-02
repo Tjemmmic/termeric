@@ -9,9 +9,9 @@ mod cellar;
 mod indicators;
 pub mod sprouts;
 
-pub use cellar::{CommandEntry, RootCellar};
+pub use cellar::{CellarAction, CellarLayout, CellarRect, CommandEntry, RootCellar};
 pub use indicators::GrowthIndicator;
-pub use sprouts::SproutMenu;
+pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout, SproutMenuRect};
 
 use termeric_core::CommandRegion;
 use termeric_core::shell::PromptTracker;
@@ -27,8 +27,8 @@ pub struct HarvestSource {
 /// prevents switching tabs or panes from skipping or duplicating regions.
 #[derive(Debug, Default)]
 pub struct HarvestTerminalState {
-    region_cursor: usize,
-    active_prompt_row: Option<usize>,
+    last_completed_region_id: u64,
+    active_region_id: Option<u64>,
     pub indicators: Vec<GrowthIndicator>,
 }
 
@@ -38,34 +38,43 @@ impl HarvestTerminalState {
         tracker: &PromptTracker,
         show_indicators: bool,
     ) -> Vec<CommandRegion> {
-        if self.region_cursor > tracker.completed_count() {
-            self.region_cursor = 0;
-        }
-
-        let active_row = tracker
+        let active = tracker
             .active_region()
-            .filter(|region| region.output_row.is_some())
-            .map(|region| region.prompt_row);
-        if active_row != self.active_prompt_row {
-            self.active_prompt_row = active_row;
-            if let Some(row) = active_row.filter(|_| show_indicators) {
-                self.start_command(row);
+            .filter(|region| region.content_available && region.output_row.is_some())
+            .and_then(|region| {
+                usize::try_from(region.prompt_row)
+                    .ok()
+                    .map(|row| (region.id, row))
+            });
+        if active.map(|(id, _)| id) != self.active_region_id {
+            self.active_region_id = active.map(|(id, _)| id);
+            self.indicators.retain(|indicator| indicator.completed);
+            if let Some((id, row)) = active.filter(|_| show_indicators) {
+                self.start_command(id, row);
             }
+        } else if let Some((id, row)) = active
+            && let Some(indicator) = self
+                .indicators
+                .iter_mut()
+                .find(|indicator| indicator.region_id == id)
+        {
+            indicator.prompt_row = row;
         }
 
         let mut completed = Vec::new();
-        while self.region_cursor < tracker.completed_count() {
-            if let Some(region) = tracker.completed_region(self.region_cursor).cloned() {
-                if show_indicators {
-                    self.start_command(region.prompt_row);
-                    self.complete_command(region.prompt_row, region.exit_code == Some(0));
-                }
-                if self.active_prompt_row == Some(region.prompt_row) {
-                    self.active_prompt_row = None;
-                }
-                completed.push(region);
+        for region in tracker
+            .completed_regions_after(self.last_completed_region_id)
+            .cloned()
+        {
+            self.last_completed_region_id = self.last_completed_region_id.max(region.id);
+            if show_indicators && let Ok(row) = usize::try_from(region.prompt_row) {
+                self.start_command(region.id, row);
+                self.complete_command(region.id, region.exit_code == Some(0));
             }
-            self.region_cursor += 1;
+            if self.active_region_id == Some(region.id) {
+                self.active_region_id = None;
+            }
+            completed.push(region);
         }
 
         if show_indicators {
@@ -79,21 +88,22 @@ impl HarvestTerminalState {
         completed
     }
 
-    fn start_command(&mut self, prompt_row: usize) {
+    fn start_command(&mut self, region_id: u64, prompt_row: usize) {
         if self
             .indicators
             .iter()
-            .all(|indicator| indicator.prompt_row != prompt_row)
+            .all(|indicator| indicator.region_id != region_id)
         {
-            self.indicators.push(GrowthIndicator::new(prompt_row));
+            self.indicators
+                .push(GrowthIndicator::new(region_id, prompt_row));
         }
     }
 
-    fn complete_command(&mut self, prompt_row: usize, success: bool) {
+    fn complete_command(&mut self, region_id: u64, success: bool) {
         if let Some(indicator) = self
             .indicators
             .iter_mut()
-            .find(|indicator| indicator.prompt_row == prompt_row)
+            .find(|indicator| indicator.region_id == region_id)
         {
             indicator.complete(success);
         }
@@ -101,12 +111,20 @@ impl HarvestTerminalState {
 }
 
 /// Harvest mode state
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct HarvestMode {
     /// Root cellar (command history)
     pub cellar: RootCellar,
     /// Active sprout menu (context actions)
     pub sprout_menu: Option<SproutMenu>,
+    next_sprout_request_id: u64,
+    reduced_motion: bool,
+}
+
+impl Default for HarvestMode {
+    fn default() -> Self {
+        Self::with_capacity(100)
+    }
 }
 
 impl HarvestMode {
@@ -115,17 +133,43 @@ impl HarvestMode {
         Self {
             cellar: RootCellar::with_capacity(max_history),
             sprout_menu: None,
+            next_sprout_request_id: 1,
+            reduced_motion: false,
+        }
+    }
+
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.reduced_motion = reduced_motion;
+        self.cellar.animation.set_reduced_motion(reduced_motion);
+        if let Some(menu) = &mut self.sprout_menu {
+            menu.set_reduced_motion(reduced_motion);
         }
     }
 
     /// Record a command completion from shell integration
-    pub fn record_command(&mut self, source: HarvestSource, region: &CommandRegion) {
-        self.cellar.add_from_region(source, region);
+    pub fn record_command(
+        &mut self,
+        source: HarvestSource,
+        region: &CommandRegion,
+        command: impl Into<String>,
+        output: impl Into<String>,
+    ) {
+        self.cellar.add_from_region(source, region, command, output);
     }
 
     /// Show sprout menu at the given position
-    pub fn show_sprout_menu(&mut self, row: usize, col: usize, command: Option<CommandEntry>) {
-        self.sprout_menu = Some(SproutMenu::new(row, col, command));
+    pub fn show_sprout_menu(
+        &mut self,
+        row: usize,
+        col: usize,
+        command: Option<CommandEntry>,
+        availability: SproutAvailability,
+    ) {
+        let request_id = self.next_sprout_request_id;
+        self.next_sprout_request_id = self.next_sprout_request_id.saturating_add(1);
+        let mut menu = SproutMenu::new(request_id, row, col, command, availability);
+        menu.set_reduced_motion(self.reduced_motion);
+        self.sprout_menu = Some(menu);
     }
 
     /// Hide the sprout menu
@@ -160,21 +204,101 @@ mod tests {
     }
 
     #[test]
+    fn capacity_eviction_never_replays_retained_regions() {
+        let mut tracker = PromptTracker::new();
+        for row in 0..1_001 {
+            tracker.mark_prompt_start(row);
+            tracker.mark_command_start(row);
+            tracker.mark_output_start(row);
+            tracker.mark_command_finished(row, Some(0));
+        }
+        let mut state = HarvestTerminalState::default();
+        let retained = state.observe(&tracker, false);
+        assert_eq!(retained.len(), 1_000);
+        let last_id = retained.last().unwrap().id;
+
+        tracker.mark_prompt_start(1_001);
+        tracker.mark_command_start(1_001);
+        tracker.mark_output_start(1_001);
+        tracker.mark_command_finished(1_001, Some(0));
+        let next = state.observe(&tracker, false);
+        assert_eq!(next.len(), 1);
+        assert!(next[0].id > last_id);
+    }
+
+    #[test]
+    fn completion_is_consumed_once_after_its_live_text_is_evicted() {
+        let mut tracker = PromptTracker::new();
+        tracker.mark_prompt_start(0);
+        tracker.mark_command_start(0);
+        tracker.mark_output_start(1);
+
+        // A large output can evict the prompt before OSC 133;D arrives. The
+        // completion must still reach Harvest exactly once, without granting
+        // stale coordinates permission to read replacement grid text.
+        tracker.adjust_for_scroll(20, -10);
+        tracker.mark_command_finished(2, Some(0));
+
+        let mut state = HarvestTerminalState::default();
+        let completed = state.observe(&tracker, true);
+        assert_eq!(completed.len(), 1);
+        assert!(!completed[0].content_available);
+        assert!(state.indicators.is_empty());
+        assert!(state.observe(&tracker, true).is_empty());
+    }
+
+    #[test]
+    fn prompt_only_and_out_of_order_cycles_never_create_harvest_entries() {
+        let mut tracker = PromptTracker::new();
+        tracker.mark_prompt_start(0);
+        tracker.mark_prompt_start(1);
+        tracker.mark_command_start(1);
+        tracker.mark_command_finished(1, Some(0));
+        tracker.mark_output_start(2);
+
+        let mut state = HarvestTerminalState::default();
+        assert!(state.observe(&tracker, false).is_empty());
+
+        tracker.mark_prompt_start(3);
+        tracker.mark_command_start(3);
+        tracker.mark_output_start(4);
+        tracker.mark_command_finished(5, Some(0));
+        assert_eq!(state.observe(&tracker, false).len(), 1);
+        assert!(state.observe(&tracker, false).is_empty());
+    }
+
+    #[test]
     fn cellar_preserves_terminal_ownership() {
         let tracker = one_completed_command();
         let region = tracker.completed_region(0).unwrap();
         let mut harvest = HarvestMode::with_capacity(5);
-        let source = HarvestSource {
-            tab_id: 7,
-            pane_id: Some(3),
-        };
-        harvest.record_command(source, region);
-        assert_eq!(harvest.cellar.latest_for_source(source).unwrap().row, 2);
+        let sources = [
+            HarvestSource {
+                tab_id: 7,
+                pane_id: Some(3),
+            },
+            HarvestSource {
+                tab_id: 7,
+                pane_id: Some(4),
+            },
+            HarvestSource {
+                tab_id: 8,
+                pane_id: None,
+            },
+        ];
+        for source in sources {
+            harvest.record_command(source, region, "fixture command", "fixture output");
+        }
+        for source in sources {
+            let entry = harvest.cellar.latest_for_source(source).unwrap();
+            assert_eq!(entry.source, source);
+            assert_eq!(entry.row, 2);
+        }
         assert!(
             harvest
                 .cellar
                 .latest_for_source(HarvestSource {
-                    tab_id: 8,
+                    tab_id: 9,
                     pane_id: None,
                 })
                 .is_none()

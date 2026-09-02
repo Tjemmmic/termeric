@@ -55,6 +55,8 @@ impl GrowthPhase {
 /// Growth indicator for a running command
 #[derive(Debug, Clone)]
 pub struct GrowthIndicator {
+    /// Stable shell-region identity for this exact command.
+    pub region_id: u64,
     /// Row where the command prompt is
     pub prompt_row: usize,
     /// Current growth phase
@@ -74,8 +76,9 @@ pub struct GrowthIndicator {
 #[allow(dead_code)]
 impl GrowthIndicator {
     /// Create a new growth indicator
-    pub fn new(prompt_row: usize) -> Self {
+    pub fn new(region_id: u64, prompt_row: usize) -> Self {
         Self {
+            region_id,
             prompt_row,
             phase: GrowthPhase::Seed,
             started_at: Instant::now(),
@@ -184,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_growth_phases() {
-        let mut indicator = GrowthIndicator::new(0);
+        let mut indicator = GrowthIndicator::new(1, 0);
 
         assert_eq!(indicator.phase, GrowthPhase::Seed);
 
@@ -197,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_completion() {
-        let mut indicator = GrowthIndicator::new(0);
+        let mut indicator = GrowthIndicator::new(1, 0);
         indicator.complete(true);
 
         assert!(indicator.completed);

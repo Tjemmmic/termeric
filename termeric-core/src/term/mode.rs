@@ -76,6 +76,12 @@ bitflags! {
 
         /// Synchronized output mode (Mode 2026) - buffer output until disabled
         const SYNCHRONIZED_OUTPUT = 0b0100_0000_0000_0000_0000;
+
+        /// Convert wheel events to cursor keys while the alternate screen is active
+        const ALTERNATE_SCROLL = 0b1000_0000_0000_0000_0000;
+
+        /// Left/right margin mode (DECLRMM) - CSI s selects horizontal margins
+        const LEFT_RIGHT_MARGIN = 0b0001_0000_0000_0000_0000_0000;
     }
 }
 

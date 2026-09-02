@@ -36,6 +36,13 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Keep release-equivalent optimization while retaining enough symbols for
+# perf, heaptrack, and DHAT to attribute hot paths and allocation sites.
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = false
+
 [profile.dev]
 opt-level = 1
 

@@ -3,7 +3,9 @@
 //! Events that can be emitted by the terminal for the application to handle.
 
 /// Events emitted by the terminal
-#[derive(Debug, Clone)]
+use crate::Color;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalEvent {
     /// The terminal title was changed (via OSC 0 or OSC 2)
     TitleChanged(String),
@@ -11,11 +13,21 @@ pub enum TerminalEvent {
     /// A bell character was received
     Bell,
 
-    /// The terminal requests clipboard access
-    ClipboardRequest(ClipboardRequest),
+    /// The terminal requests clipboard access. Reply framing is captured when
+    /// the request is parsed so a later S7C1T/S8C1T cannot reorder semantics.
+    ClipboardRequest {
+        selection: ClipboardRequest,
+        reply_uses_8bit_controls: bool,
+    },
 
     /// The terminal wants to write to clipboard
-    ClipboardWrite(String),
+    ClipboardWrite {
+        selection: ClipboardRequest,
+        text: String,
+    },
+
+    /// A terminal-local xterm dynamic color operation.
+    DynamicColor(DynamicColorOperation),
 
     /// A hyperlink was activated
     HyperlinkActivated(String),
@@ -34,7 +46,7 @@ pub enum TerminalEvent {
 }
 
 /// Desktop notification request
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationRequest {
     /// Notification title
     pub title: Option<String>,
@@ -43,10 +55,43 @@ pub struct NotificationRequest {
 }
 
 /// Clipboard request type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardRequest {
     /// Request primary selection (X11)
     Primary,
     /// Request clipboard contents
     Clipboard,
+}
+
+impl ClipboardRequest {
+    pub const fn osc_code(self) -> char {
+        match self {
+            Self::Primary => 'p',
+            Self::Clipboard => 'c',
+        }
+    }
+}
+
+/// Addressable xterm palette/default color slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicColorTarget {
+    Palette(u8),
+    Foreground,
+    Background,
+    Cursor,
+}
+
+/// Typed OSC 4/10/11/12/104/110/111/112 operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicColorOperation {
+    Set {
+        target: DynamicColorTarget,
+        color: Color,
+    },
+    Query {
+        target: DynamicColorTarget,
+        reply_uses_8bit_controls: bool,
+    },
+    Reset(DynamicColorTarget),
+    ResetPalette,
 }

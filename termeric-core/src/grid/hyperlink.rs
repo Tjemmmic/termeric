@@ -2,7 +2,8 @@
 //!
 //! Manages storage of hyperlink URLs and assigns unique IDs to each hyperlink.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::mem::size_of;
 
 /// A hyperlink entry with URL and optional ID parameter
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +71,21 @@ impl HyperlinkRegistry {
         new_id
     }
 
+    pub fn find_id(&self, url: &str, id: Option<&str>) -> Option<u32> {
+        self.url_to_id
+            .get(&(url.to_owned(), id.map(str::to_owned)))
+            .copied()
+    }
+
+    pub fn retain_ids(&mut self, retained: &HashSet<u32>) {
+        self.links
+            .retain(|identifier, _| retained.contains(identifier));
+        self.url_to_id
+            .retain(|_, identifier| retained.contains(identifier));
+        self.links.shrink_to_fit();
+        self.url_to_id.shrink_to_fit();
+    }
+
     /// Get a hyperlink by its ID
     pub fn get(&self, id: u32) -> Option<&Hyperlink> {
         self.links.get(&id)
@@ -95,6 +111,25 @@ impl HyperlinkRegistry {
     /// Check if the registry is empty
     pub fn is_empty(&self) -> bool {
         self.links.is_empty()
+    }
+
+    /// Estimated heap and table memory owned by the deduplicated registry.
+    pub fn memory_usage_bytes(&self) -> usize {
+        let strings = self
+            .links
+            .values()
+            .map(|link| {
+                link.url.capacity()
+                    + link
+                        .id
+                        .as_ref()
+                        .map_or(0, |identifier| identifier.capacity())
+            })
+            .sum::<usize>();
+        size_of::<Self>()
+            + self.links.capacity() * size_of::<(u32, Hyperlink)>()
+            + self.url_to_id.capacity() * size_of::<((String, Option<String>), u32)>()
+            + strings * 2
     }
 }
 

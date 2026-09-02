@@ -172,11 +172,16 @@ impl CodexPlugin {
     ///
     /// Priority: repo-specific `.termeric/config` > `default_profile` config > no profile.
     /// Returns the resolved profile (if any) and its name.
-    fn resolve_profile(&self, cwd: Option<&str>) -> (Option<&CodexProfile>, Option<String>) {
+    fn resolve_profile(
+        &self,
+        cwd: Option<&str>,
+        explicit: Option<&str>,
+    ) -> (Option<&CodexProfile>, Option<String>) {
         // 1. Try repo-specific profile from .termeric/config [codex] section
-        let profile_name = cwd
-            .and_then(|c| resolve_repo_profile(c, "codex"))
-            .or_else(|| self.config.default_profile.clone());
+        let profile_name = explicit.map(String::from).or_else(|| {
+            cwd.and_then(|c| resolve_repo_profile(c, "codex"))
+                .or_else(|| self.config.default_profile.clone())
+        });
 
         if let Some(ref name) = profile_name {
             if let Some(profile) = self.config.profiles.get(name) {
@@ -199,9 +204,11 @@ impl CodexPlugin {
         ctx: &PluginContext,
         extra_cli_args: &[&str],
         title: &str,
+        explicit_profile: Option<&str>,
+        forced_cwd: Option<&str>,
     ) -> Vec<PluginAction> {
-        let cwd = self.resolve_cwd(ctx);
-        let (profile, profile_name) = self.resolve_profile(cwd);
+        let cwd = forced_cwd.or_else(|| self.resolve_cwd(ctx));
+        let (profile, profile_name) = self.resolve_profile(cwd, explicit_profile);
 
         let (profile_extra_args, profile_env, profile_approval, profile_sandbox) = match profile {
             Some(p) => (
@@ -220,7 +227,7 @@ impl CodexPlugin {
 
         let mut actions = Vec::with_capacity(2);
         if profile.is_none() {
-            if let Some(name) = profile_name {
+            if let Some(name) = profile_name.clone() {
                 actions.push(PluginAction::ShowNotice {
                     title: "Codex profile not found".into(),
                     lines: vec![
@@ -253,6 +260,7 @@ impl CodexPlugin {
             cwd: cwd.map(|s| s.to_string()),
             title: Some(title.to_string()),
             plugin_id: Some("codex".to_string()),
+            profile: profile_name.filter(|_| profile.is_some()),
             env,
         });
         actions
@@ -271,11 +279,15 @@ impl Plugin for CodexPlugin {
     fn on_hook(&mut self, hook: &Hook, ctx: &PluginContext) -> HookResponse {
         match hook {
             Hook::CommandInvoked { command_id } => match command_id.as_str() {
-                "codex.open" => HookResponse::Actions(self.build_launch_actions(ctx, &[], "Codex")),
+                "codex.open" => {
+                    HookResponse::Actions(self.build_launch_actions(ctx, &[], "Codex", None, None))
+                }
                 "codex.resume" => HookResponse::Actions(self.build_launch_actions(
                     ctx,
                     &["resume", "--last"],
                     "Codex (resume)",
+                    None,
+                    None,
                 )),
                 "codex.copy-last" => HookResponse::Action(PluginAction::CopyFromPluginTab {
                     plugin_id: "codex".to_string(),
@@ -298,6 +310,17 @@ impl Plugin for CodexPlugin {
                 | "codex.select-profile" => HookResponse::Handled,
                 _ => HookResponse::Ignored,
             },
+            Hook::WorkspaceRestore {
+                plugin_id,
+                profile,
+                cwd,
+            } if plugin_id == self.id() => HookResponse::Actions(self.build_launch_actions(
+                ctx,
+                &[],
+                "Codex",
+                profile.as_deref(),
+                cwd.as_deref(),
+            )),
             _ => HookResponse::Ignored,
         }
     }
@@ -631,6 +654,7 @@ mod tests {
                 title,
                 plugin_id,
                 env,
+                ..
             }) => {
                 assert_eq!(program, "codex");
                 assert!(
@@ -935,7 +959,7 @@ mod tests {
     #[test]
     fn test_resolve_profile_no_profiles_configured() {
         let plugin = CodexPlugin::new(CodexConfig::default());
-        let (profile, name) = plugin.resolve_profile(Some("/tmp/nonexistent"));
+        let (profile, name) = plugin.resolve_profile(Some("/tmp/nonexistent"), None);
         assert!(profile.is_none());
         assert!(name.is_none());
     }
@@ -957,7 +981,7 @@ mod tests {
             profiles,
             ..Default::default()
         });
-        let (profile, name) = plugin.resolve_profile(None);
+        let (profile, name) = plugin.resolve_profile(None, None);
         assert!(profile.is_some());
         assert_eq!(name, Some("safe".to_string()));
         assert_eq!(profile.unwrap().approval_mode, Some("suggest".to_string()));
@@ -969,9 +993,31 @@ mod tests {
             default_profile: Some("nonexistent".to_string()),
             ..Default::default()
         });
-        let (profile, name) = plugin.resolve_profile(None);
+        let (profile, name) = plugin.resolve_profile(None, None);
         assert!(profile.is_none());
         assert_eq!(name, Some("nonexistent".to_string()));
+    }
+
+    #[test]
+    fn workspace_profile_reference_overrides_current_default() {
+        let profiles = HashMap::from([
+            ("current".into(), CodexProfile::default()),
+            (
+                "archived".into(),
+                CodexProfile {
+                    sandbox_mode: Some("read-only".into()),
+                    ..CodexProfile::default()
+                },
+            ),
+        ]);
+        let plugin = CodexPlugin::new(CodexConfig {
+            default_profile: Some("current".into()),
+            profiles,
+            ..CodexConfig::default()
+        });
+        let (profile, name) = plugin.resolve_profile(None, Some("archived"));
+        assert_eq!(name.as_deref(), Some("archived"));
+        assert_eq!(profile.unwrap().sandbox_mode.as_deref(), Some("read-only"));
     }
 
     #[test]
@@ -1110,6 +1156,12 @@ mod tests {
     fn installed_codex_accepts_generated_launch_args() {
         use std::process::Command;
 
+        if std::env::var("TERMERIC_REAL_CODEX_CONTRACT").as_deref() != Ok("1") {
+            eprintln!(
+                "skipping installed Codex contract probe: set TERMERIC_REAL_CODEX_CONTRACT=1 for explicit operator testing"
+            );
+            return;
+        }
         let available = Command::new("codex").arg("--version").output();
         let Ok(version) = available else {
             eprintln!("skipping Codex CLI contract probe: codex is not installed");

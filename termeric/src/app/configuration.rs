@@ -3,6 +3,9 @@
 use super::*;
 
 impl App {
+    pub(super) const CONFIG_POLL_INTERVAL: std::time::Duration =
+        std::time::Duration::from_millis(750);
+
     pub(super) fn change_font_size(&mut self, delta: f32) {
         let Some(renderer) = &mut self.renderer else {
             return;
@@ -14,49 +17,25 @@ impl App {
 
     /// Set font size to a specific value
     pub(super) fn set_font_size(&mut self, size: f32) {
+        self.config.font.size = size;
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let Some(window) = &self.window else { return };
+        let Some(window) = self.window.clone() else {
+            return;
+        };
 
-        self.config.font.size = size;
         renderer.set_font_size(size);
 
         // Recalculate grid size after font change
         let window_size = window.inner_size();
-        let (new_cols, new_rows) =
-            renderer.calculate_grid_size(window_size.width, window_size.height);
-
-        if new_cols != self.cols || new_rows != self.rows {
-            self.cols = new_cols;
-            self.rows = new_rows;
-
-            // Resize all tabs
-            if let Some(tabs) = &mut self.tabs {
-                tabs.resize(self.cols, self.rows);
-            }
-
-            log::info!(
-                "Font size set to {}, grid resized to {}x{}",
-                size,
-                self.cols,
-                self.rows
-            );
-        }
-
-        // Always resize pane managers when font changes — cell dimensions
-        // changed even if cols/rows stayed the same.
-        let cell_width = renderer.cell_width();
-        let cell_height = renderer.cell_height();
-        let content_width = self.cols as f32 * cell_width;
-        let content_height = self.rows as f32 * cell_height;
-        if let Some(tabs) = &mut self.tabs {
-            for tab in tabs.all_tabs_mut() {
-                if let Some(ref mut pm) = tab.pane_manager {
-                    pm.resize(content_width, content_height, cell_width, cell_height);
-                }
-            }
-        }
+        self.sync_terminal_geometry(window_size.width, window_size.height);
+        log::info!(
+            "Font size set to {}, grid resized to {}x{}",
+            size,
+            self.cols,
+            self.rows
+        );
 
         // Request redraw
         window.request_redraw();
@@ -64,12 +43,18 @@ impl App {
 
     /// Set font family to a specific value
     pub(super) fn set_font_family(&mut self, family: String) {
+        self.config
+            .font
+            .fallback
+            .retain(|fallback| !fallback.eq_ignore_ascii_case(&family));
+        self.config.font.family = family.clone();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let Some(window) = &self.window else { return };
+        let Some(window) = self.window.clone() else {
+            return;
+        };
 
-        self.config.font.family = family.clone();
         renderer.set_font_families(family, &self.config.font.fallback);
         // Sync ligature setting and log resolved font info
         renderer.set_ligatures(self.config.font.ligatures);
@@ -81,74 +66,74 @@ impl App {
         );
 
         let window_size = window.inner_size();
-        let (new_cols, new_rows) =
-            renderer.calculate_grid_size(window_size.width, window_size.height);
-
-        if new_cols != self.cols || new_rows != self.rows {
-            self.cols = new_cols;
-            self.rows = new_rows;
-
-            if let Some(tabs) = &mut self.tabs {
-                tabs.resize(self.cols, self.rows);
-            }
-
-            log::info!(
-                "Font family updated, grid resized to {}x{}",
-                self.cols,
-                self.rows
-            );
-        }
-
-        // Always resize pane managers — cell dimensions changed
-        let cell_width = renderer.cell_width();
-        let cell_height = renderer.cell_height();
-        let content_width = self.cols as f32 * cell_width;
-        let content_height = self.rows as f32 * cell_height;
-        if let Some(tabs) = &mut self.tabs {
-            for tab in tabs.all_tabs_mut() {
-                if let Some(ref mut pm) = tab.pane_manager {
-                    pm.resize(content_width, content_height, cell_width, cell_height);
-                }
-            }
-        }
+        self.sync_terminal_geometry(window_size.width, window_size.height);
+        log::info!(
+            "Font family updated, grid resized to {}x{}",
+            self.cols,
+            self.rows
+        );
 
         window.request_redraw();
     }
 
-    /// Set line-height multiplier and propagate the resulting cell geometry.
-    pub(super) fn set_line_height(&mut self, multiplier: f32) {
+    /// Update one position in the ordered font fallback chain. Selecting None
+    /// removes that position and shifts later families forward.
+    pub(super) fn set_font_fallback(&mut self, index: usize, family: Option<String>) {
+        if index > self.config.font.fallback.len() || index >= crate::config::MAX_FONT_FALLBACKS {
+            return;
+        }
+        if let Some(family) = family.as_ref()
+            && (family.eq_ignore_ascii_case(&self.config.font.family)
+                || self
+                    .config
+                    .font
+                    .fallback
+                    .iter()
+                    .enumerate()
+                    .any(|(other, configured)| {
+                        other != index && configured.eq_ignore_ascii_case(family)
+                    }))
+        {
+            self.toasts
+                .warning(format!("Font fallback is already configured: {family}"));
+            return;
+        }
+
+        match family {
+            Some(family) if index == self.config.font.fallback.len() => {
+                self.config.font.fallback.push(family);
+            }
+            Some(family) => self.config.font.fallback[index] = family,
+            None if index < self.config.font.fallback.len() => {
+                self.config.font.fallback.remove(index);
+            }
+            None => return,
+        }
+
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let Some(window) = &self.window else { return };
+        renderer.set_font_families(self.config.font.family.clone(), &self.config.font.fallback);
+        if let Some(window) = self.window.clone() {
+            let size = window.inner_size();
+            self.sync_terminal_geometry(size.width, size.height);
+            window.request_redraw();
+        }
+    }
 
+    /// Set line-height multiplier and propagate the resulting cell geometry.
+    pub(super) fn set_line_height(&mut self, multiplier: f32) {
         self.config.font.line_height = multiplier;
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+
         renderer.set_line_height(multiplier);
         let window_size = window.inner_size();
-        let (new_cols, new_rows) =
-            renderer.calculate_grid_size(window_size.width, window_size.height);
-        if new_cols != self.cols || new_rows != self.rows {
-            self.cols = new_cols;
-            self.rows = new_rows;
-            if let Some(tabs) = &mut self.tabs {
-                tabs.resize(self.cols, self.rows);
-            }
-        }
-
-        let cell_width = renderer.cell_width();
-        let cell_height = renderer.cell_height();
-        if let Some(tabs) = &mut self.tabs {
-            for tab in tabs.all_tabs_mut() {
-                if let Some(ref mut panes) = tab.pane_manager {
-                    panes.resize(
-                        self.cols as f32 * cell_width,
-                        self.rows as f32 * cell_height,
-                        cell_width,
-                        cell_height,
-                    );
-                }
-            }
-        }
+        self.sync_terminal_geometry(window_size.width, window_size.height);
         window.request_redraw();
     }
 
@@ -157,60 +142,151 @@ impl App {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let Some(window) = &self.window else { return };
+        let Some(window) = self.window.clone() else {
+            return;
+        };
 
         self.config.window.padding = padding;
         renderer.set_padding(padding as f32);
 
         let window_size = window.inner_size();
-        let (new_cols, new_rows) =
-            renderer.calculate_grid_size(window_size.width, window_size.height);
-
-        if new_cols != self.cols || new_rows != self.rows {
-            self.cols = new_cols;
-            self.rows = new_rows;
-
-            if let Some(tabs) = &mut self.tabs {
-                tabs.resize(self.cols, self.rows);
-            }
-
-            log::info!(
-                "Padding updated, grid resized to {}x{}",
-                self.cols,
-                self.rows
-            );
-        }
-
-        // Resize pane managers — content area changed
-        let cell_width = renderer.cell_width();
-        let cell_height = renderer.cell_height();
-        let content_width = self.cols as f32 * cell_width;
-        let content_height = self.rows as f32 * cell_height;
-        if let Some(tabs) = &mut self.tabs {
-            for tab in tabs.all_tabs_mut() {
-                if let Some(ref mut pm) = tab.pane_manager {
-                    pm.resize(content_width, content_height, cell_width, cell_height);
-                }
-            }
-        }
+        self.sync_terminal_geometry(window_size.width, window_size.height);
+        log::info!(
+            "Padding updated, grid resized to {}x{}",
+            self.cols,
+            self.rows
+        );
 
         window.request_redraw();
     }
 
-    /// Poll the config file's mtime; if it changed since our last load,
-    /// reload + re-apply + toast. Called once per frame but only hits the
-    /// filesystem at most every 750ms.
-    pub(super) fn poll_config_for_hot_reload(&mut self) {
-        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(750);
-        if self.last_config_check.elapsed() < POLL_INTERVAL {
+    /// Apply layout changes immediately and schedule at most one bounded
+    /// off-event-loop decode for a new or modified local background image.
+    pub(super) fn sync_background_image(&mut self, force_reload: bool) {
+        let policy = self.config.window.background_image.clone();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_background_image_layout(policy.fit, policy.opacity);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+
+        let path_changed = self.background_image_path != policy.path;
+        if !force_reload && !path_changed {
             return;
         }
+        self.background_image_path = policy.path.clone();
+        self.last_background_image_mtime = policy.path.as_deref().and_then(|path| {
+            std::fs::metadata(crate::renderer::resolve_background_image_path(path))
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        });
+        self.background_image_generation = self.background_image_generation.wrapping_add(1);
+
+        if policy.path.is_none() {
+            self.background_image_pending = false;
+            if let Some(renderer) = &mut self.renderer {
+                renderer.clear_background_image();
+            }
+            return;
+        }
+        if self.background_image_loading {
+            self.background_image_pending = true;
+            return;
+        }
+        self.start_background_image_load();
+    }
+
+    fn start_background_image_load(&mut self) {
+        let Some(configured_path) = self.background_image_path.clone() else {
+            return;
+        };
+        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+            return;
+        };
+        let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
+            return;
+        };
+        let generation = self.background_image_generation;
+        let resolved_path = crate::renderer::resolve_background_image_path(&configured_path);
+        self.background_image_loading = true;
+        let spawn = std::thread::Builder::new()
+            .name("termeric-background-image".into())
+            .spawn(move || {
+                let result = crate::renderer::load_background_image(&resolved_path);
+                let _ = proxy.send_event(AppEvent::BackgroundImageLoaded {
+                    window_id,
+                    generation,
+                    path: resolved_path,
+                    result,
+                });
+            });
+        if let Err(error) = spawn {
+            self.background_image_loading = false;
+            log::warn!("Could not start background image loader: {error}");
+            self.toasts
+                .warning(format!("Background image loader could not start: {error}"));
+        }
+    }
+
+    pub(super) fn handle_background_image_loaded(
+        &mut self,
+        generation: u64,
+        path: PathBuf,
+        result: std::result::Result<crate::renderer::DecodedBackgroundImage, String>,
+    ) {
+        self.background_image_loading = false;
+        if generation == self.background_image_generation {
+            match result {
+                Ok(decoded) => {
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.install_background_image(decoded);
+                        renderer.set_background_image_layout(
+                            self.config.window.background_image.fit,
+                            self.config.window.background_image.opacity,
+                        );
+                    }
+                    self.last_background_image_mtime = std::fs::metadata(&path)
+                        .and_then(|metadata| metadata.modified())
+                        .ok();
+                    log::info!("Background image loaded: {}", path.display());
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Background image load failed; keeping last known good image: {error}"
+                    );
+                    self.toasts.warning(format!(
+                        "Background image failed; keeping last known good image: {error}"
+                    ));
+                }
+            }
+        }
+
+        if std::mem::take(&mut self.background_image_pending)
+            && self.background_image_path.is_some()
+        {
+            self.start_background_image_load();
+        }
+    }
+
+    /// Poll the config file's mtime; if it changed since our last load,
+    /// reload + re-apply + toast. The event loop wakes for this deadline, but
+    /// only renders when the observed file state changes.
+    pub(super) fn poll_config_for_hot_reload(&mut self) -> bool {
+        if self.last_config_check.elapsed() < Self::CONFIG_POLL_INTERVAL {
+            return false;
+        }
         self.last_config_check = Instant::now();
+        let mut changed = false;
 
         let path = crate::config::Config::config_path();
         let current_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
 
         if current_mtime != self.last_config_mtime {
+            changed = true;
             self.last_config_mtime = current_mtime;
 
             // Only reload if the file exists (avoid racing with editors that
@@ -235,15 +311,40 @@ impl App {
             }
         }
 
+        let plugin_registry_mtime = std::fs::metadata(crate::plugin::runtime::registry_path())
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if plugin_registry_mtime != self.last_plugin_registry_mtime {
+            changed = true;
+            self.last_plugin_registry_mtime = plugin_registry_mtime;
+            self.sync_plugins_from_config();
+            self.reload_dynamic_keybindings();
+            self.toasts.info("Third-party plugins reloaded");
+            log::info!("Third-party plugin registry hot-reloaded");
+        }
+
+        if let Some(path) = self.background_image_path.clone() {
+            let resolved = crate::renderer::resolve_background_image_path(&path);
+            let mtime = std::fs::metadata(resolved)
+                .and_then(|metadata| metadata.modified())
+                .ok();
+            if mtime != self.last_background_image_mtime {
+                changed = true;
+                self.last_background_image_mtime = mtime;
+                self.sync_background_image(true);
+            }
+        }
+
         let Some(theme_path) = self.active_theme_path.clone() else {
-            return;
+            return changed;
         };
         let theme_mtime = std::fs::metadata(&theme_path)
             .and_then(|metadata| metadata.modified())
             .ok();
         if theme_mtime == self.last_theme_mtime {
-            return;
+            return changed;
         }
+        changed = true;
         self.last_theme_mtime = theme_mtime;
 
         match Theme::load(&theme_path) {
@@ -259,6 +360,7 @@ impl App {
                 ));
             }
         }
+        changed
     }
 
     /// Validate and atomically select a new configuration before applying it
@@ -267,8 +369,12 @@ impl App {
         config.validate().map_err(|error| format!("{error:#}"))?;
         Theme::resolve(&config.theme.name, config.theme.path.as_deref())
             .map_err(|error| format!("theme rejected: {error:#}"))?;
+        let keyboard_type_changed = config.keyboard.xterm_type != self.config.keyboard.xterm_type;
         self.config = config;
         self.apply_config_side_effects();
+        if keyboard_type_changed && let Some(tabs) = &mut self.tabs {
+            tabs.set_xterm_keyboard_type(self.config.keyboard.xterm_type.terminal_type(), true);
+        }
         Ok(())
     }
 
@@ -280,13 +386,31 @@ impl App {
         self.set_font_family(self.config.font.family.clone());
         self.set_font_size(self.config.font.size);
         self.set_line_height(self.config.font.line_height);
+        let tab_bar_position_changed = self.renderer.as_ref().is_some_and(|renderer| {
+            renderer.tab_bar_position() != self.config.window.tab_bar_position
+        });
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_tab_bar_position(self.config.window.tab_bar_position);
+        }
+        if tab_bar_position_changed {
+            self.tab_bar_hover = None;
+            self.tab_bar_hover_progress = 0.0;
+        }
         self.set_padding(self.config.window.padding);
         if let Some(renderer) = &mut self.renderer {
             renderer.set_ligatures(self.config.font.ligatures);
+            renderer.set_bold_is_bright(self.config.font.bold_is_bright);
             renderer.set_opacity(self.config.window.opacity);
         }
+        self.sync_background_image(false);
         if let Some(window) = &self.window {
             window.set_decorations(self.config.window.decorations);
+            window.set_window_level(
+                self.config
+                    .window
+                    .level
+                    .native_for_window(self.launch.quick_access),
+            );
         }
         self.cursor_blink_period = (self.config.cursor.blink_rate as f32 / 1000.0) * 2.0;
         self.reset_cursor_blink();
@@ -306,14 +430,40 @@ impl App {
             }
         }
         if let Some(tabs) = &mut self.tabs {
-            tabs.set_scrollback_limit(self.config.scrollback.lines);
+            tabs.set_scrollback_limits(
+                self.config.scrollback.lines,
+                self.config.scrollback.max_memory_bytes(),
+            );
+            tabs.set_screen_checksum_reporting(self.config.security.allow_screen_checksum_reports);
+            tabs.set_kitty_file_transmission(self.config.security.allow_kitty_file_transfers);
+            // Reapplying unrelated settings must not undo a profile selected
+            // by the foreground application through DECSET 1060/1061.
+            tabs.set_xterm_keyboard_type(self.config.keyboard.xterm_type.terminal_type(), false);
             tabs.set_shell_config(self.config.shell.clone());
+            for tab in tabs.all_tabs_mut() {
+                if let Some(manager) = &mut tab.pane_manager {
+                    manager.set_cwd_mode(self.config.panes.cwd);
+                }
+            }
         }
         self.shortcut_registry = ShortcutRegistry::new();
         self.shortcut_registry
             .apply_overrides(&self.config.shortcuts);
+        self.compiled_copy_patterns = self
+            .config
+            .copy_mode
+            .patterns
+            .iter()
+            .filter_map(|pattern| {
+                regex::Regex::new(&pattern.regex)
+                    .ok()
+                    .map(|regex| (pattern.name.clone(), regex))
+            })
+            .collect();
         self.sync_plugins_from_config();
         self.sync_harvest_from_config();
+        self.sync_accessibility_preferences();
+        self.refresh_launch_profile_commands();
         self.reload_dynamic_keybindings();
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -321,9 +471,11 @@ impl App {
     }
 
     pub(super) fn sync_plugins_from_config(&mut self) {
+        self.plugin_runtime_generation = self.plugin_runtime_generation.wrapping_add(1).max(1);
+        self.structured_plugin_worker
+            .set_generation(self.plugin_runtime_generation);
         let ctx = self.build_plugin_context();
-        self.plugin_manager.deregister("claude-code");
-        self.plugin_manager.deregister("codex");
+        self.plugin_manager.unload_all();
         if self.config.plugins.claude_code.enabled {
             let plugin = ClaudeCodePlugin::new(self.config.plugins.claude_code.clone());
             if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
@@ -339,6 +491,64 @@ impl App {
                 self.toasts.error(format!("Codex plugin failed: {error}"));
             }
         }
+        let (runtime_plugins, statuses, registry_error) =
+            match self.discover_runtime_plugins_for_app() {
+                Ok((plugins, statuses)) => (plugins, statuses, None),
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    log::error!("{error}");
+                    self.toasts
+                        .error(format!("Third-party plugin registry rejected: {error}"));
+                    let mut summary: String = error.chars().take(511).collect();
+                    if summary.chars().count() < error.chars().count() {
+                        summary.push('…');
+                    }
+                    (Vec::new(), Vec::new(), Some(summary))
+                }
+            };
+        for plugin in runtime_plugins {
+            let id = crate::plugin::hooks::Plugin::id(&plugin).to_string();
+            if let Err(error) = self.plugin_manager.register(Box::new(plugin), &ctx) {
+                log::error!("Third-party plugin {id:?} was not loaded: {error:#}");
+                self.toasts
+                    .error(format!("Third-party plugin {id} failed: {error:#}"));
+            }
+        }
+        let summary = if let Some(error) = registry_error {
+            format!("Registry rejected: {error}")
+        } else if statuses.is_empty() {
+            "None installed (use `termeric plugin --help`)".into()
+        } else {
+            statuses
+                .iter()
+                .take(4)
+                .map(|status| {
+                    let requested = status
+                        .requested
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let granted = status
+                        .granted
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!(
+                        "{}:{} req=[{}] grant=[{}] settings={}{}",
+                        status.id,
+                        if status.enabled { "on" } else { "off" },
+                        requested,
+                        granted,
+                        status.settings.len(),
+                        status.diagnostic.as_ref().map_or("", |_| " error")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        self.settings_panel.set_runtime_plugin_summary(summary);
         self.refresh_plugin_commands();
         log::info!("Loaded {} plugin(s)", self.plugin_manager.count());
     }
@@ -358,6 +568,72 @@ impl App {
             }
         } else {
             self.harvest = None;
+        }
+    }
+
+    pub(super) fn sync_accessibility_preferences(&mut self) {
+        let reduced_motion = self.reduced_motion_enabled();
+        let high_contrast = self.high_contrast_enabled();
+        self.settings_panel.set_reduced_motion(reduced_motion);
+        self.session_panel.set_reduced_motion(reduced_motion);
+        self.commands_panel.set_reduced_motion(reduced_motion);
+        self.command_palette.set_reduced_motion(reduced_motion);
+        self.domain_picker.set_reduced_motion(reduced_motion);
+        self.shortcuts_panel.set_reduced_motion(reduced_motion);
+        self.info_overlay.set_reduced_motion(reduced_motion);
+        self.diff_review.set_reduced_motion(reduced_motion);
+        self.context_picker.set_reduced_motion(reduced_motion);
+        self.guardrail.set_reduced_motion(reduced_motion);
+        self.toasts.set_reduced_motion(reduced_motion);
+        if let Some(tabs) = &mut self.tabs {
+            tabs.set_reduced_motion(reduced_motion);
+        }
+        if let Some(harvest) = &mut self.harvest {
+            harvest.set_reduced_motion(reduced_motion);
+        }
+        if reduced_motion {
+            self.tab_bar_hover_progress = f32::from(self.tab_bar_hover.is_some());
+            self.copy_flash_start = None;
+        }
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_high_contrast(&self.theme, high_contrast);
+        }
+    }
+
+    pub(super) fn reduced_motion_enabled(&self) -> bool {
+        self.config
+            .accessibility
+            .reduce_motion
+            .resolve(self.system_accessibility.reduce_motion)
+    }
+
+    pub(super) fn high_contrast_enabled(&self) -> bool {
+        self.config
+            .accessibility
+            .high_contrast
+            .resolve(self.system_accessibility.high_contrast)
+    }
+
+    pub(super) fn set_system_accessibility_preferences(
+        &mut self,
+        preferences: super::system_accessibility::SystemAccessibilityPreferences,
+    ) {
+        if self.system_accessibility == preferences {
+            return;
+        }
+        let previous_reduce_motion = self.reduced_motion_enabled();
+        let previous_high_contrast = self.high_contrast_enabled();
+        self.system_accessibility = preferences;
+        if previous_reduce_motion == self.reduced_motion_enabled()
+            && previous_high_contrast == self.high_contrast_enabled()
+        {
+            return;
+        }
+        self.sync_accessibility_preferences();
+        self.redraw_scheduler
+            .request(super::redraw_scheduler::RedrawReason::ConfigReload);
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
 
@@ -408,6 +684,27 @@ impl App {
             SettingsAction::SetFontFamily(family) => {
                 self.set_font_family(family);
             }
+            SettingsAction::SetFontFallback { index, family } => {
+                self.set_font_fallback(index, family);
+            }
+            SettingsAction::SetFontLigatures(enabled) => {
+                self.config.font.ligatures = enabled;
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_ligatures(enabled);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            SettingsAction::SetBoldIsBright(enabled) => {
+                self.config.font.bold_is_bright = enabled;
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_bold_is_bright(enabled);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
             SettingsAction::SetTheme(name) => match Theme::resolve(&name, None) {
                 Ok((theme, source)) => {
                     let display = name.clone();
@@ -433,10 +730,27 @@ impl App {
                     window.request_redraw();
                 }
             }
+            SettingsAction::SetBackgroundImageOpacity(opacity) => {
+                self.config.window.background_image.opacity = opacity;
+                self.sync_background_image(false);
+            }
+            SettingsAction::SetBackgroundImageFit(fit) => {
+                self.config.window.background_image.fit = fit;
+                self.sync_background_image(false);
+            }
             SettingsAction::SetScrollback(lines) => {
                 self.config.scrollback.lines = lines;
                 if let Some(tabs) = &mut self.tabs {
-                    tabs.set_scrollback_limit(lines);
+                    tabs.set_scrollback_limits(lines, self.config.scrollback.max_memory_bytes());
+                }
+            }
+            SettingsAction::SetScrollbackMemory(memory_mib) => {
+                self.config.scrollback.max_memory_mib = memory_mib;
+                if let Some(tabs) = &mut self.tabs {
+                    tabs.set_scrollback_limits(
+                        self.config.scrollback.lines,
+                        self.config.scrollback.max_memory_bytes(),
+                    );
                 }
             }
             SettingsAction::SetScrollSpeed(speed) => {
@@ -446,6 +760,25 @@ impl App {
                 self.config.window.decorations = enabled;
                 if let Some(window) = &self.window {
                     window.set_decorations(enabled);
+                }
+            }
+            SettingsAction::SetWindowLevel(level) => {
+                self.config.window.level = level;
+                if let Some(window) = &self.window {
+                    window.set_window_level(level.native_for_window(self.launch.quick_access));
+                }
+            }
+            SettingsAction::SetTabBarPosition(position) => {
+                self.config.window.tab_bar_position = position;
+                self.tab_bar_hover = None;
+                self.tab_bar_hover_progress = 0.0;
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_tab_bar_position(position);
+                }
+                if let Some(window) = self.window.clone() {
+                    let size = window.inner_size();
+                    self.sync_terminal_geometry(size.width, size.height);
+                    window.request_redraw();
                 }
             }
             SettingsAction::SetCursorStyle(style_name) => {
@@ -472,11 +805,7 @@ impl App {
                 self.bell.set_audio(enabled);
             }
             SettingsAction::SetLineHeight(height) => {
-                self.config.font.line_height = height;
-                // Trigger a re-render to apply new line height
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+                self.set_line_height(height);
             }
             SettingsAction::SetBellDuration(ms) => {
                 self.config.bell.visual_duration_ms = ms;
@@ -492,6 +821,12 @@ impl App {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
+            }
+            SettingsAction::SetReduceMotion(preference) => {
+                self.config.accessibility.reduce_motion = preference;
+            }
+            SettingsAction::SetHighContrast(preference) => {
+                self.config.accessibility.high_contrast = preference;
             }
             SettingsAction::SaveConfig => {
                 match self.save_config() {
@@ -567,6 +902,10 @@ impl App {
                 }
                 _ => {}
             },
+            SettingsAction::ManageRuntimePlugins => {
+                self.open_runtime_plugin_manager();
+                return;
+            }
             SettingsAction::None => return,
         }
 
@@ -577,9 +916,162 @@ impl App {
         }
     }
 
+    /// Apply one custom-command panel action through a single path shared by
+    /// pointer, keyboard, and accessibility input.
+    pub(super) fn apply_commands_panel_action(
+        &mut self,
+        action: crate::ui::commands::panel::CommandsPanelAction,
+    ) {
+        use crate::ui::commands::panel::CommandsPanelAction;
+
+        match action {
+            CommandsPanelAction::Run(index) => {
+                if let Some(command) = self
+                    .config
+                    .commands
+                    .get(index)
+                    .map(|command| command.command.clone())
+                {
+                    self.commands_panel.close();
+                    self.run_custom_command(&command);
+                }
+            }
+            CommandsPanelAction::Delete(index) => {
+                if index >= self.config.commands.len() {
+                    return;
+                }
+                let name = self.config.commands.remove(index).name;
+                log::info!("Deleted custom command '{}'", name);
+                match self.save_config() {
+                    Ok(message) => {
+                        log::info!("{}", message);
+                        self.toasts.success(format!("Deleted command '{}'", name));
+                    }
+                    Err(error) => {
+                        log::error!("Deleted '{}' but save failed: {}", name, error);
+                        self.toasts.error(format!("Save failed: {}", error));
+                    }
+                }
+            }
+            CommandsPanelAction::StartAdd => self.commands_panel.start_add(),
+            CommandsPanelAction::Submit => {
+                if let Some(command) = self.commands_panel.try_submit() {
+                    let name = command.name.clone();
+                    self.config.commands.push(command);
+                    match self.save_config() {
+                        Ok(message) => {
+                            log::info!("{}", message);
+                            self.toasts.success(format!("Saved command '{}'", name));
+                        }
+                        Err(error) => {
+                            log::error!("Failed to save custom command: {}", error);
+                            self.toasts.error(format!("Save failed: {}", error));
+                        }
+                    }
+                } else {
+                    self.toasts.warning("Both name and command are required");
+                }
+            }
+            CommandsPanelAction::ClickName => self.commands_panel.focus_name(),
+            CommandsPanelAction::ClickCommand => self.commands_panel.focus_command(),
+            CommandsPanelAction::CancelEdit => self.commands_panel.cancel_edit(),
+            CommandsPanelAction::Close => self.commands_panel.close(),
+            CommandsPanelAction::None => {}
+        }
+    }
+
+    /// Apply one workspace/session panel action through the same path for
+    /// pointer, keyboard, and accessibility input.
+    pub(super) fn apply_session_panel_action(
+        &mut self,
+        action: crate::session::panel::SessionPanelAction,
+    ) {
+        use crate::session::panel::SessionPanelAction;
+
+        let workspace_mode = self.session_panel.is_workspace_mode();
+        match action {
+            SessionPanelAction::Load(id) => {
+                if workspace_mode {
+                    self.restore_saved_workspace(&id);
+                } else {
+                    self.restore_saved_session(&id);
+                }
+                self.session_panel.close();
+            }
+            SessionPanelAction::Delete(id) => {
+                let result = if workspace_mode {
+                    crate::workspace::delete_workspace(&id)
+                } else {
+                    crate::session::delete_session(&id)
+                };
+                match result {
+                    Ok(()) => {
+                        let noun = if workspace_mode {
+                            "workspace"
+                        } else {
+                            "session"
+                        };
+                        log::info!("Deleted {noun} '{}'", id);
+                        self.toasts.success(format!("Deleted {noun} '{}'", id));
+                        if workspace_mode {
+                            if self.current_workspace_id.as_deref() == Some(id.as_str()) {
+                                self.current_workspace_id = None;
+                            }
+                            if let Err(error) = self.app_state.forget_workspace(&id) {
+                                log::warn!(
+                                    "Could not clear deleted workspace from state: {error:#}"
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        log::error!("Failed to delete session '{}': {}", id, error);
+                        self.toasts.error(format!("Delete failed: {}", error));
+                    }
+                }
+                self.session_panel.refresh_sessions();
+            }
+            SessionPanelAction::Rename(id) => self.session_panel.begin_rename(&id),
+            SessionPanelAction::SubmitRename => {
+                if let Some((id, name)) = self.session_panel.take_rename() {
+                    match crate::workspace::rename_workspace(&id, &name) {
+                        Ok(()) => {
+                            self.session_panel.refresh_sessions();
+                            self.toasts.success("Workspace renamed");
+                        }
+                        Err(error) => self.toasts.error(format!("Rename failed: {error:#}")),
+                    }
+                }
+            }
+            SessionPanelAction::CancelRename => self.session_panel.cancel_rename(),
+            SessionPanelAction::Close => self.session_panel.close(),
+            SessionPanelAction::None => {}
+        }
+    }
+
     /// Apply a shortcuts panel action
     pub(super) fn apply_shortcuts_action(&mut self, action: ShortcutsAction) {
         match action {
+            ShortcutsAction::StartRecording(action) => {
+                if self
+                    .shortcuts_panel
+                    .select_action(action, &self.shortcut_registry)
+                {
+                    self.shortcuts_panel.start_recording(action);
+                }
+            }
+            ShortcutsAction::ClearShortcut(action) => {
+                if self
+                    .shortcuts_panel
+                    .select_action(action, &self.shortcut_registry)
+                {
+                    self.shortcut_registry.set_binding(action, None);
+                    self.command_palette.register_commands(core_commands(
+                        self.config.harvest.enabled,
+                        &self.shortcut_registry,
+                    ));
+                }
+            }
             ShortcutsAction::SetShortcut { action, chord } => {
                 self.shortcut_registry.set_binding(action, chord);
                 self.command_palette.register_commands(core_commands(

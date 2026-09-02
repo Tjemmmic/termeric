@@ -11,7 +11,9 @@ mod storage;
 pub use cell::{Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec};
 pub use hyperlink::{Hyperlink, HyperlinkRegistry};
 pub use row::Row;
+pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, GridMemoryUsage, RowView};
 
+use std::collections::HashSet;
 use storage::GridStorage;
 
 /// Cursor position and state
@@ -67,6 +69,30 @@ impl Grid {
         }
     }
 
+    /// Capture the cells exactly as they are currently presented, without
+    /// copying scrollback history. This keeps synchronized-output snapshots
+    /// bounded by the visible viewport rather than the history limit.
+    pub(crate) fn visible_snapshot(&self) -> Self {
+        let mut snapshot = Self::new(self.cols, self.rows);
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let (Some(source), Some(target)) =
+                    (self.cell_scrolled(row, col), snapshot.cell_mut(row, col))
+                else {
+                    continue;
+                };
+                *target = (*source).clone();
+            }
+        }
+
+        snapshot.cursor = self.cursor;
+        // A terminal cursor is not presented while the user is viewing
+        // history. The snapshot has no history of its own, so preserve that
+        // visual rule explicitly.
+        snapshot.cursor.visible &= self.scroll_offset == 0;
+        snapshot
+    }
+
     /// Resize the grid to new dimensions, reflowing text when columns change
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let (new_row, new_col) = self
@@ -99,15 +125,15 @@ impl Grid {
 
     /// Get a reference to a cell accounting for current scroll offset
     /// When scrolled up, this returns cells from scrollback buffer
-    pub fn cell_scrolled(&self, row: usize, col: usize) -> Option<&Cell> {
+    pub fn cell_scrolled(&self, row: usize, col: usize) -> Option<CellRef<'_>> {
         if self.scroll_offset == 0 {
             // Not scrolled - return visible cell from active buffer
-            return self.storage.cell(row, col);
+            return self.storage.cell(row, col).map(CellRef::Borrowed);
         }
 
         let scrollback_len = self.storage.scrollback_len();
         if scrollback_len == 0 {
-            return self.storage.cell(row, col);
+            return self.storage.cell(row, col).map(CellRef::Borrowed);
         }
 
         // When scrolled up by N lines:
@@ -130,9 +156,7 @@ impl Grid {
             let lines_back = self.scroll_offset - row;
             if lines_back <= scrollback_len {
                 let scrollback_idx = scrollback_len - lines_back;
-                self.storage
-                    .scrollback_row(scrollback_idx)
-                    .and_then(|r| r.get(col))
+                self.storage.scrollback_cell(scrollback_idx, col)
             } else {
                 // Scrolled past available scrollback (shouldn't happen with clamping)
                 None
@@ -141,7 +165,7 @@ impl Grid {
             // This row shows active buffer content
             let active_row = row - self.scroll_offset;
             if active_row < self.rows {
-                self.storage.cell(active_row, col)
+                self.storage.cell(active_row, col).map(CellRef::Borrowed)
             } else {
                 None
             }
@@ -178,11 +202,11 @@ impl Grid {
     }
 
     /// Scroll the grid up by one line, pushing the top line to scrollback
-    pub fn scroll_up(&mut self) {
+    pub fn scroll_up(&mut self) -> usize {
         let old_len = self.storage.scrollback_len();
         let was_at_max = self.scroll_offset > 0 && self.scroll_offset >= old_len;
 
-        self.storage.scroll_up();
+        let evicted = self.storage.scroll_up();
         let new_len = self.storage.scrollback_len();
 
         // If user is scrolled into history, maintain their view position
@@ -197,6 +221,7 @@ impl Grid {
             // If scrollback didn't grow (at capacity), content shifts but we can't
             // maintain the exact same view since the oldest line was deleted
         }
+        evicted
     }
 
     /// Scroll the grid down by one line (reverse scroll)
@@ -205,13 +230,38 @@ impl Grid {
     }
 
     /// Scroll a region up by one line
-    pub fn scroll_region_up(&mut self, top: usize, bottom: usize) {
-        self.storage.scroll_region_up(top, bottom);
+    pub fn scroll_region_up(&mut self, top: usize, bottom: usize) -> usize {
+        self.storage.scroll_region_up(top, bottom)
     }
 
     /// Scroll a region down by one line
     pub fn scroll_region_down(&mut self, top: usize, bottom: usize) {
         self.storage.scroll_region_down(top, bottom);
+    }
+
+    /// Scroll a partial-width rectangle up by one row.
+    pub fn scroll_rect_up(
+        &mut self,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
+        blank: &Cell,
+    ) {
+        self.storage.scroll_rect_up(top, bottom, left, right, blank);
+    }
+
+    /// Scroll a partial-width rectangle down by one row.
+    pub fn scroll_rect_down(
+        &mut self,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
+        blank: &Cell,
+    ) {
+        self.storage
+            .scroll_rect_down(top, bottom, left, right, blank);
     }
 
     /// Clear all cells in the visible grid
@@ -256,6 +306,21 @@ impl Grid {
         self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
     }
 
+    /// Set the maximum estimated memory owned by archived scrollback rows.
+    pub fn set_scrollback_byte_limit(&mut self, limit: usize) {
+        self.storage.set_scrollback_byte_limit(limit);
+        self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
+    }
+
+    /// Return memory diagnostics for visible and archived row storage.
+    pub fn memory_usage(&self) -> GridMemoryUsage {
+        self.storage.memory_usage()
+    }
+
+    pub(crate) fn collect_hyperlink_ids(&self, identifiers: &mut HashSet<u32>) {
+        self.storage.collect_hyperlink_ids(identifiers);
+    }
+
     /// Get a row from the grid (accounting for scroll offset)
     pub fn row(&self, row: usize) -> Option<&Row> {
         self.storage.row(row)
@@ -263,7 +328,7 @@ impl Grid {
 
     /// Get a row from the grid using a scrollback-aware offset
     /// 0..rows-1 for visible rows, negative for scrollback (e.g. -1 is newest scrollback)
-    pub fn row_at_offset(&self, offset: i32) -> Option<&Row> {
+    pub fn row_at_offset(&self, offset: i32) -> Option<RowView<'_>> {
         self.storage.row_at_offset(offset)
     }
 
@@ -288,9 +353,9 @@ impl Grid {
         let mut lines: Vec<String> = self
             .storage
             .iter_scrollback()
-            .chain(self.storage.iter_visible())
             .map(|row| row.to_ansi_string())
             .collect();
+        lines.extend(self.storage.iter_visible().map(|row| row.to_ansi_string()));
 
         // Trim trailing empty lines
         while lines.last().is_some_and(|l| l.is_empty()) {
@@ -317,7 +382,7 @@ impl Grid {
     }
 
     /// Iterate over scrollback rows (oldest first) for persistence
-    pub fn scrollback_rows(&self) -> impl Iterator<Item = &Row> {
+    pub fn scrollback_rows(&self) -> impl Iterator<Item = RowView<'_>> {
         self.storage.iter_scrollback()
     }
 }
@@ -396,5 +461,25 @@ mod tests {
         let cursor = grid.cursor();
         assert_eq!(cursor.row, 23);
         assert_eq!(cursor.col, 79);
+    }
+
+    #[test]
+    fn visible_snapshot_copies_the_scrolled_view_without_history() {
+        let mut grid = Grid::new(4, 2);
+        for (col, character) in "old!".chars().enumerate() {
+            grid.cell_mut(0, col).unwrap().set_char(character);
+        }
+        grid.scroll_up();
+        for (col, character) in "live".chars().enumerate() {
+            grid.cell_mut(1, col).unwrap().set_char(character);
+        }
+        grid.set_scroll_offset(1);
+
+        let snapshot = grid.visible_snapshot();
+
+        assert_eq!(snapshot.scrollback_len(), 0);
+        assert_eq!(snapshot.scroll_offset(), 0);
+        assert_eq!(snapshot.row(0).unwrap().to_string(), "old!");
+        assert!(!snapshot.cursor().visible);
     }
 }

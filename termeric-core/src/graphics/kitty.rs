@@ -1,266 +1,385 @@
-//! Kitty Graphics Protocol parser
-//!
-//! Parses APC (Application Program Command) sequences for the Kitty graphics protocol.
-//! Format: APC G <key>=<value>,<key>=<value>;[base64 data] ST
+//! Strict parser for the supported Kitty graphics protocol subset.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::HashMap;
+use std::fmt;
 
-/// Kitty graphics command
-#[derive(Debug, Clone)]
-pub struct KittyCommand {
-    /// Action to perform
-    pub action: KittyAction,
-    /// Image ID (i=)
-    pub image_id: Option<u32>,
-    /// Placement ID (p=)
-    pub placement_id: Option<u32>,
-    /// Image transmission info
-    pub transmission: Option<KittyTransmission>,
-    /// Placement parameters
-    pub placement: Option<KittyPlacement>,
-    /// Base64 decoded data
-    pub data: Option<Vec<u8>>,
-    /// Whether more data chunks follow (m=1)
-    pub more_chunks: bool,
+/// Kitty limits each directly transmitted, base64-encoded chunk to 4096 bytes.
+pub const MAX_ENCODED_CHUNK_BYTES: usize = 4096;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KittyParseError(pub String);
+
+impl fmt::Display for KittyParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
 }
 
-/// Action type for the command
+/// Kitty graphics command.
+#[derive(Debug, Clone)]
+pub struct KittyCommand {
+    pub action: KittyAction,
+    pub image_id: Option<u32>,
+    /// Client image number (`I=`). Unlike IDs, numbers are not unique and
+    /// resolve to the newest retained image carrying that number.
+    pub image_number: Option<u32>,
+    pub placement_id: Option<u32>,
+    pub transmission: KittyTransmission,
+    pub placement: KittyPlacement,
+    pub frame: KittyFrame,
+    pub data: Vec<u8>,
+    pub more_chunks: bool,
+    /// q=0 reports all results, q=1 suppresses success, q=2 suppresses all replies.
+    pub quiet: u8,
+    /// Deletion selector (d=), defaulting to all visible placements/images.
+    pub delete: char,
+    /// Whether a semicolon and data field were present.
+    pub has_data: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KittyAction {
-    /// Transmit image data (a=t)
     Transmit,
-    /// Display a transmitted image (a=p)
     Display,
-    /// Transmit and display (a=T)
     TransmitAndDisplay,
-    /// Delete an image (a=d)
     Delete,
-    /// Query terminal capabilities (a=q)
     Query,
-    /// Animation frame composition (a=f, a=c, a=a)
+    TransmitFrame,
+    AnimationControl,
     FrameComposition,
 }
 
-/// Image transmission parameters
-#[derive(Debug, Clone)]
-pub struct KittyTransmission {
-    /// Data format (f=)
-    pub format: KittyFormat,
-    /// Image width (s=)
+/// Action-dependent animation controls. Kitty intentionally reuses several
+/// control keys between frame loading, playback control, and composition.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KittyFrame {
+    /// `r=`: edited/affected/source frame number, depending on the action.
+    pub frame_number: Option<u32>,
+    /// `c=`: base/current/destination frame number, depending on the action.
+    pub other_frame_number: Option<u32>,
+    pub gap: Option<i32>,
+    /// Frame-load destination or composition destination coordinates (`x/y`).
+    pub x: u32,
+    pub y: u32,
+    /// Composition rectangle (`w/h`).
     pub width: Option<u32>,
-    /// Image height (v=)
     pub height: Option<u32>,
-    /// Transmission medium (t=)
-    pub medium: KittyMedium,
-    /// Compression (o=)
-    pub compression: KittyCompression,
+    /// Composition source coordinates (`X/Y`).
+    pub source_x: u32,
+    pub source_y: u32,
+    /// Frame-load background color (`Y=` as `0xRRGGBBAA`).
+    pub background_color: Option<u32>,
+    /// Replacement instead of source-over alpha blending.
+    pub replace: bool,
+    /// Playback state (`s=1/2/3`) and loop count (`v=`).
+    pub animation_state: Option<u8>,
+    pub loop_count: Option<u32>,
 }
 
-/// Image data format
+#[derive(Debug, Clone, Copy)]
+pub struct KittyTransmission {
+    pub format: KittyFormat,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub medium: KittyMedium,
+    pub compression: KittyCompression,
+    /// Local-media read ceiling, or expected decompressed PNG size (`S=`).
+    pub data_size: Option<u64>,
+    /// Byte offset into local media (`O=`).
+    pub data_offset: Option<u64>,
+    /// Client usage hints (`N=`). Hints may be ignored by the storage policy.
+    pub usage_hints: u32,
+}
+
+impl Default for KittyTransmission {
+    fn default() -> Self {
+        Self {
+            format: KittyFormat::Rgba,
+            width: None,
+            height: None,
+            medium: KittyMedium::Direct,
+            compression: KittyCompression::None,
+            data_size: None,
+            data_offset: None,
+            usage_hints: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyFormat {
-    /// 32-bit RGBA (f=32)
     #[default]
     Rgba,
-    /// 24-bit RGB (f=24)
     Rgb,
-    /// PNG encoded (f=100)
     Png,
 }
 
-/// Transmission medium
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyMedium {
-    /// Direct data in payload (t=d)
     #[default]
     Direct,
-    /// File path (t=f)
     File,
-    /// Temporary file (t=t)
     TempFile,
-    /// Shared memory (t=s)
     SharedMemory,
 }
 
-/// Compression method
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyCompression {
-    /// No compression (o=)
     #[default]
     None,
-    /// Zlib compression (o=z)
     Zlib,
 }
 
-/// Image placement parameters
 #[derive(Debug, Clone, Default)]
 pub struct KittyPlacement {
-    /// X position in pixels within cell (X=)
+    /// Source rectangle in image pixels (x/y/w/h).
+    pub source_x: Option<u32>,
+    pub source_y: Option<u32>,
+    pub source_width: Option<u32>,
+    pub source_height: Option<u32>,
+    /// Pixel offset in the cursor cell (X/Y).
     pub x_offset: Option<u32>,
-    /// Y position in pixels within cell (Y=)
     pub y_offset: Option<u32>,
-    /// Display width in columns (c=)
+    /// Destination size in cells (c/r).
     pub width: Option<u32>,
-    /// Display height in rows (r=)
     pub height: Option<u32>,
-    /// Column position (x=)
-    pub col: Option<u32>,
-    /// Row position (y=)
-    pub row: Option<u32>,
-    /// Z-index for layering (z=)
     pub z_index: Option<i32>,
+    /// C=1 prevents the normal cursor movement after placement.
+    pub do_not_move_cursor: bool,
+    /// U=1 creates an invisible prototype for Unicode placeholder cells.
+    pub virtual_placement: bool,
+    /// Parent image and placement identifiers for relative placement (P/Q).
+    pub parent_image_id: Option<u32>,
+    pub parent_placement_id: Option<u32>,
+    /// Cell displacement from the parent's top-left origin (H/V).
+    pub horizontal_offset: i32,
+    pub vertical_offset: i32,
+    /// Terminal-owned placement origin, never parsed from protocol x/y.
+    pub(crate) col: Option<u32>,
+    pub(crate) row: Option<u32>,
 }
 
 impl KittyCommand {
-    /// Parse a Kitty graphics APC sequence
-    ///
-    /// Expected format after "G": key=value,key=value;[base64data]
-    pub fn parse(payload: &[u8]) -> Option<Self> {
-        // Find the control portion and optional data portion
-        let (control, data_part) = if let Some(pos) = payload.iter().position(|&b| b == b';') {
-            (&payload[..pos], Some(&payload[pos + 1..]))
-        } else {
-            (payload, None)
+    /// Parse the bytes following APC `G`.
+    pub fn parse(payload: &[u8]) -> Result<Self, KittyParseError> {
+        let (control, encoded, has_data) = match payload.iter().position(|byte| *byte == b';') {
+            Some(pos) => (&payload[..pos], &payload[pos + 1..], true),
+            None => (payload, &[][..], false),
         };
+        let control = std::str::from_utf8(control)
+            .map_err(|_| KittyParseError("control data is not UTF-8".into()))?;
+        let params = parse_params(control)?;
+        const SUPPORTED_KEYS: &str = "aiIpNfsvtoSOmqdxywhXYcrzCUPQHV";
+        if let Some(key) = params
+            .keys()
+            .find(|key| key.len() != 1 || !SUPPORTED_KEYS.contains(key.as_str()))
+        {
+            return Err(KittyParseError(format!("unsupported control {key}")));
+        }
 
-        // Parse key=value pairs
-        let control_str = std::str::from_utf8(control).ok()?;
-        let params = parse_params(control_str);
-
-        // Determine action
-        let action = match params.get("a").map(|s| s.as_str()) {
-            Some("t") => KittyAction::Transmit,
+        let action = match params.get("a").map(String::as_str) {
+            None | Some("t") => KittyAction::Transmit,
             Some("T") => KittyAction::TransmitAndDisplay,
             Some("p") => KittyAction::Display,
             Some("d") => KittyAction::Delete,
             Some("q") => KittyAction::Query,
-            Some("f") | Some("c") | Some("a") => KittyAction::FrameComposition,
-            _ => KittyAction::TransmitAndDisplay, // Default
+            Some("f") => KittyAction::TransmitFrame,
+            Some("a") => KittyAction::AnimationControl,
+            Some("c") => KittyAction::FrameComposition,
+            Some(value) => return Err(KittyParseError(format!("unsupported action {value}"))),
         };
 
-        // Parse IDs
-        let image_id = params.get("i").and_then(|s| s.parse().ok());
-        let placement_id = params.get("p").and_then(|s| s.parse().ok());
+        let format = match params.get("f").map(String::as_str) {
+            None | Some("32") => KittyFormat::Rgba,
+            Some("0") if action == KittyAction::FrameComposition => KittyFormat::Rgba,
+            Some("24") => KittyFormat::Rgb,
+            Some("100") => KittyFormat::Png,
+            Some(value) => return Err(KittyParseError(format!("unsupported format {value}"))),
+        };
+        let medium = match params.get("t").map(String::as_str) {
+            None | Some("d") => KittyMedium::Direct,
+            Some("f") => KittyMedium::File,
+            Some("t") => KittyMedium::TempFile,
+            Some("s") => KittyMedium::SharedMemory,
+            Some(value) => return Err(KittyParseError(format!("unsupported medium {value}"))),
+        };
+        let compression = match params.get("o").map(String::as_str) {
+            None => KittyCompression::None,
+            Some("z") => KittyCompression::Zlib,
+            Some(value) => return Err(KittyParseError(format!("unsupported compression {value}"))),
+        };
+        let more_chunks = match params.get("m").map(String::as_str) {
+            None | Some("0") => false,
+            Some("1") => true,
+            Some(value) => return Err(KittyParseError(format!("invalid m={value}"))),
+        };
+        let quiet = number::<u8>(&params, "q")?.unwrap_or(0);
+        if quiet > 2 {
+            return Err(KittyParseError("q must be 0, 1, or 2".into()));
+        }
+        let delete = match params.get("d") {
+            None => 'a',
+            Some(value) if value.chars().count() == 1 => value.chars().next().unwrap(),
+            Some(_) => return Err(KittyParseError("d must be one character".into())),
+        };
+        if params.contains_key("i") && params.contains_key("I") {
+            return Err(KittyParseError(
+                "i and I cannot be specified together".into(),
+            ));
+        }
 
-        // Parse transmission parameters
-        let transmission =
-            if action == KittyAction::Transmit || action == KittyAction::TransmitAndDisplay {
-                Some(KittyTransmission {
-                    format: match params.get("f").map(|s| s.as_str()) {
-                        Some("24") => KittyFormat::Rgb,
-                        Some("100") => KittyFormat::Png,
-                        _ => KittyFormat::Rgba,
-                    },
-                    width: params.get("s").and_then(|s| s.parse().ok()),
-                    height: params.get("v").and_then(|s| s.parse().ok()),
-                    medium: match params.get("t").map(|s| s.as_str()) {
-                        Some("f") => KittyMedium::File,
-                        Some("t") => KittyMedium::TempFile,
-                        Some("s") => KittyMedium::SharedMemory,
-                        _ => KittyMedium::Direct,
-                    },
-                    compression: match params.get("o").map(|s| s.as_str()) {
-                        Some("z") => KittyCompression::Zlib,
-                        _ => KittyCompression::None,
-                    },
-                })
-            } else {
-                None
-            };
+        if encoded.len() > MAX_ENCODED_CHUNK_BYTES {
+            return Err(KittyParseError(
+                "direct data chunk exceeds 4096 bytes".into(),
+            ));
+        }
+        if more_chunks && encoded.len() % 4 != 0 {
+            return Err(KittyParseError(
+                "non-final base64 chunk length must be divisible by four".into(),
+            ));
+        }
+        let data = if has_data {
+            STANDARD
+                .decode(encoded)
+                .map_err(|_| KittyParseError("invalid base64 data".into()))?
+        } else {
+            Vec::new()
+        };
 
-        // Parse placement parameters
-        let placement = Some(KittyPlacement {
-            x_offset: params.get("X").and_then(|s| s.parse().ok()),
-            y_offset: params.get("Y").and_then(|s| s.parse().ok()),
-            width: params.get("c").and_then(|s| s.parse().ok()),
-            height: params.get("r").and_then(|s| s.parse().ok()),
-            col: params.get("x").and_then(|s| s.parse().ok()),
-            row: params.get("y").and_then(|s| s.parse().ok()),
-            z_index: params.get("z").and_then(|s| s.parse().ok()),
-        });
-
-        // Check if more chunks follow
-        let more_chunks = params.get("m").map(|s| s == "1").unwrap_or(false);
-
-        // Decode base64 data if present
-        let data = if let Some(data_part) = data_part {
-            decode_base64(data_part)
+        let cursor_policy = number::<u8>(&params, "C")?.unwrap_or(0);
+        if cursor_policy > 1 {
+            return Err(KittyParseError("C must be 0 or 1".into()));
+        }
+        let virtual_placement = number::<u8>(&params, "U")?.unwrap_or(0);
+        if virtual_placement > 1 {
+            return Err(KittyParseError("U must be 0 or 1".into()));
+        }
+        let frame_replace = match action {
+            KittyAction::TransmitFrame => number::<u8>(&params, "X")?.unwrap_or(0),
+            KittyAction::FrameComposition => cursor_policy,
+            _ => 0,
+        };
+        if frame_replace > 1 {
+            return Err(KittyParseError(
+                "animation composition mode must be 0 or 1".into(),
+            ));
+        }
+        let animation_state = if action == KittyAction::AnimationControl {
+            number::<u8>(&params, "s")?.filter(|value| *value != 0)
         } else {
             None
         };
+        if animation_state.is_some_and(|value| !(1..=3).contains(&value)) {
+            return Err(KittyParseError("animation s must be 1, 2, or 3".into()));
+        }
 
-        Some(Self {
+        let frame = KittyFrame {
+            frame_number: number::<u32>(&params, "r")?.filter(|value| *value != 0),
+            other_frame_number: number::<u32>(&params, "c")?.filter(|value| *value != 0),
+            gap: number::<i32>(&params, "z")?.filter(|value| *value != 0),
+            x: number::<u32>(&params, "x")?.unwrap_or(0),
+            y: number::<u32>(&params, "y")?.unwrap_or(0),
+            width: number::<u32>(&params, "w")?.filter(|value| *value != 0),
+            height: number::<u32>(&params, "h")?.filter(|value| *value != 0),
+            source_x: if action == KittyAction::FrameComposition {
+                number::<u32>(&params, "X")?.unwrap_or(0)
+            } else {
+                0
+            },
+            source_y: if action == KittyAction::FrameComposition {
+                number::<u32>(&params, "Y")?.unwrap_or(0)
+            } else {
+                0
+            },
+            background_color: (action == KittyAction::TransmitFrame)
+                .then(|| number::<u32>(&params, "Y"))
+                .transpose()?
+                .flatten(),
+            replace: frame_replace == 1,
+            animation_state,
+            loop_count: if action == KittyAction::AnimationControl {
+                number::<u32>(&params, "v")?.filter(|value| *value != 0)
+            } else {
+                None
+            },
+        };
+
+        Ok(Self {
             action,
-            image_id,
-            placement_id,
-            transmission,
-            placement,
+            image_id: number(&params, "i")?,
+            image_number: number(&params, "I")?,
+            placement_id: number(&params, "p")?,
+            transmission: KittyTransmission {
+                format,
+                width: number(&params, "s")?,
+                height: number(&params, "v")?,
+                medium,
+                compression,
+                data_size: number::<u64>(&params, "S")?.filter(|value| *value != 0),
+                data_offset: number::<u64>(&params, "O")?.filter(|value| *value != 0),
+                usage_hints: number::<u32>(&params, "N")?.unwrap_or(0),
+            },
+            placement: KittyPlacement {
+                source_x: number(&params, "x")?,
+                source_y: number(&params, "y")?,
+                source_width: number::<u32>(&params, "w")?.filter(|value| *value != 0),
+                source_height: number::<u32>(&params, "h")?.filter(|value| *value != 0),
+                x_offset: number(&params, "X")?,
+                y_offset: number(&params, "Y")?,
+                width: number::<u32>(&params, "c")?.filter(|value| *value != 0),
+                height: number::<u32>(&params, "r")?.filter(|value| *value != 0),
+                z_index: number(&params, "z")?,
+                do_not_move_cursor: cursor_policy == 1,
+                virtual_placement: virtual_placement == 1,
+                parent_image_id: number::<u32>(&params, "P")?.filter(|value| *value != 0),
+                parent_placement_id: number::<u32>(&params, "Q")?.filter(|value| *value != 0),
+                horizontal_offset: number::<i32>(&params, "H")?.unwrap_or(0),
+                vertical_offset: number::<i32>(&params, "V")?.unwrap_or(0),
+                col: None,
+                row: None,
+            },
+            frame,
             data,
             more_chunks,
+            quiet,
+            delete,
+            has_data,
         })
     }
 }
 
-/// Parse comma-separated key=value pairs
-fn parse_params(s: &str) -> HashMap<String, String> {
+fn parse_params(value: &str) -> Result<HashMap<String, String>, KittyParseError> {
     let mut params = HashMap::new();
-    for pair in s.split(',') {
-        if let Some((key, value)) = pair.split_once('=') {
-            params.insert(key.to_string(), value.to_string());
+    if value.is_empty() {
+        return Ok(params);
+    }
+    for pair in value.split(',') {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| KittyParseError(format!("invalid control {pair}")))?;
+        if key.chars().count() != 1 || value.is_empty() {
+            return Err(KittyParseError(format!("invalid control {pair}")));
+        }
+        if params.insert(key.to_owned(), value.to_owned()).is_some() {
+            return Err(KittyParseError(format!("duplicate control {key}")));
         }
     }
-    params
+    Ok(params)
 }
 
-/// Decode base64 data
-fn decode_base64(data: &[u8]) -> Option<Vec<u8>> {
-    // Simple base64 decoder
-    const DECODE_TABLE: [i8; 256] = {
-        let mut table = [-1i8; 256];
-        let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut i = 0;
-        while i < 64 {
-            table[chars[i] as usize] = i as i8;
-            i += 1;
-        }
-        table
-    };
-
-    let data: Vec<u8> = data
-        .iter()
-        .copied()
-        .filter(|&b| b != b'\n' && b != b'\r' && b != b' ')
-        .collect();
-
-    if data.is_empty() {
-        return Some(Vec::new());
-    }
-
-    let mut result = Vec::with_capacity(data.len() * 3 / 4);
-    let mut buffer = 0u32;
-    let mut bits = 0;
-
-    for &byte in &data {
-        if byte == b'=' {
-            continue;
-        }
-
-        let value = DECODE_TABLE[byte as usize];
-        if value < 0 {
-            return None; // Invalid character
-        }
-
-        buffer = (buffer << 6) | (value as u32);
-        bits += 6;
-
-        if bits >= 8 {
-            bits -= 8;
-            result.push((buffer >> bits) as u8);
-            buffer &= (1 << bits) - 1;
-        }
-    }
-
-    Some(result)
+fn number<T>(params: &HashMap<String, String>, key: &str) -> Result<Option<T>, KittyParseError>
+where
+    T: std::str::FromStr,
+{
+    params
+        .get(key)
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|_| KittyParseError(format!("invalid {key}={value}")))
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -268,53 +387,114 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_simple_command() {
-        let payload = b"a=T,f=100,i=1";
-        let cmd = KittyCommand::parse(payload).unwrap();
-
+    fn parses_static_png_and_source_rectangle_without_moving_cursor() {
+        let cmd =
+            KittyCommand::parse(b"a=T,f=100,i=7,p=9,x=2,y=3,w=4,h=5,X=6,Y=7,c=8,r=9,z=-2,C=1")
+                .unwrap();
         assert_eq!(cmd.action, KittyAction::TransmitAndDisplay);
-        assert_eq!(cmd.image_id, Some(1));
-        assert!(matches!(
-            cmd.transmission.as_ref().unwrap().format,
-            KittyFormat::Png
-        ));
+        assert_eq!(cmd.transmission.format, KittyFormat::Png);
+        assert_eq!(cmd.placement.source_x, Some(2));
+        assert_eq!(cmd.placement.source_y, Some(3));
+        assert_eq!(cmd.placement.z_index, Some(-2));
+        assert!(cmd.placement.do_not_move_cursor);
     }
 
     #[test]
-    fn test_parse_with_data() {
-        let payload = b"a=T,f=32,s=2,v=2,i=1;AQIDBA=="; // base64 for [1,2,3,4]
-        let cmd = KittyCommand::parse(payload).unwrap();
-
-        assert_eq!(cmd.action, KittyAction::TransmitAndDisplay);
-        assert_eq!(cmd.image_id, Some(1));
-        assert_eq!(cmd.data, Some(vec![1, 2, 3, 4]));
+    fn strictly_decodes_data_and_rejects_invalid_controls() {
+        let cmd = KittyCommand::parse(b"a=T,f=32,s=1,v=1,i=1;AQIDBA==").unwrap();
+        assert_eq!(cmd.data, vec![1, 2, 3, 4]);
+        assert!(KittyCommand::parse(b"a=T,f=999;AQID").is_err());
+        assert!(KittyCommand::parse(b"a=T,a=p;AQID").is_err());
+        assert!(KittyCommand::parse(b"a=T;%%%=").is_err());
+        assert!(KittyCommand::parse(b"m=1;AQI").is_err());
+        assert!(KittyCommand::parse(b"a=p,L=1,i=2").is_err());
+        assert_eq!(
+            KittyCommand::parse(b"f=32,s=1,v=1;AQIDBA==")
+                .unwrap()
+                .action,
+            KittyAction::Transmit
+        );
     }
 
     #[test]
-    fn test_parse_placement() {
-        let payload = b"a=p,i=1,x=10,y=5,c=20,r=10";
-        let cmd = KittyCommand::parse(payload).unwrap();
+    fn parses_local_media_size_and_offset() {
+        let cmd = KittyCommand::parse(b"a=q,t=t,S=80,O=10;iW1wL2ltYWdl").unwrap();
+        assert_eq!(cmd.transmission.medium, KittyMedium::TempFile);
+        assert_eq!(cmd.transmission.data_size, Some(80));
+        assert_eq!(cmd.transmission.data_offset, Some(10));
 
-        assert_eq!(cmd.action, KittyAction::Display);
-        let placement = cmd.placement.unwrap();
-        assert_eq!(placement.col, Some(10));
-        assert_eq!(placement.row, Some(5));
-        assert_eq!(placement.width, Some(20));
-        assert_eq!(placement.height, Some(10));
+        let defaults = KittyCommand::parse(b"a=q,t=t,S=0,O=0;iW1wL2ltYWdl").unwrap();
+        assert_eq!(defaults.transmission.data_size, None);
+        assert_eq!(defaults.transmission.data_offset, None);
     }
 
     #[test]
-    fn test_decode_base64() {
-        // "Hello" in base64 is "SGVsbG8="
-        let result = decode_base64(b"SGVsbG8=").unwrap();
-        assert_eq!(result, b"Hello");
+    fn parses_image_numbers_and_ignorable_usage_hints_exclusively() {
+        let cmd = KittyCommand::parse(b"a=T,I=13,N=1,f=32,s=1,v=1;AQIDBA==").unwrap();
+        assert_eq!(cmd.image_id, None);
+        assert_eq!(cmd.image_number, Some(13));
+        assert_eq!(cmd.transmission.usage_hints, 1);
 
-        // Empty string
-        let result = decode_base64(b"").unwrap();
-        assert!(result.is_empty());
+        assert!(KittyCommand::parse(b"a=t,i=7,I=13;AQIDBA==").is_err());
+        assert!(KittyCommand::parse(b"a=t,I=not-a-number;AQIDBA==").is_err());
+    }
 
-        // With whitespace
-        let result = decode_base64(b"SGVs\nbG8=").unwrap();
-        assert_eq!(result, b"Hello");
+    #[test]
+    fn parses_only_the_defined_unicode_placeholder_flag() {
+        let cmd = KittyCommand::parse(b"a=p,U=1,i=7,c=2,r=3").unwrap();
+        assert!(cmd.placement.virtual_placement);
+        assert!(KittyCommand::parse(b"a=p,U=2,i=7,c=2,r=3").is_err());
+    }
+
+    #[test]
+    fn parses_signed_relative_placement_controls() {
+        let cmd = KittyCommand::parse(b"a=p,i=7,p=8,P=9,Q=10,H=-11,V=12").unwrap();
+        assert_eq!(cmd.placement.parent_image_id, Some(9));
+        assert_eq!(cmd.placement.parent_placement_id, Some(10));
+        assert_eq!(cmd.placement.horizontal_offset, -11);
+        assert_eq!(cmd.placement.vertical_offset, 12);
+
+        let defaults = KittyCommand::parse(b"a=p,i=7,P=0,Q=0").unwrap();
+        assert_eq!(defaults.placement.parent_image_id, None);
+        assert_eq!(defaults.placement.parent_placement_id, None);
+        assert_eq!(defaults.placement.horizontal_offset, 0);
+        assert_eq!(defaults.placement.vertical_offset, 0);
+        assert!(KittyCommand::parse(b"a=p,i=7,H=2147483648").is_err());
+    }
+
+    #[test]
+    fn parses_action_dependent_animation_controls() {
+        let load = KittyCommand::parse(
+            b"a=f,i=1,f=32,s=2,v=3,x=4,y=5,c=1,r=2,z=-1,X=1,Y=4278190335;AQIDBA==",
+        )
+        .unwrap();
+        assert_eq!(load.action, KittyAction::TransmitFrame);
+        assert_eq!(
+            (load.transmission.width, load.transmission.height),
+            (Some(2), Some(3))
+        );
+        assert_eq!((load.frame.x, load.frame.y), (4, 5));
+        assert_eq!(
+            (load.frame.frame_number, load.frame.other_frame_number),
+            (Some(2), Some(1))
+        );
+        assert_eq!(load.frame.gap, Some(-1));
+        assert!(load.frame.replace);
+        assert_eq!(load.frame.background_color, Some(4_278_190_335));
+
+        let control = KittyCommand::parse(b"a=a,i=1,s=3,v=4,r=2,c=3,z=48").unwrap();
+        assert_eq!(control.action, KittyAction::AnimationControl);
+        assert_eq!(control.frame.animation_state, Some(3));
+        assert_eq!(control.frame.loop_count, Some(4));
+
+        let compose =
+            KittyCommand::parse(b"a=c,i=1,r=2,c=3,w=4,h=5,X=6,Y=7,x=8,y=9,C=1,f=0").unwrap();
+        assert_eq!(compose.action, KittyAction::FrameComposition);
+        assert_eq!((compose.frame.source_x, compose.frame.source_y), (6, 7));
+        assert_eq!((compose.frame.x, compose.frame.y), (8, 9));
+        assert!(compose.frame.replace);
+        assert!(KittyCommand::parse(b"a=a,i=1,s=4").is_err());
+        assert!(KittyCommand::parse(b"a=f,i=1,X=2").is_err());
+        assert!(KittyCommand::parse(b"a=t,i=1,f=0").is_err());
     }
 }

@@ -126,7 +126,7 @@ impl Renderer {
 
         // Placeholder when empty
         if info.input.is_empty() {
-            let hint = "Search commands...";
+            let hint = &info.placeholder;
             let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
             let mut hx = text_start_x;
             for c in hint.chars() {
@@ -325,10 +325,22 @@ impl Renderer {
             footer_sep,
         );
 
+        let noun = |count: usize| {
+            if count == 1 {
+                info.item_noun.clone()
+            } else {
+                format!("{}s", info.item_noun)
+            }
+        };
         let footer_text = if info.total_entries < info.total_count {
-            format!("{} of {} commands", info.total_entries, info.total_count)
+            format!(
+                "{} of {} {}",
+                info.total_entries,
+                info.total_count,
+                noun(info.total_count)
+            )
         } else {
-            format!("{} commands", info.total_count)
+            format!("{} {}", info.total_count, noun(info.total_count))
         };
         let footer_color = adjust_alpha(self.ui.palette_footer, anim);
         let footer_text_y = footer_y + (footer_height - cell_height) / 2.0;
@@ -347,7 +359,7 @@ impl Renderer {
             ("Up", "↑"),
             ("Down", "↓"),
             ("Enter", "Select"),
-            ("Esc", "Close"),
+            ("Esc", info.escape_label.as_str()),
         ];
         let mut hint_x = panel_x + panel_width - padding;
         let hint_color = adjust_alpha(self.ui.palette_footer, 0.6 * anim);

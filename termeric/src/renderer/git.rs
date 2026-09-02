@@ -8,7 +8,9 @@ impl Renderer {
         &mut self,
         info: &GitCompletionInfo,
         cursor_pos: (f32, f32),
-        window_width: f32,
+        content_left: f32,
+        content_top: f32,
+        content_width: f32,
         window_height: f32,
     ) {
         if info.completions.is_empty() {
@@ -18,7 +20,6 @@ impl Renderer {
         let ui_cw = self.cell_width;
         let cell_h = self.cell_height;
         let padding = self.padding;
-        let tab_bar_h = self.tab_bar_height();
 
         let accent = self.ui.settings_accent;
         let text_color = self.ui.settings_text;
@@ -27,8 +28,8 @@ impl Renderer {
 
         // Position: below the cursor
         let (cursor_col, cursor_row) = cursor_pos;
-        let dropdown_x = padding + cursor_col * ui_cw;
-        let dropdown_top = tab_bar_h + padding + (cursor_row + 1.0) * cell_h;
+        let dropdown_x = content_left + padding + cursor_col * ui_cw;
+        let dropdown_top = content_top + padding + (cursor_row + 1.0) * cell_h;
 
         // Sizing
         let max_visible = 8usize;
@@ -45,13 +46,13 @@ impl Renderer {
             .unwrap_or(10);
         let dropdown_width = ((max_len + 4) as f32 * ui_cw)
             .max(ui_cw * 24.0)
-            .min(window_width * 0.5);
+            .min(content_width * 0.5);
 
         // Ensure dropdown fits on screen
-        let dropdown_x = dropdown_x.min(window_width - dropdown_width - padding);
+        let dropdown_x = dropdown_x.min(content_left + content_width - dropdown_width - padding);
         let dropdown_top = if dropdown_top + dropdown_height > window_height {
             // Flip above cursor if it goes off-screen
-            tab_bar_h + padding + cursor_row * cell_h - dropdown_height
+            content_top + padding + cursor_row * cell_h - dropdown_height
         } else {
             dropdown_top
         };

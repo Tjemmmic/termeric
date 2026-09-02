@@ -31,11 +31,50 @@ pub enum Hook {
     TabSwitched { from: usize, to: usize },
     /// A command was executed in the terminal (from shell integration)
     CommandExecuted {
+        /// Stable terminal-local OSC 133 region identity.
+        region_id: u64,
+        /// Stable application-local tab identity.
+        tab_id: usize,
+        /// Stable pane identity when the tab is split.
+        pane_id: Option<u32>,
+        /// Bounded command-region text. Empty when backing rows were evicted.
         command: String,
+        /// Whether command text was truncated at the extraction boundary.
+        command_truncated: bool,
+        /// Bounded output-region text. Empty when backing rows were evicted.
+        output: String,
+        /// Whether output text was truncated at the extraction boundary.
+        output_truncated: bool,
+        /// Whether the completed region still had authoritative grid content.
+        content_available: bool,
         exit_code: Option<i32>,
     },
     /// A plugin command was invoked (from command palette or keybinding)
     CommandInvoked { command_id: String },
+    /// Recreate a plugin-owned tab from a persisted workspace. The named
+    /// profile is an explicit archive reference and therefore takes priority
+    /// over repository and default profile selection.
+    WorkspaceRestore {
+        plugin_id: String,
+        profile: Option<String>,
+        cwd: Option<String>,
+    },
+}
+
+impl Hook {
+    /// Payload-free name suitable for diagnostics. Hook payloads can contain
+    /// terminal text or command data and must never be formatted into logs.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::AppReady => "app-ready",
+            Self::TabCreated { .. } => "tab-created",
+            Self::TabClosed { .. } => "tab-closed",
+            Self::TabSwitched { .. } => "tab-switched",
+            Self::CommandExecuted { .. } => "command-executed",
+            Self::CommandInvoked { .. } => "command-invoked",
+            Self::WorkspaceRestore { .. } => "workspace-restore",
+        }
+    }
 }
 
 /// What a plugin returns after processing a hook.
@@ -55,6 +94,11 @@ pub enum HookResponse {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum PluginAction {
+    /// Invoke a versioned declarative lifecycle handler on the bounded
+    /// background plugin worker.
+    InvokeStructuredHandler {
+        invocation: crate::plugin::structured::StructuredHandlerInvocation,
+    },
     /// Open a new tab running a specific program (no shell echo)
     OpenTab {
         /// Program to run (e.g., "claude")
@@ -67,6 +111,8 @@ pub enum PluginAction {
         title: Option<String>,
         /// Plugin ID that owns this tab (None = generic command tab)
         plugin_id: Option<String>,
+        /// Resolved named profile, when the launch used one.
+        profile: Option<String>,
         /// Additional environment variables to set for the spawned process
         env: HashMap<String, String>,
     },
@@ -112,6 +158,31 @@ pub enum PluginAction {
         plugin_id: String,
         profile_name: String,
     },
+}
+
+impl PluginAction {
+    /// Payload-free diagnostic name. Action payloads can contain terminal
+    /// text, environment values, context, or diffs and must not enter logs.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::InvokeStructuredHandler { .. } => "invoke-structured-handler",
+            Self::OpenTab { .. } => "open-tab",
+            Self::WriteToPty { .. } => "write-to-pty",
+            Self::Notify { .. } => "notify",
+            Self::ShowMessage { .. } => "show-message",
+            Self::ShowNotice { .. } => "show-notice",
+            Self::ClearPluginTab { .. } => "clear-plugin-tab",
+            Self::RestartPlugin { .. } => "restart-plugin",
+            Self::CopyFromPluginTab { .. } => "copy-from-plugin-tab",
+            Self::ApplyDiff { .. } => "apply-diff",
+            Self::StageDiff { .. } => "stage-diff",
+            Self::RevertDiff { .. } => "revert-diff",
+            Self::ToggleTranscript => "toggle-transcript",
+            Self::InjectContext { .. } => "inject-context",
+            Self::ListProfiles { .. } => "list-profiles",
+            Self::ApplyProfile { .. } => "apply-profile",
+        }
+    }
 }
 
 /// Metadata for a command a plugin contributes to the command palette.
@@ -228,7 +299,14 @@ mod tests {
             Hook::TabClosed { tab_id: 1 },
             Hook::TabSwitched { from: 0, to: 1 },
             Hook::CommandExecuted {
+                region_id: 1,
+                tab_id: 1,
+                pane_id: None,
                 command: "ls".to_string(),
+                command_truncated: false,
+                output: String::new(),
+                output_truncated: false,
+                content_available: true,
                 exit_code: Some(0),
             },
             Hook::CommandInvoked {
@@ -248,6 +326,7 @@ mod tests {
                 cwd: None,
                 title: Some("Test".to_string()),
                 plugin_id: None,
+                profile: None,
                 env: HashMap::new(),
             },
             PluginAction::WriteToPty {

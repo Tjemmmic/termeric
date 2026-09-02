@@ -31,6 +31,7 @@ pub struct OverlayAnimation {
     animation_start: Instant,
     animating_open: bool,
     duration: f32,
+    reduced_motion: bool,
 }
 
 impl OverlayAnimation {
@@ -41,6 +42,7 @@ impl OverlayAnimation {
             animation_start: Instant::now(),
             animating_open: false,
             duration: DEFAULT_OVERLAY_DURATION,
+            reduced_motion: false,
         }
     }
 
@@ -61,6 +63,10 @@ impl OverlayAnimation {
 
     /// Start the close animation.
     pub fn close(&mut self) {
+        if self.reduced_motion {
+            self.close_immediately();
+            return;
+        }
         self.animating_open = false;
         self.animation_start = Instant::now();
     }
@@ -83,6 +89,13 @@ impl OverlayAnimation {
 
     /// Linear animation progress (0.0 = hidden, 1.0 = fully visible).
     pub fn progress(&self) -> f32 {
+        if self.reduced_motion {
+            return if self.active && self.animating_open {
+                1.0
+            } else {
+                0.0
+            };
+        }
         if !self.active {
             return 0.0;
         }
@@ -99,12 +112,27 @@ impl OverlayAnimation {
 
     /// Update animation state. Returns true if still animating (needs redraw).
     pub fn update(&mut self) -> bool {
+        if self.reduced_motion {
+            if !self.animating_open {
+                self.active = false;
+            }
+            return false;
+        }
         let anim = self.progress();
         if !self.animating_open && anim < ANIM_EPSILON {
             self.active = false;
             return false;
         }
         self.animation_start.elapsed().as_secs_f32() < self.duration
+    }
+
+    /// Disable non-essential transition frames while preserving the logical
+    /// open/closed state and immediate input revocation on close.
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.reduced_motion = reduced_motion;
+        if reduced_motion && !self.animating_open {
+            self.active = false;
+        }
     }
 }
 
@@ -122,6 +150,7 @@ pub struct PanelAnimation {
     animating_open: bool,
     animation_base: f32,
     duration: f32,
+    reduced_motion: bool,
 }
 
 impl PanelAnimation {
@@ -133,6 +162,7 @@ impl PanelAnimation {
             animating_open: false,
             animation_base: 0.0,
             duration: DEFAULT_PANEL_DURATION,
+            reduced_motion: false,
         }
     }
 
@@ -199,6 +229,9 @@ impl PanelAnimation {
     /// Raw linear progress (0.0 = closed, 1.0 = open), accounting for
     /// the animation base for seamless reversal.
     pub fn raw_progress(&self) -> f32 {
+        if self.reduced_motion {
+            return if self.open { 1.0 } else { 0.0 };
+        }
         let elapsed = self.animation_start.elapsed().as_secs_f32();
         let linear = (elapsed / self.duration).min(1.0);
 
@@ -216,12 +249,21 @@ impl PanelAnimation {
 
     /// Update animation state. Returns true if still animating (needs redraw).
     pub fn update(&mut self) -> bool {
+        if self.reduced_motion {
+            return false;
+        }
         let anim = self.raw_progress();
         if !self.animating_open && anim < ANIM_EPSILON {
             self.open = false;
             return false;
         }
         self.animation_start.elapsed().as_secs_f32() < self.duration
+    }
+
+    /// Disable non-essential transition frames. Open panels remain fully
+    /// visible and closed panels become fully hidden immediately.
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.reduced_motion = reduced_motion;
     }
 }
 
@@ -318,5 +360,26 @@ mod tests {
         assert!((ease_out_cubic(1.0) - 1.0).abs() < f32::EPSILON);
         // Mid-point should be > 0.5 (fast start, slow finish)
         assert!(ease_out_cubic(0.5) > 0.5);
+    }
+
+    #[test]
+    fn reduced_motion_makes_overlay_and_panel_transitions_immediate() {
+        let mut overlay = OverlayAnimation::new();
+        overlay.set_reduced_motion(true);
+        overlay.open();
+        assert_eq!(overlay.progress(), 1.0);
+        assert!(!overlay.update());
+        overlay.close();
+        assert!(!overlay.is_active());
+        assert!(!overlay.is_visible());
+
+        let mut panel = PanelAnimation::new();
+        panel.set_reduced_motion(true);
+        panel.open();
+        assert_eq!(panel.raw_progress(), 1.0);
+        assert!(!panel.needs_redraw());
+        panel.close();
+        assert_eq!(panel.raw_progress(), 0.0);
+        assert!(panel.is_closed());
     }
 }

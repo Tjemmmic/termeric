@@ -3,6 +3,7 @@
 //! Stores decoded image data and manages memory limits.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Unique identifier for a stored image
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,7 +19,9 @@ pub struct StoredImage {
     /// Height in pixels
     pub height: u32,
     /// RGBA pixel data
-    pub data: Vec<u8>,
+    pub data: Arc<[u8]>,
+    /// Terminal-local content revision used to invalidate GPU caches on ID reuse.
+    pub revision: u64,
 }
 
 impl StoredImage {
@@ -37,8 +40,15 @@ pub struct ImagePlacement {
     pub placement_id: Option<u32>,
     /// Column position (0-indexed)
     pub col: u32,
-    /// Row position (0-indexed)
-    pub row: u32,
+    /// Row position relative to the live screen; negative rows are scrollback.
+    pub row: i64,
+    /// Whether the placement belongs to the alternate screen.
+    pub alternate_screen: bool,
+    /// Source rectangle origin and extent in pixels.
+    pub source_x: u32,
+    pub source_y: u32,
+    pub source_width: Option<u32>,
+    pub source_height: Option<u32>,
     /// X offset within cell (pixels)
     pub x_offset: u32,
     /// Y offset within cell (pixels)
@@ -47,8 +57,39 @@ pub struct ImagePlacement {
     pub width: Option<u32>,
     /// Display height (in rows, if specified)
     pub height: Option<u32>,
+    /// Exact display extent for pixel-addressed protocols. When present the
+    /// renderer uses these values while `width`/`height` retain the logical
+    /// cell footprint used by scrolling and clipping.
+    pub pixel_width: Option<u32>,
+    pub pixel_height: Option<u32>,
     /// Z-index for layering
     pub z_index: i32,
+}
+
+/// One renderer-ready image instance. Ordinary protocol placements use their
+/// semantic placement geometry directly. Derived instances such as Unicode
+/// placeholder tiles and relative placements extending left of column zero
+/// additionally provide pixel geometry and normalized texture coordinates.
+#[derive(Debug, Clone)]
+pub struct PresentationImage {
+    pub placement: ImagePlacement,
+    pub image: StoredImage,
+    /// `[x_offset, y_offset, width, height]` in pixels relative to the
+    /// placement's first cell.
+    pub pixel_rect: Option<[f32; 4]>,
+    /// Normalized `[u_min, v_min, u_max, v_max]` source texture coordinates.
+    pub source_uv: Option<[f32; 4]>,
+}
+
+impl PresentationImage {
+    pub fn from_placement(placement: &ImagePlacement, image: &StoredImage) -> Self {
+        Self {
+            placement: placement.clone(),
+            image: image.clone(),
+            pixel_rect: None,
+            source_uv: None,
+        }
+    }
 }
 
 /// Storage for images with memory management
@@ -114,9 +155,33 @@ impl ImageStorage {
         Ok(())
     }
 
-    /// Get an image by ID (updates access order)
+    /// Borrow an image by ID without changing recency. Call [`Self::touch`]
+    /// when the lookup represents a protocol/display access.
     pub fn get(&self, id: ImageId) -> Option<&StoredImage> {
         self.images.get(&id)
+    }
+
+    /// Replace same-sized decoded pixels without disturbing storage order or
+    /// quota accounting. Animation root-frame edits always preserve geometry.
+    pub(crate) fn replace_pixels(&mut self, id: ImageId, data: Arc<[u8]>, revision: u64) -> bool {
+        let Some(image) = self.images.get_mut(&id) else {
+            return false;
+        };
+        if data.len() != image.data.len() {
+            return false;
+        }
+        image.data = data;
+        image.revision = revision;
+        self.touch(id);
+        true
+    }
+
+    /// Mark an image as recently used without requiring mutable pixel access.
+    pub fn touch(&mut self, id: ImageId) {
+        if let Some(pos) = self.access_order.iter().position(|&item| item == id) {
+            self.access_order.remove(pos);
+            self.access_order.push(id);
+        }
     }
 
     /// Get an image mutably
@@ -168,6 +233,47 @@ impl ImageStorage {
     pub fn iter(&self) -> impl Iterator<Item = &StoredImage> {
         self.images.values()
     }
+
+    /// Iterate in least-recently-used to most-recently-used order. Relay
+    /// snapshots retain this order so reconnecting does not silently change
+    /// which decoded image the next bounded-cache insertion evicts.
+    pub(crate) fn iter_lru(&self) -> impl Iterator<Item = &StoredImage> {
+        self.access_order
+            .iter()
+            .filter_map(|image_id| self.images.get(image_id))
+    }
+
+    pub(crate) fn restore_relay_metadata(
+        &mut self,
+        order: &[ImageId],
+        revisions: &std::collections::HashMap<ImageId, u64>,
+    ) -> Result<(), String> {
+        if order.len() != self.images.len()
+            || revisions.len() != self.images.len()
+            || order
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != order.len()
+            || order
+                .iter()
+                .any(|image_id| !self.images.contains_key(image_id))
+            || revisions
+                .keys()
+                .any(|image_id| !self.images.contains_key(image_id))
+        {
+            return Err("relay image metadata does not match decoded storage".into());
+        }
+        for (image_id, revision) in revisions {
+            self.images
+                .get_mut(image_id)
+                .expect("validated relay image")
+                .revision = *revision;
+        }
+        self.access_order.clone_from_slice(order);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -179,7 +285,8 @@ mod tests {
             id: ImageId(id),
             width: 10,
             height: 10,
-            data: vec![0u8; size],
+            data: vec![0u8; size].into(),
+            revision: id as u64,
         }
     }
 
@@ -240,6 +347,17 @@ mod tests {
         storage.store(create_test_image(1, 200)).unwrap();
         assert_eq!(storage.len(), 1);
         assert_eq!(storage.memory_usage(), 200);
+    }
+
+    #[test]
+    fn touch_updates_lru_order() {
+        let mut storage = ImageStorage::new(2, 1024);
+        storage.store(create_test_image(1, 10)).unwrap();
+        storage.store(create_test_image(2, 10)).unwrap();
+        storage.touch(ImageId(1));
+        storage.store(create_test_image(3, 10)).unwrap();
+        assert!(storage.contains(ImageId(1)));
+        assert!(!storage.contains(ImageId(2)));
     }
 
     #[test]

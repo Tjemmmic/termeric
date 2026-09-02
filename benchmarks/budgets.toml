@@ -1,0 +1,191 @@
+schema_version = 1
+
+# Ratios compare related workloads in the same process/run, avoiding a false
+# precision tied to one developer machine. Values are intentionally broad
+# initial regression rails and should tighten only after multiple CI baselines.
+
+[[ratio_budget]]
+name = "scrollback time scales sub-quadratically"
+numerator = "core.scrollback.100k_time"
+denominator = "core.scrollback.10k_time"
+max_ratio = 30.0
+
+[[ratio_budget]]
+name = "scrollback owned bytes scale sub-quadratically"
+numerator = "memory.scrollback.100k_estimated_bytes"
+denominator = "memory.scrollback.10k_estimated_bytes"
+max_ratio = 20.0
+
+[[ratio_budget]]
+name = "search scales sub-quadratically"
+numerator = "interaction.search.100k"
+denominator = "interaction.search.10k"
+max_ratio = 20.0
+
+[[metric_budget]]
+name = "10k cooperative search completion rail"
+metric = "interaction.search.10k"
+statistic = "p95"
+max = 50.0
+
+[[metric_budget]]
+name = "100k cooperative search completion rail"
+metric = "interaction.search.100k"
+statistic = "p95"
+max = 500.0
+
+[[metric_budget]]
+name = "10k search keyboard dispatch rail"
+metric = "interaction.search_dispatch.10k"
+statistic = "p95"
+max = 10.0
+
+[[metric_budget]]
+name = "100k search keyboard dispatch rail"
+metric = "interaction.search_dispatch.100k"
+statistic = "p95"
+max = 10.0
+
+[[metric_budget]]
+name = "10k completed-result extension dispatch rail"
+metric = "interaction.search_extension_dispatch.10k"
+statistic = "p95"
+max = 10.0
+
+[[metric_budget]]
+name = "100k completed-result extension dispatch rail"
+metric = "interaction.search_extension_dispatch.100k"
+statistic = "p95"
+max = 25.0
+
+[[metric_budget]]
+name = "10k dense search completion rail"
+metric = "interaction.search.10k_dense"
+statistic = "p95"
+max = 1000.0
+
+[[metric_budget]]
+name = "dense search result indexes stay within their explicit memory budget"
+metric = "memory.search_results.10k_dense_estimated_bytes"
+statistic = "max"
+max = 8388608.0
+
+[[ratio_budget]]
+name = "pane layout scaling"
+numerator = "interaction.pane_layout.64"
+denominator = "interaction.pane_layout.8"
+max_ratio = 16.0
+
+[[metric_budget]]
+name = "100k scrollback process memory safety rail"
+metric = "memory.scrollback.100k_rss_delta"
+statistic = "p95"
+max = 196608.0
+
+[[metric_budget]]
+name = "100k compact scrollback ownership stays within configured budget"
+metric = "memory.scrollback.100k_estimated_bytes"
+statistic = "max"
+max = 134217728.0
+
+[[metric_budget]]
+name = "100k scrollback construction allocator-byte rail"
+metric = "memory.scrollback.100k_allocated_bytes"
+statistic = "max"
+max = 268435456.0
+
+[[metric_budget]]
+name = "100k scrollback construction allocation-count rail"
+metric = "memory.scrollback.100k_allocation_count"
+statistic = "max"
+max = 2000000.0
+
+[[metric_budget]]
+name = "10k history repeated reflow safety rail"
+metric = "core.reflow.10k_50_resizes"
+statistic = "p95"
+max = 750.0
+
+[[metric_budget]]
+name = "10k history repeated reflow allocator-byte rail"
+metric = "memory.reflow.10k_50_resizes_allocated_bytes"
+statistic = "max"
+max = 268435456.0
+
+[[metric_budget]]
+name = "10k history repeated reflow allocation-count rail"
+metric = "memory.reflow.10k_50_resizes_allocation_count"
+statistic = "max"
+max = 200000.0
+
+[[metric_budget]]
+name = "headless renderer frame safety rail"
+metric = "renderer.frame_build_upload_submit"
+statistic = "p95"
+max = 100.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "displayed idle CPU stays event-driven"
+metric = "idle.application_cpu"
+statistic = "p95"
+max = 3.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "displayed idle submits no unchanged frames"
+metric = "idle.application_rendered_frames"
+statistic = "max"
+max = 0.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "steady frames allocate no new pipeline buffers"
+metric = "renderer.steady_frame_buffer_allocations"
+statistic = "max"
+max = 0.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "one-cell updates rebuild one terminal row"
+metric = "renderer.row_cache.one_row_rebuilds"
+statistic = "max"
+max = 1.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "unchanged row-cache frames allocate no GPU buffers"
+metric = "renderer.row_cache.steady_allocations"
+statistic = "max"
+max = 0.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "one-row cache update latency rail"
+metric = "renderer.row_cache.one_row_update"
+statistic = "p95"
+max = 1.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "eight-pane unchanged cache lookup rail"
+metric = "renderer.row_cache.multi_pane"
+statistic = "p95"
+max = 0.25
+allow_skipped = true
+
+[[metric_budget]]
+name = "slow transcript persistence cannot stall input or PTY enqueue"
+metric = "latency.transcript_enqueue_under_slow_disk"
+statistic = "p95"
+max = 25.0
+
+[[variation_budget]]
+name = "deterministic core parser repeatability"
+metric = "core.parser.plain_4mib"
+max_coefficient_of_variation = 0.35
+
+[[variation_budget]]
+name = "deterministic pane-layout repeatability"
+metric = "interaction.pane_layout.8"
+max_coefficient_of_variation = 0.35

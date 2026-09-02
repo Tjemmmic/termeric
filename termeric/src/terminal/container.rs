@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io;
-use termeric_core::{Terminal, TerminalEvent};
+use termeric_core::Terminal;
 
 use crate::panes::{Divider, PaneDir, PaneId, PaneRect, SplitDirection};
 
@@ -27,10 +27,6 @@ pub trait TerminalContainer {
 
     /// Write input data to the focused terminal's PTY
     fn write_input(&mut self, data: &[u8]) -> io::Result<()>;
-
-    /// Process pending events from all terminals
-    /// Returns (had_output, terminal_events)
-    fn process_events(&mut self) -> (bool, Vec<TerminalEvent>);
 
     /// Resize all terminals to fit the given dimensions
     fn resize(&mut self, cols: usize, rows: usize) -> anyhow::Result<()>;

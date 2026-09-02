@@ -1,62 +1,312 @@
-//! Context picker — modal UI for assembling context bundles for AI sessions
-//!
-//! Provides a multi-source context assembler that gathers data from git diffs,
-//! file trees, terminal output, etc. and injects the assembled text into a
-//! plugin tab's PTY as a single coherent context bundle.
+//! Request-scoped context assembly for developer-tool terminal sessions.
 
-use std::process::Command;
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use super::animation::OverlayAnimation;
+use super::constants::CONTENT_CHAR_SCALE;
+use crate::tabs::TerminalEventOrigin;
 
-/// Maximum characters per context source
-const MAX_SOURCE_CHARS: usize = 10_000;
+pub const MAX_CONTEXT_SOURCES: usize = 6;
+pub const MAX_CONTEXT_FILES: usize = 16;
+pub const MAX_CONTEXT_PATH_CHARS: usize = 1024;
+pub const MAX_CONTEXT_SOURCE_CHARS: usize = 10_000;
+pub const MAX_ASSEMBLED_CONTEXT_CHARS: usize = 64_000;
+const CONTEXT_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// A context source that can be selected
-#[derive(Debug, Clone)]
-pub struct ContextSource {
-    /// Human-readable label
-    pub label: String,
-    /// Whether this source is selected
-    pub selected: bool,
-    /// Whether this source is available (e.g., git diff only in git repos)
-    pub available: bool,
-    /// The kind of source
-    pub kind: ContextKind,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContextPickerRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
-/// Types of context sources
-#[derive(Debug, Clone)]
-pub enum ContextKind {
-    /// `git diff` (unstaged changes)
+impl ContextPickerRect {
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContextSourceId {
     GitDiffUnstaged,
-    /// `git diff --cached` (staged changes)
     GitDiffStaged,
-    /// File tree from project root
     FileTree,
-    /// Last N lines from any terminal tab
     TerminalOutput,
-    /// Last detected test output (PASS/FAIL/error patterns)
     TestOutput,
-    /// Specific files (file content injection)
-    SpecificFiles { paths: Vec<String> },
+    SpecificFiles,
 }
 
-/// Context picker overlay state
-pub struct ContextPicker {
-    /// Animation state
-    animation: OverlayAnimation,
-    /// Available context sources
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextSource {
+    pub id: ContextSourceId,
+    pub label: String,
+    pub selected: bool,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextTarget {
+    pub plugin_id: String,
+    pub origin: TerminalEventOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextPickerPhase {
+    Sources,
+    FilePaths,
+    Gathering,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextPickerAction {
+    Cancel {
+        request_id: u64,
+    },
+    Move {
+        request_id: u64,
+        delta: isize,
+    },
+    Scroll {
+        request_id: u64,
+        delta: isize,
+    },
+    Toggle {
+        request_id: u64,
+        source: ContextSourceId,
+    },
+    Primary {
+        request_id: u64,
+    },
+    EditFiles {
+        request_id: u64,
+    },
+    SetFileInput {
+        request_id: u64,
+        value: String,
+    },
+    AppendFileInput {
+        request_id: u64,
+        character: char,
+    },
+    BackspaceFileInput {
+        request_id: u64,
+    },
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextGatherRequest {
+    pub request_id: u64,
+    pub cwd: Option<PathBuf>,
+    pub selected: Vec<ContextSourceId>,
+    pub specific_files: Vec<PathBuf>,
+    pub terminal_output: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextPickerCompletion {
+    Ignored,
+    Failed,
+    Ready { target: ContextTarget, text: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextPickerSnapshot {
+    pub request_id: u64,
     pub sources: Vec<ContextSource>,
-    /// Currently highlighted source index
     pub selected_index: usize,
-    /// Assembled context text (after gathering)
-    pub assembled: Option<String>,
-    /// Working directory for commands
-    pub cwd: Option<String>,
-    /// The plugin ID to inject context into (e.g. "claude-code", "codex")
-    pub target_plugin_id: Option<String>,
-    /// Status message (e.g., "Gathering context...")
+    pub scroll_offset: usize,
+    pub phase: ContextPickerPhase,
+    pub file_input: String,
     pub status: Option<String>,
+    pub awaiting: bool,
+    pub animation: f32,
+}
+
+impl ContextPickerSnapshot {
+    pub fn primary_label(&self) -> &'static str {
+        match self.phase {
+            ContextPickerPhase::Sources => "Gather & Insert",
+            ContextPickerPhase::FilePaths => "Save Files",
+            ContextPickerPhase::Gathering => "Gathering…",
+        }
+    }
+
+    pub fn cancel_label(&self) -> &'static str {
+        if self.phase == ContextPickerPhase::FilePaths {
+            "Back"
+        } else {
+            "Cancel"
+        }
+    }
+}
+
+/// Geometry shared by rendering, pointer hit testing, viewport clamping, and
+/// accessibility semantics.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContextPickerLayout {
+    pub card: ContextPickerRect,
+    pub content: ContextPickerRect,
+    pub file_input: ContextPickerRect,
+    pub cancel_button: ContextPickerRect,
+    pub primary_button: ContextPickerRect,
+    pub padding: f32,
+    pub title_height: f32,
+    pub row_height: f32,
+    pub footer_height: f32,
+    pub visible_count: usize,
+    pub char_scale: f32,
+    pub scrollbar_x: f32,
+}
+
+impl ContextPickerLayout {
+    pub fn calculate(
+        window_width: f32,
+        window_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+        animation: f32,
+        phase: ContextPickerPhase,
+        source_count: usize,
+    ) -> Self {
+        let char_scale = (cell_width * CONTENT_CHAR_SCALE).max(1.0);
+        let padding = (cell_width * 2.0).max(12.0);
+        let title_height = cell_height * 2.5;
+        let row_height = cell_height * 2.2;
+        let footer_height = cell_height * 5.2;
+        let outer_margin = (cell_width * 2.0).max(12.0);
+        let available_width = (window_width - outer_margin * 2.0).max(1.0);
+        let card_width = (cell_width * 58.0).max(440.0).min(available_width);
+
+        let fixed_height = padding + title_height + footer_height + padding * 0.5;
+        let available_height = (window_height - outer_margin * 2.0).max(row_height);
+        let content_budget = (available_height - fixed_height).max(row_height);
+        let rows_that_fit = ((content_budget / row_height).floor() as usize).max(1);
+        let desired_rows = if phase == ContextPickerPhase::FilePaths {
+            3
+        } else {
+            source_count.max(1)
+        };
+        let visible_count = desired_rows.min(rows_that_fit);
+        let content_height = visible_count as f32 * row_height;
+        let card_height = fixed_height + content_height;
+        let card_x = (window_width - card_width) / 2.0;
+        let card_y = (window_height - card_height) / 2.0 + (1.0 - animation) * -20.0;
+        let content_x = card_x + padding;
+        let content_y = card_y + padding + title_height;
+        let scrollbar_gutter = cell_width.max(6.0);
+        let content_width = (card_width - padding * 2.0 - scrollbar_gutter).max(char_scale);
+
+        let button_height = cell_height * 1.8;
+        let button_gap = cell_width * 1.5;
+        let button_y = content_y + content_height + cell_height * 1.15;
+        let available_button_width = (card_width - padding * 2.0 - button_gap).max(2.0);
+        let cancel_width = (available_button_width * 0.38).max(1.0);
+        let primary_width = (available_button_width - cancel_width).max(1.0);
+        let cancel_x = card_x + padding;
+        let primary_x = cancel_x + cancel_width + button_gap;
+
+        Self {
+            card: ContextPickerRect {
+                x: card_x,
+                y: card_y,
+                width: card_width,
+                height: card_height,
+            },
+            content: ContextPickerRect {
+                x: content_x,
+                y: content_y,
+                width: content_width,
+                height: content_height,
+            },
+            file_input: ContextPickerRect {
+                x: content_x,
+                y: content_y + row_height * 0.75,
+                width: content_width,
+                height: row_height,
+            },
+            cancel_button: ContextPickerRect {
+                x: cancel_x,
+                y: button_y,
+                width: cancel_width,
+                height: button_height,
+            },
+            primary_button: ContextPickerRect {
+                x: primary_x,
+                y: button_y,
+                width: primary_width,
+                height: button_height,
+            },
+            padding,
+            title_height,
+            row_height,
+            footer_height,
+            visible_count,
+            char_scale,
+            scrollbar_x: card_x + card_width - padding - 4.0,
+        }
+    }
+
+    pub fn source_row_at(
+        &self,
+        x: f32,
+        y: f32,
+        scroll_offset: usize,
+        source_count: usize,
+    ) -> Option<usize> {
+        if !self.content.contains(x, y) {
+            return None;
+        }
+        let visible = ((y - self.content.y) / self.row_height).floor() as usize;
+        let source = scroll_offset.saturating_add(visible);
+        (source < source_count).then_some(source)
+    }
+
+    pub fn hit_test(
+        &self,
+        x: f32,
+        y: f32,
+        snapshot: &ContextPickerSnapshot,
+    ) -> ContextPickerAction {
+        let request_id = snapshot.request_id;
+        if self.cancel_button.contains(x, y) {
+            return ContextPickerAction::Cancel { request_id };
+        }
+        if self.primary_button.contains(x, y) {
+            return ContextPickerAction::Primary { request_id };
+        }
+        if snapshot.phase == ContextPickerPhase::Sources
+            && let Some(index) =
+                self.source_row_at(x, y, snapshot.scroll_offset, snapshot.sources.len())
+        {
+            return ContextPickerAction::Toggle {
+                request_id,
+                source: snapshot.sources[index].id,
+            };
+        }
+        ContextPickerAction::None
+    }
+}
+
+pub struct ContextPicker {
+    animation: OverlayAnimation,
+    sources: Vec<ContextSource>,
+    selected_index: usize,
+    scroll_offset: usize,
+    viewport_rows: usize,
+    cwd: Option<PathBuf>,
+    target: Option<ContextTarget>,
+    phase: ContextPickerPhase,
+    file_input: String,
+    specific_files: Vec<PathBuf>,
+    status: Option<String>,
+    request_id: u64,
+    accepting: bool,
 }
 
 impl ContextPicker {
@@ -65,252 +315,638 @@ impl ContextPicker {
             animation: OverlayAnimation::new(),
             sources: Vec::new(),
             selected_index: 0,
-            assembled: None,
+            scroll_offset: 0,
+            viewport_rows: 1,
             cwd: None,
-            target_plugin_id: None,
+            target: None,
+            phase: ContextPickerPhase::Sources,
+            file_input: String::new(),
+            specific_files: Vec::new(),
             status: None,
+            request_id: 0,
+            accepting: false,
         }
     }
 
-    /// Open the context picker with the given working directory
-    pub fn open(&mut self, cwd: Option<String>) {
-        self.cwd = cwd.clone();
-        let in_git = is_git_repo(cwd.as_deref());
+    pub fn open(&mut self, cwd: Option<String>, target: ContextTarget) -> u64 {
+        self.request_id = self.request_id.wrapping_add(1).max(1);
+        self.cwd = cwd.map(PathBuf::from);
+        let in_git = is_git_repo(self.cwd.as_deref());
         self.sources = vec![
-            ContextSource {
-                label: "Git Diff (unstaged)".into(),
-                selected: true,
-                available: in_git,
-                kind: ContextKind::GitDiffUnstaged,
-            },
-            ContextSource {
-                label: "Git Diff (staged)".into(),
-                selected: false,
-                available: in_git,
-                kind: ContextKind::GitDiffStaged,
-            },
-            ContextSource {
-                label: "File Tree".into(),
-                selected: false,
-                available: true,
-                kind: ContextKind::FileTree,
-            },
-            ContextSource {
-                label: "Recent Terminal Output (50 lines)".into(),
-                selected: false,
-                available: true,
-                kind: ContextKind::TerminalOutput,
-            },
-            ContextSource {
-                label: "Last Test Output".into(),
-                selected: false,
-                available: true,
-                kind: ContextKind::TestOutput,
-            },
-            ContextSource {
-                label: "Specific Files...".into(),
-                selected: false,
-                available: in_git,
-                kind: ContextKind::SpecificFiles { paths: Vec::new() },
-            },
+            source(
+                ContextSourceId::GitDiffUnstaged,
+                "Git Diff (unstaged)",
+                in_git,
+                in_git,
+            ),
+            source(
+                ContextSourceId::GitDiffStaged,
+                "Git Diff (staged)",
+                false,
+                in_git,
+            ),
+            source(
+                ContextSourceId::FileTree,
+                "File Tree",
+                !in_git,
+                self.cwd.is_some(),
+            ),
+            source(
+                ContextSourceId::TerminalOutput,
+                "Recent Terminal Output (50 lines)",
+                false,
+                true,
+            ),
+            source(ContextSourceId::TestOutput, "Last Test Output", false, true),
+            source(
+                ContextSourceId::SpecificFiles,
+                "Specific Files…",
+                false,
+                self.cwd.is_some(),
+            ),
         ];
+        debug_assert_eq!(self.sources.len(), MAX_CONTEXT_SOURCES);
         self.selected_index = 0;
-        self.assembled = None;
+        self.scroll_offset = 0;
+        self.target = Some(target);
+        self.phase = ContextPickerPhase::Sources;
+        self.file_input.clear();
+        self.specific_files.clear();
         self.status = None;
+        self.accepting = true;
         self.animation.open();
+        self.request_id
     }
 
-    /// Move selection up
-    pub fn move_up(&mut self) {
-        if self.selected_index > 0 {
-            self.selected_index -= 1;
-        }
+    pub fn request_id(&self) -> u64 {
+        self.request_id
     }
 
-    /// Move selection down
-    pub fn move_down(&mut self) {
-        if self.selected_index < self.sources.len().saturating_sub(1) {
-            self.selected_index += 1;
-        }
+    pub fn is_awaiting(&self, request_id: u64) -> bool {
+        self.accepting && self.request_id == request_id
     }
 
-    /// Toggle the selected source
-    pub fn toggle_selected(&mut self) {
-        if let Some(source) = self.sources.get_mut(self.selected_index) {
-            if source.available {
-                source.selected = !source.selected;
-            }
-        }
+    pub fn is_awaiting_current(&self) -> bool {
+        self.is_awaiting(self.request_id)
     }
 
-    /// Gather all selected context sources and assemble the text
-    pub fn gather(&mut self, terminal_output: Option<String>) -> String {
-        let mut parts = Vec::new();
+    pub fn phase(&self) -> ContextPickerPhase {
+        self.phase
+    }
 
-        for source in &self.sources {
-            if !source.selected || !source.available {
-                continue;
-            }
-            match &source.kind {
-                ContextKind::GitDiffUnstaged => {
-                    if let Some(diff) = run_git_diff(self.cwd.as_deref(), false) {
-                        if !diff.trim().is_empty() {
-                            parts.push(format!(
-                                "=== Git Diff (Unstaged) ===\n{}",
-                                truncate(&diff, MAX_SOURCE_CHARS)
-                            ));
-                        }
-                    }
-                }
-                ContextKind::GitDiffStaged => {
-                    if let Some(diff) = run_git_diff(self.cwd.as_deref(), true) {
-                        if !diff.trim().is_empty() {
-                            parts.push(format!(
-                                "=== Git Diff (Staged) ===\n{}",
-                                truncate(&diff, MAX_SOURCE_CHARS)
-                            ));
-                        }
-                    }
-                }
-                ContextKind::FileTree => {
-                    if let Some(tree) = run_file_tree(self.cwd.as_deref()) {
-                        parts.push(format!("=== File Tree ===\n{}", truncate(&tree, 5_000)));
-                    }
-                }
-                ContextKind::TerminalOutput => {
-                    if let Some(ref output) = terminal_output {
-                        if !output.trim().is_empty() {
-                            parts.push(format!(
-                                "=== Recent Terminal Output ===\n{}",
-                                truncate(output, MAX_SOURCE_CHARS)
-                            ));
-                        }
-                    }
-                }
-                ContextKind::TestOutput => {
-                    if let Some(ref output) = terminal_output {
-                        if let Some(test_output) = extract_test_output(output) {
-                            parts.push(format!(
-                                "=== Test Output ===\n{}",
-                                truncate(&test_output, MAX_SOURCE_CHARS)
-                            ));
-                        }
-                    }
-                }
-                ContextKind::SpecificFiles { paths } => {
-                    for path in paths {
-                        if let Ok(content) = std::fs::read_to_string(path) {
-                            let truncated = truncate(&content, MAX_SOURCE_CHARS);
-                            parts.push(format!("=== File: {} ===\n{}", path, truncated));
-                        }
-                    }
-                }
-            }
+    pub fn sources(&self) -> &[ContextSource] {
+        &self.sources
+    }
+
+    pub fn selected_source(&self) -> Option<ContextSourceId> {
+        self.sources
+            .get(self.selected_index)
+            .map(|source| source.id)
+    }
+
+    pub fn select_source(&mut self, request_id: u64, source: ContextSourceId) -> bool {
+        if !self.is_awaiting(request_id) || self.phase != ContextPickerPhase::Sources {
+            return false;
         }
-
-        let assembled = if parts.is_empty() {
-            "(No context sources produced output)".to_string()
-        } else {
-            parts.join("\n\n")
+        let Some(index) = self.sources.iter().position(|entry| entry.id == source) else {
+            return false;
         };
-
-        self.assembled = Some(assembled.clone());
-        assembled
+        self.selected_index = index;
+        self.reveal_selection();
+        true
     }
 
-    /// Dismiss the overlay
-    pub fn dismiss(&mut self) {
-        // Clear transient state so stale status/result doesn't bleed into
-        // the next open.
+    pub fn viewport_rows(&self) -> usize {
+        self.viewport_rows
+    }
+
+    pub fn snapshot(&self) -> ContextPickerSnapshot {
+        ContextPickerSnapshot {
+            request_id: self.request_id,
+            sources: self.sources.clone(),
+            selected_index: self.selected_index,
+            scroll_offset: self.scroll_offset,
+            phase: self.phase,
+            file_input: self.file_input.clone(),
+            status: self.status.clone(),
+            awaiting: self.is_awaiting_current(),
+            animation: self.animation(),
+        }
+    }
+
+    pub fn set_viewport(&mut self, rows: usize) {
+        self.viewport_rows = rows.max(1);
+        self.reveal_selection();
+    }
+
+    pub fn apply(&mut self, action: ContextPickerAction) -> Option<ContextGatherRequest> {
+        let request_id = match &action {
+            ContextPickerAction::Cancel { request_id }
+            | ContextPickerAction::Move { request_id, .. }
+            | ContextPickerAction::Scroll { request_id, .. }
+            | ContextPickerAction::Toggle { request_id, .. }
+            | ContextPickerAction::Primary { request_id }
+            | ContextPickerAction::EditFiles { request_id }
+            | ContextPickerAction::SetFileInput { request_id, .. }
+            | ContextPickerAction::AppendFileInput { request_id, .. }
+            | ContextPickerAction::BackspaceFileInput { request_id } => *request_id,
+            ContextPickerAction::None => return None,
+        };
+        if !self.is_awaiting(request_id) {
+            return None;
+        }
+        match action {
+            ContextPickerAction::Cancel { .. } => {
+                if self.phase == ContextPickerPhase::FilePaths {
+                    self.phase = ContextPickerPhase::Sources;
+                    self.status = None;
+                } else {
+                    self.accepting = false;
+                    self.status = None;
+                    self.target = None;
+                    self.animation.close();
+                }
+            }
+            ContextPickerAction::Move { delta, .. }
+                if self.phase == ContextPickerPhase::Sources =>
+            {
+                self.selected_index = self
+                    .selected_index
+                    .saturating_add_signed(delta)
+                    .min(self.sources.len().saturating_sub(1));
+                self.reveal_selection();
+            }
+            ContextPickerAction::Scroll { delta, .. }
+                if self.phase == ContextPickerPhase::Sources =>
+            {
+                self.scroll_offset = self.scroll_offset.saturating_add_signed(delta);
+                self.clamp_scroll();
+            }
+            ContextPickerAction::Toggle { source, .. }
+                if self.phase == ContextPickerPhase::Sources =>
+            {
+                if let Some(index) = self.sources.iter().position(|entry| entry.id == source) {
+                    self.selected_index = index;
+                    self.reveal_selection();
+                    if source == ContextSourceId::SpecificFiles {
+                        self.open_file_editor();
+                    } else if self.sources[index].available {
+                        self.sources[index].selected = !self.sources[index].selected;
+                        self.status = None;
+                    }
+                }
+            }
+            ContextPickerAction::EditFiles { .. } if self.phase == ContextPickerPhase::Sources => {
+                self.open_file_editor();
+            }
+            ContextPickerAction::SetFileInput { value, .. }
+                if self.phase == ContextPickerPhase::FilePaths =>
+            {
+                self.file_input = bounded_text(&value, MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES);
+                self.status = None;
+            }
+            ContextPickerAction::AppendFileInput { character, .. }
+                if self.phase == ContextPickerPhase::FilePaths =>
+            {
+                if !character.is_control()
+                    && self.file_input.chars().count() < MAX_CONTEXT_PATH_CHARS * MAX_CONTEXT_FILES
+                {
+                    self.file_input.push(character);
+                    self.status = None;
+                }
+            }
+            ContextPickerAction::BackspaceFileInput { .. }
+                if self.phase == ContextPickerPhase::FilePaths =>
+            {
+                self.file_input.pop();
+                self.status = None;
+            }
+            ContextPickerAction::Primary { .. } => match self.phase {
+                ContextPickerPhase::Sources => {}
+                ContextPickerPhase::FilePaths => self.commit_file_editor(),
+                ContextPickerPhase::Gathering => {}
+            },
+            _ => {}
+        }
+        None
+    }
+
+    pub fn begin_gather(
+        &mut self,
+        request_id: u64,
+        terminal_output: Option<String>,
+    ) -> Option<ContextGatherRequest> {
+        if !self.is_awaiting(request_id) || self.phase != ContextPickerPhase::Sources {
+            return None;
+        }
+        let selected: Vec<_> = self
+            .sources
+            .iter()
+            .filter(|source| source.selected && source.available)
+            .map(|source| source.id)
+            .collect();
+        if selected.is_empty() {
+            self.status = Some("Select at least one available context source".into());
+            return None;
+        }
+        self.phase = ContextPickerPhase::Gathering;
+        self.status = Some("Gathering bounded context…".into());
+        Some(ContextGatherRequest {
+            request_id,
+            cwd: self.cwd.clone(),
+            selected,
+            specific_files: self.specific_files.clone(),
+            terminal_output: terminal_output
+                .map(|text| bounded_text(&text, MAX_CONTEXT_SOURCE_CHARS)),
+        })
+    }
+
+    pub fn complete(
+        &mut self,
+        request_id: u64,
+        result: Result<String, String>,
+    ) -> ContextPickerCompletion {
+        if !self.is_awaiting(request_id) || self.phase != ContextPickerPhase::Gathering {
+            return ContextPickerCompletion::Ignored;
+        }
+        match result {
+            Ok(text) => {
+                let Some(target) = self.target.take() else {
+                    self.phase = ContextPickerPhase::Sources;
+                    self.status = Some("The context destination is no longer available".into());
+                    return ContextPickerCompletion::Failed;
+                };
+                self.accepting = false;
+                self.status = None;
+                self.animation.close();
+                ContextPickerCompletion::Ready { target, text }
+            }
+            Err(error) => {
+                self.phase = ContextPickerPhase::Sources;
+                self.status = Some(bounded_text(&error, 512));
+                ContextPickerCompletion::Failed
+            }
+        }
+    }
+
+    fn open_file_editor(&mut self) {
+        let available = self
+            .sources
+            .iter()
+            .find(|source| source.id == ContextSourceId::SpecificFiles)
+            .is_some_and(|source| source.available);
+        if !available {
+            self.status = Some("Specific files require a working directory".into());
+            return;
+        }
+        self.file_input = self
+            .specific_files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.phase = ContextPickerPhase::FilePaths;
         self.status = None;
-        self.assembled = None;
-        self.animation.close();
     }
 
-    /// Whether the overlay is active (accepting input)
+    fn commit_file_editor(&mut self) {
+        match validate_specific_files(self.cwd.as_deref(), &self.file_input) {
+            Ok(paths) => {
+                self.specific_files = paths;
+                if let Some(source) = self
+                    .sources
+                    .iter_mut()
+                    .find(|source| source.id == ContextSourceId::SpecificFiles)
+                {
+                    source.selected = !self.specific_files.is_empty();
+                    source.label = format!("Specific Files… ({})", self.specific_files.len());
+                }
+                self.phase = ContextPickerPhase::Sources;
+                self.status = None;
+            }
+            Err(error) => self.status = Some(error),
+        }
+    }
+
+    fn reveal_selection(&mut self) {
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        } else if self.selected_index >= self.scroll_offset.saturating_add(self.viewport_rows) {
+            self.scroll_offset = self.selected_index + 1 - self.viewport_rows;
+        }
+        self.clamp_scroll();
+    }
+
+    fn clamp_scroll(&mut self) {
+        self.scroll_offset = self
+            .scroll_offset
+            .min(self.sources.len().saturating_sub(self.viewport_rows));
+    }
+
     pub fn is_active(&self) -> bool {
         self.animation.is_active()
     }
 
-    /// Whether the overlay is visible (active or animating out)
     pub fn is_visible(&self) -> bool {
         self.animation.is_visible()
     }
 
-    /// Get eased animation progress
     pub fn animation(&self) -> f32 {
         self.animation.eased()
     }
 
-    /// Update animation state. Returns true if still animating.
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.animation.set_reduced_motion(reduced_motion);
+    }
+
     pub fn update_animation(&mut self) -> bool {
-        self.animation.update()
-    }
-
-    /// Whether any source is selected
-    pub fn has_selection(&self) -> bool {
-        self.sources.iter().any(|s| s.selected && s.available)
+        let animating = self.animation.update();
+        if !self.animation.is_active() && !self.animation.is_visible() {
+            self.sources.clear();
+            self.cwd = None;
+            self.target = None;
+            self.file_input.clear();
+            self.specific_files.clear();
+            self.status = None;
+            self.scroll_offset = 0;
+        }
+        animating
     }
 }
 
-/// Check if a directory is inside a git repository
-fn is_git_repo(cwd: Option<&str>) -> bool {
-    let mut cmd = Command::new("git");
-    cmd.args(["rev-parse", "--git-dir"]);
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
+fn source(id: ContextSourceId, label: &str, selected: bool, available: bool) -> ContextSource {
+    ContextSource {
+        id,
+        label: label.into(),
+        selected,
+        available,
     }
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
-/// Run git diff (staged or unstaged)
-fn run_git_diff(cwd: Option<&str>, staged: bool) -> Option<String> {
-    let mut cmd = Command::new("git");
-    cmd.arg("diff");
-    if staged {
-        cmd.arg("--cached");
+fn is_git_repo(cwd: Option<&Path>) -> bool {
+    cwd.and_then(|path| path.canonicalize().ok())
+        .is_some_and(|path| {
+            path.ancestors()
+                .any(|ancestor| ancestor.join(".git").exists())
+        })
+}
+
+fn validate_specific_files(cwd: Option<&Path>, value: &str) -> Result<Vec<PathBuf>, String> {
+    let root = cwd
+        .ok_or_else(|| "Specific files require a working directory".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the working directory: {error}"))?;
+    let entries: Vec<_> = value
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    if entries.len() > MAX_CONTEXT_FILES {
+        return Err(format!("Choose at most {MAX_CONTEXT_FILES} files"));
     }
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-    cmd.output().ok().and_then(|o| {
-        if o.status.success() {
-            String::from_utf8(o.stdout).ok()
+    let mut paths = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if entry.chars().count() > MAX_CONTEXT_PATH_CHARS {
+            return Err(format!(
+                "A file path exceeds {MAX_CONTEXT_PATH_CHARS} characters"
+            ));
+        }
+        let candidate = Path::new(entry);
+        let candidate = if candidate.is_absolute() {
+            candidate.to_path_buf()
         } else {
-            None
+            root.join(candidate)
+        };
+        let canonical = candidate
+            .canonicalize()
+            .map_err(|error| format!("Could not open {entry}: {error}"))?;
+        if !canonical.starts_with(&root) {
+            return Err(format!("{entry} is outside the context working directory"));
         }
-    })
+        if !canonical.is_file() {
+            return Err(format!("{entry} is not a regular file"));
+        }
+        if !paths.contains(&canonical) {
+            paths.push(canonical);
+        }
+    }
+    Ok(paths)
 }
 
-/// Run file tree listing (respects .gitignore via git ls-files)
-fn run_file_tree(cwd: Option<&str>) -> Option<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["ls-files"]);
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    }
-    let output = cmd.output().ok()?;
-    if output.status.success() {
-        String::from_utf8(output.stdout).ok()
-    } else {
-        // Fallback: find
-        let mut cmd = Command::new("find");
-        cmd.args([".", "-type", "f", "-not", "-path", "./.git/*"]);
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
+pub fn gather_context(request: ContextGatherRequest) -> Result<String, String> {
+    let mut parts = Vec::new();
+    for source in request.selected {
+        let part = match source {
+            ContextSourceId::GitDiffUnstaged => bounded_git_diff(request.cwd.as_deref(), false)?
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| format!("=== Git Diff (Unstaged) ===\n{text}")),
+            ContextSourceId::GitDiffStaged => bounded_git_diff(request.cwd.as_deref(), true)?
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| format!("=== Git Diff (Staged) ===\n{text}")),
+            ContextSourceId::FileTree => bounded_file_tree(request.cwd.as_deref())?
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| format!("=== File Tree ===\n{text}")),
+            ContextSourceId::TerminalOutput => request
+                .terminal_output
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| {
+                    format!(
+                        "=== Recent Terminal Output ===\n{}",
+                        bounded_text(text, MAX_CONTEXT_SOURCE_CHARS)
+                    )
+                }),
+            ContextSourceId::TestOutput => request
+                .terminal_output
+                .as_deref()
+                .and_then(extract_test_output)
+                .map(|text| {
+                    format!(
+                        "=== Test Output ===\n{}",
+                        bounded_text(&text, MAX_CONTEXT_SOURCE_CHARS)
+                    )
+                }),
+            ContextSourceId::SpecificFiles => {
+                let files = gather_specific_files(request.cwd.as_deref(), &request.specific_files)?;
+                (!files.is_empty()).then(|| files.join("\n\n"))
+            }
+        };
+        if let Some(part) = part {
+            parts.push(part);
         }
-        cmd.output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
     }
+    if parts.is_empty() {
+        return Err("Selected sources produced no context".into());
+    }
+    Ok(bounded_text(
+        &parts.join("\n\n"),
+        MAX_ASSEMBLED_CONTEXT_CHARS,
+    ))
 }
 
-/// Extract test-related output from terminal text.
-///
-/// Looks for patterns that indicate test output: PASS, FAIL, error[E,
-/// "panicked at", "test result:", and captures the surrounding block.
+fn gather_specific_files(root: Option<&Path>, paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let root = root
+        .ok_or_else(|| "Specific files require a working directory".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the working directory: {error}"))?;
+    let mut files = Vec::with_capacity(paths.len().min(MAX_CONTEXT_FILES));
+    for path in paths.iter().take(MAX_CONTEXT_FILES) {
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("Could not resolve {}: {error}", path.display()))?;
+        if !canonical.starts_with(&root) || !canonical.is_file() {
+            return Err(format!(
+                "{} is no longer a regular file inside the context working directory",
+                path.display()
+            ));
+        }
+        let content = fs::read_to_string(&canonical)
+            .map_err(|error| format!("Could not read {}: {error}", canonical.display()))?;
+        files.push(format!(
+            "=== File: {} ===\n{}",
+            canonical.display(),
+            bounded_text(&content, MAX_CONTEXT_SOURCE_CHARS)
+        ));
+    }
+    Ok(files)
+}
+
+fn bounded_git_diff(cwd: Option<&Path>, staged: bool) -> Result<Option<String>, String> {
+    let mut args = vec!["diff"];
+    if staged {
+        args.push("--cached");
+    }
+    run_bounded_command("git", &args, cwd, MAX_CONTEXT_SOURCE_CHARS * 4)
+}
+
+fn bounded_file_tree(cwd: Option<&Path>) -> Result<Option<String>, String> {
+    if let Some(output) =
+        run_bounded_command("git", &["ls-files"], cwd, MAX_CONTEXT_SOURCE_CHARS * 4)?
+    {
+        if !output.trim().is_empty() {
+            return Ok(Some(bounded_text(&output, MAX_CONTEXT_SOURCE_CHARS)));
+        }
+    }
+    let Some(root) = cwd else {
+        return Ok(None);
+    };
+    let mut files = Vec::new();
+    collect_files(root, root, 0, &mut files)?;
+    Ok((!files.is_empty()).then(|| bounded_text(&files.join("\n"), 5_000)))
+}
+
+fn collect_files(
+    root: &Path,
+    directory: &Path,
+    depth: usize,
+    output: &mut Vec<String>,
+) -> Result<(), String> {
+    if depth > 32 || output.len() >= 5_000 {
+        return Ok(());
+    }
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("Could not list {}: {error}", directory.display()))?;
+    let mut entries = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Could not read directory entry: {error}"))?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if output.len() >= 5_000 {
+            break;
+        }
+        let path = entry.path();
+        if path.file_name().is_some_and(|name| name == ".git") {
+            continue;
+        }
+        let kind = entry
+            .file_type()
+            .map_err(|error| format!("Could not inspect {}: {error}", path.display()))?;
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            collect_files(root, &path, depth + 1, output)?;
+        } else if kind.is_file() {
+            output.push(
+                path.strip_prefix(root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn run_bounded_command(
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+    max_bytes: usize,
+) -> Result<Option<String>, String> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Could not start {program}: {error}")),
+    };
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("Could not capture {program} output"))?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout
+            .take(max_bytes as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+    });
+    let deadline = Instant::now() + CONTEXT_COMMAND_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(format!("{program} context command timed out"));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(format!("Could not wait for {program}: {error}"));
+            }
+        }
+    };
+    let mut bytes = reader
+        .join()
+        .map_err(|_| format!("{program} output reader panicked"))?
+        .map_err(|error| format!("Could not read {program} output: {error}"))?;
+    let truncated = bytes.len() > max_bytes;
+    bytes.truncate(max_bytes);
+    if !status.success() && !truncated {
+        return Ok(None);
+    }
+    let mut output = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated {
+        output.push_str("\n… output truncated");
+    }
+    Ok(Some(output))
+}
+
 pub fn extract_test_output(output: &str) -> Option<String> {
-    let test_patterns = [
+    let patterns = [
         "test result:",
         "PASS",
         "FAIL",
@@ -321,76 +957,172 @@ pub fn extract_test_output(output: &str) -> Option<String> {
         "tests passed",
         "tests failed",
     ];
-
-    let lines: Vec<&str> = output.lines().collect();
-    let mut test_lines = Vec::new();
-    let mut in_test_block = false;
-    let mut last_test_line = 0;
-
-    for (i, line) in lines.iter().enumerate() {
-        let is_test_line = test_patterns.iter().any(|p| line.contains(p));
-        if is_test_line {
-            // Include 5 lines of context before the first match
-            if !in_test_block {
-                let start = i.saturating_sub(5);
-                for prev in &lines[start..i] {
-                    test_lines.push(*prev);
-                }
+    let lines: Vec<_> = output.lines().collect();
+    let mut selected = Vec::new();
+    let mut last_match = None;
+    for (index, line) in lines.iter().enumerate() {
+        if patterns.iter().any(|pattern| line.contains(pattern)) {
+            let start = index.saturating_sub(5);
+            if last_match.is_none() {
+                selected.extend_from_slice(&lines[start..index]);
             }
-            in_test_block = true;
-            last_test_line = i;
-            test_lines.push(line);
-        } else if in_test_block && i - last_test_line < 3 {
-            // Include a few lines after test output
-            test_lines.push(line);
+            selected.push(*line);
+            last_match = Some(index);
+        } else if last_match.is_some_and(|last| index.saturating_sub(last) < 3) {
+            selected.push(*line);
         } else {
-            in_test_block = false;
+            last_match = None;
         }
     }
-
-    if test_lines.is_empty() {
-        None
-    } else {
-        Some(test_lines.join("\n"))
-    }
+    (!selected.is_empty()).then(|| selected.join("\n"))
 }
 
-/// Truncate a string to a maximum number of characters
-fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        s
-    } else {
-        // Find a safe char boundary
-        let mut end = max;
-        while !s.is_char_boundary(end) && end > 0 {
-            end -= 1;
-        }
-        &s[..end]
+fn bounded_text(value: &str, max_chars: usize) -> String {
+    let mut characters = value.chars();
+    let mut bounded: String = characters.by_ref().take(max_chars).collect();
+    if characters.next().is_some() && max_chars > 0 {
+        bounded.pop();
+        bounded.push('…');
     }
+    bounded
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn target(tab_id: usize) -> ContextTarget {
+        ContextTarget {
+            plugin_id: "fixture-plugin".into(),
+            origin: TerminalEventOrigin::Tab { tab_id },
+        }
+    }
+
     #[test]
-    fn test_extract_test_output() {
+    fn modal_actions_are_request_scoped_and_dismiss_revokes_immediately() {
+        let mut picker = ContextPicker::new();
+        let first = picker.open(None, target(1));
+        let second = picker.open(None, target(2));
+        picker.apply(ContextPickerAction::Cancel { request_id: first });
+        assert!(picker.is_awaiting(second));
+        picker.apply(ContextPickerAction::Cancel { request_id: second });
+        assert!(picker.is_active());
+        assert!(!picker.is_awaiting(second));
+        assert!(!picker.is_awaiting(second));
+    }
+
+    #[test]
+    fn shared_layout_bounds_rows_buttons_and_pointer_actions() {
+        let mut picker = ContextPicker::new();
+        let request = picker.open(None, target(7));
+        let layout = ContextPickerLayout::calculate(
+            900.0,
+            300.0,
+            10.0,
+            20.0,
+            1.0,
+            picker.phase(),
+            picker.sources().len(),
+        );
+        picker.set_viewport(layout.visible_count);
+        let snapshot = picker.snapshot();
+        assert!(layout.card.height < 300.0);
+        assert!(layout.visible_count < picker.sources().len());
+        assert_eq!(
+            layout.hit_test(
+                layout.primary_button.x + 1.0,
+                layout.primary_button.y + 1.0,
+                &snapshot,
+            ),
+            ContextPickerAction::Primary {
+                request_id: request
+            }
+        );
+        assert_eq!(
+            layout.source_row_at(
+                layout.content.x + 1.0,
+                layout.content.y + 1.0,
+                picker.snapshot().scroll_offset,
+                picker.sources().len(),
+            ),
+            Some(0)
+        );
+        picker.apply(ContextPickerAction::Scroll {
+            request_id: request,
+            delta: 100,
+        });
+        assert_eq!(
+            picker.snapshot().scroll_offset,
+            picker.sources().len() - layout.visible_count
+        );
+    }
+
+    #[test]
+    fn gathering_completion_rejects_replaced_and_cancelled_requests() {
+        let mut picker = ContextPicker::new();
+        let first = picker.open(None, target(11));
+        picker.apply(ContextPickerAction::Toggle {
+            request_id: first,
+            source: ContextSourceId::TerminalOutput,
+        });
+        assert!(picker.begin_gather(first, Some("fixture".into())).is_some());
+        let second = picker.open(None, target(12));
+        assert_eq!(
+            picker.complete(first, Ok("stale".into())),
+            ContextPickerCompletion::Ignored
+        );
+        assert!(picker.is_awaiting(second));
+    }
+
+    #[test]
+    fn specific_files_are_workspace_bounded_and_gathered_with_total_caps() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("fixture.rs");
+        fs::write(&file, "x".repeat(MAX_CONTEXT_SOURCE_CHARS + 100)).unwrap();
+        let paths = validate_specific_files(Some(directory.path()), "fixture.rs").unwrap();
+        assert_eq!(paths, [file.canonicalize().unwrap()]);
+        assert!(validate_specific_files(Some(directory.path()), "/etc/passwd").is_err());
+
+        let text = gather_context(ContextGatherRequest {
+            request_id: 1,
+            cwd: Some(directory.path().to_path_buf()),
+            selected: vec![ContextSourceId::SpecificFiles],
+            specific_files: paths,
+            terminal_output: None,
+        })
+        .unwrap();
+        assert!(text.contains("=== File:"));
+        assert!(text.chars().count() <= MAX_ASSEMBLED_CONTEXT_CHARS);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn specific_file_is_revalidated_after_selection_to_block_symlink_retargeting() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("fixture.rs");
+        fs::write(&file, "safe fixture").unwrap();
+        let paths = validate_specific_files(Some(directory.path()), "fixture.rs").unwrap();
+        fs::remove_file(&file).unwrap();
+        symlink("/etc/passwd", &file).unwrap();
+
+        let result = gather_context(ContextGatherRequest {
+            request_id: 2,
+            cwd: Some(directory.path().to_path_buf()),
+            selected: vec![ContextSourceId::SpecificFiles],
+            specific_files: paths,
+            terminal_output: None,
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_output_extraction_is_bounded_to_relevant_blocks() {
         let output = "some random output\ncompiling...\ntest foo ... ok\ntest bar ... FAIL\ntest result: 1 passed; 1 failed\nmore stuff";
         let extracted = extract_test_output(output).unwrap();
         assert!(extracted.contains("FAIL"));
         assert!(extracted.contains("test result:"));
-    }
-
-    #[test]
-    fn test_extract_test_output_none() {
-        let output = "hello world\nno test results here";
-        assert!(extract_test_output(output).is_none());
-    }
-
-    #[test]
-    fn test_extract_test_output_rust_panic() {
-        let output = "running tests\nthread 'main' panicked at 'assertion failed'\nnote: run with RUST_BACKTRACE=1";
-        let extracted = extract_test_output(output).unwrap();
-        assert!(extracted.contains("panicked at"));
+        assert!(extract_test_output("hello world").is_none());
     }
 }

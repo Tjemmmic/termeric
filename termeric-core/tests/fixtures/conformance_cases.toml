@@ -1,0 +1,402 @@
+manifest_version = 1
+
+[[case]]
+id = "cursor-position"
+cols = 10
+rows = 3
+input_hex = "48 65 6c 6c 6f 1b 5b 32 3b 35 48 58"
+chunks = [1, 2, 3, 1]
+expected_text = "Hello\n    X\n"
+expected_cursor = [1, 5]
+
+[[case]]
+id = "bell"
+cols = 4
+rows = 2
+input_hex = "07"
+expected_events = ["bell"]
+
+[[case]]
+id = "ris-reset"
+cols = 8
+rows = 2
+input_hex = "41 1b 5b 3f 31 68 1b 5b 33 31 6d 42 1b 63"
+expected_text = "\n"
+expected_cursor = [0, 0]
+expected_modes_none = ["CURSOR_KEYS_APPLICATION"]
+expected_modes_all = ["AUTOWRAP"]
+
+[[case]]
+id = "dec-soft-reset"
+cols = 8
+rows = 3
+input_hex = "1b 5b 34 3b 32 30 68 1b 5b 3f 31 3b 36 3b 31 30 30 30 3b 32 30 30 34 68 1b 5b 3f 37 3b 32 35 6c 1b 3d 1b 5b 33 31 6d 1b 5b 31 22 71 1b 28 30 41 71 1b 37 1b 5b 21 70 71"
+chunks = [1, 2, 5, 3]
+expected_text = "A─q\n\n"
+expected_cursor = [0, 3]
+expected_modes_all = ["AUTOWRAP", "CURSOR_VISIBLE", "LINEFEED_NEWLINE", "MOUSE_TRACKING", "BRACKETED_PASTE"]
+expected_modes_none = ["INSERT", "CURSOR_KEYS_APPLICATION", "ORIGIN", "KEYPAD_APPLICATION"]
+
+[[case]]
+id = "delete-characters"
+cols = 8
+rows = 2
+input_hex = "41 42 43 44 45 1b 5b 33 47 1b 5b 32 50"
+expected_text = "ABE\n"
+expected_cursor = [0, 2]
+
+[[case]]
+id = "insert-characters"
+cols = 8
+rows = 2
+input_hex = "41 42 43 44 1b 5b 32 47 1b 5b 32 40 5a"
+expected_text = "AZ BCD\n"
+expected_cursor = [0, 2]
+
+[[case]]
+id = "classic-csi-editing-and-tabs"
+cols = 24
+rows = 4
+input_hex = "41 1b 5b 33 62 1b 5b 31 3b 32 48 1b 5b 32 58 1b 5b 32 3b 32 48 1b 5b 33 61 1b 5b 32 65 1b 5b 37 60 1b 5b 3f 35 57 1b 5b 32 49 1b 5b 5a 58 1b 5b 33 67 0d 1b 5b 49 59"
+chunks = [1, 2, 5, 3]
+expected_text = "A  A\n\n\n        X              Y"
+expected_cursor = [3, 23]
+
+[[case]]
+id = "dec-selective-erase"
+cols = 8
+rows = 2
+input_hex = "1b 5b 31 22 71 41 1b 5b 30 22 71 42 1b 5b 31 22 71 e7 95 8c 1b 5b 32 22 71 43 1b 5b 3f 32 4b 1b 50 24 71 22 71 1b 5c"
+chunks = [1, 2, 4, 3]
+expected_text = "A 界\n"
+expected_cursor = [0, 5]
+expected_events = ["pty:1b503124723022711b5c"]
+
+[[case]]
+id = "insert-delete-lines"
+cols = 8
+rows = 4
+input_hex = "41 0d 0a 42 0d 0a 43 1b 5b 32 3b 31 48 1b 5b 31 4c 58 1b 5b 31 4d"
+expected_text = "A\nB\nC\n"
+
+[[case]]
+id = "scroll-region"
+cols = 8
+rows = 4
+input_hex = "31 0d 0a 32 0d 0a 33 0d 0a 34 1b 5b 32 3b 34 72 1b 5b 32 3b 31 48 1b 5b 31 53"
+expected_text = "1\n3\n4\n"
+
+[[case]]
+id = "left-right-margins"
+cols = 10
+rows = 4
+input_hex = "41 41 41 41 41 41 41 41 41 41 0d 0a 42 42 42 42 42 42 42 42 42 42 0d 0a 43 43 43 43 43 43 43 43 43 43 0d 0a 44 44 44 44 44 44 44 44 44 44 1b 5b 32 3b 34 72 1b 5b 3f 36 39 68 1b 5b 33 3b 38 73 1b 5b 34 3b 33 48 31 32 33 34 35 36 58"
+chunks = [1, 2, 5, 3]
+expected_text = "AAAAAAAAAA\nBBCCCCCCBB\nCC123456CC\nDDX     DD"
+expected_cursor = [3, 3]
+expected_modes_all = ["AUTOWRAP", "CURSOR_VISIBLE", "LEFT_RIGHT_MARGIN"]
+
+[[case]]
+id = "rectangular-area-operations"
+cols = 8
+rows = 4
+input_hex = "41 42 43 44 45 46 47 48 0d 0a 49 4a 4b 4c 4d 4e 4f 50 0d 0a 51 52 53 54 55 56 57 58 0d 0a 59 5a 30 31 32 33 34 35 1b 5b 38 38 3b 32 3b 32 3b 33 3b 34 24 78 1b 5b 32 3b 32 3b 33 3b 34 3b 31 3b 31 3b 35 3b 31 24 76 1b 5b 31 22 71 1b 5b 38 30 3b 33 3b 33 3b 33 3b 33 24 78 1b 5b 30 22 71 1b 5b 31 32 30 3b 33 3b 34 3b 33 3b 34 24 78 1b 5b 33 3b 32 3b 33 3b 34 24 7b 1b 5b 32 3b 36 3b 32 3b 38 24 7a"
+chunks = [1, 2, 5, 3]
+expected_text = "ABCDXXXH\nIXXXX\nQ P UVWX\nYZ012345"
+expected_cursor = [3, 7]
+
+[[case]]
+id = "attribute-change-areas"
+cols = 6
+rows = 3
+input_hex = "41 42 43 44 45 46 0d 0a 47 48 49 4a 4b 4c 0d 0a 4d 4e 4f 50 51 52 1b 5b 32 2a 78 1b 50 24 71 2a 78 1b 5c 1b 5b 31 3b 32 3b 33 3b 35 3b 31 3b 37 24 72 1b 5b 31 3b 32 3b 33 3b 35 3b 31 3b 34 3b 35 3b 37 24 74 1b 5b 31 2a 78 1b 50 24 71 2a 78 1b 5c 1b 5b 31 3b 33 3b 33 3b 34 3b 38 24 72"
+chunks = [1, 2, 5, 3]
+expected_text = "ABCDEF\nGHIJKL\nMNOPQR"
+expected_cursor = [2, 5]
+expected_events = ["pty:1b50312472322a781b5c", "pty:1b50312472312a781b5c"]
+
+[[case]]
+id = "rectangular-checksum-report"
+cols = 5
+rows = 2
+allow_screen_checksum_reports = true
+input_hex = "41 20 42 1b 5b 37 3b 31 3b 31 3b 31 3b 31 3b 33 2a 79"
+chunks = [1, 2, 5, 3]
+expected_text = "A B\n"
+expected_cursor = [0, 3]
+expected_events = ["pty:1b5037217e464637441b5c"]
+
+[[case]]
+id = "device-status-reports"
+cols = 8
+rows = 4
+input_hex = "1b 5b 35 6e 1b 5b 33 3b 34 48 1b 5b 36 6e"
+chunks = [1, 1, 2, 3]
+expected_cursor = [2, 3]
+expected_events = ["pty:1b5b306e", "pty:1b5b333b3452"]
+
+[[case]]
+id = "device-attributes"
+cols = 8
+rows = 4
+input_hex = "1b 5b 63 1b 5b 30 63 1b 5a 1b 5b 3e 63 1b 5b 3e 30 63"
+chunks = [1, 2, 1, 3]
+expected_events = ["pty:1b5b3f313b323b343b3863", "pty:1b5b3f313b323b343b3863", "pty:1b5b3f313b323b343b3863", "pty:1b5b3e303b313b3063", "pty:1b5b3e303b313b3063"]
+
+[[case]]
+id = "dec-special-graphics"
+cols = 80
+rows = 2
+input_hex = "1b 28 30 5f 60 61 62 63 64 65 66 67 68 69 6a 6b 6c 6d 6e 6f 70 71 72 73 74 75 76 77 78 79 7a 7b 7c 7d 7e"
+chunks = [1, 2, 5, 3]
+expected_text = " ◆▒␉␌␍␊°±␤␋┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£·\n"
+
+[[case]]
+id = "g0-g1-shifts"
+cols = 12
+rows = 2
+input_hex = "71 1b 29 30 71 0e 71 0f 71 1b 28 41 23"
+chunks = [1]
+expected_text = "qq─q£\n"
+
+[[case]]
+id = "presentation-state-roundtrip"
+cols = 12
+rows = 4
+input_hex = "1b 28 41 1b 29 30 1b 2a 41 1b 2b 30 1b 6f 1b 7e 1b 5b 31 3b 34 3a 33 3b 36 3b 37 6d 1b 5b 31 22 71 1b 5b 3f 36 68 1b 5b 34 3b 31 32 48 58 1b 4e 1b 5b 31 24 77 1b 5b 33 67 1b 5b 31 3b 33 48 1b 48 1b 5b 31 3b 37 48 1b 48 1b 5b 32 24 77 1b 63 1b 50 31 24 74 34 3b 31 32 3b 31 3b 4f 3b 41 3b 4b 3b 33 3b 31 3b 40 3b 41 30 41 30 1b 5c 1b 50 32 24 74 33 2f 37 1b 5c 1b 5b 31 24 77 1b 5b 32 24 77"
+chunks = [1, 2, 5, 3]
+expected_text = "\n\n\n"
+expected_cursor = [3, 11]
+expected_modes_all = ["ORIGIN", "AUTOWRAP", "CURSOR_VISIBLE"]
+expected_events = ["pty:1b50312475343b31323b313b4f3b413b4b3b333b313b403b413041301b5c", "pty:1b50322475332f371b5c", "pty:1b50312475343b31323b313b4f3b413b4b3b333b313b403b413041301b5c", "pty:1b50322475332f371b5c"]
+
+[[case]]
+id = "c1-control-framing"
+cols = 8
+rows = 4
+input_hex = "1b 2a 30 8e 71 9b 32 3b 32 48 58 85 59 c4 9b 9d 32 3b 63 31 2d 74 69 74 6c 65 9c 1b 20 47 9b 35 6e 90 24 71 6d 9c 9d 35 32 3b 63 3b 3f 9c 9d 31 31 3b 3f 9c 1b 20 46 9b 35 6e"
+chunks = [1, 2, 5, 3]
+expected_text = "─\n X\nYě\n"
+expected_cursor = [2, 2]
+expected_modes_all = ["AUTOWRAP", "CURSOR_VISIBLE"]
+expected_events = ["title:c1-title", "pty:9b306e", "pty:90312472306d9c", "clipboard-request:Clipboard:true", "dynamic-color:Query { target: Background, reply_uses_8bit_controls: true }", "pty:1b5b306e"]
+
+[[case]]
+id = "c1-high-bit-control-bodies"
+cols = 8
+rows = 2
+input_hex = "1b a0 c7 1b 5b b5 ee 9b b6 ee 1b 50 a4 f1 ed 1b dc 1b 5d b1 b1 bb bf 1b dc 1b 5d b2 bb 68 c3 a9 f0 9f 8c b1 1b dc 1b 5d b8 bb 3b 68 74 74 70 73 3a 2f 2f e4 be 8b 2e 65 78 61 6d 70 6c 65 2f e8 b7 af e5 be 84 1b dc 58 1b 5d 38 3b 3b 1b 5c"
+chunks = [1, 2, 5, 3]
+expected_text = "X\n"
+expected_cursor = [0, 1]
+expected_modes_all = ["AUTOWRAP", "CURSOR_VISIBLE"]
+expected_events = ["pty:9b306e", "pty:9b313b3152", "pty:90312472306d9c", "dynamic-color:Query { target: Background, reply_uses_8bit_controls: true }", "title:hé🌱"]
+expected_hyperlinks = [{ row = 0, col = 0, url = "https://例.example/路径" }]
+
+[[case]]
+id = "xtgettcap-multi-name"
+cols = 8
+rows = 2
+input_hex = "1b 20 47 1b 50 2b 71 35 34 34 65 3b 34 33 36 66 3b 35 32 34 37 34 32 3b 36 62 36 33 37 35 37 35 33 31 3b 36 62 36 36 33 31 33 32 3b 37 35 36 65 36 62 36 65 36 66 37 37 36 65 3b 36 62 36 33 37 35 36 34 33 31 1b 5c"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:90312b72353434653d373837343635373236643264373436353732366436353732363936333b343336663d3332333533363b3532343734323d33383b366236333735373533313d3162346634313b36623636333133323d316235623332333437659c"]
+
+[[case]]
+id = "xtwinops-geometry-reports"
+cols = 8
+rows = 2
+input_hex = "1b 20 47 1b 5b 31 34 74 1b 5b 31 36 74 1b 5b 31 38 74 1b 5b 31 34 3b 32 74 1b 5b 31 35 74 1b 5b 32 34 74"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:9b343b33323b363474", "pty:9b363b31363b3874", "pty:9b383b323b3874"]
+
+[[case]]
+id = "decrqss-legacy-geometry"
+cols = 132
+rows = 40
+input_hex = "1b 50 24 71 74 1b 5c 1b 50 24 71 24 7c 1b 5c 1b 50 24 71 2a 7c 1b 5c 1b 50 24 71 24 7d 1b 5c 1b 50 24 71 24 7e 1b 5c 1b 5b 35 30 74 1b 5b 31 33 32 24 7c 1b 5b 39 39 2a 7c 1b 5b 31 24 7d 1b 5b 31 24 7e 1b 20 47 90 24 71 74 9c 90 24 71 24 7c 9c 90 24 71 2a 7c 9c"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b503124723339741b5c", "pty:1b503124723830247c1b5c", "pty:1b5031247234302a7c1b5c", "pty:1b503024721b5c", "pty:1b503024721b5c", "pty:903124723339749c", "pty:903124723830247c9c", "pty:9031247234302a7c9c"]
+
+[[case]]
+id = "dec-conformance-level"
+cols = 8
+rows = 3
+input_hex = "41 42 1b 5b 36 32 3b 30 22 70 1b 5b 35 6e 1b 50 24 71 22 70 1b 5c 1b 5b 34 68 1b 5b 36 33 3b 33 22 70 1b 5b 36 31 3b 39 22 70 1b 5b 35 6e 1b 50 24 71 22 70 1b 5c 1b 5b 36 35 22 70 1b 5b 35 6e 1b 5b 36 34 3b 31 22 70 1b 50 24 71 22 70 1b 5c"
+chunks = [1, 2, 5, 3]
+expected_text = "AB\n\n"
+expected_cursor = [0, 2]
+expected_modes_all = ["AUTOWRAP", "CURSOR_VISIBLE"]
+expected_modes_none = ["INSERT"]
+expected_events = ["pty:9b306e", "pty:9031247236323b3022709c", "pty:1b5b306e", "pty:1b5031247236313b3122701b5c", "pty:9b306e", "pty:1b5031247236343b3122701b5c"]
+
+[[case]]
+id = "xterm-modify-other-keys"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 34 6d 1b 5b 3e 34 3b 32 3a 31 6d 1b 5b 3f 34 6d 1b 5b 3e 34 3b 39 6d 1b 5b 3e 34 3b 31 66 1b 5b 3f 34 67 1b 5b 3e 34 3b 32 66 1b 5b 3f 34 67 1b 20 47 1b 5b 3f 34 6d 1b 5b 3e 34 6e 1b 5b 3e 34 66 1b 5b 3f 34 67"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e343b306d", "pty:1b5b3e343b326d", "pty:1b5b3e343b3166", "pty:1b5b3e343b3166", "pty:9b3e343b326d", "pty:9b3e343b3066"]
+expected_modify_other_keys = { level = 0, modifier_mask = 0, format = 0 }
+
+[[case]]
+id = "xterm-keyboard-resource-zero"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 30 6d 1b 5b 3f 30 67 1b 5b 3e 30 3b 31 35 6d 1b 5b 3e 30 3b 34 32 66 1b 5b 3f 30 6d 1b 5b 3f 30 67 1b 5b 3e 30 3a 31 6d 1b 5b 3e 30 3b 37 3b 31 6d"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e303b306d", "pty:1b5b3e303b3066", "pty:1b5b3e303b31356d", "pty:1b5b3e303b343266"]
+expected_keyboard_resource = { modify = 15, format = 42 }
+
+[[case]]
+id = "xterm-keyboard-types"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 31 30 36 30 68 1b 5b 3f 31 30 36 30 24 70 1b 5b 3f 31 30 36 31 24 70 1b 5b 3f 31 30 36 31 68 1b 5b 3f 31 30 36 30 24 70 1b 5b 3f 31 30 36 31 24 70 1b 5b 3f 31 30 36 30 73 1b 5b 3f 31 30 36 30 68 1b 5b 3f 31 30 36 31 72 1b 5b 3f 31 30 36 30 24 70 1b 5b 3f 31 30 36 31 24 70"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3f313036303b312479", "pty:1b5b3f313036313b322479", "pty:1b5b3f313036303b322479", "pty:1b5b3f313036313b312479", "pty:1b5b3f313036303b322479", "pty:1b5b3f313036313b312479"]
+expected_keyboard_type = "vt220"
+
+[[case]]
+id = "dec-user-defined-keys"
+cols = 8
+rows = 2
+input_hex = "1b 50 30 3b 31 7c 31 2f 36 36 36 39 36 65 36 34 3b 31 37 2f 37 33 36 39 37 38 1b 5c 1b 50 31 3b 30 7c 31 37 2f 35 33 34 39 35 38 3b 33 34 2f 30 30 66 66 3b 33 35 2f 61 61 3b 31 38 2f 30 3b 31 39 2f 7a 7a 1b 5c 1b 5b 21 70"
+chunks = [1, 2, 5, 3]
+expected_user_defined_keys = [
+    { code = 1, value_hex = "66 69 6e 64" },
+    { code = 17, value_hex = "53 49 58" },
+    { code = 34, value_hex = "00 ff" },
+]
+
+[[case]]
+id = "xterm-cursor-key-resources"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 31 6d 1b 5b 3f 31 67 1b 5b 3e 31 3b 34 6d 1b 5b 3e 31 3b 31 66 1b 5b 3f 31 6d 1b 5b 3f 31 67 1b 5b 3e 31 3b 35 6d 1b 5b 3e 31 3b 32 66"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e313b326d", "pty:1b5b3e313b3066", "pty:1b5b3e313b346d", "pty:1b5b3e313b3166"]
+expected_cursor_keys = { mode = 4, format = 1 }
+
+[[case]]
+id = "xterm-function-key-resources"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 32 6d 1b 5b 3f 32 67 1b 5b 3e 32 3b 34 6d 1b 5b 3e 32 3b 31 66 1b 5b 3f 32 6d 1b 5b 3f 32 67 1b 5b 3e 32 3b 35 6d 1b 5b 3e 32 3b 32 66"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e323b326d", "pty:1b5b3e323b3066", "pty:1b5b3e323b346d", "pty:1b5b3e323b3166"]
+expected_function_keys = { mode = 4, format = 1 }
+
+[[case]]
+id = "xterm-string-key-resources"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 35 6d 1b 5b 3f 35 67 1b 5b 3e 35 3b 34 6d 1b 5b 3e 35 3b 31 66 1b 5b 3f 35 6d 1b 5b 3f 35 67 1b 5b 3e 35 3b 39 6d 1b 5b 3e 35 3b 32 66"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e353b306d", "pty:1b5b3e353b3066", "pty:1b5b3e353b346d", "pty:1b5b3e353b3166"]
+expected_string_keys = { mode = 4, format = 1 }
+
+[[case]]
+id = "xterm-keypad-key-resources"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 33 6d 1b 5b 3f 33 67 1b 5b 3e 33 3b 34 6d 1b 5b 3e 33 3b 31 66 1b 5b 3f 33 6d 1b 5b 3f 33 67 1b 5b 3e 33 3b 35 6d 1b 5b 3e 33 3b 32 66"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e333b306d", "pty:1b5b3e333b3066", "pty:1b5b3e333b346d", "pty:1b5b3e333b3166"]
+expected_keypad_keys = { mode = 4, format = 1 }
+
+[[case]]
+id = "xterm-modifier-key-resources"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 36 6d 1b 5b 3f 36 67 1b 5b 3e 36 3b 34 6d 1b 5b 3e 36 3b 31 66 1b 5b 3f 36 6d 1b 5b 3f 36 67 1b 5b 3e 36 3b 35 6d 1b 5b 3e 36 3b 32 66"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e363b306d", "pty:1b5b3e363b3066", "pty:1b5b3e363b346d", "pty:1b5b3e363b3166"]
+expected_modifier_keys = { mode = 4, format = 1 }
+
+[[case]]
+id = "xterm-special-key-resources"
+cols = 8
+rows = 2
+input_hex = "1b 5b 3f 37 6d 1b 5b 3f 37 67 1b 5b 3e 37 3b 34 6d 1b 5b 3e 37 3b 31 66 1b 5b 3f 37 6d 1b 5b 3f 37 67 1b 5b 3e 37 3b 35 6d 1b 5b 3e 37 3b 32 66"
+chunks = [1, 2, 5, 3]
+expected_events = ["pty:1b5b3e373b306d", "pty:1b5b3e373b3066", "pty:1b5b3e373b346d", "pty:1b5b3e373b3166"]
+expected_special_keys = { mode = 4, format = 1 }
+
+[[case]]
+id = "dec-saved-cursor-state"
+cols = 4
+rows = 4
+input_hex = "1b 5b 32 3b 34 72 1b 5b 3f 36 68 1b 5b 32 3b 34 48 58 1b 37 1b 5b 3f 36 6c 1b 5b 48 1b 38 59"
+chunks = [1, 2, 5, 3]
+expected_text = "\n\n   X\nY"
+expected_cursor = [3, 1]
+expected_modes_all = ["ORIGIN", "AUTOWRAP"]
+
+[[case]]
+id = "standard-modes"
+cols = 8
+rows = 3
+input_hex = "1b 5b 34 68 41 42 1b 5b 34 6c 1b 5b 32 30 68 0a 43"
+expected_modes_all = ["LINEFEED_NEWLINE"]
+expected_modes_none = ["INSERT"]
+
+[[case]]
+id = "private-modes"
+cols = 8
+rows = 4
+input_hex = "1b 5b 3f 31 68 1b 3d 1b 5b 3f 36 68 1b 5b 3f 39 68 1b 5b 3f 31 30 30 30 68 1b 5b 3f 31 30 30 32 68 1b 5b 3f 31 30 30 33 68 1b 5b 3f 31 30 30 35 68 1b 5b 3f 31 30 30 36 68 1b 5b 3f 31 30 30 34 68 1b 5b 3f 31 30 30 37 68 1b 5b 3f 32 30 30 34 68"
+chunks = [2, 1, 4, 3, 5]
+expected_modes_all = ["CURSOR_KEYS_APPLICATION", "KEYPAD_APPLICATION", "ORIGIN", "MOUSE_X10", "MOUSE_TRACKING", "MOUSE_BUTTON_EVENT", "MOUSE_ANY_EVENT", "MOUSE_UTF8", "MOUSE_SGR", "FOCUS_EVENTS", "ALTERNATE_SCROLL", "BRACKETED_PASTE"]
+
+[[case]]
+id = "alternate-screen"
+cols = 10
+rows = 2
+input_hex = "6d 61 69 6e 1b 5b 3f 31 30 34 39 68 61 6c 74 1b 5b 3f 31 30 34 39 6c 21"
+chunks = [4, 2, 1, 3]
+expected_text = "main!\n"
+expected_cursor = [0, 5]
+expected_modes_none = ["ALT_SCREEN"]
+
+[[case]]
+id = "notifications"
+cols = 8
+rows = 2
+input_hex = "1b 5d 39 3b 68 65 6c 6c 6f 07 1b 5d 37 37 37 3b 6e 6f 74 69 66 79 3b 74 69 74 6c 65 3b 62 6f 64 79 07"
+chunks = [1, 3, 2, 5]
+expected_events = ["notification::hello", "notification:title:body"]
+
+[[case]]
+id = "osc-hyperlink"
+cols = 10
+rows = 2
+input_hex = "1b 5d 38 3b 69 64 3d 64 6f 63 3b 68 74 74 70 73 3a 2f 2f 65 78 61 6d 70 6c 65 2e 63 6f 6d 1b 5c 6c 69 6e 6b 1b 5d 38 3b 3b 1b 5c 78"
+expected_text = "linkx\n"
+expected_hyperlinks = [{ row = 0, col = 0, url = "https://example.com" }]
+
+[[case]]
+id = "osc7-current-directory"
+cols = 8
+rows = 2
+input_hex = "1b 5d 37 3b 66 69 6c 65 3a 2f 2f 6c 6f 63 61 6c 68 6f 73 74 2f 77 6f 72 6b 2f 61 25 32 30 62 3b 73 65 6d 69 2f 25 45 37 25 39 35 25 38 43 1b 5c 78 1b 5d 37 3b 68 74 74 70 73 3a 2f 2f 6c 6f 63 61 6c 68 6f 73 74 2f 72 65 70 6c 61 63 65 64 07 9d 37 3b 66 69 6c 65 3a 2f 2f 2f 74 6d 70 2f 63 31 25 32 30 63 77 64 9c"
+chunks = [1, 2, 5, 3]
+expected_text = "x\n"
+expected_cursor = [0, 1]
+expected_working_directory = { uri = "file:///tmp/c1%20cwd", path = "/tmp/c1 cwd" }
+
+[[case]]
+id = "truncated-and-unknown-input"
+cols = 5
+rows = 3
+input_hex = "1b 5b 39 39 39 39 3b 3b 3b ff 1b 5d 35 32 3b 63 3b 3f 1b 5f 47 61 3d 71 3b"
+chunks = [1]
+expected_events = ["clipboard-request:Clipboard:false"]
+
+[[case]]
+id = "unicode-graphemes"
+cols = 30
+rows = 2
+input_hex = "e7 95 8c 20 65 cc 81 20 e2 98 ba ef b8 8e 20 e2 98 ba ef b8 8f 20 f0 9f 87 ba f0 9f 87 b8 20 f0 9f 91 8d f0 9f 8f bd 20 f0 9f 91 a9 e2 80 8d f0 9f 92 bb"
+chunks = [1, 2, 3, 1, 4]
+expected_text = "界 é ☺︎ ☺️ 🇺🇸 👍🏽 👩‍💻\n"
+expected_cursor = [0, 18]

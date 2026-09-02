@@ -178,6 +178,20 @@ mod tests {
     }
 
     #[test]
+    fn scrollback_cap_is_enforced_without_partial_or_duplicate_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scrollback.txt");
+        let line = "x".repeat(8_191);
+        let lines = vec![line; MAX_SCROLLBACK_FILE_SIZE / 8_192 + 1];
+        let report = save_scrollback_to_path(&path, &lines, MAX_SCROLLBACK_FILE_SIZE).unwrap();
+        assert_eq!(report.bytes_written, MAX_SCROLLBACK_FILE_SIZE);
+        assert!(report.truncated);
+        let bytes = fs::read(path).unwrap();
+        assert_eq!(bytes.len(), MAX_SCROLLBACK_FILE_SIZE);
+        assert_eq!(bytes.iter().filter(|&&byte| byte == b'\n').count(), 640);
+    }
+
+    #[test]
     fn updating_metadata_preserves_original_creation_time() {
         let dir = tempfile::tempdir().unwrap();
         let mut original = Session::new("first".into(), None);

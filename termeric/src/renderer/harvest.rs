@@ -11,24 +11,8 @@ use crate::renderer::types::{CellarRenderInfo, IndicatorRenderInfo, SproutMenuRe
 
 /// Return the sprout action row under a pointer. Geometry intentionally uses
 /// the same padding and item-height math as `build_sprout_menu`.
-pub fn sprout_menu_hit_test(
-    menu: &SproutMenuRenderInfo,
-    x: f32,
-    y: f32,
-    cell_width: f32,
-    cell_height: f32,
-) -> Option<usize> {
-    if x < menu.x || x >= menu.x + menu.width || y < menu.y || y >= menu.y + menu.height {
-        return None;
-    }
-    let padding = cell_width * 0.5;
-    let item_height = cell_height * 1.4;
-    let local_y = y - menu.y - padding;
-    if local_y < 0.0 {
-        return None;
-    }
-    let index = (local_y / item_height) as usize;
-    (index < menu.actions.len()).then_some(index)
+pub fn sprout_menu_hit_test(menu: &SproutMenuRenderInfo, x: f32, y: f32) -> Option<usize> {
+    menu.layout.hit_test(x, y)
 }
 
 impl Renderer {
@@ -44,7 +28,7 @@ impl Renderer {
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
         // Position indicators in the left padding, one cell-width left of the grid
-        let gutter_x = (self.padding - cell_width).max(0.0);
+        let gutter_x = self.tab_bar_width() + (self.padding - cell_width).max(0.0);
 
         for ind in indicators {
             let y = content_y + ind.row as f32 * cell_height;
@@ -79,18 +63,14 @@ impl Renderer {
             return;
         }
 
+        let anim = cellar.animation_progress;
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
-        let anim = cellar.animation_progress;
-
-        // Panel dimensions
-        let panel_width = (cell_width * 35.0).min(350.0);
-        let panel_height = window_height * 0.6;
-        let panel_y = (window_height - panel_height) / 2.0;
-
-        // Ease-out cubic for slide
-        let eased = 1.0 - (1.0 - anim).powi(3);
-        let panel_x = -panel_width + panel_width * eased;
+        let layout = &cellar.layout;
+        let panel_x = layout.panel.x;
+        let panel_y = layout.panel.y;
+        let panel_width = layout.panel.width;
+        let panel_height = layout.panel.height;
 
         // Use DrawCtx for card and text rendering
         let bg = adjust_alpha(self.ui.settings_bg, 0.95 * anim);
@@ -106,10 +86,7 @@ impl Renderer {
             };
 
             // Scrim (dim area behind panel)
-            let scrim_width = panel_x + panel_width;
-            if scrim_width > 0.0 {
-                ctx.draw_scrim(scrim_width, window_height, ctx.ui.scrim, anim * 0.5);
-            }
+            ctx.draw_scrim(_window_width, window_height, ctx.ui.scrim, anim * 0.5);
 
             // Panel background
             ctx.draw_card(panel_x, panel_y, panel_width, panel_height, bg, border);
@@ -119,9 +96,24 @@ impl Renderer {
             let text_color = adjust_alpha(ctx.ui.settings_header, anim);
             let dim_color = adjust_alpha(ctx.ui.settings_text_dim, anim);
             ctx.draw_text("Root Cellar", panel_x + cell_width, header_y, text_color);
+            ctx.text
+                .push_char('×', layout.close.x, layout.close.y, text_color);
 
             // Success rate badge
-            let rate_text = format!("{:.0}% healthy", cellar.success_rate * 100.0);
+            let rate_text = if cellar.evicted_entries == 0 {
+                format!(
+                    "{:.0}% healthy · {} kept",
+                    cellar.success_rate * 100.0,
+                    cellar.total_entries
+                )
+            } else {
+                format!(
+                    "{:.0}% healthy · {} kept · {} evicted",
+                    cellar.success_rate * 100.0,
+                    cellar.total_entries,
+                    cellar.evicted_entries
+                )
+            };
             let rate_color = if cellar.success_rate > 0.8 {
                 adjust_alpha([0.3, 0.8, 0.4, 1.0], anim) // green
             } else if cellar.success_rate > 0.5 {
@@ -137,7 +129,7 @@ impl Renderer {
             );
 
             // Separator
-            let sep_y = header_y + cell_height * 2.5;
+            let sep_y = layout.list.y - cell_height * 0.5;
             ctx.draw_separator(
                 panel_x + cell_width * 0.5,
                 sep_y,
@@ -146,19 +138,20 @@ impl Renderer {
             );
 
             // Entry list
-            let list_top = sep_y + cell_height * 0.5;
-            let max_visible = ((panel_height - (list_top - panel_y) - cell_height) / cell_height)
-                .floor() as usize;
-
-            for (i, entry) in cellar
-                .entries
-                .iter()
-                .skip(cellar.scroll)
-                .take(max_visible)
-                .enumerate()
-            {
-                let entry_y = list_top + i as f32 * cell_height;
+            for (entry, (_, row)) in cellar.entries.iter().zip(&layout.rows) {
+                let entry_y = row.y;
                 let entry_color = adjust_alpha(entry.health_color, entry.opacity * anim);
+
+                if cellar.selected_id == Some(entry.id) {
+                    ctx.rect.push_rounded_rect(
+                        row.x,
+                        row.y,
+                        row.width,
+                        row.height,
+                        adjust_alpha(ctx.ui.palette_accent, 0.14 * anim),
+                        4.0,
+                    );
+                }
 
                 // Health indicator character
                 let health_char = match entry.health {
@@ -167,29 +160,44 @@ impl Renderer {
                     _ => '\u{2716}', // heavy X (sick)
                 };
                 ctx.text
-                    .push_char(health_char, panel_x + cell_width, entry_y, entry_color);
+                    .push_char(health_char, row.x + cell_width * 0.5, entry_y, entry_color);
 
                 // Exit code
-                let code_text = match entry.exit_code {
+                let mut code_text = match entry.exit_code {
                     Some(0) => "ok".to_string(),
                     Some(code) => format!("E{}", code),
                     None => "...".to_string(),
                 };
-                ctx.draw_text(&code_text, panel_x + cell_width * 3.0, entry_y, dim_color);
+                if entry.output_truncated {
+                    code_text.push_str(" clipped");
+                }
+                let code_width = code_text.chars().count() as f32 * cell_width;
+                let code_x = row.x + row.width - code_width - cell_width * 0.5;
+                ctx.draw_text(&code_text, code_x, entry_y, dim_color);
 
-                // Row indicator
-                let row_text = format!("L{}", entry.row);
-                ctx.draw_text(&row_text, panel_x + cell_width * 8.0, entry_y, dim_color);
+                let command_x = row.x + cell_width * 2.0;
+                let command_chars = ((code_x - command_x - cell_width * 0.5) / cell_width)
+                    .floor()
+                    .max(0.0) as usize;
+                let mut command = entry
+                    .command
+                    .chars()
+                    .take(command_chars)
+                    .collect::<String>();
+                if entry.command.chars().count() > command_chars && command_chars > 0 {
+                    command.pop();
+                    command.push('…');
+                }
+                ctx.draw_text(&command, command_x, entry_y, text_color);
             }
 
             // Scrollbar
-            let scrollbar_x = panel_x + panel_width - cell_width;
             ctx.draw_scrollbar(
-                scrollbar_x,
-                list_top,
-                panel_height - (list_top - panel_y) - cell_height,
-                cellar.entries.len(),
-                max_visible,
+                layout.scrollbar.x,
+                layout.scrollbar.y,
+                layout.scrollbar.height,
+                cellar.total_entries,
+                layout.max_visible,
                 cellar.scroll,
                 anim,
                 4.0,
@@ -225,23 +233,23 @@ impl Renderer {
             };
 
             // Card shadow + background
-            ctx.draw_card_shadow(menu.x, menu.y, menu.width, menu.height, 0.2, 2);
-            ctx.draw_card(menu.x, menu.y, menu.width, menu.height, bg, border);
+            let panel = menu.layout.panel;
+            ctx.draw_card_shadow(panel.x, panel.y, panel.width, panel.height, 0.2, 2);
+            ctx.draw_card(panel.x, panel.y, panel.width, panel.height, bg, border);
 
             // Action items
-            let item_height = cell_height * 1.4;
-            let padding = cell_width * 0.5;
-
-            for (i, (name, icon)) in menu.actions.iter().enumerate() {
-                let item_y = menu.y + padding + i as f32 * item_height;
+            for (i, ((name, icon, enabled), row)) in
+                menu.actions.iter().zip(&menu.layout.rows).enumerate()
+            {
+                let item_y = row.y;
 
                 // Highlight selected item
-                if i == menu.selected {
+                if i == menu.selected && *enabled {
                     ctx.rect.push_rounded_rect(
-                        menu.x + 2.0,
-                        item_y,
-                        menu.width - 4.0,
-                        item_height,
+                        row.x,
+                        row.y,
+                        row.width,
+                        row.height,
                         highlight_bg,
                         4.0,
                     );
@@ -250,17 +258,25 @@ impl Renderer {
                 // Icon
                 ctx.text.push_char(
                     *icon,
-                    menu.x + padding,
-                    item_y + (item_height - cell_height) / 2.0,
-                    icon_color,
+                    row.x + menu.layout.padding,
+                    item_y + (row.height - cell_height) / 2.0,
+                    if *enabled {
+                        icon_color
+                    } else {
+                        adjust_alpha(ctx.ui.palette_text, 0.35 * anim)
+                    },
                 );
 
                 // Action name
                 ctx.draw_text(
                     name,
-                    menu.x + padding + cell_width * 2.0,
-                    item_y + (item_height - cell_height) / 2.0,
-                    text_color,
+                    row.x + menu.layout.padding + cell_width * 2.0,
+                    item_y + (row.height - cell_height) / 2.0,
+                    if *enabled {
+                        text_color
+                    } else {
+                        adjust_alpha(ctx.ui.palette_text, 0.45 * anim)
+                    },
                 );
             }
         }
@@ -274,16 +290,23 @@ mod tests {
     #[test]
     fn sprout_hit_test_matches_rendered_rows() {
         let menu = SproutMenuRenderInfo {
-            x: 10.0,
-            y: 20.0,
-            actions: vec![("Copy".into(), 'c'), ("Run".into(), 'r')],
+            actions: vec![("Copy".into(), 'c', true), ("Run".into(), 'r', false)],
             selected: 0,
             opacity: 1.0,
-            width: 100.0,
-            height: 38.0,
+            layout: crate::harvest::SproutMenuLayout::calculate(
+                0, 0, 2, 10, 400.0, 300.0, 0.0, 20.0, 10.0, 10.0, 10.0,
+            ),
         };
-        assert_eq!(sprout_menu_hit_test(&menu, 20.0, 27.0, 10.0, 10.0), Some(0));
-        assert_eq!(sprout_menu_hit_test(&menu, 20.0, 41.0, 10.0, 10.0), Some(1));
-        assert_eq!(sprout_menu_hit_test(&menu, 5.0, 27.0, 10.0, 10.0), None);
+        let first = menu.layout.rows[0];
+        let second = menu.layout.rows[1];
+        assert_eq!(
+            sprout_menu_hit_test(&menu, first.x + 1.0, first.y + 1.0),
+            Some(0)
+        );
+        assert_eq!(
+            sprout_menu_hit_test(&menu, second.x + 1.0, second.y + 1.0),
+            Some(1)
+        );
+        assert_eq!(sprout_menu_hit_test(&menu, 1.0, 1.0), None);
     }
 }

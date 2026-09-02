@@ -1,0 +1,341 @@
+//! Platform input-method state and commit routing.
+//!
+//! Preedit text is application-owned display state. It is never written to a
+//! PTY; only `Ime::Commit` reaches the currently focused text surface.
+
+use winit::event::Ime;
+
+use super::*;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct ImeState {
+    enabled: bool,
+    preedit: Option<ImePreedit>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ImePreedit {
+    pub text: String,
+    pub cursor: Option<(usize, usize)>,
+}
+
+impl ImeState {
+    pub fn preedit(&self) -> Option<&ImePreedit> {
+        self.preedit.as_ref()
+    }
+
+    pub fn clear_preedit(&mut self) {
+        self.preedit = None;
+    }
+
+    fn set_preedit(&mut self, text: String, cursor: Option<(usize, usize)>) {
+        if text.is_empty() {
+            self.preedit = None;
+            return;
+        }
+        let cursor = cursor.filter(|(start, end)| {
+            start <= end
+                && *end <= text.len()
+                && text.is_char_boundary(*start)
+                && text.is_char_boundary(*end)
+        });
+        self.preedit = Some(ImePreedit { text, cursor });
+    }
+}
+
+impl App {
+    pub(super) fn handle_ime_event(&mut self, event: Ime) {
+        match event {
+            Ime::Enabled => self.ime.enabled = true,
+            Ime::Disabled => {
+                self.ime.enabled = false;
+                self.ime.clear_preedit();
+            }
+            Ime::Preedit(text, cursor) => {
+                if self.accepts_ime_text() {
+                    self.ime.set_preedit(text, cursor);
+                } else {
+                    self.ime.clear_preedit();
+                }
+            }
+            Ime::Commit(text) => {
+                self.ime.clear_preedit();
+                self.commit_ime_text(&text);
+            }
+        }
+        self.redraw_scheduler
+            .request(redraw_scheduler::RedrawReason::KeyboardInput);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// Return whether the current focus owner is a text destination. Modal
+    /// surfaces without an editable field intentionally swallow IME input.
+    fn accepts_ime_text(&self) -> bool {
+        if matches!(self.broadcast, BroadcastState::Armed { .. })
+            || self.guardrail.is_active()
+            || self.info_overlay.is_active()
+            || self.diff_review.is_active()
+            || self.context_picker.is_active()
+            || self.domain_picker.is_active()
+            || self
+                .harvest
+                .as_ref()
+                .is_some_and(|h| h.sprout_menu.is_some() || h.cellar.is_expanded())
+        {
+            return false;
+        }
+        if self.command_palette.is_active() || self.settings_panel.is_active() {
+            return true;
+        }
+        if self.tab_rename.is_some() {
+            return true;
+        }
+        if self.shortcuts_panel.is_active() {
+            return !self.shortcuts_panel.is_recording();
+        }
+        if self.session_panel.is_open() {
+            return self.session_panel.is_renaming();
+        }
+        if self.commands_panel.is_open() {
+            return self.commands_panel.is_editing();
+        }
+        if self.search.is_active() {
+            return true;
+        }
+        !self.copy_mode.is_active()
+            && !self.focused_pane_read_only()
+            && self.active_terminal().is_some()
+    }
+
+    fn commit_ime_text(&mut self, text: &str) {
+        if text.is_empty() || !self.accepts_ime_text() {
+            return;
+        }
+
+        let printable = || text.chars().filter(|c| !c.is_control());
+        if self.command_palette.is_active() {
+            for character in printable() {
+                self.command_palette.handle_char(character);
+            }
+        } else if let Some(rename) = &mut self.tab_rename {
+            for character in printable() {
+                if rename.input.chars().count() < rename.max_chars {
+                    rename.input.push(character);
+                }
+            }
+            if let Some(tab) = self.tabs.as_mut().and_then(|tabs| {
+                tabs.all_tabs_mut()
+                    .iter_mut()
+                    .find(|tab| tab.id == rename.tab_id)
+            }) {
+                tab.set_user_title(Some(rename.input.clone()));
+            }
+        } else if self.shortcuts_panel.is_active() {
+            use crate::ui::shortcuts_panel::ShortcutsKey;
+            for character in printable() {
+                let action = self
+                    .shortcuts_panel
+                    .handle_key(ShortcutsKey::Char(character), &self.shortcut_registry);
+                self.apply_shortcuts_action(action);
+            }
+        } else if self.settings_panel.is_active() {
+            for character in printable() {
+                let action = self.settings_panel.handle_key(
+                    crate::ui::settings::SettingsKey::FilterChar(character),
+                    &self.config,
+                    &self.shortcut_registry,
+                );
+                self.apply_settings_action(action);
+            }
+        } else if self.session_panel.is_open() {
+            for character in printable() {
+                self.session_panel.rename_char(character);
+            }
+        } else if self.commands_panel.is_open() {
+            for character in printable() {
+                self.commands_panel.form_char(character);
+            }
+        } else if self.search.is_active() {
+            let cursor = self.search_cursor_pos;
+            if self
+                .with_search_and_active_grid(|search, grid| search.insert_text(cursor, text, grid))
+                .unwrap_or(false)
+            {
+                self.search_cursor_pos += text.len();
+            }
+        } else {
+            let encoded = crate::input::encode_ime_text(self.active_kitty_keyboard_flags(), text);
+            self.write_to_pty(&encoded);
+        }
+    }
+
+    /// Keep the native candidate window and Termeric's preedit decoration on
+    /// the exact focused-pane cursor geometry used by the renderer.
+    pub(super) fn ime_preedit_render_info(
+        &self,
+        panes: &[crate::terminal::container::PaneRenderInfo],
+    ) -> Option<crate::renderer::ImePreeditRenderInfo> {
+        let renderer = self.renderer.as_ref()?;
+        let terminal = self.active_terminal()?;
+        let cursor = terminal.grid().cursor();
+        let search_height = if self.search.is_active() || self.search.has_results() {
+            renderer.cell_height() + 16.0
+        } else {
+            0.0
+        };
+        let content_top = renderer.tab_bar_height() + renderer.chrome_bar_height() + search_height;
+        let content_left = renderer.tab_bar_width();
+        let focused_pane = panes.iter().find(|pane| pane.is_focused);
+        let (origin_x, origin_y, max_width) = if let Some(pane) = focused_pane {
+            let cursor_offset = cursor.col as f32 * renderer.cell_width();
+            (
+                content_left + renderer.padding() + pane.rect.x,
+                content_top + pane.rect.y,
+                (pane.rect.width - cursor_offset).max(renderer.cell_width()),
+            )
+        } else {
+            let (window_width, _) = renderer.window_size();
+            let cursor_offset = cursor.col as f32 * renderer.cell_width();
+            (
+                content_left + renderer.padding(),
+                content_top + renderer.padding(),
+                (window_width as f32 - content_left - renderer.padding() * 2.0 - cursor_offset)
+                    .max(renderer.cell_width()),
+            )
+        };
+        let x = origin_x + cursor.col as f32 * renderer.cell_width();
+        let y = origin_y + cursor.row as f32 * renderer.cell_height();
+
+        if let Some(window) = &self.window {
+            window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(x.round() as i32, y.round() as i32),
+                winit::dpi::PhysicalSize::new(
+                    renderer.cell_width().ceil().max(1.0) as u32,
+                    renderer.cell_height().ceil().max(1.0) as u32,
+                ),
+            );
+        }
+
+        let preedit = self.ime.preedit()?;
+        Some(crate::renderer::ImePreeditRenderInfo {
+            text: preedit.text.clone(),
+            cursor: preedit.cursor,
+            x,
+            y,
+            max_width,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preedit_cursor_must_be_a_valid_utf8_range() {
+        let mut state = ImeState::default();
+        state.set_preedit("日本".into(), Some((0, 3)));
+        assert_eq!(state.preedit().unwrap().cursor, Some((0, 3)));
+        state.set_preedit("日本".into(), Some((1, 3)));
+        assert_eq!(state.preedit().unwrap().cursor, None);
+    }
+
+    #[test]
+    fn empty_preedit_clears_composition() {
+        let mut state = ImeState::default();
+        state.set_preedit("かな".into(), None);
+        state.set_preedit(String::new(), None);
+        assert!(state.preedit().is_none());
+    }
+
+    #[test]
+    fn preedit_is_not_inserted_and_commit_is_inserted_once() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.command_palette.open();
+
+        app.handle_ime_event(Ime::Enabled);
+        app.handle_ime_event(Ime::Preedit("にほん".into(), Some((0, 9))));
+        assert_eq!(app.command_palette.build_info().input, "");
+        assert_eq!(app.ime.preedit().unwrap().text, "にほん");
+
+        app.handle_ime_event(Ime::Commit("日本".into()));
+        assert_eq!(app.command_palette.build_info().input, "日本");
+        assert!(app.ime.preedit().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ime_commit_reaches_only_the_focused_pane_pty() {
+        use crate::config::ShellConfig;
+        use crate::panes::{PaneManager, SplitDirection};
+        use std::collections::HashMap;
+        use std::time::{Duration, Instant};
+
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let shell = ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec![
+                "-c".into(),
+                "stty raw -echo; dd bs=1 count=6 2>/dev/null | od -An -tx1; sleep 0.1".into(),
+            ],
+            env: Default::default(),
+        };
+        let mut panes =
+            PaneManager::new(40, 8, shell, 100, 1024 * 1024, 400.0, 160.0, 10.0, 20.0).unwrap();
+        let right = panes.split(SplitDirection::Vertical).unwrap();
+        panes.focus(right);
+
+        let mut tabs = TabManager::new(40, 8, ShellConfig::default(), 100, 1024 * 1024);
+        tabs.new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), "sleep 2".into()],
+            None,
+            Some("ime-routing"),
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+
+        app.handle_ime_event(Ime::Preedit("にほん".into(), None));
+        let quiet_deadline = Instant::now() + Duration::from_millis(80);
+        while Instant::now() < quiet_deadline {
+            app.process_pty_events();
+            std::thread::yield_now();
+        }
+        let pane_text = |app: &App, id| {
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .get_pane(id)
+                .unwrap()
+                .terminal
+                .rows_text(0, 7)
+        };
+        assert!(!pane_text(&app, right).contains("e6 97 a5"));
+
+        app.handle_ime_event(Ime::Commit("日本".into()));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let output = loop {
+            app.process_pty_events();
+            let output = pane_text(&app, right);
+            if output.contains("e6 97 a5 e6 9c ac") || Instant::now() >= deadline {
+                break output;
+            }
+            std::thread::yield_now();
+        };
+        assert!(output.contains("e6 97 a5 e6 9c ac"), "{output:?}");
+        assert!(!pane_text(&app, PaneId(0)).contains("e6 97 a5"));
+    }
+}

@@ -3,6 +3,7 @@
 //! Functions for deriving tab titles from process state (CWD, foreground process).
 
 use std::path::Path;
+use termeric_core::Terminal;
 
 /// Get the current working directory of a process by its PID
 #[cfg(target_os = "linux")]
@@ -15,6 +16,78 @@ pub(crate) fn get_process_cwd(pid: u32) -> Option<String> {
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn get_process_cwd(_pid: u32) -> Option<String> {
+    None
+}
+
+/// Return a shell-reported directory only when its OSC 7 authority identifies
+/// this machine. Remote hosts remain useful display metadata but must never be
+/// treated as local filesystem paths for Git, persistence, or process spawn.
+pub(crate) fn terminal_working_directory(terminal: &Terminal) -> Option<String> {
+    let directory = terminal.reported_working_directory()?;
+    if !directory.host().is_none_or(host_is_local) {
+        return None;
+    }
+
+    #[cfg(target_os = "windows")]
+    if directory.path().as_bytes().get(0..4).is_some_and(|prefix| {
+        prefix[0] == b'/'
+            && prefix[1].is_ascii_alphabetic()
+            && prefix[2] == b':'
+            && prefix[3] == b'/'
+    }) {
+        return Some(directory.path()[1..].to_string());
+    }
+
+    Some(directory.path().to_string())
+}
+
+pub(crate) fn terminal_reported_directory_path(terminal: &Terminal) -> Option<&str> {
+    terminal
+        .reported_working_directory()
+        .map(|directory| directory.path())
+}
+
+fn host_is_local(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    if ["localhost", "127.0.0.1", "[::1]"]
+        .iter()
+        .any(|local| host.eq_ignore_ascii_case(local))
+    {
+        return true;
+    }
+    local_hostname()
+        .as_deref()
+        .map(|local| local.trim_end_matches('.'))
+        .is_some_and(|local| host.eq_ignore_ascii_case(local))
+}
+
+#[cfg(unix)]
+fn local_hostname() -> Option<String> {
+    let mut bytes = [0u8; 256];
+    // SAFETY: `bytes` is a writable buffer of the exact length supplied to
+    // gethostname, and it remains alive for the duration of the call.
+    if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
+        return None;
+    }
+    let length = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..length])
+        .ok()
+        .filter(|hostname| !hostname.is_empty())
+        .map(String::from)
+}
+
+#[cfg(target_os = "windows")]
+fn local_hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .ok()
+        .filter(|hostname| !hostname.is_empty())
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn local_hostname() -> Option<String> {
     None
 }
 
@@ -72,4 +145,32 @@ pub(crate) fn get_foreground_process(shell_pid: u32) -> Option<String> {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn get_foreground_process(_shell_pid: u32) -> Option<String> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reported_directory_accepts_local_authorities_and_rejects_remote_hosts() {
+        let mut terminal = Terminal::new(8, 2);
+        terminal.process(b"\x1b]7;file:///tmp/local%20path\x07");
+        assert_eq!(
+            terminal_working_directory(&terminal).as_deref(),
+            Some("/tmp/local path")
+        );
+
+        terminal.process(b"\x1b]7;file://localhost/tmp/loopback\x07");
+        assert_eq!(
+            terminal_working_directory(&terminal).as_deref(),
+            Some("/tmp/loopback")
+        );
+
+        terminal.process(b"\x1b]7;file://remote.example/tmp/not-local\x07");
+        assert_eq!(terminal_working_directory(&terminal), None);
+        assert_eq!(
+            terminal_reported_directory_path(&terminal),
+            Some("/tmp/not-local")
+        );
+    }
 }

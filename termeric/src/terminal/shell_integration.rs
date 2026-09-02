@@ -1,4 +1,4 @@
-//! Shell launch preparation for OSC 133 semantic prompt marks.
+//! Shell launch preparation for OSC 7 cwd and OSC 133 semantic prompt marks.
 
 use crate::config::ShellConfig;
 use anyhow::{Context, Result};
@@ -15,6 +15,8 @@ __termeric_prompt_command() {
     if [ -n "$__termeric_user_prompt_command" ]; then
         eval "$__termeric_user_prompt_command"
     fi
+    local __termeric_cwd=${PWD//%/%25}
+    printf '\033]7;file://%s\007' "$__termeric_cwd"
     printf '\033]133;A\007\033]133;B\007'
     __termeric_seen_command=1
 }
@@ -28,21 +30,82 @@ if [[ -n "$TERMERIC_ORIGINAL_ZDOTDIR" && -r "$TERMERIC_ORIGINAL_ZDOTDIR/.zshrc" 
 elif [[ -r "$HOME/.zshrc" ]]; then
     source "$HOME/.zshrc"
 fi
-autoload -Uz add-zsh-hook
 __termeric_preexec() { printf '\033]133;C\007' }
 __termeric_precmd() {
     local __termeric_status=$?
     if [[ -n "$__termeric_seen_command" ]]; then
         printf '\033]133;D;%s\007' "$__termeric_status"
     fi
+    local __termeric_cwd=${PWD//%/%25}
+    printf '\033]7;file://%s\007' "$__termeric_cwd"
     printf '\033]133;A\007\033]133;B\007'
     __termeric_seen_command=1
 }
-add-zsh-hook preexec __termeric_preexec
-add-zsh-hook precmd __termeric_precmd
+typeset -ga preexec_functions precmd_functions
+preexec_functions+=(__termeric_preexec)
+precmd_functions+=(__termeric_precmd)
 "#;
 
-const FISH_INIT: &str = r#"function __termeric_preexec --on-event fish_preexec; printf '\e]133;C\a'; end; function __termeric_postexec --on-event fish_postexec; printf '\e]133;D;%s\a' $status; end; function __termeric_prompt --on-event fish_prompt; printf '\e]133;A\a\e]133;B\a'; end"#;
+const FISH_INIT: &str = r#"function __termeric_cwd --on-event fish_prompt
+    set -l __termeric_path (string replace -a '%' '%25' -- $PWD)
+    printf '\e]7;file://%s\a' $__termeric_path
+end
+if string match -qr '^[0-3]\.' $version
+    function __termeric_preexec --on-event fish_preexec; printf '\e]133;C\a'; end
+    function __termeric_postexec --on-event fish_postexec; printf '\e]133;D;%s\a' $status; end
+    function __termeric_prompt --on-event fish_prompt; printf '\e]133;A\a\e]133;B\a'; end
+end"#;
+
+// Modern Nushell implements OSC 7 and OSC 133 itself. Enable those native
+// producers after the user's configuration has loaded instead of installing
+// duplicate hooks that can drift from Reedline's command lifecycle.
+const NUSHELL_INIT: &str =
+    "$env.config.shell_integration.osc7 = true; $env.config.shell_integration.osc133 = true";
+
+// Elvish has no pre-REPL command-line hook that preserves an arbitrary rc.elv.
+// Make a normal Elvish module discoverable instead; the user opts in once with
+// `use termeric-integration`, matching Elvish's documented module model.
+const ELVISH_MODULE: &str = r#"{
+    use str
+
+    if (eq $E:TERMERIC_ELVISH_HAD_XDG_DATA_DIRS 1) {
+        set-env XDG_DATA_DIRS $E:TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS
+    } else {
+        unset-env XDG_DATA_DIRS
+    }
+    unset-env TERMERIC_ELVISH_HAD_XDG_DATA_DIRS
+    unset-env TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS
+
+    fn termeric-report-pwd {
+        var termeric-cwd = (str:replace '%' '%25' $pwd)
+        printf "\e]7;file://%s\a" $termeric-cwd
+    }
+    fn termeric-before-readline {
+        termeric-report-pwd
+        printf "\e]133;A\a\e]133;B\a"
+    }
+    fn termeric-after-readline {|_| printf "\e]133;C\a" }
+    fn termeric-after-command {|command-info|
+        var termeric-status = 0
+        if (not-eq $nil $command-info[error]) {
+            set termeric-status = 1
+            if (has-key $command-info[error] reason) {
+                if (has-key $command-info[error][reason] exit-status) {
+                    set termeric-status = $command-info[error][reason][exit-status]
+                }
+            }
+        }
+        printf "\e]133;D;%s\a" $termeric-status
+    }
+
+    set edit:before-readline = [ $@edit:before-readline $termeric-before-readline~ ]
+    set edit:after-readline = [ $@edit:after-readline $termeric-after-readline~ ]
+    set edit:after-command = [ $@edit:after-command $termeric-after-command~ ]
+    set after-chdir = [ $@after-chdir {|_| termeric-report-pwd } ]
+}
+"#;
+
+const ELVISH_MANUAL_INSTRUCTIONS: &str = "Elvish integration is available; add `use termeric-integration` to ~/.config/elvish/rc.elv and open a new tab";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellLaunch {
@@ -82,7 +145,11 @@ pub fn prepare_shell_launch(shell: &ShellConfig) -> ShellLaunch {
                     .clone()
                     .or_else(|| std::env::var("SHELL").ok()),
                 args: shell.args.clone(),
-                env: Vec::new(),
+                env: shell
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
                 integration: ShellIntegrationSupport::Unavailable(format!(
                     "Shell integration setup failed: {error:#}"
                 )),
@@ -99,18 +166,16 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
     let mut launch = ShellLaunch {
         program,
         args: shell.args.clone(),
-        env: Vec::new(),
+        env: shell
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
         integration: ShellIntegrationSupport::Unavailable(
-            "Shell integration is unavailable; configure Bash, Zsh, or Fish".into(),
+            "Shell integration is unavailable; configure Bash, Zsh, Fish, Nushell, or Elvish"
+                .into(),
         ),
     };
-
-    if !is_interactive_launch(&launch.args) {
-        launch.integration = ShellIntegrationSupport::Unavailable(
-            "Shell integration is disabled for command/script shell arguments".into(),
-        );
-        return Ok(launch);
-    }
 
     let Some(program) = launch.program.as_deref() else {
         return Ok(launch);
@@ -119,6 +184,13 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(program);
+
+    if !is_interactive_shell_launch(shell_name, &launch.args) {
+        launch.integration = ShellIntegrationSupport::Unavailable(
+            "Shell integration is disabled for command/script shell arguments".into(),
+        );
+        return Ok(launch);
+    }
 
     match shell_name {
         "bash" => {
@@ -147,10 +219,123 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
                 .splice(0..0, ["--init-command".into(), FISH_INIT.into()]);
             launch.integration = ShellIntegrationSupport::Enabled("fish");
         }
+        "nu" => {
+            launch
+                .args
+                .splice(0..0, ["--execute".to_string(), NUSHELL_INIT.to_string()]);
+            launch.integration = ShellIntegrationSupport::Enabled("nushell");
+        }
+        "elvish" => {
+            write_integration_file(
+                base,
+                "elvish/lib",
+                "termeric-integration.elv",
+                ELVISH_MODULE,
+            )?;
+            expose_elvish_module(base, &mut launch.env)?;
+            launch.integration =
+                ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into());
+        }
         _ => {}
     }
 
     Ok(launch)
+}
+
+fn is_interactive_shell_launch(shell_name: &str, args: &[String]) -> bool {
+    match shell_name {
+        "nu" => is_interactive_nushell_launch(args),
+        "elvish" => is_interactive_elvish_launch(args),
+        _ => is_interactive_launch(args),
+    }
+}
+
+fn is_interactive_elvish_launch(args: &[String]) -> bool {
+    let mut expects_value = false;
+    for arg in args {
+        if expects_value {
+            expects_value = false;
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "-c" | "-lsp" | "-daemon" | "-version" | "-buildinfo" | "-help" | "-norc"
+        ) || arg.starts_with("-c=")
+            || arg.starts_with("-lsp=")
+            || arg.starts_with("-daemon=")
+            || arg.starts_with("-version=")
+            || arg.starts_with("-buildinfo=")
+            || arg.starts_with("-help=")
+            || arg.starts_with("-norc=")
+        {
+            return false;
+        }
+        if matches!(
+            arg.as_str(),
+            "-rc" | "-deprecation-level" | "-log" | "-db" | "-sock"
+        ) {
+            expects_value = true;
+            continue;
+        }
+        if arg == "--" {
+            continue;
+        }
+        if !arg.starts_with('-') {
+            return false;
+        }
+    }
+    !expects_value
+}
+
+fn is_interactive_nushell_launch(args: &[String]) -> bool {
+    let mut expects_value = false;
+    for arg in args {
+        if expects_value {
+            expects_value = false;
+            continue;
+        }
+        if matches!(arg.as_str(), "-c" | "--commands" | "--command")
+            || arg.starts_with("--commands=")
+            || arg.starts_with("--command=")
+            || (arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains('c'))
+            || matches!(arg.as_str(), "--lsp" | "--testbin")
+            || arg.starts_with("--ide-")
+        {
+            return false;
+        }
+
+        // `--execute` runs before an interactive REPL, but combining an
+        // arbitrary user prelude with ours without parsing Nushell would be
+        // ambiguous. Preserve such launches exactly and report no integration.
+        if matches!(arg.as_str(), "-e" | "--execute")
+            || arg.starts_with("--execute=")
+            || (arg.starts_with("-e") && arg.len() > 2)
+        {
+            return false;
+        }
+
+        if matches!(
+            arg.as_str(),
+            "-I" | "--include-path"
+                | "--config"
+                | "--env-config"
+                | "--plugin-config"
+                | "--plugins"
+                | "--log-level"
+                | "--log-target"
+                | "--threads"
+                | "--table-mode"
+                | "--error-style"
+        ) {
+            expects_value = true;
+            continue;
+        }
+
+        if !arg.starts_with('-') {
+            return false;
+        }
+    }
+    !expects_value
 }
 
 fn is_interactive_launch(args: &[String]) -> bool {
@@ -158,6 +343,64 @@ fn is_interactive_launch(args: &[String]) -> bool {
         matches!(arg.as_str(), "-c" | "--command")
             || (!arg.starts_with('-') && !matches!(arg.as_str(), "login"))
     })
+}
+
+fn expose_elvish_module(base: &Path, env: &mut Vec<(String, String)>) -> Result<()> {
+    // If a parent Elvish never imported the module, its temporary search-path
+    // markers can reach a nested Termeric process. Recover the true original
+    // value instead of stacking our path or preserving it into grandchildren.
+    let inherited = match effective_env(env, "TERMERIC_ELVISH_HAD_XDG_DATA_DIRS").as_deref() {
+        Some("1") => effective_env(env, "TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS"),
+        Some("0") => None,
+        _ => effective_env(env, "XDG_DATA_DIRS"),
+    };
+    let module_root = base
+        .to_str()
+        .context("Elvish shell integration path is not valid UTF-8")?;
+
+    let mut paths = vec![PathBuf::from(module_root)];
+    if let Some(value) = inherited.as_deref() {
+        for path in std::env::split_paths(value) {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    } else if cfg!(unix) {
+        paths.extend([
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share"),
+        ]);
+    }
+    let joined = std::env::join_paths(paths)
+        .context("Elvish shell integration path cannot be represented in XDG_DATA_DIRS")?
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("Elvish XDG_DATA_DIRS is not valid UTF-8"))?;
+
+    upsert_env(
+        env,
+        "TERMERIC_ELVISH_HAD_XDG_DATA_DIRS",
+        if inherited.is_some() { "1" } else { "0" }.into(),
+    );
+    upsert_env(
+        env,
+        "TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS",
+        inherited.unwrap_or_default(),
+    );
+    upsert_env(env, "XDG_DATA_DIRS", joined);
+    Ok(())
+}
+
+fn effective_env(env: &[(String, String)], key: &str) -> Option<String> {
+    env.iter()
+        .rev()
+        .find(|(candidate, _)| candidate == key)
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var(key).ok())
+}
+
+fn upsert_env(env: &mut Vec<(String, String)>, key: &str, value: String) {
+    env.retain(|(candidate, _)| candidate != key);
+    env.push((key.into(), value));
 }
 
 fn write_integration_file(
@@ -190,36 +433,229 @@ mod tests {
         ShellConfig {
             program: Some(program.into()),
             args: args.iter().map(|arg| (*arg).into()).collect(),
+            env: Default::default(),
         }
     }
 
     #[test]
-    fn supported_shells_receive_semantic_prompt_hooks() {
+    fn supported_shells_receive_semantic_prompt_integration() {
         let temp = tempfile::tempdir().unwrap();
         let bash = prepare_shell_launch_in(&shell("/bin/bash", &[]), temp.path()).unwrap();
         assert_eq!(bash.args[0], "--rcfile");
         assert!(bash.integration.is_enabled());
+        assert!(
+            std::fs::read_to_string(&bash.args[1])
+                .unwrap()
+                .contains("]7;file://")
+        );
 
         let zsh = prepare_shell_launch_in(&shell("zsh", &["-l"]), temp.path()).unwrap();
         assert!(zsh.env.iter().any(|(key, _)| key == "ZDOTDIR"));
         assert!(zsh.integration.is_enabled());
+        let zdotdir = zsh.env.iter().find(|(key, _)| key == "ZDOTDIR").unwrap();
+        assert!(
+            std::fs::read_to_string(Path::new(&zdotdir.1).join(".zshrc"))
+                .unwrap()
+                .contains("]7;file://")
+        );
 
         let fish = prepare_shell_launch_in(&shell("fish", &[]), temp.path()).unwrap();
         assert_eq!(fish.args[0], "--init-command");
         assert!(fish.integration.is_enabled());
+        assert!(fish.args[1].contains("]7;file://"));
+
+        let nushell = prepare_shell_launch_in(&shell("/usr/bin/nu", &[]), temp.path()).unwrap();
+        assert_eq!(nushell.args, ["--execute", NUSHELL_INIT]);
+        assert_eq!(
+            nushell.integration,
+            ShellIntegrationSupport::Enabled("nushell")
+        );
     }
 
     #[test]
     fn command_launches_and_unknown_shells_are_not_modified() {
         let temp = tempfile::tempdir().unwrap();
-        let scripted =
-            prepare_shell_launch_in(&shell("bash", &["-c", "echo hi"]), temp.path()).unwrap();
+        let mut configured = shell("bash", &["-c", "echo hi"]);
+        configured.env.insert("PROFILE_MARK".into(), "exact".into());
+        let scripted = prepare_shell_launch_in(&configured, temp.path()).unwrap();
         assert_eq!(scripted.args, vec!["-c", "echo hi"]);
-        assert!(!scripted.integration.is_enabled());
+        assert!(
+            scripted
+                .env
+                .contains(&("PROFILE_MARK".into(), "exact".into()))
+        );
+        assert_eq!(
+            scripted.integration,
+            ShellIntegrationSupport::Unavailable(
+                "Shell integration is disabled for command/script shell arguments".into()
+            )
+        );
 
-        let unknown = prepare_shell_launch_in(&shell("nu", &[]), temp.path()).unwrap();
+        let unknown = prepare_shell_launch_in(&shell("xonsh", &[]), temp.path()).unwrap();
         assert!(unknown.args.is_empty());
-        assert!(!unknown.integration.is_enabled());
+        assert_eq!(
+            unknown.integration,
+            ShellIntegrationSupport::Unavailable(
+                "Shell integration is unavailable; configure Bash, Zsh, Fish, Nushell, or Elvish"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn elvish_exposes_a_manual_module_without_replacing_user_startup() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut configured = shell("/usr/bin/elvish", &[]);
+        configured
+            .env
+            .insert("XDG_DATA_DIRS".into(), "/custom/one:/custom/two".into());
+        configured.env.insert("PROFILE_MARK".into(), "exact".into());
+
+        let launch = prepare_shell_launch_in(&configured, temp.path()).unwrap();
+        assert!(launch.args.is_empty());
+        assert_eq!(
+            launch.integration,
+            ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into())
+        );
+        assert!(
+            launch
+                .env
+                .contains(&("PROFILE_MARK".into(), "exact".into()))
+        );
+        assert!(
+            launch
+                .env
+                .contains(&("TERMERIC_ELVISH_HAD_XDG_DATA_DIRS".into(), "1".into()))
+        );
+        assert!(launch.env.contains(&(
+            "TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS".into(),
+            "/custom/one:/custom/two".into()
+        )));
+        let xdg = launch
+            .env
+            .iter()
+            .find(|(key, _)| key == "XDG_DATA_DIRS")
+            .unwrap();
+        assert_eq!(
+            std::env::split_paths(&xdg.1).collect::<Vec<_>>(),
+            [
+                temp.path().to_path_buf(),
+                PathBuf::from("/custom/one"),
+                PathBuf::from("/custom/two")
+            ]
+        );
+
+        let module =
+            std::fs::read_to_string(temp.path().join("elvish/lib/termeric-integration.elv"))
+                .unwrap();
+        assert_eq!(module, ELVISH_MODULE);
+        assert!(module.contains("$@edit:before-readline"));
+        assert!(module.contains("$@edit:after-readline"));
+        assert!(module.contains("$@edit:after-command"));
+        assert!(module.contains("$@after-chdir"));
+        assert!(module.contains("]7;file://"));
+        assert!(module.contains("]133;D;%s"));
+        assert!(module.contains("unset-env TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS"));
+
+        let mut nested = shell("elvish", &[]);
+        nested.env.insert(
+            "XDG_DATA_DIRS".into(),
+            "/old/termeric:/original/data".into(),
+        );
+        nested
+            .env
+            .insert("TERMERIC_ELVISH_HAD_XDG_DATA_DIRS".into(), "1".into());
+        nested.env.insert(
+            "TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS".into(),
+            "/original/data".into(),
+        );
+        let nested_launch = prepare_shell_launch_in(&nested, temp.path()).unwrap();
+        let nested_xdg = nested_launch
+            .env
+            .iter()
+            .find(|(key, _)| key == "XDG_DATA_DIRS")
+            .unwrap();
+        assert_eq!(
+            std::env::split_paths(&nested_xdg.1).collect::<Vec<_>>(),
+            [temp.path().to_path_buf(), PathBuf::from("/original/data")]
+        );
+    }
+
+    #[test]
+    fn elvish_only_exposes_the_module_to_rc_loading_repls() {
+        let temp = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["-c", "echo hi"],
+            vec!["script.elv"],
+            vec!["-lsp"],
+            vec!["-daemon"],
+            vec!["-version"],
+            vec!["-norc"],
+        ] {
+            let launch = prepare_shell_launch_in(&shell("elvish", &args), temp.path()).unwrap();
+            assert_eq!(launch.args, args);
+            assert!(launch.env.iter().all(|(key, _)| key != "XDG_DATA_DIRS"));
+            assert_eq!(
+                launch.integration,
+                ShellIntegrationSupport::Unavailable(
+                    "Shell integration is disabled for command/script shell arguments".into()
+                )
+            );
+        }
+
+        let repl = prepare_shell_launch_in(
+            &shell("elvish", &["-rc", "/tmp/custom.elv", "-i"]),
+            temp.path(),
+        )
+        .unwrap();
+        assert_eq!(repl.args, ["-rc", "/tmp/custom.elv", "-i"]);
+        assert_eq!(
+            repl.integration,
+            ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into())
+        );
+        assert!(repl.env.iter().any(|(key, _)| key == "XDG_DATA_DIRS"));
+    }
+
+    #[test]
+    fn nushell_only_modifies_unambiguous_repl_launches() {
+        let temp = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["-c", "print hi"],
+            vec!["--commands=print hi"],
+            vec!["script.nu"],
+            vec!["--lsp"],
+            vec!["--ide-check", "1"],
+            vec!["--execute", "print setup"],
+        ] {
+            let launch = prepare_shell_launch_in(&shell("nu", &args), temp.path()).unwrap();
+            assert_eq!(launch.args, args);
+            assert_eq!(
+                launch.integration,
+                ShellIntegrationSupport::Unavailable(
+                    "Shell integration is disabled for command/script shell arguments".into()
+                )
+            );
+        }
+
+        let repl = prepare_shell_launch_in(
+            &shell("nu", &["--config", "/tmp/custom.nu", "--login"]),
+            temp.path(),
+        )
+        .unwrap();
+        assert_eq!(
+            repl.args,
+            [
+                "--execute",
+                NUSHELL_INIT,
+                "--config",
+                "/tmp/custom.nu",
+                "--login"
+            ]
+        );
+        assert_eq!(
+            repl.integration,
+            ShellIntegrationSupport::Enabled("nushell")
+        );
     }
 
     #[test]
@@ -250,6 +686,7 @@ mod tests {
         let stdout = String::from_utf8_lossy(&bytes);
         assert!(stdout.contains("harvest-smoke"));
         assert!(stdout.contains("\u{1b}]133;A\u{7}"));
+        assert!(stdout.contains("\u{1b}]7;file://"));
         assert!(
             stdout.contains("\u{1b}]133;C\u{7}"),
             "{}",
@@ -263,6 +700,11 @@ mod tests {
 
         let mut terminal = termeric_core::Terminal::new(80, 24);
         terminal.process(&bytes);
+        assert!(
+            terminal.reported_working_directory().is_some(),
+            "real Bash output produced no OSC 7 directory report: {}",
+            stdout.escape_debug()
+        );
         let mut state = crate::harvest::HarvestTerminalState::default();
         let regions = state.observe(&terminal.shell_integration().prompt_tracker, true);
         assert!(
@@ -277,8 +719,226 @@ mod tests {
                     pane_id: None,
                 },
                 &region,
+                "printf harvest-smoke",
+                "harvest-smoke",
             );
         }
         assert_eq!(harvest.cellar.len(), 1);
+    }
+
+    #[test]
+    fn supported_shells_preserve_user_rc_and_emit_multiline_exit_regions() {
+        let require_all = std::env::var("TERMERIC_REQUIRE_SHELL_ACCEPTANCE").as_deref() == Ok("1");
+        let candidates = [
+            ("bash", ".bashrc", "printf 'CUSTOM_RC_BASH\\n'\n"),
+            ("zsh", ".zshrc", "printf 'CUSTOM_RC_ZSH\\n'\n"),
+            (
+                "fish",
+                ".config/fish/config.fish",
+                "printf 'CUSTOM_RC_FISH\\n'\n",
+            ),
+        ];
+
+        for (shell_name, rc_path, rc_contents) in candidates {
+            let Some(program) = executable_on_path(shell_name) else {
+                assert!(
+                    !require_all,
+                    "{shell_name} is required by TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1"
+                );
+                eprintln!("skipping {shell_name} OSC 133 acceptance: executable unavailable");
+                continue;
+            };
+            run_shell_semantics_probe(
+                &program,
+                shell_name,
+                rc_path,
+                rc_contents,
+                ShellIntegrationSupport::Enabled(shell_name),
+            );
+        }
+    }
+
+    #[test]
+    fn nushell_native_integration_preserves_user_config_and_emits_regions_when_available() {
+        let required = std::env::var("TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE").as_deref() == Ok("1");
+        let Some(program) = executable_on_path("nu") else {
+            assert!(
+                !required,
+                "nu is required by TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1"
+            );
+            eprintln!("skipping Nushell OSC 133 acceptance: executable unavailable");
+            return;
+        };
+        run_shell_semantics_probe(
+            &program,
+            "nushell",
+            ".config/nushell/config.nu",
+            "print 'CUSTOM_RC_NUSHELL'\n",
+            ShellIntegrationSupport::Enabled("nushell"),
+        );
+    }
+
+    #[test]
+    fn elvish_module_preserves_user_config_and_emits_regions_when_available() {
+        let required = std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref() == Ok("1");
+        let Some(program) = executable_on_path("elvish") else {
+            assert!(
+                !required,
+                "elvish is required by TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1"
+            );
+            eprintln!("skipping Elvish OSC 133 acceptance: executable unavailable");
+            return;
+        };
+        run_shell_semantics_probe(
+            &program,
+            "elvish",
+            ".config/elvish/rc.elv",
+            "echo CUSTOM_RC_ELVISH\nuse termeric-integration\n",
+            ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
+        );
+    }
+
+    fn executable_on_path(name: &str) -> Option<String> {
+        let output = Command::new("/bin/sh")
+            .args(["-c", &format!("command -v -- {name}")])
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    fn run_shell_semantics_probe(
+        program: &str,
+        shell_name: &'static str,
+        rc_path: &str,
+        rc_contents: &str,
+        expected_support: ShellIntegrationSupport,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let rc = home.join(rc_path);
+        std::fs::create_dir_all(rc.parent().unwrap()).unwrap();
+        std::fs::write(&rc, rc_contents).unwrap();
+
+        let launch =
+            prepare_shell_launch_in(&shell(program, &[]), &temp.path().join("generated")).unwrap();
+        assert_eq!(launch.integration, expected_support);
+        let mut environment = launch.env;
+        environment.push(("HOME".into(), home.display().to_string()));
+        environment.push((
+            "XDG_CONFIG_HOME".into(),
+            home.join(".config").display().to_string(),
+        ));
+        environment.push(("HISTFILE".into(), "/dev/null".into()));
+
+        let pty = Pty::new_with_env(
+            100,
+            30,
+            launch.program.as_deref(),
+            &launch.args,
+            &environment,
+        )
+        .unwrap();
+        let (mut handle, reader) = pty.take_reader();
+        let rx = spawn_reader_thread(reader);
+        if shell_name == "nushell" {
+            handle
+                .write_all(b"print (\n'first:second'\n)\r^false\rexit\r")
+                .unwrap();
+        } else if shell_name == "elvish" {
+            handle
+                .write_all(b"echo [\nfirst:second\n]\rfalse\rexit\r")
+                .unwrap();
+        } else {
+            handle
+                .write_all(b"printf '%s:%s\\n' first \\\nsecond\rfalse\rexit\r")
+                .unwrap();
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut bytes = Vec::new();
+        let mut reader_closed = false;
+        let mut terminal = termeric_core::Terminal::new(100, 30);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(PtyEvent::Output(chunk)) => {
+                    terminal.process(&chunk);
+                    bytes.extend(&chunk);
+                    for event in terminal.drain_events() {
+                        match event {
+                            termeric_core::TerminalEvent::PtyWrite(reply) => {
+                                handle.write_all(&reply).unwrap();
+                            }
+                            termeric_core::TerminalEvent::DynamicColor(
+                                termeric_core::DynamicColorOperation::Query {
+                                    target: termeric_core::DynamicColorTarget::Background,
+                                    ..
+                                },
+                            ) => {
+                                handle
+                                    .write_all(b"\x1b]11;rgb:2020/1818/1414\x1b\\")
+                                    .unwrap();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(PtyEvent::Closed) => {
+                    reader_closed = true;
+                    break;
+                }
+                Ok(PtyEvent::Error(error)) => panic!("{shell_name} PTY failed: {error}"),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if !handle.is_running() {
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(
+            reader_closed || !handle.is_running(),
+            "{shell_name} did not exit after the probe: {}",
+            String::from_utf8_lossy(&bytes).escape_debug()
+        );
+
+        let stdout = String::from_utf8_lossy(&bytes);
+        assert!(
+            stdout.contains(&format!("CUSTOM_RC_{}", shell_name.to_uppercase())),
+            "{shell_name} did not load its user rc: {}",
+            stdout.escape_debug()
+        );
+        assert!(
+            stdout.contains("first:second"),
+            "{shell_name} did not run the multiline command: {}",
+            stdout.escape_debug()
+        );
+        assert!(
+            terminal.reported_working_directory().is_some(),
+            "{shell_name} emitted no OSC 7 directory report: {}",
+            stdout.escape_debug()
+        );
+
+        let mut state = crate::harvest::HarvestTerminalState::default();
+        let regions = state.observe(&terminal.shell_integration().prompt_tracker, true);
+        let exit_codes: Vec<_> = regions
+            .iter()
+            .filter_map(|region| region.exit_code)
+            .collect();
+        let expected_exit_codes = if shell_name == "fish" {
+            // Fish emits a final region for `exit`; its default status is the
+            // preceding command's status. Bash/Zsh exit before the next prompt.
+            vec![0, 1, 1]
+        } else {
+            vec![0, 1]
+        };
+        assert_eq!(
+            exit_codes,
+            expected_exit_codes,
+            "{shell_name} emitted incomplete command regions {regions:?}: {}",
+            stdout.escape_debug()
+        );
     }
 }

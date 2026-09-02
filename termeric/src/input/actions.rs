@@ -21,6 +21,8 @@ pub enum Action {
     DecreaseFontSize,
     /// Reset font size to default
     ResetFontSize,
+    /// Toggle borderless fullscreen for the current native window
+    ToggleFullscreen,
     /// Clear selection
     ClearSelection,
     /// Create a new tab
@@ -35,6 +37,10 @@ pub enum Action {
     SwitchToTab(usize),
     /// Toggle search mode
     ToggleSearch,
+    /// Enter or leave keyboard copy mode.
+    ToggleCopyMode,
+    /// Enter quick select for visible semantic matches.
+    QuickSelect,
     /// Toggle settings panel
     ToggleSettings,
     /// Navigate to previous prompt (shell integration)
@@ -53,6 +59,22 @@ pub enum Action {
     NavigatePane(String),
     /// Close current pane
     ClosePane,
+    RenameTab,
+    MoveTabLeft,
+    MoveTabRight,
+    MoveTabToNextWindow,
+    TogglePinTab,
+    TogglePaneZoom,
+    TogglePaneReadOnly,
+    SwapPaneNext,
+    BalancePanes,
+    MovePaneToNextTab,
+    MovePaneToNextWindow,
+    LayoutColumns,
+    LayoutRows,
+    LayoutGrid,
+    CyclePaneCwdMode,
+    ToggleBroadcast,
     /// Clear scrollback buffer
     ClearScrollback,
     /// Reset terminal

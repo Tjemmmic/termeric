@@ -3,7 +3,7 @@
 //! Interactive UI components that overlay the terminal:
 //! - Command palette (Ctrl+Shift+P)
 //! - Settings panel (Ctrl+,)
-//! - Info overlay (About/Version)
+//! - Bounded information, error, and choice overlay
 //! - Diff review overlay
 //! - Context picker modal
 
@@ -14,6 +14,7 @@ pub mod commands;
 pub mod constants;
 pub mod context_picker;
 pub mod diff_review;
+pub mod domain_picker;
 pub mod info_overlay;
 pub mod settings;
 pub mod shortcuts_panel;

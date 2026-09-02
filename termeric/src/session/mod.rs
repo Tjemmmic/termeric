@@ -19,7 +19,26 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+thread_local! {
+    static TEST_SESSIONS_BASE_DIR: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
 static SESSION_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The live terminal scope represented by a saved session snapshot.
+///
+/// Older session files predate split panes and deserialize to
+/// [`SessionCaptureScope::SingleTerminal`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionCaptureScope {
+    #[default]
+    SingleTerminal,
+    FocusedPane,
+}
 
 /// A saved terminal session (single tab)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +57,10 @@ pub struct Session {
     /// Last foreground command that was running (e.g., "cargo", "vim")
     #[serde(default)]
     pub last_command: Option<String>,
+    /// Whether this snapshot came from a whole single-terminal tab or only the
+    /// focused pane of a split tab.
+    #[serde(default)]
+    pub capture_scope: SessionCaptureScope,
     /// When this session was first created (ISO 8601)
     pub created_at: String,
     /// When this session was last updated (ISO 8601)
@@ -46,7 +69,7 @@ pub struct Session {
 
 impl Session {
     /// Current session format version
-    pub const CURRENT_VERSION: u32 = 3;
+    pub const CURRENT_VERSION: u32 = 4;
 
     /// Create a new session with a generated ID
     pub fn new(title: String, working_directory: Option<String>) -> Self {
@@ -59,6 +82,7 @@ impl Session {
             working_directory,
             scrollback_file: None,
             last_command: None,
+            capture_scope: SessionCaptureScope::SingleTerminal,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -74,6 +98,7 @@ impl Session {
             working_directory,
             scrollback_file: None,
             last_command: None,
+            capture_scope: SessionCaptureScope::SingleTerminal,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -145,8 +170,17 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
 ///
 /// Returns `~/.local/share/termeric/sessions/`
 pub fn sessions_base_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_SESSIONS_BASE_DIR.with(|base| base.borrow().clone()) {
+        return Some(path);
+    }
     directories::ProjectDirs::from("com", "termeric", "termeric")
         .map(|dirs| dirs.data_dir().join("sessions"))
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_sessions_base_dir(path: Option<PathBuf>) {
+    TEST_SESSIONS_BASE_DIR.with(|base| *base.borrow_mut() = path);
 }
 
 /// Sanitize a session name to prevent path traversal attacks.

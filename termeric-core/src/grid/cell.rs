@@ -5,7 +5,7 @@
 use bitflags::bitflags;
 
 /// RGB color
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -41,7 +41,7 @@ impl Color {
 
 bitflags! {
     /// Cell text attributes (bold, italic, etc.)
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
     pub struct CellAttrs: u16 {
         /// Bold/increased intensity
         const BOLD       = 0b0000_0000_0001;
@@ -90,7 +90,7 @@ impl CellAttrs {
 
 bitflags! {
     /// Cell flags for special handling
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
     pub struct CellFlags: u8 {
         /// This cell contains a wide character (takes 2 cells)
         const WIDE_CHAR = 0b0001;
@@ -100,11 +100,20 @@ bitflags! {
         const HYPERLINK = 0b0100;
         /// This cell has been modified since last render
         const DIRTY = 0b1000;
+        /// DEC character protection selected by DECSCA. Selective erase
+        /// operations preserve cells carrying this flag.
+        const PROTECTED = 0b1_0000;
+        /// The displayed glyph originated in DEC Special Graphics. Retaining
+        /// the G-set identity makes DECRQCRA reversible without another byte
+        /// in every dense cell.
+        const DEC_SPECIAL_GRAPHICS = 0b10_0000;
+        /// The displayed glyph originated in the United Kingdom G-set.
+        const DEC_UK_CHARSET = 0b100_0000;
     }
 }
 
 /// Content of a cell
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CellContent {
     /// Empty cell
     #[default]
@@ -143,13 +152,31 @@ impl CellContent {
             CellContent::Empty => None,
         }
     }
+
+    /// Append this cell's complete text content.
+    pub fn push_to(&self, output: &mut String) {
+        match self {
+            Self::Empty => {}
+            Self::Char(character) => output.push(*character),
+            Self::Grapheme(grapheme) => output.push_str(grapheme),
+        }
+    }
+
+    /// Return an owned representation suitable for grapheme extension.
+    pub fn to_text(&self) -> String {
+        match self {
+            Self::Empty => String::new(),
+            Self::Char(character) => character.to_string(),
+            Self::Grapheme(grapheme) => grapheme.to_string(),
+        }
+    }
 }
 
 /// How a color was originally specified by the program.
 ///
 /// Preserving this allows session restore to re-resolve indexed colors
 /// through the current theme, so sessions adapt to theme changes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ColorSpec {
     /// Terminal default color (fg or bg)
     #[default]
@@ -161,7 +188,7 @@ pub enum ColorSpec {
 }
 
 /// A single cell in the terminal grid
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Cell {
     /// The character(s) displayed in this cell
     pub content: CellContent,
@@ -175,6 +202,10 @@ pub struct Cell {
     pub bg_spec: ColorSpec,
     /// Underline color (None means use fg color)
     pub underline_color: Option<Color>,
+    /// How the underline color was originally specified. This is retained
+    /// separately from the resolved color because Kitty Unicode placeholders
+    /// encode placement IDs in the original color value.
+    pub underline_color_spec: Option<ColorSpec>,
     /// Text attributes (bold, italic, etc.)
     pub attrs: CellAttrs,
     /// Cell flags (wide char, hyperlink, etc.)
@@ -192,6 +223,7 @@ impl Default for Cell {
             fg_spec: ColorSpec::Default,
             bg_spec: ColorSpec::Default,
             underline_color: None,
+            underline_color_spec: None,
             attrs: CellAttrs::empty(),
             flags: CellFlags::empty(),
             hyperlink_id: None,
@@ -200,6 +232,20 @@ impl Default for Cell {
 }
 
 impl Cell {
+    /// Whether this cell can be omitted from immutable scrollback storage.
+    pub(crate) fn is_history_default(&self) -> bool {
+        self.content.is_empty()
+            && self.fg == Color::default_fg()
+            && self.bg == Color::default_bg()
+            && self.fg_spec == ColorSpec::Default
+            && self.bg_spec == ColorSpec::Default
+            && self.underline_color.is_none()
+            && self.underline_color_spec.is_none()
+            && self.attrs.is_empty()
+            && (self.flags - CellFlags::DIRTY).is_empty()
+            && self.hyperlink_id.is_none()
+    }
+
     /// Create a new empty cell
     pub fn new() -> Self {
         Self::default()
@@ -221,7 +267,12 @@ impl Cell {
 
     /// Set the grapheme content (for complex Unicode)
     pub fn set_grapheme(&mut self, s: &str) {
-        self.content = CellContent::Grapheme(s.into());
+        let mut scalars = s.chars();
+        self.content = match (scalars.next(), scalars.next()) {
+            (None, _) => CellContent::Empty,
+            (Some(scalar), None) => CellContent::Char(scalar),
+            (Some(_), Some(_)) => CellContent::Grapheme(s.into()),
+        };
         self.flags.insert(CellFlags::DIRTY);
     }
 
@@ -233,8 +284,25 @@ impl Cell {
         self.fg_spec = ColorSpec::Default;
         self.bg_spec = ColorSpec::Default;
         self.underline_color = None;
+        self.underline_color_spec = None;
         self.attrs = CellAttrs::empty();
         self.flags = CellFlags::DIRTY; // Keep dirty flag to trigger re-render
+        self.hyperlink_id = None;
+    }
+
+    /// Remove only the displayed grapheme and hyperlink identity while
+    /// retaining visual and DEC protection attributes. DEC selective erase
+    /// uses this distinction instead of creating a newly styled BCE blank.
+    pub(crate) fn clear_content_preserving_attrs(&mut self) {
+        self.content = CellContent::Empty;
+        self.flags.remove(
+            CellFlags::WIDE_CHAR
+                | CellFlags::WIDE_CHAR_SPACER
+                | CellFlags::HYPERLINK
+                | CellFlags::DEC_SPECIAL_GRAPHICS
+                | CellFlags::DEC_UK_CHARSET,
+        );
+        self.flags.insert(CellFlags::DIRTY);
         self.hyperlink_id = None;
     }
 

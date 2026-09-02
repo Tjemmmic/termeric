@@ -93,6 +93,45 @@ updated_at = "2026-02-24T21:59:43Z"
         assert_eq!(session.version, 3);
         assert_eq!(session.id, "2026-02-24_21h59m43");
         assert_eq!(session.title, "test");
+        assert_eq!(
+            session.capture_scope,
+            super::super::SessionCaptureScope::SingleTerminal
+        );
+    }
+
+    #[test]
+    fn legacy_v1_and_v3_fixtures_remain_compatible() {
+        for fixture in [
+            include_str!("../../tests/fixtures/sessions/v1.toml"),
+            include_str!("../../tests/fixtures/sessions/v3.toml"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("session.toml");
+            fs::write(&path, fixture).unwrap();
+            let session = restore_session_from_path(&path).unwrap();
+            assert!(session.is_compatible());
+            assert_eq!(
+                session.capture_scope,
+                super::super::SessionCaptureScope::SingleTerminal
+            );
+        }
+    }
+
+    #[test]
+    fn current_fixture_records_focused_pane_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.toml");
+        fs::write(
+            &path,
+            include_str!("../../tests/fixtures/sessions/v4-focused-pane.toml"),
+        )
+        .unwrap();
+        let session = restore_session_from_path(&path).unwrap();
+        assert_eq!(session.version, Session::CURRENT_VERSION);
+        assert_eq!(
+            session.capture_scope,
+            super::super::SessionCaptureScope::FocusedPane
+        );
     }
 
     #[test]

@@ -8,6 +8,32 @@
 # program = "/bin/zsh"
 # Arguments to pass to shell
 # args = ["-l"]
+# Optional bounded child environment
+# env = { EDITOR = "nvim" }
+
+# Reusable non-plugin terminal launches. Each profile becomes a command-palette
+# entry and can be selected with `termeric --terminal-profile development`.
+# Program and args are executed directly; cwd must be absolute.
+# [profiles.development]
+# description = "Rust workspace"
+# program = "/bin/zsh"
+# args = ["-l"]
+# cwd = "/home/user/src/project"
+# title = "Project shell"
+# env = { RUST_BACKTRACE = "1" }
+
+# Linux serial profiles use the same CLI/palette profile identity but cannot
+# also set program, args, cwd, or env. Serial tabs cannot be split implicitly.
+# [profiles.board]
+# description = "Embedded development board"
+# title = "Board console"
+# [profiles.board.serial]
+# device = "/dev/serial/by-id/usb-example"
+# baud = 115200
+# data_bits = 8
+# parity = "none" # none, even, odd
+# stop_bits = 1 # 1 or 2
+# flow_control = "none" # none, software, hardware
 
 # Font configuration
 [font]
@@ -17,18 +43,45 @@ family = "monospace"
 size = 14.0
 # Line-height multiplier (0.8 - 3.0)
 line_height = 1.2
-# Fallback families (first installed family is used if primary is unavailable;
-# cosmic-text provides per-glyph fallback after family selection)
+# Ordered per-grapheme fallback families. Termeric uses the first configured
+# family that covers the complete grapheme, then platform fallback as a final
+# safety net. At most 16 unique family names may be configured.
 # fallback = ["Noto Sans Mono", "DejaVu Sans Mono"]
 # Enable shaping of common programming ligatures
 ligatures = true
+# Compatibility option: make SGR bold promote ANSI colors 0-7 to 8-15.
+# Disabled by default because font weight and color intensity are independent.
+bold_is_bright = false
 
 # Scrollback configuration
 [scrollback]
 # Maximum number of lines to keep in scrollback buffer
 lines = 10000
+# Maximum compact history memory per terminal or pane (MiB)
+max_memory_mib = 128
 # Lines moved per wheel event (0.1 - 100)
 scroll_speed = 6.0
+
+# Directory inherited by newly split panes: focused, tab, or process.
+[panes]
+cwd = "focused"
+
+# Xterm-compatible keyboard type used by new terminals and restored by RIS.
+# Applications can temporarily select legacy/vt220 with private modes 1060/1061.
+[keyboard]
+xterm_type = "normal" # normal, legacy, vt220
+
+# Keyboard-only history navigation and semantic hint matching. Entry shortcuts
+# are configurable in Settings > Keyboard Shortcuts. Modal presets are "vi"
+# (H/J/K/L, V, Y, /) or "emacs" (Ctrl+B/F/P/N, Space, Alt+W, Ctrl+S).
+[copy_mode]
+bindings = "vi"
+
+# Replace this list to control non-OSC-8 quick-select matches. Built-in
+# defaults cover URLs, filesystem paths, and 7-40 digit hexadecimal hashes.
+# [[copy_mode.patterns]]
+# name = "ticket"
+# regex = "PROJ-[0-9]+"
 
 # Theme configuration
 [theme]
@@ -37,6 +90,17 @@ name = "turmeric"
 # Or explicit path to a theme file. The active file is watched for changes.
 # path = "/path/to/custom-theme.toml"
 # Named custom themes are loaded from ~/.config/termeric/themes/<name>.toml.
+
+# Renderer selection: prefer GPU then WGPU software fallback, or force one path.
+[renderer]
+backend = "auto" # auto, gpu, software
+
+[accessibility]
+# Follow the Linux desktop portal when available; use "on" or "off" to override.
+# Reduced motion removes non-essential UI transitions while retaining semantic changes.
+reduce_motion = "system"
+# High contrast changes application chrome without changing terminal colors.
+high_contrast = "system"
 
 # Window configuration
 [window]
@@ -50,6 +114,18 @@ opacity = 1.0
 padding = 8
 # Use operating-system window borders and title bar
 decorations = true
+# Desktop stacking request: normal, always_on_top, or always_on_bottom.
+# The compositor/window manager remains authoritative.
+level = "normal"
+# Tab strip placement: top or left. Left keeps global controls in the top toolbar.
+tab_bar_position = "top"
+
+# Optional static local PNG/JPEG behind the terminal content. Relative paths
+# resolve beside config.toml. See docs/background-images.md for strict limits.
+[window.background_image]
+# path = "/path/to/background.png"
+opacity = 0.20
+fit = "cover" # cover, contain, stretch, or center
 
 [cursor]
 # Options: block, underline, beam
@@ -63,19 +139,55 @@ visual = true
 audio = false
 visual_duration_ms = 100
 
+# Rectangular checksums can reveal visible terminal cells one at a time. Keep
+# them disabled unless compatibility testing explicitly requires DECRQCRA.
+[security]
+allow_screen_checksum_reports = false
+# Kitty `t=f` lets applications in ordinary local tabs request reads from
+# persistent local paths. Keep it disabled unless every application in the
+# terminal is trusted; domain relays always deny it, and stream, temporary-file,
+# and shared-memory image transfer do not require it.
+allow_kitty_file_transfers = false
+# Running-GUI input can execute commands in any exact pane owned by that GUI.
+# Keep it disabled unless local automation holding Termeric's private control
+# token is trusted. Read-only inventory and bounded get-text do not require it.
+allow_gui_control_input = false
+
+# OSC 52 is process-controlled clipboard access. Writes are enabled for common
+# remote-copy workflows; reads are denied by default to prevent clipboard
+# exfiltration. Denied reads receive an empty bounded reply.
+[security.osc52]
+allow_read = false
+allow_write = true
+max_bytes = 1048576
+
+# Optional friendly names for remote live-domain hosts. Each destination is an
+# existing OpenSSH alias or user@host. Ports, identities, proxies, certificates,
+# and known-host policy remain in ~/.ssh/config and OpenSSH's own files.
+# Use with: termeric domain --host-profile build list
+# List configured entries with: termeric domain hosts [--json]
+# [domains.ssh_hosts.build]
+# destination = "developer@build.example"
+# description = "Build farm"
+
 [session]
 enabled = true
+# These compatibility keys now control complete workspace save/restore. Legacy
+# single-terminal snapshots remain available explicitly from the command palette.
 auto_restore = false
 auto_save = true
 save_scrollback = true
 
 # Experimental beta command-history visualization. Disabled by default.
-# Interactive Bash, Zsh, and Fish tabs receive OSC 133 marks automatically.
+# Interactive Bash, Zsh, Fish, and unambiguous modern Nushell REPL tabs receive
+# OSC 133 marks automatically; Nushell uses its native producer. Elvish users
+# add `use termeric-integration` once to ~/.config/elvish/rc.elv.
 # Custom shells and script/-c launches are not modified; Harvest will explain
 # when semantic prompt marks are unavailable.
 [harvest]
 enabled = false
 show_indicators = true
+# Count limit; retained command/output strings also share an 8 MiB hard cap.
 max_history = 100
 
 # OpenAI Codex CLI integration (tested with codex-cli 0.137.0)

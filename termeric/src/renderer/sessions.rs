@@ -21,7 +21,7 @@ impl Renderer {
         let dropdown_x = (dropdown_anchor_x + session_button_width - dropdown_width).max(0.0);
         let dropdown_y = tab_bar_height;
 
-        // Items: at least 1 row (placeholder if empty) + "Manage Sessions…"
+        // Items: at least 1 row (placeholder if empty) + manager action.
         let session_count = info.sessions.len().min(SESSION_DROPDOWN_MAX_ITEMS);
         let display_rows = session_count.max(1); // at least 1 row for placeholder
         let extra_items = 1; // Manage Sessions
@@ -68,7 +68,7 @@ impl Renderer {
             let item_y = dropdown_y + 2.0;
             let text_y = item_y + (row_height - cell_height) / 2.0;
             let mut text_x = dropdown_x + padding_x;
-            for c in "No saved sessions".chars() {
+            for c in "No legacy snapshots".chars() {
                 if text_x + cell_width > dropdown_x + dropdown_width - padding_x {
                     break;
                 }
@@ -143,10 +143,10 @@ impl Renderer {
             self.ui.settings_separator,
         );
 
-        // "Manage Sessions…" item
+        // Snapshot-manager item
         let manage_y = sep_y + 1.0;
 
-        // Hover highlight for "Manage Sessions…"
+        // Hover highlight for the snapshot-manager item.
         let manage_row_idx = display_rows;
         if info.hovered_index == Some(manage_row_idx) {
             let hover_color = [
@@ -167,7 +167,7 @@ impl Renderer {
 
         let manage_text_y = manage_y + (row_height - cell_height) / 2.0;
         let mut manage_x = dropdown_x + padding_x;
-        for c in "Manage Sessions…".chars() {
+        for c in "Manage Snapshots…".chars() {
             if !c.is_whitespace() {
                 self.text_pipeline
                     .push_char(c, manage_x, manage_text_y, dim_text_color);

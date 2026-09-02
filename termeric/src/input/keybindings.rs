@@ -21,8 +21,11 @@ pub enum BindableAction {
     Copy,
     Paste,
     ToggleSearch,
+    ToggleCopyMode,
+    QuickSelect,
     ToggleCommandPalette,
     ToggleSettings,
+    ToggleFullscreen,
     ClearSelection,
 
     // Font
@@ -53,6 +56,22 @@ pub enum BindableAction {
     NavigatePaneLeft,
     NavigatePaneRight,
     ClosePane,
+    RenameTab,
+    MoveTabLeft,
+    MoveTabRight,
+    MoveTabToNextWindow,
+    TogglePinTab,
+    TogglePaneZoom,
+    TogglePaneReadOnly,
+    SwapPaneNext,
+    BalancePanes,
+    MovePaneToNextTab,
+    MovePaneToNextWindow,
+    LayoutColumns,
+    LayoutRows,
+    LayoutGrid,
+    CyclePaneCwdMode,
+    ToggleBroadcast,
 
     // Scrolling
     ScrollPageUp,
@@ -73,13 +92,16 @@ impl BindableAction {
     /// Every variant, in display order.
     pub fn all() -> &'static [BindableAction] {
         use BindableAction::*;
-        static ALL: [BindableAction; 37] = [
+        static ALL: [BindableAction; 56] = [
             // General
             Copy,
             Paste,
             ToggleSearch,
+            ToggleCopyMode,
+            QuickSelect,
             ToggleCommandPalette,
             ToggleSettings,
+            ToggleFullscreen,
             ClearSelection,
             // Font
             IncreaseFontSize,
@@ -107,6 +129,22 @@ impl BindableAction {
             NavigatePaneLeft,
             NavigatePaneRight,
             ClosePane,
+            RenameTab,
+            MoveTabLeft,
+            MoveTabRight,
+            MoveTabToNextWindow,
+            TogglePinTab,
+            TogglePaneZoom,
+            TogglePaneReadOnly,
+            SwapPaneNext,
+            BalancePanes,
+            MovePaneToNextTab,
+            MovePaneToNextWindow,
+            LayoutColumns,
+            LayoutRows,
+            LayoutGrid,
+            CyclePaneCwdMode,
+            ToggleBroadcast,
             // Scrolling
             ScrollPageUp,
             ScrollPageDown,
@@ -146,6 +184,18 @@ impl BindableAction {
                 category: General,
                 default_binding: Some(KeyChord::new("f", true, false, true, false)),
             },
+            ToggleCopyMode => ActionMeta {
+                id: "toggle_copy_mode",
+                label: "Keyboard Copy Mode",
+                category: Navigation,
+                default_binding: Some(KeyChord::new("x", true, false, true, false)),
+            },
+            QuickSelect => ActionMeta {
+                id: "quick_select",
+                label: "Quick Select Hints",
+                category: Navigation,
+                default_binding: Some(KeyChord::new("u", true, false, true, false)),
+            },
             ToggleCommandPalette => ActionMeta {
                 id: "toggle_command_palette",
                 label: "Command Palette",
@@ -157,6 +207,12 @@ impl BindableAction {
                 label: "Settings",
                 category: General,
                 default_binding: Some(KeyChord::new(",", true, false, false, false)),
+            },
+            ToggleFullscreen => ActionMeta {
+                id: "toggle_fullscreen",
+                label: "Toggle Fullscreen",
+                category: General,
+                default_binding: Some(KeyChord::new("F11", false, false, false, false)),
             },
             ClearSelection => ActionMeta {
                 id: "clear_selection",
@@ -308,6 +364,34 @@ impl BindableAction {
                 category: Panes,
                 default_binding: Some(KeyChord::new("w", false, true, true, false)),
             },
+            RenameTab => action_meta("rename_tab", "Rename Tab", Tabs),
+            MoveTabLeft => action_meta("move_tab_left", "Move Tab Left", Tabs),
+            MoveTabRight => action_meta("move_tab_right", "Move Tab Right", Tabs),
+            MoveTabToNextWindow => {
+                action_meta("move_tab_to_next_window", "Move Tab to Next Window", Tabs)
+            }
+            TogglePinTab => action_meta("toggle_pin_tab", "Pin or Unpin Tab", Tabs),
+            TogglePaneZoom => action_meta("toggle_pane_zoom", "Zoom Pane", Panes),
+            TogglePaneReadOnly => {
+                action_meta("toggle_pane_read_only", "Toggle Pane Read-only", Panes)
+            }
+            SwapPaneNext => action_meta("swap_pane_next", "Swap Pane with Next", Panes),
+            BalancePanes => action_meta("balance_panes", "Balance Panes", Panes),
+            MovePaneToNextTab => {
+                action_meta("move_pane_to_next_tab", "Move Pane to Next Tab", Panes)
+            }
+            MovePaneToNextWindow => action_meta(
+                "move_pane_to_next_window",
+                "Move Pane to Next Window",
+                Panes,
+            ),
+            LayoutColumns => action_meta("layout_columns", "Layout: Columns", Panes),
+            LayoutRows => action_meta("layout_rows", "Layout: Rows", Panes),
+            LayoutGrid => action_meta("layout_grid", "Layout: Grid", Panes),
+            CyclePaneCwdMode => {
+                action_meta("cycle_pane_cwd_mode", "Cycle New Pane Directory", Panes)
+            }
+            ToggleBroadcast => action_meta("toggle_broadcast", "Toggle Broadcast Input", Panes),
 
             // ── Scrolling ──
             ScrollPageUp => ActionMeta {
@@ -372,8 +456,11 @@ impl BindableAction {
             Self::Copy => Action::Copy,
             Self::Paste => Action::Paste,
             Self::ToggleSearch => Action::ToggleSearch,
+            Self::ToggleCopyMode => Action::ToggleCopyMode,
+            Self::QuickSelect => Action::QuickSelect,
             Self::ToggleCommandPalette => Action::ToggleCommandPalette,
             Self::ToggleSettings => Action::ToggleSettings,
+            Self::ToggleFullscreen => Action::ToggleFullscreen,
             Self::ClearSelection => Action::ClearSelection,
             Self::IncreaseFontSize => Action::IncreaseFontSize,
             Self::DecreaseFontSize => Action::DecreaseFontSize,
@@ -398,6 +485,22 @@ impl BindableAction {
             Self::NavigatePaneLeft => Action::NavigatePane("left".into()),
             Self::NavigatePaneRight => Action::NavigatePane("right".into()),
             Self::ClosePane => Action::ClosePane,
+            Self::RenameTab => Action::RenameTab,
+            Self::MoveTabLeft => Action::MoveTabLeft,
+            Self::MoveTabRight => Action::MoveTabRight,
+            Self::MoveTabToNextWindow => Action::MoveTabToNextWindow,
+            Self::TogglePinTab => Action::TogglePinTab,
+            Self::TogglePaneZoom => Action::TogglePaneZoom,
+            Self::TogglePaneReadOnly => Action::TogglePaneReadOnly,
+            Self::SwapPaneNext => Action::SwapPaneNext,
+            Self::BalancePanes => Action::BalancePanes,
+            Self::MovePaneToNextTab => Action::MovePaneToNextTab,
+            Self::MovePaneToNextWindow => Action::MovePaneToNextWindow,
+            Self::LayoutColumns => Action::LayoutColumns,
+            Self::LayoutRows => Action::LayoutRows,
+            Self::LayoutGrid => Action::LayoutGrid,
+            Self::CyclePaneCwdMode => Action::CyclePaneCwdMode,
+            Self::ToggleBroadcast => Action::ToggleBroadcast,
             Self::ScrollPageUp => Action::ScrollUp(10),
             Self::ScrollPageDown => Action::ScrollDown(10),
             Self::ScrollToTop => Action::ScrollToTop,
@@ -455,6 +558,15 @@ pub struct ActionMeta {
     pub category: ShortcutCategory,
     /// Default key chord (None = unset by default).
     pub default_binding: Option<KeyChord>,
+}
+
+fn action_meta(id: &'static str, label: &'static str, category: ShortcutCategory) -> ActionMeta {
+    ActionMeta {
+        id,
+        label,
+        category,
+        default_binding: None,
+    }
 }
 
 // ── KeyChord ────────────────────────────────────────────────────────────────
@@ -964,6 +1076,12 @@ mod tests {
                 .unwrap()
                 .display_string(),
             "Alt+Left"
+        );
+        assert_eq!(
+            reg.binding_for(BindableAction::ToggleFullscreen)
+                .unwrap()
+                .display_string(),
+            "F11"
         );
     }
 

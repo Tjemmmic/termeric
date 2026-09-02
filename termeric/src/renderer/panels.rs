@@ -9,7 +9,7 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
-        use crate::ui::commands::panel::EditMode;
+        use crate::ui::commands::panel::{CommandsPanelLayout, EditMode};
 
         let anim = info.animation;
         if anim <= 0.0 {
@@ -19,11 +19,19 @@ impl Renderer {
         let ui_cw = self.cell_width;
         let cell_height = self.cell_height;
 
-        // Panel dimensions
-        let panel_width = (ui_cw * 36.0).max(340.0).min(window_width * 0.45);
-        let panel_x = window_width - panel_width * anim;
-        let padding = ui_cw * 1.8;
-        let small_pad = ui_cw * 0.8;
+        let layout = CommandsPanelLayout::calculate(
+            window_width,
+            window_height,
+            ui_cw,
+            cell_height,
+            anim,
+            info.edit_mode != EditMode::Browse,
+            info.commands.len(),
+        );
+        let panel_width = layout.panel.width;
+        let panel_x = layout.panel.x;
+        let padding = layout.padding;
+        let small_pad = layout.small_padding;
 
         // Colors
         let text_color = self.ui.settings_text;
@@ -57,7 +65,7 @@ impl Renderer {
         );
 
         // ── HEADER: " ⚡ Custom Commands                × " ──
-        let header_height = cell_height * 2.8;
+        let header_height = layout.header_height;
         let header_text_y = (header_height - cell_height) / 2.0;
 
         // Title with drawn lightning bolt icon (matches tab bar)
@@ -102,7 +110,7 @@ impl Renderer {
         }
 
         // Close (×) button — drawn as two diagonal lines
-        let close_x = panel_x + panel_width - padding - ui_cw;
+        let close_x = layout.close_button.x;
         let close_cx = close_x + ui_cw * 0.5;
         let close_cy = header_height / 2.0;
         let close_arm = cell_height * 0.25;
@@ -133,10 +141,10 @@ impl Renderer {
         );
 
         // ── "+ New Command" button ──
-        let btn_y = header_height + cell_height * 0.8;
-        let btn_height = cell_height * 2.0;
-        let btn_width = panel_width - padding * 2.0;
-        let btn_x = panel_x + padding;
+        let btn_y = layout.new_button.y;
+        let btn_height = layout.new_button.height;
+        let btn_width = layout.new_button.width;
+        let btn_x = layout.new_button.x;
 
         // Button background — accent outline with subtle fill on hover
         let btn_bg = if info.hovered_add {
@@ -197,14 +205,14 @@ impl Renderer {
         let mut list_start_y = btn_y + btn_height + cell_height * 0.8;
 
         if info.edit_mode != EditMode::Browse {
-            let form_x = panel_x + padding;
-            let form_w = panel_width - padding * 2.0;
-            let field_height = cell_height * 1.8;
-            let label_w = ui_cw * 10.0;
+            let form = layout.form.expect("editing layout includes a form");
+            let form_x = form.container.x;
+            let form_w = form.container.width;
+            let field_height = form.name_input.height;
 
             // Form background
             let form_bg = [accent[0], accent[1], accent[2], 0.05];
-            let form_total_h = field_height * 2.0 + cell_height * 3.2;
+            let form_total_h = form.container.height;
             self.rect_pipeline.push_rounded_rect(
                 form_x,
                 list_start_y,
@@ -214,7 +222,7 @@ impl Renderer {
                 6.0,
             );
 
-            let fy = list_start_y + small_pad;
+            let fy = form.name_input.y;
 
             // "Name:" label + input
             let name_label = "Name:";
@@ -228,8 +236,8 @@ impl Renderer {
                 );
             }
             // Name input box
-            let input_x = form_x + label_w;
-            let input_w = form_w - label_w - small_pad;
+            let input_x = form.name_input.x;
+            let input_w = form.name_input.width;
             let name_active = info.edit_mode == EditMode::EditingName;
             let input_border = if name_active { accent } else { separator };
             self.rect_pipeline.push_rounded_rect(
@@ -279,7 +287,7 @@ impl Renderer {
             }
 
             // "Command:" label + input
-            let cmd_fy = fy + field_height + small_pad;
+            let cmd_fy = form.command_input.y;
             let cmd_label = "Command:";
             let cmd_label_y = cmd_fy + (field_height - cell_height) / 2.0;
             for (i, c) in cmd_label.chars().enumerate() {
@@ -341,11 +349,11 @@ impl Renderer {
             }
 
             // Save / Cancel buttons
-            let buttons_y = cmd_fy + field_height + small_pad * 1.5;
+            let buttons_y = form.save_button.y;
             let save_text = "Save";
-            let save_w = ui_cw * 7.0;
-            let save_x = form_x + form_w - save_w;
-            let save_h = cell_height * 1.6;
+            let save_w = form.save_button.width;
+            let save_x = form.save_button.x;
+            let save_h = form.save_button.height;
             self.rect_pipeline
                 .push_rounded_rect(save_x, buttons_y, save_w, save_h, accent, 4.0);
             let save_text_y = buttons_y + (save_h - cell_height) / 2.0;
@@ -360,8 +368,8 @@ impl Renderer {
             }
 
             let cancel_text = "Cancel";
-            let cancel_w = ui_cw * 8.0;
-            let cancel_x = save_x - cancel_w - small_pad;
+            let cancel_w = form.cancel_button.width;
+            let cancel_x = form.cancel_button.x;
             self.rect_pipeline
                 .push_rounded_rect(cancel_x, buttons_y, cancel_w, save_h, separator, 4.0);
             let cancel_text_y = buttons_y + (save_h - cell_height) / 2.0;
@@ -377,7 +385,7 @@ impl Renderer {
 
             // Hint
             let hint = "Tab to switch fields, Enter to save";
-            let hint_y = buttons_y + save_h + small_pad;
+            let hint_y = form.hint_y;
             let hx = form_x + small_pad;
             for (i, c) in hint.chars().enumerate() {
                 self.text_pipeline.push_char(
@@ -388,7 +396,7 @@ impl Renderer {
                 );
             }
 
-            list_start_y = list_start_y + form_total_h + cell_height * 0.5;
+            list_start_y = form.container.y + form_total_h + cell_height * 0.5;
         }
 
         // ── Section label ──
@@ -408,7 +416,7 @@ impl Renderer {
         }
 
         // ── Command rows ──
-        let row_height = cell_height * 3.0;
+        let row_height = layout.row_height;
 
         if info.commands.is_empty() && info.edit_mode == EditMode::Browse {
             // Empty state
@@ -435,7 +443,7 @@ impl Renderer {
         }
 
         for (i, cmd) in info.commands.iter().enumerate() {
-            let item_y = list_start_y + i as f32 * row_height;
+            let item_y = layout.command_row(i).y;
 
             // Hover highlight (full row)
             if info.hovered_index == Some(i) && info.hovered_delete != Some(i) {
@@ -513,7 +521,7 @@ impl Renderer {
             }
 
             // Delete (x) button (right side)
-            let del_x = panel_x + panel_width - padding - ui_cw * 1.5;
+            let del_x = layout.command_delete(i).x + ui_cw * 0.5;
             let _del_y = item_y + (row_height - cell_height) / 2.0;
             let del_color = if info.hovered_delete == Some(i) {
                 [0.9, 0.3, 0.3, 1.0]
@@ -560,114 +568,69 @@ impl Renderer {
         y: f32,
         commands: &[crate::config::CustomCommand],
         window_width: f32,
-        _window_height: f32,
+        window_height: f32,
         animation: f32,
         edit_mode: &crate::ui::commands::panel::EditMode,
     ) -> crate::ui::commands::panel::CommandsPanelAction {
-        use crate::ui::commands::panel::{CommandsPanelAction, EditMode};
+        use crate::ui::commands::panel::{CommandsPanelAction, CommandsPanelLayout, EditMode};
 
         let ui_cw = self.cell_width;
         let cell_height = self.cell_height;
 
-        let panel_width = (ui_cw * 36.0).max(340.0).min(window_width * 0.45);
-        let panel_x = window_width - panel_width * animation;
-        let padding = ui_cw * 1.8;
+        let layout = CommandsPanelLayout::calculate(
+            window_width,
+            window_height,
+            ui_cw,
+            cell_height,
+            animation,
+            *edit_mode != EditMode::Browse,
+            commands.len(),
+        );
 
         // Click outside panel = close
-        if x < panel_x {
+        if x < layout.panel.x {
             return CommandsPanelAction::Close;
         }
 
-        let header_height = cell_height * 2.8;
-        let header_text_y = (header_height - cell_height) / 2.0;
-
         // Close (x) button
-        let close_x = panel_x + panel_width - padding - ui_cw;
-        if x >= close_x && y >= header_text_y && y <= header_text_y + cell_height * 1.5 {
+        if layout.close_button.contains(x, y) {
             return CommandsPanelAction::Close;
         }
 
         // "+ New Command" button
-        let btn_y = header_height + cell_height * 0.8;
-        let btn_height = cell_height * 2.0;
-        let btn_x = panel_x + padding;
-        let btn_width = panel_width - padding * 2.0;
-        if x >= btn_x && x <= btn_x + btn_width && y >= btn_y && y <= btn_y + btn_height {
-            return CommandsPanelAction::AddSubmit {
-                name: String::new(),
-                command: String::new(),
-            };
+        if layout.new_button.contains(x, y) {
+            return CommandsPanelAction::StartAdd;
         }
 
-        // Calculate list start
-        let mut list_start_y = btn_y + btn_height + cell_height * 0.8;
-
         // Hit-test form fields if editing
-        if *edit_mode != EditMode::Browse {
-            let small_pad = ui_cw * 0.8;
-            let field_height = cell_height * 1.8;
-            let label_w = ui_cw * 10.0;
-            let form_x = panel_x + padding;
-            let form_w = panel_width - padding * 2.0;
-            let form_total_h = field_height * 2.0 + cell_height * 3.2;
-
-            let fy = list_start_y + small_pad;
-            let input_x = form_x + label_w;
-            let input_w = form_w - label_w - small_pad;
-
+        if let Some(form) = layout.form {
             // Name field click
-            if x >= input_x && x <= input_x + input_w && y >= fy && y <= fy + field_height {
+            if form.name_input.contains(x, y) {
                 return CommandsPanelAction::ClickName;
             }
 
             // Command field click
-            let cmd_fy = fy + field_height + small_pad;
-            if x >= input_x && x <= input_x + input_w && y >= cmd_fy && y <= cmd_fy + field_height {
+            if form.command_input.contains(x, y) {
                 return CommandsPanelAction::ClickCommand;
             }
 
             // Save button
-            let buttons_y = cmd_fy + field_height + small_pad * 1.5;
-            let save_w = ui_cw * 7.0;
-            let save_x = form_x + form_w - save_w;
-            let save_h = cell_height * 1.6;
-            if x >= save_x && x <= save_x + save_w && y >= buttons_y && y <= buttons_y + save_h {
-                return CommandsPanelAction::AddSubmit {
-                    name: "SAVE".to_string(),
-                    command: "SAVE".to_string(),
-                };
+            if form.save_button.contains(x, y) {
+                return CommandsPanelAction::Submit;
             }
 
             // Cancel button
-            let cancel_w = ui_cw * 8.0;
-            let cancel_x = save_x - cancel_w - small_pad;
-            if x >= cancel_x
-                && x <= cancel_x + cancel_w
-                && y >= buttons_y
-                && y <= buttons_y + save_h
-            {
-                return CommandsPanelAction::Close;
+            if form.cancel_button.contains(x, y) {
+                return CommandsPanelAction::CancelEdit;
             }
-
-            list_start_y = list_start_y + form_total_h + cell_height * 0.5;
-        }
-
-        // Skip section label
-        if !commands.is_empty() {
-            list_start_y += cell_height * 1.5;
         }
 
         // Command rows
-        let row_height = cell_height * 3.0;
         for i in 0..commands.len() {
-            let item_y = list_start_y + i as f32 * row_height;
-            if y >= item_y && y < item_y + row_height {
-                // Delete (x) button
-                let del_x = panel_x + panel_width - padding - ui_cw * 1.5;
-                if x >= del_x - ui_cw * 0.5 && x <= del_x + ui_cw * 1.5 {
-                    return CommandsPanelAction::Delete(i);
-                }
-                // Click row = Run
+            if layout.command_delete(i).contains(x, y) {
+                return CommandsPanelAction::Delete(i);
+            }
+            if layout.command_run(i).contains(x, y) {
                 return CommandsPanelAction::Run(i);
             }
         }
@@ -681,6 +644,8 @@ impl Renderer {
         window_width: f32,
         window_height: f32,
     ) {
+        use crate::session::panel::SessionPanelLayout;
+
         let anim = info.animation;
         if anim <= 0.0 {
             return;
@@ -689,13 +654,22 @@ impl Renderer {
         let ui_cw = self.cell_width;
         let cell_height = self.cell_height;
 
-        // Panel dimensions
-        let panel_width = (ui_cw * 35.0).max(320.0).min(window_width * 0.45);
-        let panel_x = window_width - panel_width * anim;
-        let panel_h = window_height;
-        let row_height = (cell_height * 3.5).max(52.0);
-        let padding_x = ui_cw * 1.5;
-        let padding_y = cell_height * 0.5;
+        let layout = SessionPanelLayout::calculate(
+            window_width,
+            window_height,
+            ui_cw,
+            cell_height,
+            anim,
+            info.rename_text.is_some(),
+            info.workspaces,
+            info.sessions.len(),
+        );
+        let panel_width = layout.panel.width;
+        let panel_x = layout.panel.x;
+        let panel_h = layout.panel.height;
+        let row_height = layout.row_height;
+        let padding_x = layout.padding_x;
+        let padding_y = layout.padding_y;
 
         // ── Scrim ──
         let scrim = self.ui.scrim;
@@ -716,8 +690,12 @@ impl Renderer {
             .push_rect(panel_x, 0.0, 2.0, panel_h, self.ui.settings_accent);
 
         // ── Title ──
-        let title = "Sessions";
-        let title_y = cell_height * 1.5;
+        let title = if info.workspaces {
+            "Workspaces"
+        } else {
+            "Legacy Snapshots"
+        };
+        let title_y = layout.title_y;
         let title_x = panel_x + padding_x;
         for (i, c) in title.chars().enumerate() {
             self.text_pipeline.push_char(
@@ -728,13 +706,88 @@ impl Renderer {
             );
         }
 
+        if let (Some(name), Some(rename)) = (&info.rename_text, layout.rename) {
+            self.rect_pipeline.push_rect(
+                rename.input.x,
+                rename.input.y,
+                rename.input.width,
+                rename.input.height,
+                [0.0, 0.0, 0.0, 0.2],
+            );
+            let text_y = rename.input.y + (rename.input.height - cell_height) / 2.0;
+            let text_x = rename.input.x + ui_cw * 0.5;
+            for (index, character) in name.chars().enumerate() {
+                let x = text_x + index as f32 * ui_cw;
+                if x + ui_cw > rename.input.x + rename.input.width {
+                    break;
+                }
+                self.text_pipeline
+                    .push_char(character, x, text_y, self.ui.settings_text);
+            }
+            let cursor_chars = name
+                .get(..info.rename_cursor)
+                .map(str::chars)
+                .map(Iterator::count)
+                .unwrap_or_else(|| name.chars().count());
+            let cursor_x = text_x + cursor_chars as f32 * ui_cw;
+            if cursor_x <= rename.input.x + rename.input.width {
+                self.rect_pipeline.push_rect(
+                    cursor_x,
+                    rename.input.y + 2.0,
+                    1.5,
+                    rename.input.height - 4.0,
+                    self.ui.settings_accent,
+                );
+            }
+            for (button, label, color) in [
+                (rename.save_button, "Save", self.ui.settings_accent),
+                (rename.cancel_button, "Cancel", self.ui.settings_separator),
+            ] {
+                self.rect_pipeline.push_rect(
+                    button.x,
+                    button.y,
+                    button.width,
+                    button.height,
+                    color,
+                );
+                let label_x =
+                    button.x + (button.width - label.chars().count() as f32 * ui_cw * 0.85) / 2.0;
+                let label_y = button.y + (button.height - cell_height) / 2.0;
+                for (index, character) in label.chars().enumerate() {
+                    self.text_pipeline.push_char(
+                        character,
+                        label_x + index as f32 * ui_cw * 0.85,
+                        label_y,
+                        self.ui.settings_text,
+                    );
+                }
+            }
+        } else {
+            let restore_note = if info.workspaces {
+                "Restore relaunches tabs and panes"
+            } else {
+                "Restore opens a new shell"
+            };
+            let note_y = title_y + cell_height * 1.2;
+            for (i, c) in restore_note.chars().take(32).enumerate() {
+                if !c.is_whitespace() {
+                    self.text_pipeline.push_char(
+                        c,
+                        panel_x + padding_x + i as f32 * ui_cw * 0.8,
+                        note_y,
+                        self.ui.settings_text_dim,
+                    );
+                }
+            }
+        }
+
         // ── Close button (×) ──
-        let close_x = panel_x + panel_width - padding_x - ui_cw;
+        let close_x = layout.close_button.x;
         self.text_pipeline
             .push_char('×', close_x, title_y, self.ui.settings_text);
 
         // ── Separator under title ──
-        let sep_y = title_y + cell_height * 2.0;
+        let sep_y = layout.separator_y;
         self.rect_pipeline.push_rect(
             panel_x + padding_x,
             sep_y,
@@ -744,15 +797,19 @@ impl Renderer {
         );
 
         // ── Session list ──
-        let list_start_y = sep_y + padding_y + 4.0;
+        let list_start_y = layout.list_start_y;
         let text_color = self.ui.settings_text;
         let dim_color = self.ui.settings_text_dim;
         let accent_color = self.ui.settings_accent;
         let btn_color = self.ui.settings_separator;
 
         if info.sessions.is_empty() {
-            // Show "No saved sessions" placeholder
-            let placeholder = "No saved sessions";
+            // Show an explicit empty-workspace placeholder.
+            let placeholder = if info.workspaces {
+                "No saved workspaces"
+            } else {
+                "No legacy snapshots"
+            };
             let ph_y = list_start_y + row_height * 0.5;
             let mut px = panel_x + padding_x;
             for c in placeholder.chars() {
@@ -763,11 +820,18 @@ impl Renderer {
             }
         }
 
-        for (i, session) in info.sessions.iter().enumerate() {
-            let item_y = list_start_y + i as f32 * row_height;
+        let end = (info.scroll_offset + layout.visible_count).min(info.sessions.len());
+        for (visible_index, session) in info.sessions
+            [info.scroll_offset.min(info.sessions.len())..end]
+            .iter()
+            .enumerate()
+        {
+            let absolute_index = info.scroll_offset + visible_index;
+            let entry_layout = layout.entry(visible_index);
+            let item_y = entry_layout.row.y;
 
             // Hover highlight for session rows
-            if info.hovered_index == Some(i) {
+            if info.hovered_index == Some(absolute_index) || info.selected_index == absolute_index {
                 let hover_color = [
                     self.ui.settings_selected[0],
                     self.ui.settings_selected[1],
@@ -808,8 +872,8 @@ impl Renderer {
                 }
             }
 
-            // Metadata line: "<subtitle> · <last_modified>"
-            // Subtitle is the last command or cwd basename; omitted when empty.
+            // Metadata line: "<subtitle> · <last_modified>". Focused-pane
+            // snapshots disclose their reduced capture scope here.
             let meta = if session.subtitle.is_empty() {
                 session.last_modified.clone()
             } else {
@@ -817,21 +881,21 @@ impl Renderer {
             };
             let meta_y = icon_y + cell_height * 1.3;
             let mut mx = name_x;
-            for c in meta.chars() {
+            for c in meta.chars().take(38) {
                 if !c.is_whitespace() {
                     self.text_pipeline.push_char(c, mx, meta_y, dim_color);
                 }
                 mx += ui_cw * 0.8;
             }
 
-            // ── Action buttons: [Load] [Delete] ──
-            let btn_height = cell_height * 1.5;
-            let btn_y = icon_y + cell_height * 0.1;
+            // ── Action buttons: [Load] [Rename] [Delete] ──
+            let btn_height = entry_layout.delete_button.height;
+            let btn_y = entry_layout.delete_button.y;
 
             // Delete button (right-aligned)
             let delete_text = "Delete";
-            let delete_w = ui_cw * (delete_text.len() as f32 + 2.0);
-            let delete_x = panel_x + panel_width - padding_x - delete_w;
+            let delete_w = entry_layout.delete_button.width;
+            let delete_x = entry_layout.delete_button.x;
             self.rect_pipeline.push_rect(
                 delete_x,
                 btn_y,
@@ -848,10 +912,27 @@ impl Renderer {
                 );
             }
 
-            // Load button (left of delete)
+            // Rename button (left of delete, complete workspaces only)
+            if let Some(rename_button) = entry_layout.rename_button {
+                let rename_text = "Rename";
+                let rename_w = rename_button.width;
+                let rename_x = rename_button.x;
+                self.rect_pipeline
+                    .push_rect(rename_x, btn_y, rename_w, btn_height, btn_color);
+                for (j, c) in rename_text.chars().enumerate() {
+                    self.text_pipeline.push_char(
+                        c,
+                        rename_x + ui_cw * 1.0 + j as f32 * ui_cw * 0.85,
+                        btn_y + (btn_height - cell_height) * 0.5,
+                        text_color,
+                    );
+                }
+            }
+
+            // Load button (left of rename)
             let load_text = "Load";
-            let load_w = ui_cw * (load_text.len() as f32 + 2.0);
-            let load_x = delete_x - load_w - ui_cw * 0.5;
+            let load_w = entry_layout.load_button.width;
+            let load_x = entry_layout.load_button.x;
             self.rect_pipeline
                 .push_rect(load_x, btn_y, load_w, btn_height, btn_color);
             for (j, c) in load_text.chars().enumerate() {
@@ -881,67 +962,72 @@ impl Renderer {
         x: f32,
         y: f32,
         sessions: &[crate::session::panel::SessionEntry],
+        workspaces: bool,
+        renaming: bool,
+        scroll_offset: usize,
         window_width: f32,
-        _window_height: f32,
+        window_height: f32,
         animation: f32,
     ) -> crate::session::panel::SessionPanelAction {
-        use crate::session::panel::SessionPanelAction;
+        use crate::session::panel::{SessionPanelAction, SessionPanelLayout};
 
         let ui_cw = self.cell_width;
         let cell_height = self.cell_height;
 
-        let panel_width = (ui_cw * 35.0).max(320.0).min(window_width * 0.45);
-        let panel_x = window_width - panel_width * animation;
-        let padding_x = ui_cw * 1.5;
-        let padding_y = cell_height * 0.5;
-        let row_height = (cell_height * 3.5).max(52.0);
+        let layout = SessionPanelLayout::calculate(
+            window_width,
+            window_height,
+            ui_cw,
+            cell_height,
+            animation,
+            renaming,
+            workspaces,
+            sessions.len(),
+        );
 
         // Click outside panel → close
-        if x < panel_x {
+        if x < layout.panel.x {
             return SessionPanelAction::Close;
         }
 
         // Close button (× in top-right)
-        let title_y = cell_height * 1.5;
-        let close_x = panel_x + panel_width - padding_x - ui_cw;
-        if x >= close_x
-            && x <= close_x + ui_cw * 1.5
-            && y >= title_y
-            && y <= title_y + cell_height * 1.5
-        {
+        if layout.close_button.contains(x, y) {
             return SessionPanelAction::Close;
         }
 
-        // Session list area
-        let sep_y = title_y + cell_height * 2.0;
-        let list_start_y = sep_y + padding_y + 4.0;
+        if let Some(rename) = layout.rename {
+            if rename.save_button.contains(x, y) {
+                return SessionPanelAction::SubmitRename;
+            }
+            if rename.cancel_button.contains(x, y) {
+                return SessionPanelAction::CancelRename;
+            }
+            // The rename form owns input until it is saved or cancelled.
+            return SessionPanelAction::None;
+        }
 
-        for (i, session) in sessions.iter().enumerate() {
-            let item_y = list_start_y + i as f32 * row_height;
-            if y < item_y || y > item_y + row_height {
+        let end = (scroll_offset + layout.visible_count).min(sessions.len());
+        for (visible_index, session) in sessions[scroll_offset.min(sessions.len())..end]
+            .iter()
+            .enumerate()
+        {
+            let entry = layout.entry(visible_index);
+            if !entry.row.contains(x, y) {
                 continue;
             }
 
-            let btn_height = cell_height * 1.5;
-            let btn_y = item_y + padding_y + cell_height * 0.1;
-
             // Check if click is in the button row area
-            if y >= btn_y && y <= btn_y + btn_height {
-                // Delete button
-                let delete_text = "Delete";
-                let delete_w = ui_cw * (delete_text.len() as f32 + 2.0);
-                let delete_x = panel_x + panel_width - padding_x - delete_w;
-                if x >= delete_x && x <= delete_x + delete_w {
-                    return SessionPanelAction::Delete(session.id.clone());
-                }
-
-                // Load button
-                let load_text = "Load";
-                let load_w = ui_cw * (load_text.len() as f32 + 2.0);
-                let load_x = delete_x - load_w - ui_cw * 0.5;
-                if x >= load_x && x <= load_x + load_w {
-                    return SessionPanelAction::Load(session.id.clone());
-                }
+            if entry.delete_button.contains(x, y) {
+                return SessionPanelAction::Delete(session.id.clone());
+            }
+            if entry
+                .rename_button
+                .is_some_and(|button| button.contains(x, y))
+            {
+                return SessionPanelAction::Rename(session.id.clone());
+            }
+            if entry.load_button.contains(x, y) {
+                return SessionPanelAction::Load(session.id.clone());
             }
 
             // Clicking anywhere else on the session row → load it

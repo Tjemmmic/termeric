@@ -2,18 +2,20 @@
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 use wgpu::*;
 
-use super::glyph_cache::GlyphCache;
+use super::buffer::{BufferStats, GrowableBuffer};
+use super::glyph_cache::{FontStyle, GlyphCache, GlyphEntry};
 
 /// Vertex for text rendering
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct TextVertex {
     pub position: [f32; 2],
     pub tex_coords: [f32; 2],
     pub color: [f32; 4],
+    pub atlas_page: f32,
+    pub color_glyph: f32,
 }
 
 impl TextVertex {
@@ -37,6 +39,16 @@ impl TextVertex {
                     shader_location: 2,
                     format: VertexFormat::Float32x4,
                 },
+                VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: VertexFormat::Float32,
+                },
+                VertexAttribute {
+                    offset: 36,
+                    shader_location: 4,
+                    format: VertexFormat::Float32,
+                },
             ],
         }
     }
@@ -50,13 +62,268 @@ struct TextUniforms {
     _padding: [f32; 2],
 }
 
-/// Queued character for rendering
-#[derive(Clone)]
-struct QueuedChar {
-    c: char,
+/// Complete text content queued at one terminal cell origin.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum QueuedContent {
+    Char(char),
+    Grapheme(Box<str>),
+    /// A contiguous sequence of one-column terminal cells shaped together.
+    Run {
+        text: String,
+        cell_width: f32,
+    },
+}
+
+/// Pixel-space clipping bounds for terminal glyph overhangs at pane edges.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct TextClip {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+/// Queued character or grapheme for rendering
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct QueuedChar {
+    pub content: QueuedContent,
+    pub x: f32,
+    pub y: f32,
+    pub color: [f32; 4],
+    pub style: FontStyle,
+    pub clip: Option<TextClip>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct TextBatch {
+    pub queued: Vec<QueuedChar>,
+    pub vertices: Vec<TextVertex>,
+    pub indices: Vec<u32>,
+    pub atlas_pages: Vec<u16>,
+}
+
+/// Collects compatible adjacent terminal cells into logical shaping runs.
+/// Whitespace, wide cells, graphemes, and attribute boundaries are flushed by
+/// the caller so terminal cell semantics remain independent of typography.
+#[derive(Clone, Debug, Default)]
+pub(super) struct TextRunAccumulator {
+    pending: Option<QueuedChar>,
+    cell_count: usize,
+}
+
+impl TextRunAccumulator {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push(
+        &mut self,
+        pipeline: &mut TextPipeline,
+        character: char,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+        style: FontStyle,
+        clip: TextClip,
+        cell_width: f32,
+    ) {
+        if let Some(queued) = self.accumulate(character, x, y, color, style, clip, cell_width) {
+            pipeline.queued.push(queued);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn accumulate(
+        &mut self,
+        character: char,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+        style: FontStyle,
+        clip: TextClip,
+        cell_width: f32,
+    ) -> Option<QueuedChar> {
+        let compatible = self.pending.as_ref().is_some_and(|pending| {
+            pending.y == y
+                && pending.color == color
+                && pending.style == style
+                && pending.clip == Some(clip)
+                && matches!(pending.content, QueuedContent::Run { cell_width: width, .. } if width == cell_width)
+                && (pending.x + self.cell_count as f32 * cell_width - x).abs() <= 0.01
+        });
+        if !compatible {
+            let flushed = self.take_pending();
+            self.pending = Some(QueuedChar {
+                content: QueuedContent::Run {
+                    text: character.to_string(),
+                    cell_width,
+                },
+                x,
+                y,
+                color,
+                style,
+                clip: Some(clip),
+            });
+            self.cell_count = 1;
+            return flushed;
+        }
+
+        let Some(QueuedChar {
+            content: QueuedContent::Run { text, .. },
+            ..
+        }) = self.pending.as_mut()
+        else {
+            unreachable!("compatible pending text is always a run");
+        };
+        text.push(character);
+        self.cell_count += 1;
+        None
+    }
+
+    pub(super) fn flush(&mut self, pipeline: &mut TextPipeline) {
+        if let Some(pending) = self.take_pending() {
+            pipeline.queued.push(pending);
+        }
+    }
+
+    fn take_pending(&mut self) -> Option<QueuedChar> {
+        let mut pending = self.pending.take()?;
+        if self.cell_count == 1
+            && let QueuedContent::Run { text, .. } = &pending.content
+            && let Some(character) = text.chars().next()
+        {
+            pending.content = QueuedContent::Char(character);
+        }
+        self.cell_count = 0;
+        Some(pending)
+    }
+}
+
+fn queued_glyphs(
+    queued: &QueuedChar,
+    glyph_cache: &mut GlyphCache,
+    queue: &Queue,
+) -> Vec<(GlyphEntry, f32)> {
+    match &queued.content {
+        QueuedContent::Char(character) => glyph_cache
+            .get_or_insert_styled(*character, queued.style, queue)
+            .map(|entry| vec![(entry, 0.0)])
+            .unwrap_or_default(),
+        QueuedContent::Grapheme(grapheme) => glyph_cache
+            .shape_grapheme_styled(grapheme, queued.style, queue)
+            .map(|run| {
+                run.glyphs
+                    .into_iter()
+                    .map(|glyph| (glyph.entry, glyph.x_offset))
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                // Atlas exhaustion or a shaping failure must not silently
+                // truncate the cluster to its first scalar. Queue every
+                // independently available glyph at the same cell origin.
+                grapheme
+                    .chars()
+                    .filter_map(|character| {
+                        glyph_cache
+                            .get_or_insert_styled(character, queued.style, queue)
+                            .map(|entry| (entry, 0.0))
+                    })
+                    .collect()
+            }),
+        QueuedContent::Run { text, cell_width } => glyph_cache
+            .shape_run_styled(text, queued.style, queue)
+            .map(|run| {
+                run.glyphs
+                    .into_iter()
+                    .map(|glyph| (glyph.entry, glyph.x_offset))
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                text.chars()
+                    .enumerate()
+                    .filter_map(|(index, character)| {
+                        glyph_cache
+                            .get_or_insert_styled(character, queued.style, queue)
+                            .map(|entry| (entry, index as f32 * *cell_width))
+                    })
+                    .collect()
+            }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_glyph_quad(
+    vertices: &mut Vec<TextVertex>,
+    indices: &mut Vec<u32>,
+    entry: GlyphEntry,
     x: f32,
     y: f32,
     color: [f32; 4],
+    atlas_width: f32,
+    atlas_height: f32,
+    baseline: f32,
+    clip: Option<TextClip>,
+) {
+    if entry.width == 0 || entry.height == 0 {
+        return;
+    }
+    let original_x0 = x + entry.bearing_x as f32;
+    let original_y0 = y + baseline - entry.bearing_y as f32;
+    let original_x1 = original_x0 + entry.width as f32;
+    let original_y1 = original_y0 + entry.height as f32;
+    let (x0, y0, x1, y1) = clip.map_or(
+        (original_x0, original_y0, original_x1, original_y1),
+        |clip| {
+            (
+                original_x0.max(clip.left),
+                original_y0.max(clip.top),
+                original_x1.min(clip.right),
+                original_y1.min(clip.bottom),
+            )
+        },
+    );
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let source_u0 = entry.x as f32 / atlas_width;
+    let source_v0 = entry.y as f32 / atlas_height;
+    let source_u1 = (entry.x + entry.width) as f32 / atlas_width;
+    let source_v1 = (entry.y + entry.height) as f32 / atlas_height;
+    let x_span = original_x1 - original_x0;
+    let y_span = original_y1 - original_y0;
+    let u0 = source_u0 + (x0 - original_x0) / x_span * (source_u1 - source_u0);
+    let v0 = source_v0 + (y0 - original_y0) / y_span * (source_v1 - source_v0);
+    let u1 = source_u0 + (x1 - original_x0) / x_span * (source_u1 - source_u0);
+    let v1 = source_v0 + (y1 - original_y0) / y_span * (source_v1 - source_v0);
+    let base = vertices.len() as u32;
+    vertices.extend_from_slice(&[
+        TextVertex {
+            position: [x0, y0],
+            tex_coords: [u0, v0],
+            color,
+            atlas_page: f32::from(entry.page),
+            color_glyph: f32::from(entry.color),
+        },
+        TextVertex {
+            position: [x1, y0],
+            tex_coords: [u1, v0],
+            color,
+            atlas_page: f32::from(entry.page),
+            color_glyph: f32::from(entry.color),
+        },
+        TextVertex {
+            position: [x1, y1],
+            tex_coords: [u1, v1],
+            color,
+            atlas_page: f32::from(entry.page),
+            color_glyph: f32::from(entry.color),
+        },
+        TextVertex {
+            position: [x0, y1],
+            tex_coords: [u0, v1],
+            color,
+            atlas_page: f32::from(entry.page),
+            color_glyph: f32::from(entry.color),
+        },
+    ]);
+    indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
 /// Text rendering pipeline
@@ -64,8 +331,8 @@ pub struct TextPipeline {
     pipeline: RenderPipeline,
     bind_group: Option<BindGroup>,
     uniform_buffer: Buffer,
-    vertex_buffer: Option<Buffer>,
-    index_buffer: Option<Buffer>,
+    vertex_buffer: GrowableBuffer,
+    index_buffer: GrowableBuffer,
     // Queued characters for this frame
     queued: Vec<QueuedChar>,
     // Built vertices
@@ -97,7 +364,7 @@ impl TextPipeline {
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
+                        view_dimension: TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -117,6 +384,17 @@ impl TextPipeline {
                         ty: BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Native RGBA glyph texture (emoji and other color fonts)
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2Array,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -201,6 +479,10 @@ impl TextPipeline {
                     binding: 2,
                     resource: uniform_buffer.as_entire_binding(),
                 },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&glyph_cache.color_texture_view),
+                },
             ],
         });
 
@@ -208,8 +490,8 @@ impl TextPipeline {
             pipeline,
             bind_group: Some(bind_group),
             uniform_buffer,
-            vertex_buffer: None,
-            index_buffer: None,
+            vertex_buffer: GrowableBuffer::new("Text Vertex Buffer", BufferUsages::VERTEX),
+            index_buffer: GrowableBuffer::new("Text Index Buffer", BufferUsages::INDEX),
             queued: Vec::new(),
             vertices: Vec::new(),
             indices: Vec::new(),
@@ -238,6 +520,74 @@ impl TextPipeline {
         self.index_layer_boundaries.clear();
     }
 
+    pub(super) fn queued_checkpoint(&self) -> usize {
+        self.queued.len()
+    }
+
+    pub(super) fn take_queued_since(&mut self, start: usize) -> Vec<QueuedChar> {
+        self.queued.split_off(start)
+    }
+
+    pub(super) fn build_batch(
+        queued: Vec<QueuedChar>,
+        queue: &Queue,
+        glyph_cache: &mut GlyphCache,
+    ) -> TextBatch {
+        let (atlas_width, atlas_height) = glyph_cache.atlas_size();
+        let (_, cell_height) = glyph_cache.cell_size();
+        let baseline = cell_height * 0.8;
+        let mut vertices = Vec::with_capacity(queued.len() * 4);
+        let mut indices = Vec::with_capacity(queued.len() * 6);
+        let mut atlas_pages = Vec::new();
+
+        for character in &queued {
+            for (entry, x_offset) in queued_glyphs(character, glyph_cache, queue) {
+                let page = entry.page_key();
+                if !atlas_pages.contains(&page) {
+                    atlas_pages.push(page);
+                }
+                append_glyph_quad(
+                    &mut vertices,
+                    &mut indices,
+                    entry,
+                    character.x + x_offset,
+                    character.y,
+                    character.color,
+                    atlas_width as f32,
+                    atlas_height as f32,
+                    baseline,
+                    character.clip,
+                );
+            }
+        }
+        TextBatch {
+            queued,
+            vertices,
+            indices,
+            atlas_pages,
+        }
+    }
+
+    pub(super) fn draw_external<'a>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        vertex_buffer: &'a Buffer,
+        index_buffer: &'a Buffer,
+        index_count: u32,
+    ) {
+        let Some(bind_group) = &self.bind_group else {
+            return;
+        };
+        if index_count == 0 {
+            return;
+        }
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
+        render_pass.draw_indexed(0..index_count, 0, 0..1);
+    }
+
     /// Mark a layer boundary at the current queued-char position.
     /// All text pushed after this call belongs to the new layer.
     pub fn mark_layer(&mut self) {
@@ -251,7 +601,106 @@ impl TextPipeline {
 
     /// Queue a character for rendering
     pub fn push_char(&mut self, c: char, x: f32, y: f32, color: [f32; 4]) {
-        self.queued.push(QueuedChar { c, x, y, color });
+        self.queued.push(QueuedChar {
+            content: QueuedContent::Char(c),
+            x,
+            y,
+            color,
+            style: FontStyle::default(),
+            clip: None,
+        });
+    }
+
+    /// Queue a terminal character with resolved SGR face and pane clipping.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_styled_char(
+        &mut self,
+        c: char,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+        style: FontStyle,
+        clip: TextClip,
+    ) {
+        self.queued.push(QueuedChar {
+            content: QueuedContent::Char(c),
+            x,
+            y,
+            color,
+            style,
+            clip: Some(clip),
+        });
+    }
+
+    /// Queue a complete grapheme cluster at one terminal cell origin.
+    #[cfg(test)]
+    pub fn push_grapheme(&mut self, grapheme: &str, x: f32, y: f32, color: [f32; 4]) {
+        if let Some(character) = grapheme.chars().next()
+            && character.len_utf8() == grapheme.len()
+        {
+            self.push_char(character, x, y, color);
+        } else {
+            self.queued.push(QueuedChar {
+                content: QueuedContent::Grapheme(grapheme.into()),
+                x,
+                y,
+                color,
+                style: FontStyle::default(),
+                clip: None,
+            });
+        }
+    }
+
+    /// Queue free-standing UI text as one shaping run with terminal-cell
+    /// advances. Unlike terminal row runs, this is not pane-clipped.
+    pub(super) fn push_ui_run(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+        cell_width: f32,
+    ) {
+        if !text.is_empty() {
+            self.queued.push(QueuedChar {
+                content: QueuedContent::Run {
+                    text: text.to_owned(),
+                    cell_width,
+                },
+                x,
+                y,
+                color,
+                style: FontStyle::default(),
+                clip: None,
+            });
+        }
+    }
+
+    /// Queue a terminal grapheme with resolved SGR face and pane clipping.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_styled_grapheme(
+        &mut self,
+        grapheme: &str,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+        style: FontStyle,
+        clip: TextClip,
+    ) {
+        if let Some(character) = grapheme.chars().next()
+            && character.len_utf8() == grapheme.len()
+        {
+            self.push_styled_char(character, x, y, color, style, clip);
+        } else {
+            self.queued.push(QueuedChar {
+                content: QueuedContent::Grapheme(grapheme.into()),
+                x,
+                y,
+                color,
+                style,
+                clip: Some(clip),
+            });
+        }
     }
 
     /// Upload vertex data to GPU
@@ -266,54 +715,24 @@ impl TextPipeline {
         let (_cell_width, cell_height) = glyph_cache.cell_size();
         let baseline = cell_height * 0.8; // Approximate baseline
 
-        // Always use standard per-character rendering for proper monospace grid alignment.
-        // Ligatures are handled separately by detecting specific patterns inline.
-        //
-        // When ligatures are enabled we still use per-char rendering for grid
-        // alignment, but attempt to shape common operator sequences so the
-        // glyph cache warms up ligature runs for future use.
-        if glyph_cache.ligatures_enabled() {
-            // Pre-warm ligature cache for common operator patterns
-            for pattern in &["=>", "->", "!=", "==", "<=", ">="] {
-                if let Some(run) = glyph_cache.shape_run(pattern, queue) {
-                    // Read ShapedGlyph fields (entry, x_offset, width) and
-                    // LigatureRun fields (glyphs, total_width) to silence warnings
-                    let _total_w = run.total_width;
-                    for g in &run.glyphs {
-                        let _w = g.width;
-                        let _xo = g.x_offset;
-                        let _ew = g.entry.width;
-                    }
-                }
-            }
-        }
-        self.upload_standard(queue, glyph_cache, atlas_w, atlas_h, baseline);
+        self.upload_queued(queue, glyph_cache, atlas_w, atlas_h, baseline);
 
         // Create/update vertex buffer
         if !self.vertices.is_empty() {
             let vertex_data = bytemuck::cast_slice(&self.vertices);
             let index_data = bytemuck::cast_slice(&self.indices);
 
-            self.vertex_buffer = Some(device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Text Vertex Buffer"),
-                    contents: vertex_data,
-                    usage: BufferUsages::VERTEX,
-                },
-            ));
-
-            self.index_buffer = Some(device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Text Index Buffer"),
-                    contents: index_data,
-                    usage: BufferUsages::INDEX,
-                },
-            ));
+            self.vertex_buffer.upload(device, queue, vertex_data);
+            self.index_buffer.upload(device, queue, index_data);
         }
     }
 
-    /// Standard per-character upload (no ligatures)
-    fn upload_standard(
+    pub(super) fn buffer_stats(&self) -> (BufferStats, BufferStats) {
+        (self.vertex_buffer.stats(), self.index_buffer.stats())
+    }
+
+    /// Upload queued characters, graphemes, and shaped row runs.
+    fn upload_queued(
         &mut self,
         queue: &Queue,
         glyph_cache: &mut GlyphCache,
@@ -334,56 +753,20 @@ impl TextPipeline {
                 next_boundary_idx += 1;
             }
 
-            let Some(entry) = glyph_cache.get_or_insert(queued.c, queue) else {
-                continue;
-            };
-
-            if entry.width == 0 || entry.height == 0 {
-                continue;
+            for (entry, x_offset) in queued_glyphs(queued, glyph_cache, queue) {
+                append_glyph_quad(
+                    &mut self.vertices,
+                    &mut self.indices,
+                    entry,
+                    queued.x + x_offset,
+                    queued.y,
+                    queued.color,
+                    atlas_w,
+                    atlas_h,
+                    baseline,
+                    queued.clip,
+                );
             }
-
-            // Position glyph using font bearing (standard approach)
-            let x0 = queued.x + entry.bearing_x as f32;
-            let y0 = queued.y + baseline - entry.bearing_y as f32;
-            let x1 = x0 + entry.width as f32;
-            let y1 = y0 + entry.height as f32;
-
-            let u0 = entry.x as f32 / atlas_w;
-            let v0 = entry.y as f32 / atlas_h;
-            let u1 = (entry.x + entry.width) as f32 / atlas_w;
-            let v1 = (entry.y + entry.height) as f32 / atlas_h;
-
-            let base_idx = self.vertices.len() as u32;
-
-            self.vertices.push(TextVertex {
-                position: [x0, y0],
-                tex_coords: [u0, v0],
-                color: queued.color,
-            });
-            self.vertices.push(TextVertex {
-                position: [x1, y0],
-                tex_coords: [u1, v0],
-                color: queued.color,
-            });
-            self.vertices.push(TextVertex {
-                position: [x1, y1],
-                tex_coords: [u1, v1],
-                color: queued.color,
-            });
-            self.vertices.push(TextVertex {
-                position: [x0, y1],
-                tex_coords: [u0, v1],
-                color: queued.color,
-            });
-
-            self.indices.extend_from_slice(&[
-                base_idx,
-                base_idx + 1,
-                base_idx + 2,
-                base_idx,
-                base_idx + 2,
-                base_idx + 3,
-            ]);
         }
 
         // Flush any remaining layer boundaries (layers with no chars, or at the end)
@@ -409,10 +792,10 @@ impl TextPipeline {
             return;
         }
 
-        let Some(vertex_buffer) = &self.vertex_buffer else {
+        let Some(vertex_buffer) = self.vertex_buffer.buffer() else {
             return;
         };
-        let Some(index_buffer) = &self.index_buffer else {
+        let Some(index_buffer) = self.index_buffer.buffer() else {
             return;
         };
         let Some(bind_group) = &self.bind_group else {
@@ -449,5 +832,77 @@ impl TextPipeline {
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
         render_pass.draw_indexed(start..end, 0, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const COLOR: [f32; 4] = [0.8, 0.7, 0.6, 1.0];
+    const CLIP: TextClip = TextClip {
+        left: 0.0,
+        top: 0.0,
+        right: 100.0,
+        bottom: 40.0,
+    };
+
+    fn append(
+        accumulator: &mut TextRunAccumulator,
+        character: char,
+        x: f32,
+        color: [f32; 4],
+        style: FontStyle,
+    ) -> Option<QueuedChar> {
+        accumulator.accumulate(character, x, 4.0, color, style, CLIP, 10.0)
+    }
+
+    #[test]
+    fn adjacent_compatible_cells_form_one_shaping_run() {
+        let mut accumulator = TextRunAccumulator::default();
+        assert!(append(&mut accumulator, '-', 0.0, COLOR, FontStyle::default()).is_none());
+        assert!(append(&mut accumulator, '>', 10.0, COLOR, FontStyle::default()).is_none());
+        let queued = accumulator.take_pending().expect("pending run");
+        assert_eq!(
+            queued.content,
+            QueuedContent::Run {
+                text: "->".into(),
+                cell_width: 10.0,
+            }
+        );
+        assert_eq!(queued.x, 0.0);
+    }
+
+    #[test]
+    fn style_color_and_geometry_boundaries_break_runs() {
+        let bold = FontStyle {
+            bold: true,
+            italic: false,
+        };
+        for (second_x, second_color, second_style) in [
+            (20.0, COLOR, FontStyle::default()),
+            (10.0, [0.2, 0.3, 0.4, 1.0], FontStyle::default()),
+            (10.0, COLOR, bold),
+        ] {
+            let mut accumulator = TextRunAccumulator::default();
+            assert!(append(&mut accumulator, 'a', 0.0, COLOR, FontStyle::default()).is_none());
+            let flushed = append(&mut accumulator, 'b', second_x, second_color, second_style)
+                .expect("boundary should flush the first cell");
+            assert_eq!(flushed.content, QueuedContent::Char('a'));
+            assert_eq!(
+                accumulator.take_pending().unwrap().content,
+                QueuedContent::Char('b')
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_pending_cell_stays_on_the_character_fast_path() {
+        let mut accumulator = TextRunAccumulator::default();
+        append(&mut accumulator, 'x', 0.0, COLOR, FontStyle::default());
+        assert_eq!(
+            accumulator.take_pending().unwrap().content,
+            QueuedContent::Char('x')
+        );
     }
 }

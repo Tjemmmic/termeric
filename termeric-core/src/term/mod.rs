@@ -4,24 +4,609 @@
 //! cursor handling, and the interface for processing escape sequences.
 
 mod cursor;
+mod keyboard;
 mod mode;
 mod selection;
 
-pub use cursor::SavedCursor;
+pub use cursor::{SavedCursor, TerminalCursorShape, TerminalCursorStyle};
+pub use keyboard::{
+    KITTY_KEYBOARD_STACK_DEPTH, KittyKeyboardFlags, MAX_USER_DEFINED_KEY_BYTES,
+    MAX_USER_DEFINED_KEYS_BYTES, XTERM_USER_DEFINED_KEY_COUNT, XtermCursorKeys, XtermFunctionKeys,
+    XtermKeyFormat, XtermKeyMode, XtermKeyboardResource, XtermKeyboardType, XtermKeypadKeys,
+    XtermModifierKeys, XtermModifyOtherKeys, XtermSpecialKeys, XtermStringKeys,
+    XtermUserDefinedKeys,
+};
 pub use mode::TerminalMode;
 pub use selection::{Point, Selection, SelectionType};
 
 use crate::ansi::Processor;
 use crate::event::TerminalEvent;
-use crate::graphics::{GraphicsManager, ImageId, ImagePlacement, KittyCommand, StoredImage};
-use crate::grid::{CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry};
+use crate::graphics::{
+    GraphicsManager, GraphicsRelaySnapshot, GraphicsResponse, ImageId, ImagePlacement,
+    KittyCommand, MAX_GRAPHICS_RELAY_METADATA_BYTES, PresentationImage, StoredImage,
+};
+use crate::grid::{
+    Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry,
+};
 use crate::shell::ShellIntegration;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 /// Tab stop interval
 const TAB_INTERVAL: usize = 8;
+/// REP remembers one normal grapheme but does not duplicate a pathological,
+/// attacker-sized combining sequence into a compact control sequence.
+const MAX_REPEAT_GRAPHEME_BYTES: usize = 1024;
+/// APC control bytes plus the protocol's maximum 4096-byte encoded data chunk.
+const MAX_KITTY_APC_BYTES: usize = 8 * 1024;
+const MAX_GRAPHICS_RELAY_APC_BYTES: usize = 64 * 1024;
+/// Safety valve for applications that enter synchronized output and never
+/// leave it. The protocol deliberately does not prescribe a timeout; one
+/// second bounds stale presentation and snapshot memory without affecting a
+/// normal frame-sized update.
+pub const SYNCHRONIZED_OUTPUT_TIMEOUT: Duration = Duration::from_secs(1);
+
+fn graphics_relay_checksum(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+/// Bounded shell-reported working-directory metadata from OSC 7.
+///
+/// The path is decoded UTF-8 and always absolute in the URI's path syntax.
+/// Consumers must still decide whether `host` names their local machine before
+/// using the path for filesystem access.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportedWorkingDirectory {
+    uri: String,
+    host: Option<String>,
+    path: String,
+}
+
+impl ReportedWorkingDirectory {
+    pub(crate) fn new(uri: String, host: Option<String>, path: String) -> Self {
+        Self { uri, host, path }
+    }
+
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+}
+
+struct SynchronizedOutputSnapshot {
+    grid: Grid,
+    alternate_screen: bool,
+    dynamic_colors: DynamicColors,
+    cursor_style: Option<TerminalCursorStyle>,
+    cursor_blink_override: Option<bool>,
+    images: Vec<PresentationImage>,
+    started_at: Instant,
+}
+
+struct PendingGraphicsRelayImport {
+    expected_bytes: usize,
+    expected_checksum: u64,
+    metadata: Vec<u8>,
+    started_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TerminalRect {
+    top: usize,
+    bottom: usize,
+    left: usize,
+    right: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShellLogicalAnchor {
+    line: usize,
+    cell: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PromptNavigationState {
+    row: i32,
+    scroll_offset: usize,
+}
+
+fn shell_logical_anchor(grid: &Grid, target_row: i32) -> Option<ShellLogicalAnchor> {
+    let oldest = -(grid.scrollback_len() as i32);
+    let newest = grid.rows().saturating_sub(1) as i32;
+    if !(oldest..=newest).contains(&target_row) {
+        return None;
+    }
+    let mut line = 0_usize;
+    let mut cell = 0_usize;
+    for row_index in oldest..=newest {
+        let row = grid.row_at_offset(row_index)?;
+        if row_index == target_row {
+            return Some(ShellLogicalAnchor { line, cell });
+        }
+        if row.is_wrapped() {
+            cell = cell.saturating_add(row.len());
+        } else {
+            line = line.saturating_add(1);
+            cell = 0;
+        }
+    }
+    None
+}
+
+fn shell_row_from_anchor(grid: &Grid, target: ShellLogicalAnchor) -> Option<i32> {
+    let oldest = -(grid.scrollback_len() as i32);
+    let newest = grid.rows().saturating_sub(1) as i32;
+    let mut line = 0_usize;
+    let mut remaining = target.cell;
+    for row_index in oldest..=newest {
+        let row = grid.row_at_offset(row_index)?;
+        if line == target.line {
+            if remaining < row.len() || !row.is_wrapped() {
+                return Some(row_index);
+            }
+            remaining = remaining.saturating_sub(row.len());
+        }
+        if !row.is_wrapped() {
+            if line == target.line {
+                return Some(row_index);
+            }
+            line = line.saturating_add(1);
+            remaining = target.cell;
+        }
+    }
+    None
+}
+
+impl TerminalRect {
+    fn width(self) -> usize {
+        self.right - self.left
+    }
+
+    fn height(self) -> usize {
+        self.bottom - self.top
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DecAttributeChange {
+    set: CellAttrs,
+    clear: CellAttrs,
+}
+
+impl DecAttributeChange {
+    fn set(&mut self, attrs: CellAttrs) {
+        self.clear.remove(attrs);
+        self.set.insert(attrs);
+    }
+
+    fn clear(&mut self, attrs: CellAttrs) {
+        self.set.remove(attrs);
+        self.clear.insert(attrs);
+    }
+
+    fn apply(self, attrs: &mut CellAttrs) {
+        attrs.remove(self.clear);
+        attrs.insert(self.set);
+    }
+
+    fn is_empty(self) -> bool {
+        self.set.is_empty() && self.clear.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DecAttributeReverse {
+    bold: bool,
+    underline: bool,
+    blink: bool,
+    inverse: bool,
+    hidden: bool,
+}
+
+impl DecAttributeReverse {
+    fn is_empty(self) -> bool {
+        !(self.bold || self.underline || self.blink || self.inverse || self.hidden)
+    }
+
+    fn apply(self, attrs: &mut CellAttrs) {
+        if self.bold {
+            attrs.toggle(CellAttrs::BOLD);
+        }
+        if self.underline {
+            if attrs.intersects(CellAttrs::ALL_UNDERLINES) {
+                attrs.remove(CellAttrs::ALL_UNDERLINES);
+            } else {
+                attrs.insert(CellAttrs::UNDERLINE);
+            }
+        }
+        if self.blink {
+            attrs.toggle(CellAttrs::BLINK);
+        }
+        if self.inverse {
+            attrs.toggle(CellAttrs::INVERSE);
+        }
+        if self.hidden {
+            attrs.toggle(CellAttrs::HIDDEN);
+        }
+    }
+}
+
+fn dec_checksum_attributes(cell: &Cell) -> u16 {
+    let mut value = 0_u16;
+    if cell.flags.contains(CellFlags::PROTECTED) {
+        value |= 0x04;
+    }
+    if cell.attrs.contains(CellAttrs::HIDDEN) {
+        value |= 0x08;
+    }
+    if cell.attrs.has_underline() {
+        value |= 0x10;
+    }
+    if cell.attrs.contains(CellAttrs::INVERSE) {
+        value |= 0x20;
+    }
+    if cell.attrs.contains(CellAttrs::BLINK) {
+        value |= 0x40;
+    }
+    if cell.attrs.contains(CellAttrs::BOLD) {
+        value |= 0x80;
+    }
+    value
+}
+
+fn dec_checksum_character(cell: &Cell, character: char) -> u16 {
+    let dec = if cell.flags.contains(CellFlags::DEC_SPECIAL_GRAPHICS) {
+        match character {
+            ' ' => b'_',
+            '◆' => b'`',
+            '▒' => b'a',
+            '␉' => b'b',
+            '␌' => b'c',
+            '␍' => b'd',
+            '␊' => b'e',
+            '°' => b'f',
+            '±' => b'g',
+            '␤' => b'h',
+            '␋' => b'i',
+            '┘' => b'j',
+            '┐' => b'k',
+            '┌' => b'l',
+            '└' => b'm',
+            '┼' => b'n',
+            '⎺' => b'o',
+            '⎻' => b'p',
+            '─' => b'q',
+            '⎼' => b'r',
+            '⎽' => b's',
+            '├' => b't',
+            '┤' => b'u',
+            '┴' => b'v',
+            '┬' => b'w',
+            '│' => b'x',
+            '≤' => b'y',
+            '≥' => b'z',
+            'π' => b'{',
+            '≠' => b'|',
+            '£' => b'}',
+            '·' => b'~',
+            _ => (character as u32 & 0xff) as u8,
+        }
+    } else if cell.flags.contains(CellFlags::DEC_UK_CHARSET) && character == '£' {
+        b'#'
+    } else if character == '␦' {
+        0x1b
+    } else {
+        (character as u32 & 0xff) as u8
+    };
+    u16::from(dec)
+}
+
+fn stored_character_set(cell: &Cell) -> CharacterSet {
+    if cell.flags.contains(CellFlags::DEC_SPECIAL_GRAPHICS) {
+        CharacterSet::DecSpecialGraphics
+    } else if cell.flags.contains(CellFlags::DEC_UK_CHARSET) {
+        CharacterSet::UnitedKingdom
+    } else {
+        CharacterSet::Ascii
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CursorPresentationState {
+    row: usize,
+    col: usize,
+    bold: bool,
+    underline: bool,
+    blink: bool,
+    inverse: bool,
+    protected: bool,
+    wrap_pending: bool,
+    origin_mode: bool,
+    gl_register: u8,
+    gr_register: u8,
+    single_shift: Option<u8>,
+    g_sets: [CharacterSet; 4],
+}
+
+impl CursorPresentationState {
+    fn parse(data: &[u8], rows: usize, cols: usize) -> Option<Self> {
+        // DECCIR has ten small, fixed-format fields. Bound this separately from
+        // the much larger DCS allowance required by graphics payloads so a
+        // malformed report cannot amplify into a large temporary field vector.
+        if data.len() > 128 {
+            return None;
+        }
+        let fields: Vec<&[u8]> = data.split(|byte| *byte == b';').collect();
+        if fields.len() != 10 {
+            return None;
+        }
+        let row = parse_decimal(fields[0])?;
+        let col = parse_decimal(fields[1])?;
+        if row == 0 || row > rows || col == 0 || col > cols || parse_decimal(fields[2])? != 1 {
+            return None;
+        }
+
+        let rendition = report_byte(fields[3], 0x0f)?;
+        let protection = report_byte(fields[4], 0x01)?;
+        let flags = report_byte(fields[5], 0x0f)?;
+        if flags & 0x06 == 0x06 {
+            // SS2 and SS3 are mutually exclusive pending states.
+            return None;
+        }
+        let gl_register = u8::try_from(parse_decimal(fields[6])?).ok()?;
+        let gr_register = u8::try_from(parse_decimal(fields[7])?).ok()?;
+        if gl_register >= 4 || gr_register >= 4 || fields[8] != b"@" {
+            return None;
+        }
+        let [g0, g1, g2, g3] = fields[9] else {
+            return None;
+        };
+        let g_sets = [
+            CharacterSet::from_designator(*g0)?,
+            CharacterSet::from_designator(*g1)?,
+            CharacterSet::from_designator(*g2)?,
+            CharacterSet::from_designator(*g3)?,
+        ];
+
+        Some(Self {
+            row: row - 1,
+            col: col - 1,
+            bold: rendition & 0x01 != 0,
+            underline: rendition & 0x02 != 0,
+            blink: rendition & 0x04 != 0,
+            inverse: rendition & 0x08 != 0,
+            protected: protection & 0x01 != 0,
+            wrap_pending: flags & 0x08 != 0,
+            origin_mode: flags & 0x01 != 0,
+            gl_register,
+            gr_register,
+            single_shift: if flags & 0x04 != 0 {
+                Some(3)
+            } else if flags & 0x02 != 0 {
+                Some(2)
+            } else {
+                None
+            },
+            g_sets,
+        })
+    }
+}
+
+fn report_byte(field: &[u8], allowed_bits: u8) -> Option<u8> {
+    let [value] = field else {
+        return None;
+    };
+    (*value & !allowed_bits == b'@').then_some(*value)
+}
+
+fn parse_decimal(field: &[u8]) -> Option<usize> {
+    if field.is_empty() {
+        return None;
+    }
+    field.iter().try_fold(0_usize, |value, byte| {
+        let digit = byte.checked_sub(b'0').filter(|digit| *digit <= 9)?;
+        value.checked_mul(10)?.checked_add(usize::from(digit))
+    })
+}
+
+fn parse_tab_stop_report(data: &[u8], cols: usize) -> Option<Vec<bool>> {
+    let digits = cols.max(1).to_string().len();
+    if data.len() > cols.saturating_mul(digits.saturating_add(1)) {
+        return None;
+    }
+    let mut tabs = vec![false; cols];
+    if data.is_empty() {
+        return Some(tabs);
+    }
+    for (count, field) in data.split(|byte| *byte == b'/').enumerate() {
+        if count >= cols {
+            return None;
+        }
+        let column = parse_decimal(field)?;
+        if column == 0 || column > cols {
+            return None;
+        }
+        tabs[column - 1] = true;
+    }
+    Some(tabs)
+}
+
+/// Estimated memory owned by terminal grids and hyperlink metadata.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TerminalMemoryUsage {
+    pub visible_bytes: usize,
+    pub scrollback_bytes: usize,
+    pub grapheme_bytes: usize,
+    pub style_bytes: usize,
+    pub hyperlink_bytes: usize,
+    pub scrollback_lines: usize,
+    pub scrollback_line_limit: usize,
+    pub scrollback_byte_limit: usize,
+}
+
+/// Terminal-local OSC palette/default color overrides. Theme colors remain the
+/// base layer and become visible again when an override is reset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DynamicColors {
+    palette: [Option<Color>; 256],
+    foreground: Option<Color>,
+    background: Option<Color>,
+    cursor: Option<Color>,
+    generation: u64,
+}
+
+impl Default for DynamicColors {
+    fn default() -> Self {
+        Self {
+            palette: [None; 256],
+            foreground: None,
+            background: None,
+            cursor: None,
+            generation: 0,
+        }
+    }
+}
+
+impl DynamicColors {
+    pub fn palette(&self, index: u8) -> Option<Color> {
+        self.palette[index as usize]
+    }
+
+    pub fn foreground(&self) -> Option<Color> {
+        self.foreground
+    }
+
+    pub fn background(&self) -> Option<Color> {
+        self.background
+    }
+
+    pub fn cursor(&self) -> Option<Color> {
+        self.cursor
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn set(&mut self, target: crate::event::DynamicColorTarget, color: Color) {
+        let slot = match target {
+            crate::event::DynamicColorTarget::Palette(index) => &mut self.palette[index as usize],
+            crate::event::DynamicColorTarget::Foreground => &mut self.foreground,
+            crate::event::DynamicColorTarget::Background => &mut self.background,
+            crate::event::DynamicColorTarget::Cursor => &mut self.cursor,
+        };
+        if *slot != Some(color) {
+            *slot = Some(color);
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    fn reset(&mut self, target: crate::event::DynamicColorTarget) {
+        let slot = match target {
+            crate::event::DynamicColorTarget::Palette(index) => &mut self.palette[index as usize],
+            crate::event::DynamicColorTarget::Foreground => &mut self.foreground,
+            crate::event::DynamicColorTarget::Background => &mut self.background,
+            crate::event::DynamicColorTarget::Cursor => &mut self.cursor,
+        };
+        if slot.take().is_some() {
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+
+    fn reset_palette(&mut self) {
+        if self.palette.iter().any(Option::is_some) {
+            self.palette.fill(None);
+            self.generation = self.generation.wrapping_add(1);
+        }
+    }
+}
+
+/// Resident 94-character sets supported in the G0-G3 registers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum CharacterSet {
+    #[default]
+    Ascii,
+    UnitedKingdom,
+    DecSpecialGraphics,
+}
+
+impl CharacterSet {
+    fn from_designator(designator: u8) -> Option<Self> {
+        match designator {
+            b'A' => Some(Self::UnitedKingdom),
+            b'B' => Some(Self::Ascii),
+            b'0' => Some(Self::DecSpecialGraphics),
+            _ => None,
+        }
+    }
+
+    fn designator(self) -> u8 {
+        match self {
+            Self::Ascii => b'B',
+            Self::UnitedKingdom => b'A',
+            Self::DecSpecialGraphics => b'0',
+        }
+    }
+
+    fn translate(self, character: char) -> char {
+        match self {
+            Self::Ascii => character,
+            Self::UnitedKingdom if character == '#' => '£',
+            Self::UnitedKingdom => character,
+            Self::DecSpecialGraphics => match character {
+                '_' => ' ',
+                '`' => '◆',
+                'a' => '▒',
+                'b' => '␉',
+                'c' => '␌',
+                'd' => '␍',
+                'e' => '␊',
+                'f' => '°',
+                'g' => '±',
+                'h' => '␤',
+                'i' => '␋',
+                'j' => '┘',
+                'k' => '┐',
+                'l' => '┌',
+                'm' => '└',
+                'n' => '┼',
+                'o' => '⎺',
+                'p' => '⎻',
+                'q' => '─',
+                'r' => '⎼',
+                's' => '⎽',
+                't' => '├',
+                'u' => '┤',
+                'v' => '┴',
+                'w' => '┬',
+                'x' => '│',
+                'y' => '≤',
+                'z' => '≥',
+                '{' => 'π',
+                '|' => '≠',
+                '}' => '£',
+                '~' => '·',
+                _ => character,
+            },
+        }
+    }
+}
 
 /// The main terminal state
 pub struct Terminal {
+    /// Terminal-database identity exported to the attached child. XTGETTCAP
+    /// reports this exact value rather than assuming the native entry exists.
+    term_name: &'static str,
     /// Primary screen grid
     grid: Grid,
     /// Alternate screen grid (for vim, less, etc.)
@@ -30,6 +615,52 @@ pub struct Terminal {
     alt_screen_active: bool,
     /// Terminal mode flags
     mode: TerminalMode,
+    /// Whether terminal-generated C1 replies use their single-byte 8-bit
+    /// representation. Input acceptance is independent of this S7C1T/S8C1T
+    /// transmission preference.
+    use_8bit_controls: bool,
+    /// DEC operating level selected by DECSCL, represented as 1 through 5.
+    /// This is negotiation/reporting state; it does not mask the terminal's
+    /// implemented parser features.
+    dec_conformance_level: u8,
+    /// Optional cursor shape/blink override selected by DECSCUSR.
+    cursor_style: Option<TerminalCursorStyle>,
+    /// Optional cursor-blink override selected by DECSET/DECRST 12.
+    /// `None` leaves the user's configured blink policy in control.
+    cursor_blink_override: Option<bool>,
+    /// Kitty keyboard negotiation is independent for the main and alternate screens.
+    keyboard: keyboard::KittyKeyboardState,
+    alt_keyboard: keyboard::KittyKeyboardState,
+    /// Xterm's global keyboard type. DECSET 1060/1061 selects a historical
+    /// profile; resetting either mode returns to the normal type.
+    xterm_keyboard_type: XtermKeyboardType,
+    /// User-configured type restored by RIS and used by unsaved DEC private
+    /// mode restores.
+    initial_xterm_keyboard_type: XtermKeyboardType,
+    /// Shared save slot used by xterm's private modes 1060 and 1061.
+    saved_xterm_keyboard_type: Option<XtermKeyboardType>,
+    /// DECUDK definitions are global to the terminal owner and are consulted
+    /// only by Shift-modified keys in the VT220 keyboard profile.
+    xterm_user_defined_keys: XtermUserDefinedKeys,
+    /// Xterm resource-zero modifyKeyboard/formatKeyboard state applies across
+    /// both screen buffers. Under Termeric's normal keyboard profile it is
+    /// queryable compatibility state and does not alter key encoding.
+    xterm_keyboard_resource: XtermKeyboardResource,
+    /// Xterm modifyCursorKeys applies across both screen buffers.
+    xterm_cursor_keys: XtermCursorKeys,
+    /// Xterm modifyFunctionKeys applies across both screen buffers.
+    xterm_function_keys: XtermFunctionKeys,
+    /// Xterm modifyKeypadKeys applies across both screen buffers.
+    xterm_keypad_keys: XtermKeypadKeys,
+    /// Xterm's reserved modifyStringKeys/formatStringKeys resource 5.
+    xterm_string_keys: XtermStringKeys,
+    /// Xterm modifyModifierKeys applies across both screen buffers.
+    xterm_modifier_keys: XtermModifierKeys,
+    /// Xterm modifySpecialKeys applies across both screen buffers.
+    xterm_special_keys: XtermSpecialKeys,
+    /// Xterm modifyOtherKeys applies to this terminal owner across both
+    /// screen buffers and is reset by DECSTR/RIS like xterm's modifier resources.
+    xterm_modify_other_keys: XtermModifyOtherKeys,
     /// Tab stop positions
     tabs: Vec<bool>,
     /// Saved cursor state for primary screen
@@ -38,6 +669,27 @@ pub struct Terminal {
     alt_saved_cursor: Option<SavedCursor>,
     /// Current text attributes for new characters
     current_attrs: CellAttrs,
+    /// Whether newly printed characters are protected from DEC selective
+    /// erase operations (DECSCA).
+    current_character_protected: bool,
+    /// DECSACE selects exact rectangles rather than the default wrapped
+    /// stream extent for DECCARA and DECRARA.
+    rectangular_change_extent: bool,
+    /// DECRQCRA can reveal screen contents one cell at a time. Keep reports
+    /// disabled until the embedding application explicitly permits them.
+    screen_checksum_reporting: bool,
+    /// G0 through G3 94-character-set designations.
+    g_sets: [CharacterSet; 4],
+    /// G-set currently invoked into GL by LS0 through LS3.
+    gl_register: u8,
+    /// G-set currently invoked into GR by LS1R through LS3R. UTF-8 input does
+    /// not remap non-ASCII scalars, but the ISO-2022 state remains reportable.
+    gr_register: u8,
+    /// One-shot G2/G3 invocation for the next graphic character.
+    single_shift: Option<u8>,
+    /// Most recently printed grapheme used by REP. `CellContent::Char` keeps
+    /// the overwhelmingly common one-scalar case inline and allocation-free.
+    last_graphic: Option<(CellContent, CharacterSet)>,
     /// Current foreground color (resolved RGB)
     current_fg: Color,
     /// Current background color (resolved RGB)
@@ -48,28 +700,59 @@ pub struct Terminal {
     current_bg_spec: ColorSpec,
     /// Current underline color (None means use fg color)
     current_underline_color: Option<Color>,
+    /// Original underline-color encoding, retained for exact replay and Kitty
+    /// Unicode placeholder placement IDs.
+    current_underline_color_spec: Option<ColorSpec>,
     /// Current hyperlink ID (if inside a hyperlink)
     current_hyperlink_id: Option<u32>,
     /// Registry of all hyperlinks
     hyperlink_registry: HyperlinkRegistry,
+    /// Evictions accumulated before the next reference-aware registry compaction
+    hyperlink_gc_evictions: usize,
     /// Current selection
     selection: Option<Selection>,
     /// Scroll region top (inclusive, 0-indexed)
     scroll_top: usize,
     /// Scroll region bottom (exclusive, 0-indexed)
     scroll_bottom: usize,
+    /// Horizontal scroll region left (inclusive, 0-indexed)
+    scroll_left: usize,
+    /// Horizontal scroll region right (exclusive, 0-indexed)
+    scroll_right: usize,
     /// Escape sequence processor
     processor: Processor,
     /// Number of columns
     cols: usize,
     /// Number of rows
     rows: usize,
+    /// Last valid OSC 7 directory report. This is shell/application metadata,
+    /// not presentation state, so DECSTR/RIS and screen changes preserve it.
+    reported_working_directory: Option<ReportedWorkingDirectory>,
+    /// Physical cell extent used to normalize pixel-addressed image protocols.
+    grid_pixel_width: u32,
+    grid_pixel_height: u32,
+    cell_pixel_width: u32,
+    cell_pixel_height: u32,
     /// Graphics manager for inline images
     graphics: GraphicsManager,
+    /// Kitty APC parsing must survive calls to `process`, which may split any byte sequence.
+    graphics_apc_data: Vec<u8>,
+    graphics_apc_active: bool,
+    graphics_apc_overflow: bool,
+    graphics_relay_import_allowed: bool,
+    graphics_relay_apc_data: Vec<u8>,
+    graphics_relay_apc_active: bool,
+    graphics_relay_apc_overflow: bool,
+    pending_graphics_relay_import: Option<PendingGraphicsRelayImport>,
     /// Shell integration for prompt tracking
     shell: ShellIntegration,
+    /// Exact prompt selected by the previous/next prompt actions. The saved
+    /// offset lets direct/manual scrolling invalidate this navigation cursor.
+    prompt_navigation: Option<PromptNavigationState>,
     /// Pending events to be handled by the application
     pending_events: Vec<TerminalEvent>,
+    dynamic_colors: DynamicColors,
+    synchronized_output_snapshot: Option<SynchronizedOutputSnapshot>,
 }
 
 impl Terminal {
@@ -77,38 +760,117 @@ impl Terminal {
     pub fn new(cols: usize, rows: usize) -> Self {
         let mut tabs = vec![false; cols];
         // Set default tab stops every 8 columns
-        for i in (0..cols).step_by(TAB_INTERVAL) {
+        for i in (TAB_INTERVAL..cols).step_by(TAB_INTERVAL) {
             tabs[i] = true;
         }
         let mut mode = TerminalMode::default();
-        mode.insert(TerminalMode::AUTOWRAP);
+        mode.insert(TerminalMode::AUTOWRAP | TerminalMode::CURSOR_VISIBLE);
+        let grid = Grid::new(cols, rows);
+        let mut alt_grid = Grid::new(cols, rows);
+        // Alternate-screen applications own a viewport, not a second history
+        // archive. Keeping both limits at zero also prevents a terminal from
+        // retaining twice its configured per-terminal scrollback budget.
+        alt_grid.set_scrollback_limit(0);
+        alt_grid.set_scrollback_byte_limit(0);
 
         Self {
-            grid: Grid::new(cols, rows),
-            alt_grid: Grid::new(cols, rows),
+            term_name: crate::pty::TERMERIC_TERM,
+            grid,
+            alt_grid,
             alt_screen_active: false,
             mode,
+            use_8bit_controls: false,
+            dec_conformance_level: 4,
+            cursor_style: None,
+            cursor_blink_override: None,
+            keyboard: keyboard::KittyKeyboardState::default(),
+            alt_keyboard: keyboard::KittyKeyboardState::default(),
+            xterm_keyboard_type: XtermKeyboardType::default(),
+            initial_xterm_keyboard_type: XtermKeyboardType::default(),
+            saved_xterm_keyboard_type: None,
+            xterm_user_defined_keys: XtermUserDefinedKeys::default(),
+            xterm_keyboard_resource: XtermKeyboardResource::default(),
+            xterm_cursor_keys: XtermCursorKeys::default(),
+            xterm_function_keys: XtermFunctionKeys::default(),
+            xterm_keypad_keys: XtermKeypadKeys::default(),
+            xterm_string_keys: XtermStringKeys::default(),
+            xterm_modifier_keys: XtermModifierKeys::default(),
+            xterm_special_keys: XtermSpecialKeys::default(),
+            xterm_modify_other_keys: XtermModifyOtherKeys::default(),
             tabs,
             saved_cursor: None,
             alt_saved_cursor: None,
             current_attrs: CellAttrs::empty(),
+            current_character_protected: false,
+            rectangular_change_extent: false,
+            screen_checksum_reporting: false,
+            g_sets: [CharacterSet::Ascii; 4],
+            gl_register: 0,
+            gr_register: 2,
+            single_shift: None,
+            last_graphic: None,
             current_fg: Color::default_fg(),
             current_bg: Color::default_bg(),
             current_fg_spec: ColorSpec::Default,
             current_bg_spec: ColorSpec::Default,
             current_underline_color: None,
+            current_underline_color_spec: None,
             current_hyperlink_id: None,
             hyperlink_registry: HyperlinkRegistry::new(),
+            hyperlink_gc_evictions: 0,
             selection: None,
             scroll_top: 0,
             scroll_bottom: rows,
+            scroll_left: 0,
+            scroll_right: cols,
             processor: Processor::new(),
             cols,
             rows,
+            reported_working_directory: None,
+            grid_pixel_width: u32::try_from(cols)
+                .unwrap_or(u32::MAX)
+                .saturating_mul(8)
+                .max(1),
+            grid_pixel_height: u32::try_from(rows)
+                .unwrap_or(u32::MAX)
+                .saturating_mul(16)
+                .max(1),
+            cell_pixel_width: 8,
+            cell_pixel_height: 16,
             graphics: GraphicsManager::new(),
+            graphics_apc_data: Vec::new(),
+            graphics_apc_active: false,
+            graphics_apc_overflow: false,
+            graphics_relay_import_allowed: false,
+            graphics_relay_apc_data: Vec::new(),
+            graphics_relay_apc_active: false,
+            graphics_relay_apc_overflow: false,
+            pending_graphics_relay_import: None,
             shell: ShellIntegration::new(),
+            prompt_navigation: None,
             pending_events: Vec::new(),
+            dynamic_colors: DynamicColors::default(),
+            synchronized_output_snapshot: None,
         }
+    }
+
+    /// Set the exact terminal-database identity exported to the attached PTY.
+    pub fn set_term_name(&mut self, term_name: &'static str) {
+        self.term_name = term_name;
+    }
+
+    /// Exact terminal-database identity reported through XTGETTCAP TN/name.
+    pub fn term_name(&self) -> &'static str {
+        self.term_name
+    }
+
+    /// Last valid OSC 7 working-directory report for this terminal owner.
+    pub fn reported_working_directory(&self) -> Option<&ReportedWorkingDirectory> {
+        self.reported_working_directory.as_ref()
+    }
+
+    pub(crate) fn set_reported_working_directory(&mut self, directory: ReportedWorkingDirectory) {
+        self.reported_working_directory = Some(directory);
     }
 
     /// Get the active grid
@@ -118,6 +880,96 @@ impl Terminal {
         } else {
             &self.grid
         }
+    }
+
+    /// Grid that is safe to present to the user. While synchronized output is
+    /// active this remains the viewport captured at DECSET 2026, even though
+    /// the live grid continues processing PTY bytes.
+    pub fn presentation_grid(&self) -> &Grid {
+        self.synchronized_output_snapshot
+            .as_ref()
+            .map_or_else(|| self.grid(), |snapshot| &snapshot.grid)
+    }
+
+    /// Whether the terminal is currently presenting its alternate screen.
+    pub fn alternate_screen_active(&self) -> bool {
+        self.alt_screen_active
+    }
+
+    /// Screen identity corresponding to [`Self::presentation_grid`].
+    pub fn presentation_alternate_screen_active(&self) -> bool {
+        self.synchronized_output_snapshot
+            .as_ref()
+            .map_or(self.alt_screen_active, |snapshot| snapshot.alternate_screen)
+    }
+
+    /// Return the newest presentation text within explicit row and UTF-8 byte
+    /// budgets. Primary-screen history is included oldest-to-newest before the
+    /// visible viewport; alternate screens never expose primary history.
+    ///
+    /// The presentation grid is used intentionally so a query cannot reveal
+    /// output hidden behind synchronized-output mode. When the byte budget is
+    /// reached, older content is discarded first and the returned string
+    /// always begins on a UTF-8 boundary.
+    pub fn bounded_presentation_text(
+        &self,
+        history_lines: usize,
+        max_bytes: usize,
+    ) -> (String, usize, bool) {
+        let grid = self.presentation_grid();
+        let history_lines = if self.presentation_alternate_screen_active() {
+            0
+        } else {
+            history_lines
+                .min(grid.scrollback_len())
+                .min(i32::MAX as usize)
+        };
+        let start = -(history_lines as i32);
+        let end = self.rows.saturating_sub(1) as i32;
+        let mut newest_first = Vec::new();
+        let mut used = 0_usize;
+        let mut included_history = 0_usize;
+        let mut truncated = false;
+
+        for row_index in (start..=end).rev() {
+            let line = grid
+                .row_at_offset(row_index)
+                .map(|row| row.plain_text(self.cols))
+                .unwrap_or_default();
+            let line = line.trim_end();
+            if line.is_empty() && newest_first.is_empty() {
+                continue;
+            }
+            let separator = usize::from(!newest_first.is_empty());
+            let prefix = used.saturating_add(separator);
+            let remaining = max_bytes.saturating_sub(prefix);
+            if prefix <= max_bytes && line.len() <= remaining {
+                newest_first.push(line.to_string());
+                used = used.saturating_add(separator).saturating_add(line.len());
+                if row_index < 0 {
+                    included_history += 1;
+                }
+                continue;
+            }
+
+            truncated = true;
+            if remaining > 0 {
+                let mut start_byte = line.len().saturating_sub(remaining);
+                while start_byte < line.len() && !line.is_char_boundary(start_byte) {
+                    start_byte += 1;
+                }
+                if start_byte < line.len() {
+                    newest_first.push(line[start_byte..].to_string());
+                    if row_index < 0 {
+                        included_history += 1;
+                    }
+                }
+            }
+            break;
+        }
+
+        newest_first.reverse();
+        (newest_first.join("\n"), included_history, truncated)
     }
 
     /// Get the active grid mutably
@@ -132,6 +984,477 @@ impl Terminal {
     /// Get terminal mode flags
     pub fn mode(&self) -> TerminalMode {
         self.mode
+    }
+
+    /// Get the application-selected cursor presentation, if any.
+    pub fn cursor_style(&self) -> Option<TerminalCursorStyle> {
+        self.cursor_style
+    }
+
+    /// Cursor presentation corresponding to [`Self::presentation_grid`].
+    pub fn presentation_cursor_style(&self) -> Option<TerminalCursorStyle> {
+        self.synchronized_output_snapshot
+            .as_ref()
+            .map_or(self.cursor_style, |snapshot| snapshot.cursor_style)
+    }
+
+    /// Application-selected cursor blink policy, when mode 12 has explicitly
+    /// overridden the user's configured default.
+    pub fn cursor_blink_override(&self) -> Option<bool> {
+        self.cursor_blink_override
+    }
+
+    /// Cursor blink policy corresponding to [`Self::presentation_grid`].
+    pub fn presentation_cursor_blink_override(&self) -> Option<bool> {
+        self.synchronized_output_snapshot
+            .as_ref()
+            .map_or(self.cursor_blink_override, |snapshot| {
+                snapshot.cursor_blink_override
+            })
+    }
+
+    /// Apply DECSCUSR. Invalid parameters leave the current style unchanged.
+    pub(crate) fn set_cursor_style(&mut self, parameter: u16) {
+        if let Some(style) = TerminalCursorStyle::from_parameter(parameter) {
+            self.cursor_style = Some(style);
+            self.cursor_blink_override = None;
+            self.set_mode(TerminalMode::CURSOR_BLINKING, style.blinking);
+        }
+    }
+
+    pub fn cursor_style_parameter(&self) -> u8 {
+        self.cursor_style.map_or(0, TerminalCursorStyle::parameter)
+    }
+
+    /// Return a DECRPM status value for a mode whose behavior is represented
+    /// authoritatively by this terminal. Unknown or momentary modes report 0.
+    pub(crate) fn mode_status(&self, private: bool, number: u16) -> u8 {
+        let enabled = if private {
+            match number {
+                1 => Some(self.mode.contains(TerminalMode::CURSOR_KEYS_APPLICATION)),
+                6 => Some(self.mode.contains(TerminalMode::ORIGIN)),
+                7 => Some(self.mode.contains(TerminalMode::AUTOWRAP)),
+                9 => Some(self.mode.contains(TerminalMode::MOUSE_X10)),
+                12 => Some(self.mode.contains(TerminalMode::CURSOR_BLINKING)),
+                25 => Some(self.mode.contains(TerminalMode::CURSOR_VISIBLE)),
+                69 => Some(self.mode.contains(TerminalMode::LEFT_RIGHT_MARGIN)),
+                1000 => Some(self.mode.contains(TerminalMode::MOUSE_TRACKING)),
+                1002 => Some(self.mode.contains(TerminalMode::MOUSE_BUTTON_EVENT)),
+                1003 => Some(self.mode.contains(TerminalMode::MOUSE_ANY_EVENT)),
+                1004 => Some(self.mode.contains(TerminalMode::FOCUS_EVENTS)),
+                1005 => Some(self.mode.contains(TerminalMode::MOUSE_UTF8)),
+                1006 => Some(self.mode.contains(TerminalMode::MOUSE_SGR)),
+                1007 => Some(self.mode.contains(TerminalMode::ALTERNATE_SCROLL)),
+                1060 => Some(self.xterm_keyboard_type == XtermKeyboardType::Legacy),
+                1061 => Some(self.xterm_keyboard_type == XtermKeyboardType::Vt220),
+                2004 => Some(self.mode.contains(TerminalMode::BRACKETED_PASTE)),
+                2026 => Some(self.mode.contains(TerminalMode::SYNCHRONIZED_OUTPUT)),
+                _ => None,
+            }
+        } else {
+            match number {
+                4 => Some(self.mode.contains(TerminalMode::INSERT)),
+                20 => Some(self.mode.contains(TerminalMode::LINEFEED_NEWLINE)),
+                _ => None,
+            }
+        };
+        enabled.map_or(0, |enabled| if enabled { 1 } else { 2 })
+    }
+
+    /// Get the Kitty keyboard enhancements active for the current screen.
+    pub fn kitty_keyboard_flags(&self) -> KittyKeyboardFlags {
+        self.keyboard_state().flags()
+    }
+
+    fn keyboard_state(&self) -> &keyboard::KittyKeyboardState {
+        if self.alt_screen_active {
+            &self.alt_keyboard
+        } else {
+            &self.keyboard
+        }
+    }
+
+    fn keyboard_state_mut(&mut self) -> &mut keyboard::KittyKeyboardState {
+        if self.alt_screen_active {
+            &mut self.alt_keyboard
+        } else {
+            &mut self.keyboard
+        }
+    }
+
+    pub(crate) fn set_kitty_keyboard_flags(&mut self, flags: u16, mode: u16) {
+        self.keyboard_state_mut().set(flags, mode);
+    }
+
+    pub(crate) fn push_kitty_keyboard_flags(&mut self, flags: u16) {
+        self.keyboard_state_mut().push(flags);
+    }
+
+    pub(crate) fn pop_kitty_keyboard_flags(&mut self, count: usize) {
+        self.keyboard_state_mut().pop(count);
+    }
+
+    /// Get xterm's terminal-local resource-zero `modifyKeyboard` and
+    /// `formatKeyboard` state.
+    pub fn xterm_keyboard_resource(&self) -> XtermKeyboardResource {
+        self.xterm_keyboard_resource
+    }
+
+    /// Get the global xterm-compatible keyboard type selected by private mode
+    /// 1060 or 1061.
+    pub fn xterm_keyboard_type(&self) -> XtermKeyboardType {
+        self.xterm_keyboard_type
+    }
+
+    /// Get the configured keyboard type restored by RIS.
+    pub fn initial_xterm_keyboard_type(&self) -> XtermKeyboardType {
+        self.initial_xterm_keyboard_type
+    }
+
+    /// Get the decoded DECUDK definition for a DEC function-key code.
+    pub fn xterm_user_defined_key(&self, code: u8) -> Option<&[u8]> {
+        self.xterm_user_defined_keys.get(code)
+    }
+
+    /// Iterate over defined DECUDK entries in ascending DEC key-code order.
+    pub fn xterm_user_defined_keys(&self) -> impl Iterator<Item = (u8, &[u8])> {
+        self.xterm_user_defined_keys.iter()
+    }
+
+    pub fn xterm_user_defined_key_bytes(&self) -> usize {
+        self.xterm_user_defined_keys.bytes()
+    }
+
+    pub(crate) fn clear_xterm_user_defined_keys(&mut self) {
+        self.xterm_user_defined_keys.clear();
+    }
+
+    pub(crate) fn define_xterm_user_defined_key(&mut self, code: u16, definition: Vec<u8>) {
+        self.xterm_user_defined_keys.define(code, definition);
+    }
+
+    /// Change the configured RIS baseline. Callers applying a changed live
+    /// configuration may also replace the current application-selected type;
+    /// callers merely propagating policy to an existing owner can preserve it.
+    pub fn configure_xterm_keyboard_type(
+        &mut self,
+        keyboard_type: XtermKeyboardType,
+        apply_current: bool,
+    ) {
+        self.initial_xterm_keyboard_type = keyboard_type;
+        if apply_current {
+            self.xterm_keyboard_type = keyboard_type;
+            self.saved_xterm_keyboard_type = None;
+        }
+    }
+
+    /// Apply xterm's mutually exclusive keyboard-type private modes. Resetting
+    /// either mode returns to the normal type, even if the other type was
+    /// active, matching xterm's `set_keyboard_type` behavior.
+    pub(crate) fn set_xterm_keyboard_type(
+        &mut self,
+        keyboard_type: XtermKeyboardType,
+        enable: bool,
+    ) {
+        self.xterm_keyboard_type = if enable {
+            keyboard_type
+        } else {
+            XtermKeyboardType::Normal
+        };
+    }
+
+    pub(crate) fn save_xterm_keyboard_type(&mut self) {
+        self.saved_xterm_keyboard_type = Some(self.xterm_keyboard_type);
+    }
+
+    pub(crate) fn restore_xterm_keyboard_type(&mut self) {
+        self.xterm_keyboard_type = self
+            .saved_xterm_keyboard_type
+            .unwrap_or(self.initial_xterm_keyboard_type);
+    }
+
+    pub(crate) fn set_xterm_keyboard_modify(&mut self, parameter: u16) {
+        self.xterm_keyboard_resource = self.xterm_keyboard_resource.with_modify(parameter);
+    }
+
+    pub(crate) fn reset_xterm_keyboard_modify(&mut self) {
+        self.xterm_keyboard_resource = self
+            .xterm_keyboard_resource
+            .with_modify(XtermKeyboardResource::default().modify());
+    }
+
+    pub(crate) fn report_xterm_keyboard_modify(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>0;{}m", self.xterm_keyboard_resource.modify()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_keyboard_format(&mut self, parameter: u16) {
+        self.xterm_keyboard_resource = self.xterm_keyboard_resource.with_format(parameter);
+    }
+
+    pub(crate) fn reset_xterm_keyboard_format(&mut self) {
+        self.xterm_keyboard_resource = self
+            .xterm_keyboard_resource
+            .with_format(XtermKeyboardResource::default().format());
+    }
+
+    pub(crate) fn report_xterm_keyboard_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>0;{}f", self.xterm_keyboard_resource.format()).into_bytes(),
+        ));
+    }
+
+    /// Get xterm's terminal-local `modifyCursorKeys` and `formatCursorKeys`
+    /// policy.
+    pub fn xterm_cursor_keys(&self) -> XtermCursorKeys {
+        self.xterm_cursor_keys
+    }
+
+    pub(crate) fn set_xterm_cursor_key_mode(&mut self, parameter: u16) {
+        self.xterm_cursor_keys.set_mode(parameter);
+    }
+
+    pub(crate) fn reset_xterm_cursor_key_mode(&mut self) {
+        self.xterm_cursor_keys = self.xterm_cursor_keys.with_mode(XtermKeyMode::default());
+    }
+
+    pub(crate) fn report_xterm_cursor_key_mode(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>1;{}m", self.xterm_cursor_keys.mode().parameter()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_cursor_key_format(&mut self, parameter: u16) {
+        self.xterm_cursor_keys.set_format(parameter);
+    }
+
+    pub(crate) fn reset_xterm_cursor_key_format(&mut self) {
+        self.xterm_cursor_keys = self
+            .xterm_cursor_keys
+            .with_format(XtermKeyFormat::default());
+    }
+
+    pub(crate) fn report_xterm_cursor_key_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>1;{}f", self.xterm_cursor_keys.format().parameter()).into_bytes(),
+        ));
+    }
+
+    /// Get xterm's terminal-local `modifyFunctionKeys` and
+    /// `formatFunctionKeys` policy.
+    pub fn xterm_function_keys(&self) -> XtermFunctionKeys {
+        self.xterm_function_keys
+    }
+
+    pub(crate) fn set_xterm_function_key_mode(&mut self, parameter: u16) {
+        self.xterm_function_keys.set_mode(parameter);
+    }
+
+    pub(crate) fn reset_xterm_function_key_mode(&mut self) {
+        self.xterm_function_keys = self.xterm_function_keys.with_mode(XtermKeyMode::default());
+    }
+
+    pub(crate) fn report_xterm_function_key_mode(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>2;{}m", self.xterm_function_keys.mode().parameter()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_function_key_format(&mut self, parameter: u16) {
+        self.xterm_function_keys.set_format(parameter);
+    }
+
+    pub(crate) fn reset_xterm_function_key_format(&mut self) {
+        self.xterm_function_keys = self
+            .xterm_function_keys
+            .with_format(XtermKeyFormat::default());
+    }
+
+    pub(crate) fn report_xterm_function_key_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>2;{}f", self.xterm_function_keys.format().parameter()).into_bytes(),
+        ));
+    }
+
+    /// Get xterm's terminal-local `modifyKeypadKeys` and
+    /// `formatKeypadKeys` policy.
+    pub fn xterm_keypad_keys(&self) -> XtermKeypadKeys {
+        self.xterm_keypad_keys
+    }
+
+    pub(crate) fn set_xterm_keypad_key_mode(&mut self, parameter: u16) {
+        self.xterm_keypad_keys.set_mode(parameter);
+    }
+
+    pub(crate) fn reset_xterm_keypad_key_mode(&mut self) {
+        self.xterm_keypad_keys = self
+            .xterm_keypad_keys
+            .with_mode(XtermKeypadKeys::default().mode());
+    }
+
+    pub(crate) fn report_xterm_keypad_key_mode(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>3;{}m", self.xterm_keypad_keys.mode().parameter()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_keypad_key_format(&mut self, parameter: u16) {
+        self.xterm_keypad_keys.set_format(parameter);
+    }
+
+    pub(crate) fn reset_xterm_keypad_key_format(&mut self) {
+        self.xterm_keypad_keys = self
+            .xterm_keypad_keys
+            .with_format(XtermKeyFormat::default());
+    }
+
+    pub(crate) fn report_xterm_keypad_key_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>3;{}f", self.xterm_keypad_keys.format().parameter()).into_bytes(),
+        ));
+    }
+
+    /// Get xterm's reserved `modifyStringKeys` and `formatStringKeys` state.
+    pub fn xterm_string_keys(&self) -> XtermStringKeys {
+        self.xterm_string_keys
+    }
+
+    pub(crate) fn set_xterm_string_key_mode(&mut self, parameter: u16) {
+        self.xterm_string_keys.set_mode(parameter);
+    }
+
+    pub(crate) fn reset_xterm_string_key_mode(&mut self) {
+        self.xterm_string_keys = self
+            .xterm_string_keys
+            .with_mode(XtermStringKeys::default().mode());
+    }
+
+    pub(crate) fn report_xterm_string_key_mode(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>5;{}m", self.xterm_string_keys.mode().parameter()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_string_key_format(&mut self, parameter: u16) {
+        self.xterm_string_keys.set_format(parameter);
+    }
+
+    pub(crate) fn reset_xterm_string_key_format(&mut self) {
+        self.xterm_string_keys = self
+            .xterm_string_keys
+            .with_format(XtermKeyFormat::default());
+    }
+
+    pub(crate) fn report_xterm_string_key_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>5;{}f", self.xterm_string_keys.format().parameter()).into_bytes(),
+        ));
+    }
+
+    /// Get xterm's terminal-local `modifyModifierKeys` and
+    /// `formatModifierKeys` policy.
+    pub fn xterm_modifier_keys(&self) -> XtermModifierKeys {
+        self.xterm_modifier_keys
+    }
+
+    pub(crate) fn set_xterm_modifier_key_mode(&mut self, parameter: u16) {
+        self.xterm_modifier_keys.set_mode(parameter);
+    }
+
+    pub(crate) fn reset_xterm_modifier_key_mode(&mut self) {
+        self.xterm_modifier_keys = self
+            .xterm_modifier_keys
+            .with_mode(XtermModifierKeys::default().mode());
+    }
+
+    pub(crate) fn report_xterm_modifier_key_mode(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>6;{}m", self.xterm_modifier_keys.mode().parameter()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_modifier_key_format(&mut self, parameter: u16) {
+        self.xterm_modifier_keys.set_format(parameter);
+    }
+
+    pub(crate) fn reset_xterm_modifier_key_format(&mut self) {
+        self.xterm_modifier_keys = self
+            .xterm_modifier_keys
+            .with_format(XtermKeyFormat::default());
+    }
+
+    pub(crate) fn report_xterm_modifier_key_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>6;{}f", self.xterm_modifier_keys.format().parameter()).into_bytes(),
+        ));
+    }
+
+    /// Get xterm's terminal-local `modifySpecialKeys` and
+    /// `formatSpecialKeys` policy.
+    pub fn xterm_special_keys(&self) -> XtermSpecialKeys {
+        self.xterm_special_keys
+    }
+
+    pub(crate) fn set_xterm_special_key_mode(&mut self, parameter: u16) {
+        self.xterm_special_keys.set_mode(parameter);
+    }
+
+    pub(crate) fn reset_xterm_special_key_mode(&mut self) {
+        self.xterm_special_keys = self
+            .xterm_special_keys
+            .with_mode(XtermSpecialKeys::default().mode());
+    }
+
+    pub(crate) fn report_xterm_special_key_mode(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>7;{}m", self.xterm_special_keys.mode().parameter()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_special_key_format(&mut self, parameter: u16) {
+        self.xterm_special_keys.set_format(parameter);
+    }
+
+    pub(crate) fn reset_xterm_special_key_format(&mut self) {
+        self.xterm_special_keys = self
+            .xterm_special_keys
+            .with_format(XtermKeyFormat::default());
+    }
+
+    pub(crate) fn report_xterm_special_key_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>7;{}f", self.xterm_special_keys.format().parameter()).into_bytes(),
+        ));
+    }
+
+    /// Get xterm's terminal-local `modifyOtherKeys` policy.
+    pub fn xterm_modify_other_keys(&self) -> XtermModifyOtherKeys {
+        self.xterm_modify_other_keys
+    }
+
+    pub(crate) fn set_xterm_modify_other_keys(&mut self, level: u16, modifier_mask: u16) {
+        self.xterm_modify_other_keys.set(level, modifier_mask);
+    }
+
+    pub(crate) fn report_xterm_modify_other_keys(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1b[>4;{}m", self.xterm_modify_other_keys.level()).into_bytes(),
+        ));
+    }
+
+    pub(crate) fn set_xterm_other_key_format(&mut self, parameter: u16) {
+        self.xterm_modify_other_keys.set_format(parameter);
+    }
+
+    pub(crate) fn report_xterm_other_key_format(&mut self) {
+        self.push_event(TerminalEvent::PtyWrite(
+            format!(
+                "\x1b[>4;{}f",
+                self.xterm_modify_other_keys.format().parameter()
+            )
+            .into_bytes(),
+        ));
     }
 
     /// Get the current selection
@@ -154,14 +1477,239 @@ impl Terminal {
         self.rows
     }
 
-    /// Push a terminal event to be handled by the application
+    /// Apply line and byte budgets to primary history. The alternate screen is
+    /// viewport-only and therefore always retains zero archived rows.
+    pub fn set_scrollback_limits(&mut self, lines: usize, bytes: usize) {
+        self.invalidate_prompt_navigation_after_manual_scroll();
+        self.grid.set_scrollback_limit(lines);
+        self.grid.set_scrollback_byte_limit(bytes);
+        self.alt_grid.set_scrollback_limit(0);
+        self.alt_grid.set_scrollback_byte_limit(0);
+        let oldest = -(self.grid.scrollback_len() as i32);
+        self.shell.prompt_tracker.adjust_for_scroll(0, oldest);
+        self.retain_prompt_navigation(oldest);
+        self.clear_selection_if_evicted();
+        self.prune_unreferenced_hyperlinks();
+    }
+
+    /// Clear saved lines from the active screen and retire any primary-shell
+    /// metadata whose backing history was removed.
+    pub fn clear_scrollback(&mut self) {
+        self.grid_mut().clear_scrollback();
+        if !self.alt_screen_active {
+            self.shell.prompt_tracker.adjust_for_scroll(0, 0);
+            self.retain_prompt_navigation(0);
+        }
+    }
+
+    /// Return a categorized estimate of terminal-owned row and hyperlink memory.
+    pub fn memory_usage(&self) -> TerminalMemoryUsage {
+        let primary = self.grid.memory_usage();
+        let alternate = self.alt_grid.memory_usage();
+        TerminalMemoryUsage {
+            visible_bytes: primary.visible_bytes + alternate.visible_bytes,
+            scrollback_bytes: primary.scrollback_bytes + alternate.scrollback_bytes,
+            grapheme_bytes: primary.grapheme_bytes + alternate.grapheme_bytes,
+            style_bytes: primary.style_bytes + alternate.style_bytes,
+            hyperlink_bytes: primary.hyperlink_reference_bytes
+                + alternate.hyperlink_reference_bytes
+                + self.hyperlink_registry.memory_usage_bytes(),
+            scrollback_lines: primary.scrollback_lines + alternate.scrollback_lines,
+            scrollback_line_limit: primary.scrollback_line_limit,
+            scrollback_byte_limit: primary.scrollback_byte_limit,
+        }
+    }
+
+    fn clear_selection_if_evicted(&mut self) {
+        let oldest_row = -(self.grid().scrollback_len() as i32);
+        if self.selection.as_ref().is_some_and(|selection| {
+            selection.start.row < oldest_row || selection.end.row < oldest_row
+        }) {
+            self.selection = None;
+        }
+    }
+
+    fn shift_selection_after_full_scroll(&mut self) {
+        if let Some(selection) = &mut self.selection {
+            selection.start.row = selection.start.row.saturating_sub(1);
+            selection.end.row = selection.end.row.saturating_sub(1);
+        }
+        self.clear_selection_if_evicted();
+    }
+
+    fn note_history_eviction(&mut self, evicted: usize) {
+        if evicted == 0 {
+            return;
+        }
+        self.hyperlink_gc_evictions = self.hyperlink_gc_evictions.saturating_add(evicted);
+        if self.hyperlink_gc_evictions >= 256 {
+            self.prune_unreferenced_hyperlinks();
+            self.hyperlink_gc_evictions = 0;
+        }
+    }
+
+    fn prune_unreferenced_hyperlinks(&mut self) {
+        let mut retained = HashSet::new();
+        self.grid.collect_hyperlink_ids(&mut retained);
+        self.alt_grid.collect_hyperlink_ids(&mut retained);
+        if let Some(identifier) = self.current_hyperlink_id {
+            retained.insert(identifier);
+        }
+        self.hyperlink_registry.retain_ids(&retained);
+    }
+
+    /// Push a terminal event to be handled by the application. `PtyWrite`
+    /// payloads are authored canonically with 7-bit introducers and framed at
+    /// this boundary according to the current S7C1T/S8C1T preference.
     pub fn push_event(&mut self, event: TerminalEvent) {
+        let event = match event {
+            TerminalEvent::PtyWrite(reply) => TerminalEvent::PtyWrite(self.frame_pty_reply(&reply)),
+            event => event,
+        };
         self.pending_events.push(event);
+    }
+
+    /// Frame a canonical 7-bit terminal reply for the active C1 transmission
+    /// mode. This is public so app-mediated OSC replies use the exact same
+    /// terminal-local contract as core-generated CSI/DCS/APC replies.
+    pub fn frame_pty_reply(&self, canonical: &[u8]) -> Vec<u8> {
+        Self::frame_pty_reply_for_mode(canonical, self.use_8bit_controls)
+    }
+
+    /// Frame a canonical reply using the mode captured when its request was
+    /// parsed. App-mediated replies use this to preserve PTY protocol order.
+    pub fn frame_pty_reply_for_mode(canonical: &[u8], use_8bit_controls: bool) -> Vec<u8> {
+        if !use_8bit_controls || canonical.len() < 2 || canonical[0] != 0x1b {
+            return canonical.to_vec();
+        }
+
+        let introducer = match canonical[1] {
+            b'[' => 0x9b,
+            b'P' => 0x90,
+            b']' => 0x9d,
+            b'_' => 0x9f,
+            _ => return canonical.to_vec(),
+        };
+        let has_string_terminator =
+            matches!(introducer, 0x90 | 0x9d | 0x9f) && canonical.ends_with(b"\x1b\\");
+        let body_end = canonical.len() - usize::from(has_string_terminator) * 2;
+        let mut framed = Vec::with_capacity(canonical.len());
+        framed.push(introducer);
+        framed.extend_from_slice(&canonical[2..body_end]);
+        if has_string_terminator {
+            framed.push(0x9c);
+        }
+        framed
+    }
+
+    pub fn uses_8bit_controls(&self) -> bool {
+        self.use_8bit_controls
+    }
+
+    pub(crate) fn set_8bit_controls(&mut self, enabled: bool) {
+        self.use_8bit_controls = enabled;
+    }
+
+    /// Select the bounded DECSCL operating profile.
+    ///
+    /// Levels 1 through 5 are accepted as parameters 61 through 65. Level 1
+    /// always transmits 7-bit controls; higher levels use 8-bit controls when
+    /// the optional second parameter is absent, 0, or 2, and 7-bit controls
+    /// for parameter 1. Invalid input is rejected atomically.
+    pub(crate) fn select_conformance_level(
+        &mut self,
+        level_parameter: u16,
+        control_parameter: Option<u16>,
+    ) {
+        let Ok(level) = u8::try_from(level_parameter.saturating_sub(60)) else {
+            return;
+        };
+        if !(1..=5).contains(&level) {
+            return;
+        }
+
+        let use_8bit_controls = if level == 1 {
+            false
+        } else {
+            match control_parameter.unwrap_or(0) {
+                0 | 2 => true,
+                1 => false,
+                _ => return,
+            }
+        };
+
+        // DEC STD 070 and the VT220 documentation define DECSCL as a soft
+        // reset. Apply that reset before installing the newly selected state.
+        self.soft_reset();
+        self.dec_conformance_level = level;
+        self.use_8bit_controls = use_8bit_controls;
+    }
+
+    pub fn dec_conformance_level(&self) -> u8 {
+        self.dec_conformance_level
     }
 
     /// Drain all pending events
     pub fn drain_events(&mut self) -> Vec<TerminalEvent> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    pub fn dynamic_colors(&self) -> &DynamicColors {
+        &self.dynamic_colors
+    }
+
+    /// Terminal-local colors corresponding to [`Self::presentation_grid`].
+    pub fn presentation_dynamic_colors(&self) -> &DynamicColors {
+        self.synchronized_output_snapshot
+            .as_ref()
+            .map_or(&self.dynamic_colors, |snapshot| &snapshot.dynamic_colors)
+    }
+
+    pub fn apply_dynamic_color(&mut self, operation: crate::event::DynamicColorOperation) {
+        use crate::event::DynamicColorOperation;
+        match operation {
+            DynamicColorOperation::Set { target, color } => self.dynamic_colors.set(target, color),
+            DynamicColorOperation::Reset(target) => self.dynamic_colors.reset(target),
+            DynamicColorOperation::ResetPalette => self.dynamic_colors.reset_palette(),
+            DynamicColorOperation::Query { .. } => {}
+        }
+    }
+
+    pub(crate) fn designate_character_set(&mut self, register: u8, designator: u8) {
+        let Some(charset) = CharacterSet::from_designator(designator) else {
+            return;
+        };
+        if let Some(slot) = self.g_sets.get_mut(usize::from(register)) {
+            *slot = charset;
+        }
+    }
+
+    pub(crate) fn invoke_gl(&mut self, register: u8) {
+        if register < self.g_sets.len() as u8 {
+            self.gl_register = register;
+        }
+    }
+
+    pub(crate) fn invoke_gr(&mut self, register: u8) {
+        if (1..self.g_sets.len() as u8).contains(&register) {
+            self.gr_register = register;
+        }
+    }
+
+    pub(crate) fn single_shift(&mut self, register: u8) {
+        if matches!(register, 2 | 3) {
+            self.single_shift = Some(register);
+        }
+    }
+
+    fn active_character_set(&self) -> CharacterSet {
+        self.g_sets[usize::from(self.gl_register)]
+    }
+
+    pub(crate) fn write_translated_character(&mut self, character: char) {
+        let register = self.single_shift.take().unwrap_or(self.gl_register);
+        let charset = self.g_sets[usize::from(register)];
+        self.write_char_with_charset(charset.translate(character), charset);
     }
 
     /// Process input bytes from PTY
@@ -174,25 +1722,156 @@ impl Terminal {
 
     /// Resize the terminal
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        let prompt_navigation_anchor = self
+            .prompt_navigation
+            .filter(|navigation| navigation.scroll_offset == self.grid.scroll_offset())
+            .and_then(|navigation| shell_logical_anchor(&self.grid, navigation.row));
+        let shell_anchors = self
+            .shell
+            .prompt_tracker
+            .tracked_rows()
+            .into_iter()
+            .filter_map(|row| shell_logical_anchor(&self.grid, row).map(|anchor| (row, anchor)))
+            .collect::<Vec<_>>();
         self.grid.resize(cols, rows);
+        let remapped_shell_rows = shell_anchors
+            .into_iter()
+            .filter_map(|(old_row, anchor)| {
+                shell_row_from_anchor(&self.grid, anchor).map(|new_row| (old_row, new_row))
+            })
+            .collect::<HashMap<_, _>>();
+        self.shell.prompt_tracker.remap_rows(&remapped_shell_rows);
+        self.prompt_navigation = prompt_navigation_anchor
+            .and_then(|anchor| shell_row_from_anchor(&self.grid, anchor))
+            .filter(|row| {
+                self.shell
+                    .prompt_tracker
+                    .all_prompts()
+                    .any(|prompt| prompt == *row)
+            })
+            .map(|row| PromptNavigationState {
+                row,
+                scroll_offset: self.grid.scroll_offset(),
+            });
         self.alt_grid.resize(cols, rows);
+        if let Some(snapshot) = &mut self.synchronized_output_snapshot {
+            snapshot.grid.resize(cols, rows);
+        }
 
-        // Update tab stops
+        // Preserve customized stops that still fit. Newly exposed columns get
+        // the DEC default every eight columns; a shrink followed by a grow
+        // therefore restores defaults only in the reintroduced region.
+        let old_cols = self.tabs.len();
         self.tabs.resize(cols, false);
-        for i in (0..cols).step_by(TAB_INTERVAL) {
-            self.tabs[i] = true;
+        if cols > old_cols {
+            let first_default = old_cols.div_ceil(TAB_INTERVAL) * TAB_INTERVAL;
+            for i in (first_default.max(TAB_INTERVAL)..cols).step_by(TAB_INTERVAL) {
+                self.tabs[i] = true;
+            }
         }
 
         // Update scroll region
         self.scroll_top = 0;
         self.scroll_bottom = rows;
+        self.scroll_left = 0;
+        self.scroll_right = cols;
 
         self.cols = cols;
         self.rows = rows;
     }
 
+    /// Update the physical drawable extent represented by the current grid.
+    /// Cell values are rounded up and never become zero.
+    pub fn set_pixel_geometry(&mut self, pixel_width: u32, pixel_height: u32) {
+        self.grid_pixel_width = pixel_width.max(1);
+        self.grid_pixel_height = pixel_height.max(1);
+        self.cell_pixel_width = self
+            .grid_pixel_width
+            .div_ceil(self.cols.max(1) as u32)
+            .max(1);
+        self.cell_pixel_height = self
+            .grid_pixel_height
+            .div_ceil(self.rows.max(1) as u32)
+            .max(1);
+        self.graphics
+            .set_cell_pixel_geometry(self.cell_pixel_width, self.cell_pixel_height);
+    }
+
+    /// Emit one of the safe, terminal-local XTWINOPS geometry reports.
+    /// Screen, outer-window, title, and mutation operations require app/window
+    /// policy and are deliberately not handled here.
+    pub(crate) fn report_text_area_geometry(&mut self, operation: u16) {
+        let response = match operation {
+            14 => format!(
+                "\x1b[4;{};{}t",
+                self.grid_pixel_height, self.grid_pixel_width
+            ),
+            16 => format!(
+                "\x1b[6;{};{}t",
+                self.cell_pixel_height, self.cell_pixel_width
+            ),
+            18 => format!("\x1b[8;{};{}t", self.rows, self.cols),
+            _ => return,
+        };
+        self.push_event(TerminalEvent::PtyWrite(response.into_bytes()));
+    }
+
+    fn row_inside_vertical_margins(&self, row: usize) -> bool {
+        row >= self.scroll_top && row < self.scroll_bottom
+    }
+
+    fn col_inside_horizontal_margins(&self, col: usize) -> bool {
+        col >= self.scroll_left && col < self.scroll_right
+    }
+
+    fn write_horizontal_bounds(&self, row: usize, col: usize) -> (usize, usize) {
+        if self.row_inside_vertical_margins(row) && col < self.scroll_right {
+            (self.scroll_left, self.scroll_right)
+        } else {
+            (0, self.cols)
+        }
+    }
+
+    fn carriage_return_column(&self, row: usize, col: usize) -> usize {
+        if self.row_inside_vertical_margins(row) && col >= self.scroll_left {
+            self.scroll_left
+        } else {
+            0
+        }
+    }
+
     /// Write a character at the current cursor position
     pub fn write_char(&mut self, c: char) {
+        self.write_char_with_charset(c, CharacterSet::Ascii);
+    }
+
+    fn write_char_with_charset(&mut self, c: char, charset: CharacterSet) {
+        // VTE delivers Unicode scalars. Re-segment the preceding stored cluster
+        // plus this scalar so combining marks, variation selectors, emoji
+        // modifiers, regional indicators, and ZWJ sequences remain one cell.
+        // Printable ASCII cannot extend an earlier grapheme. Keep this common
+        // path allocation-free and avoid running the Unicode segmenter for
+        // every byte of ordinary shell output.
+        if !c.is_ascii() && self.try_extend_previous_grapheme(c) {
+            return;
+        }
+
+        let mut encoded = [0; 4];
+        let scalar = c.encode_utf8(&mut encoded);
+        let mut orphan = String::new();
+        let mut width = crate::unicode::grapheme_width(scalar);
+        let grapheme = if width == 0 {
+            // Defined orphan-combining behavior: compose it over a blank cell
+            // rather than losing it or attaching across an explicit cursor
+            // movement/control boundary.
+            orphan.push(' ');
+            orphan.push(c);
+            width = 1;
+            orphan.as_str()
+        } else {
+            scalar
+        };
+
         let cursor = self.grid().cursor();
         let cols = self.cols;
 
@@ -201,194 +1880,617 @@ impl Terminal {
         // arrives, perform the actual wrap (mark the row as soft-wrapped,
         // carriage-return, and linefeed).
         if cursor.wrap_pending && self.mode.contains(TerminalMode::AUTOWRAP) {
-            // Mark the row we're leaving as soft-wrapped
+            let (left, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
+            // Partial-width wraps are presentation layout rather than a
+            // whole-row logical continuation, so they must not enter reflow.
             if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                row.set_wrapped(true);
+                row.set_wrapped(left == 0 && right == cols);
             }
-            self.grid_mut().set_cursor(cursor.row, 0);
+            self.grid_mut().set_cursor(cursor.row, left);
             self.linefeed();
         }
         // If not autowrap, cursor stays at last column (overwrite mode)
 
-        let cursor = self.grid().cursor();
+        let mut cursor = self.grid().cursor();
+        let (left, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
+        if width == 2 && cursor.col + 1 >= right {
+            if self.mode.contains(TerminalMode::AUTOWRAP) && right - left >= 2 {
+                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                    row.set_wrapped(left == 0 && right == cols);
+                }
+                self.grid_mut().set_cursor(cursor.row, left);
+                self.linefeed();
+                cursor = self.grid().cursor();
+            } else {
+                // A one-column grid cannot represent a wide pair. Keep the
+                // grapheme visible in the sole cell without creating an orphan.
+                width = 1;
+            }
+        }
+
         let fg = self.current_fg;
         let bg = self.current_bg;
         let fg_spec = self.current_fg_spec;
         let bg_spec = self.current_bg_spec;
         let attrs = self.current_attrs;
+        let protected = self.current_character_protected;
 
+        let blank = self.erase_cell();
         if self.mode.contains(TerminalMode::INSERT)
             && let Some(row) = self.grid_mut().row_mut(cursor.row)
         {
-            row.insert_cells(cursor.col, 1);
+            row.insert_cells_bounded(cursor.col, right, width, &blank);
         }
 
-        // Write the character
+        // Clear either half of any existing wide pair, then write the leader
+        // and (for width two) an attributed empty spacer atomically.
         let underline_color = self.current_underline_color;
+        let underline_color_spec = self.current_underline_color_spec;
         let hyperlink_id = self.current_hyperlink_id;
-        if let Some(cell) = self.grid_mut().cell_mut(cursor.row, cursor.col) {
-            cell.content = CellContent::Char(c);
-            cell.fg = fg;
-            cell.bg = bg;
-            cell.fg_spec = fg_spec;
-            cell.bg_spec = bg_spec;
-            cell.underline_color = underline_color;
-            cell.attrs = attrs;
-            cell.hyperlink_id = hyperlink_id;
-            // Set hyperlink flag if this cell is part of a hyperlink
-            if hyperlink_id.is_some() {
-                cell.flags.insert(CellFlags::HYPERLINK);
-            } else {
-                cell.flags.remove(CellFlags::HYPERLINK);
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            row.clear_grapheme_at(cursor.col);
+            if width == 2 {
+                row.clear_grapheme_at(cursor.col + 1);
+            }
+            if let Some(cell) = row.get_mut(cursor.col) {
+                cell.set_grapheme(grapheme);
+                cell.fg = fg;
+                cell.bg = bg;
+                cell.fg_spec = fg_spec;
+                cell.bg_spec = bg_spec;
+                cell.underline_color = underline_color;
+                cell.underline_color_spec = underline_color_spec;
+                cell.attrs = attrs;
+                cell.hyperlink_id = hyperlink_id;
+                cell.flags.remove(CellFlags::WIDE_CHAR_SPACER);
+                cell.flags
+                    .remove(CellFlags::DEC_SPECIAL_GRAPHICS | CellFlags::DEC_UK_CHARSET);
+                cell.flags.set(
+                    CellFlags::DEC_SPECIAL_GRAPHICS,
+                    charset == CharacterSet::DecSpecialGraphics,
+                );
+                cell.flags.set(
+                    CellFlags::DEC_UK_CHARSET,
+                    charset == CharacterSet::UnitedKingdom,
+                );
+                cell.flags.set(CellFlags::WIDE_CHAR, width == 2);
+                cell.flags.set(CellFlags::HYPERLINK, hyperlink_id.is_some());
+                cell.flags.set(CellFlags::PROTECTED, protected);
+            }
+            if width == 2
+                && let Some(spacer) = row.get_mut(cursor.col + 1)
+            {
+                spacer.content = CellContent::Empty;
+                spacer.fg = fg;
+                spacer.bg = bg;
+                spacer.fg_spec = fg_spec;
+                spacer.bg_spec = bg_spec;
+                spacer.underline_color = underline_color;
+                spacer.underline_color_spec = underline_color_spec;
+                spacer.attrs = attrs;
+                spacer.hyperlink_id = hyperlink_id;
+                spacer.flags.remove(CellFlags::WIDE_CHAR);
+                spacer
+                    .flags
+                    .remove(CellFlags::DEC_SPECIAL_GRAPHICS | CellFlags::DEC_UK_CHARSET);
+                spacer.flags.set(
+                    CellFlags::DEC_SPECIAL_GRAPHICS,
+                    charset == CharacterSet::DecSpecialGraphics,
+                );
+                spacer.flags.set(
+                    CellFlags::DEC_UK_CHARSET,
+                    charset == CharacterSet::UnitedKingdom,
+                );
+                spacer
+                    .flags
+                    .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::DIRTY);
+                spacer
+                    .flags
+                    .set(CellFlags::HYPERLINK, hyperlink_id.is_some());
+                spacer.flags.set(CellFlags::PROTECTED, protected);
             }
         }
 
         // Advance cursor. If we just wrote to the last column, set
         // wrap_pending instead of advancing past the edge (which would
         // be clamped by set_cursor anyway).
-        if cursor.col + 1 >= cols {
+        if cursor.col + width >= right {
             // Stay at last column but flag that a wrap is pending
             self.grid_mut().set_wrap_pending(true);
         } else {
-            self.grid_mut().set_cursor(cursor.row, cursor.col + 1);
+            self.grid_mut().set_cursor(cursor.row, cursor.col + width);
+        }
+        self.remember_last_graphic(grapheme, charset);
+    }
+
+    fn remember_last_graphic(&mut self, grapheme: &str, charset: CharacterSet) {
+        if grapheme.len() > MAX_REPEAT_GRAPHEME_BYTES {
+            self.last_graphic = None;
+            return;
+        }
+
+        let mut scalars = grapheme.chars();
+        self.last_graphic = match (scalars.next(), scalars.next()) {
+            (Some(scalar), None) => Some((CellContent::Char(scalar), charset)),
+            (Some(_), Some(_)) => Some((CellContent::Grapheme(grapheme.into()), charset)),
+            (None, _) => None,
+        };
+    }
+
+    fn try_extend_previous_grapheme(&mut self, next: char) -> bool {
+        let cursor = self.grid().cursor();
+        let cols = self.cols;
+        let (left, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
+        let candidate_col = if cursor.wrap_pending {
+            Some(cursor.col)
+        } else {
+            cursor.col.checked_sub(1)
+        };
+        let Some(mut col) = candidate_col else {
+            return false;
+        };
+        if self
+            .grid()
+            .cell(cursor.row, col)
+            .is_some_and(Cell::is_wide_char_spacer)
+        {
+            let Some(leader) = col.checked_sub(1) else {
+                return false;
+            };
+            col = leader;
+        }
+        let Some(cell) = self.grid().cell(cursor.row, col) else {
+            return false;
+        };
+        if cell.content.is_empty() || cell.is_wide_char_spacer() {
+            return false;
+        }
+        let charset = stored_character_set(cell);
+        let original = cell.content.to_text();
+        if !crate::unicode::extends_grapheme(&original, next) {
+            return false;
+        }
+
+        let mut combined = original;
+        combined.push(next);
+        let old_width = cell.width();
+        let requested_width = crate::unicode::grapheme_width(&combined).max(1);
+        let template = cell.clone();
+
+        if requested_width == 2
+            && col + 1 >= right
+            && right - left >= 2
+            && self.mode.contains(TerminalMode::AUTOWRAP)
+        {
+            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                row.clear_grapheme_at(col);
+                row.set_wrapped(left == 0 && right == cols);
+            }
+            self.grid_mut().set_cursor(cursor.row, left);
+            self.linefeed();
+            let destination = self.grid().cursor();
+            if let Some(row) = self.grid_mut().row_mut(destination.row) {
+                row.clear_grapheme_at(left);
+                row.clear_grapheme_at(left + 1);
+                if let Some(leader) = row.get_mut(left) {
+                    *leader = template.clone();
+                    leader.set_grapheme(&combined);
+                    leader.flags.remove(CellFlags::WIDE_CHAR_SPACER);
+                    leader.flags.insert(CellFlags::WIDE_CHAR | CellFlags::DIRTY);
+                }
+                if let Some(spacer) = row.get_mut(left + 1) {
+                    *spacer = template;
+                    spacer.content = CellContent::Empty;
+                    spacer.flags.remove(CellFlags::WIDE_CHAR);
+                    spacer
+                        .flags
+                        .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::DIRTY);
+                }
+                row.repair_wide_cells();
+            }
+            if right - left == 2 {
+                self.grid_mut().set_cursor(destination.row, right - 1);
+                self.grid_mut().set_wrap_pending(true);
+            } else {
+                self.grid_mut().set_cursor(destination.row, left + 2);
+            }
+            self.remember_last_graphic(&combined, charset);
+            return true;
+        }
+
+        let new_width = if requested_width == 2 && col + 1 >= right {
+            1
+        } else {
+            requested_width
+        };
+
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            if old_width != new_width {
+                row.clear_grapheme_at(col + 1);
+            }
+            if let Some(leader) = row.get_mut(col) {
+                *leader = template.clone();
+                leader.set_grapheme(&combined);
+                leader.flags.remove(CellFlags::WIDE_CHAR_SPACER);
+                leader.flags.set(CellFlags::WIDE_CHAR, new_width == 2);
+            }
+            if new_width == 2
+                && let Some(spacer) = row.get_mut(col + 1)
+            {
+                *spacer = template;
+                spacer.content = CellContent::Empty;
+                spacer.flags.remove(CellFlags::WIDE_CHAR);
+                spacer
+                    .flags
+                    .insert(CellFlags::WIDE_CHAR_SPACER | CellFlags::DIRTY);
+            }
+            row.repair_wide_cells();
+        }
+
+        if col + new_width >= right {
+            self.grid_mut().set_cursor(cursor.row, right - 1);
+            self.grid_mut().set_wrap_pending(true);
+        } else {
+            self.grid_mut().set_cursor(cursor.row, col + new_width);
+        }
+        self.remember_last_graphic(&combined, charset);
+        true
+    }
+
+    /// Repeat the most recently printed grapheme using the current rendition.
+    /// A missing or deliberately unremembered pathological grapheme is a no-op.
+    pub fn repeat_last_graphic(&mut self, count: usize) {
+        let Some((grapheme, charset)) = self.last_graphic.clone() else {
+            return;
+        };
+
+        match grapheme {
+            CellContent::Empty => {}
+            CellContent::Char(character) => {
+                for _ in 0..count {
+                    self.write_char_with_charset(character, charset);
+                }
+            }
+            CellContent::Grapheme(grapheme) => {
+                if grapheme.len() > MAX_REPEAT_GRAPHEME_BYTES {
+                    return;
+                }
+                for _ in 0..count {
+                    for character in grapheme.chars() {
+                        self.write_char_with_charset(character, charset);
+                    }
+                }
+            }
         }
     }
 
-    /// Perform a carriage return (move cursor to column 0)
+    /// Perform a carriage return, honoring the left margin when applicable.
     pub fn carriage_return(&mut self) {
         let cursor = self.grid().cursor();
+        let col = self.carriage_return_column(cursor.row, cursor.col);
         // Clear wrapped flag — explicit CR means this row ends here
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
             row.set_wrapped(false);
         }
-        self.grid_mut().set_cursor(cursor.row, 0);
+        self.grid_mut().set_cursor(cursor.row, col);
     }
 
     /// Perform a line feed (move cursor down, scroll if at bottom)
     pub fn linefeed(&mut self) {
         let cursor = self.grid().cursor();
+        let col = if self.mode.contains(TerminalMode::LINEFEED_NEWLINE) {
+            self.carriage_return_column(cursor.row, cursor.col)
+        } else {
+            cursor.col
+        };
 
-        if cursor.row + 1 >= self.scroll_bottom {
+        if cursor.row + 1 == self.scroll_bottom && self.col_inside_horizontal_margins(col) {
             // At bottom of scroll region, scroll up
             self.scroll_up(1);
+            self.grid_mut().set_cursor(cursor.row, col);
             // Clear wrap_pending — we've moved to a new logical position
             self.grid_mut().set_wrap_pending(false);
         } else {
-            self.grid_mut().set_cursor(cursor.row + 1, cursor.col);
-        }
-
-        if self.mode.contains(TerminalMode::LINEFEED_NEWLINE) {
-            self.carriage_return();
+            let row = cursor
+                .row
+                .saturating_add(1)
+                .min(self.rows.saturating_sub(1));
+            self.grid_mut().set_cursor(row, col);
         }
     }
 
     /// Scroll the screen up by n lines
     pub fn scroll_up(&mut self, n: usize) {
+        self.invalidate_prompt_navigation_after_manual_scroll();
         let scroll_top = self.scroll_top;
         let scroll_bottom = self.scroll_bottom;
+        let scroll_left = self.scroll_left;
+        let scroll_right = self.scroll_right;
+        let full_width = scroll_left == 0 && scroll_right == self.cols;
+        let blank = self.erase_cell();
         for _ in 0..n {
-            if scroll_top == 0 && scroll_bottom == self.rows {
-                self.grid_mut().scroll_up();
-            } else {
+            if full_width && scroll_top == 0 && scroll_bottom == self.rows {
+                let evicted = self.grid_mut().scroll_up();
+                self.shift_selection_after_full_scroll();
+                self.note_history_eviction(evicted);
+                if !self.alt_screen_active {
+                    let oldest = -(self.grid().scrollback_len() as i32);
+                    self.shell.prompt_tracker.adjust_for_scroll(1, oldest);
+                    if let Some(navigation) = &mut self.prompt_navigation {
+                        navigation.row = navigation.row.saturating_sub(1);
+                    }
+                    self.retain_prompt_navigation(oldest);
+                }
+            } else if full_width {
                 self.grid_mut().scroll_region_up(scroll_top, scroll_bottom);
+            } else {
+                self.grid_mut().scroll_rect_up(
+                    scroll_top,
+                    scroll_bottom,
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                );
             }
         }
+        let preserve_history =
+            !self.alt_screen_active && full_width && scroll_top == 0 && scroll_bottom == self.rows;
+        let history_lines = self.grid().scrollback_len();
+        self.graphics.scroll_up(
+            self.alt_screen_active,
+            scroll_top..scroll_bottom,
+            scroll_left..scroll_right,
+            n,
+            preserve_history,
+            history_lines,
+        );
     }
 
     /// Scroll the screen down by n lines
     pub fn scroll_down(&mut self, n: usize) {
         let scroll_top = self.scroll_top;
         let scroll_bottom = self.scroll_bottom;
+        let scroll_left = self.scroll_left;
+        let scroll_right = self.scroll_right;
+        let full_width = scroll_left == 0 && scroll_right == self.cols;
+        let blank = self.erase_cell();
         for _ in 0..n {
-            if scroll_top == 0 && scroll_bottom == self.rows {
+            if full_width && scroll_top == 0 && scroll_bottom == self.rows {
                 self.grid_mut().scroll_down();
-            } else {
+            } else if full_width {
                 self.grid_mut()
                     .scroll_region_down(scroll_top, scroll_bottom);
+            } else {
+                self.grid_mut().scroll_rect_down(
+                    scroll_top,
+                    scroll_bottom,
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                );
             }
         }
+        self.graphics.scroll_down(
+            self.alt_screen_active,
+            scroll_top..scroll_bottom,
+            scroll_left..scroll_right,
+            n,
+        );
     }
 
     /// Move to the next tab stop
     pub fn horizontal_tab(&mut self) {
+        self.cursor_forward_tabs(1);
+    }
+
+    /// Move forward across the requested number of horizontal tab stops.
+    pub fn cursor_forward_tabs(&mut self, count: usize) {
         let cursor = self.grid().cursor();
-        let cols = self.cols;
-        let mut col = cursor.col + 1;
-
-        while col < cols && !self.tabs.get(col).copied().unwrap_or(false) {
-            col += 1;
+        let max_col =
+            if self.row_inside_vertical_margins(cursor.row) && cursor.col < self.scroll_right {
+                self.scroll_right - 1
+            } else {
+                self.cols.saturating_sub(1)
+            };
+        let mut col = cursor.col;
+        for _ in 0..count {
+            col = ((col + 1)..=max_col)
+                .find(|candidate| self.tabs.get(*candidate).copied().unwrap_or(false))
+                .unwrap_or(max_col);
         }
+        self.grid_mut().set_cursor(cursor.row, col);
+    }
 
-        let new_col = col.min(cols.saturating_sub(1));
-        self.grid_mut().set_cursor(cursor.row, new_col);
+    /// Move backward across the requested number of horizontal tab stops.
+    pub fn cursor_backward_tabs(&mut self, count: usize) {
+        let cursor = self.grid().cursor();
+        let min_col =
+            if self.row_inside_vertical_margins(cursor.row) && cursor.col >= self.scroll_left {
+                self.scroll_left
+            } else {
+                0
+            };
+        let mut col = cursor.col;
+        for _ in 0..count {
+            col = (min_col..col)
+                .rev()
+                .find(|candidate| self.tabs.get(*candidate).copied().unwrap_or(false))
+                .unwrap_or(min_col);
+        }
+        self.grid_mut().set_cursor(cursor.row, col);
     }
 
     /// Move cursor up
     pub fn cursor_up(&mut self, n: usize) {
         let cursor = self.grid().cursor();
-        self.grid_mut()
-            .set_cursor(cursor.row.saturating_sub(n), cursor.col);
+        let minimum =
+            if self.col_inside_horizontal_margins(cursor.col) && cursor.row >= self.scroll_top {
+                self.scroll_top
+            } else {
+                0
+            };
+        let row = cursor.row.saturating_sub(n).max(minimum);
+        self.grid_mut().set_cursor(row, cursor.col);
     }
 
     /// Move cursor down
     pub fn cursor_down(&mut self, n: usize) {
         let cursor = self.grid().cursor();
-        let new_row = (cursor.row + n).min(self.rows - 1);
+        let maximum =
+            if self.col_inside_horizontal_margins(cursor.col) && cursor.row < self.scroll_bottom {
+                self.scroll_bottom - 1
+            } else {
+                self.rows - 1
+            };
+        let new_row = cursor.row.saturating_add(n).min(maximum);
         self.grid_mut().set_cursor(new_row, cursor.col);
     }
 
     /// Move cursor forward (right)
     pub fn cursor_forward(&mut self, n: usize) {
         let cursor = self.grid().cursor();
-        let new_col = (cursor.col + n).min(self.cols - 1);
+        let maximum =
+            if self.row_inside_vertical_margins(cursor.row) && cursor.col < self.scroll_right {
+                self.scroll_right - 1
+            } else {
+                self.cols - 1
+            };
+        let new_col = cursor.col.saturating_add(n).min(maximum);
         self.grid_mut().set_cursor(cursor.row, new_col);
     }
 
     /// Move cursor backward (left)
     pub fn cursor_backward(&mut self, n: usize) {
         let cursor = self.grid().cursor();
+        let minimum =
+            if self.row_inside_vertical_margins(cursor.row) && cursor.col >= self.scroll_left {
+                self.scroll_left
+            } else {
+                0
+            };
         self.grid_mut()
-            .set_cursor(cursor.row, cursor.col.saturating_sub(n));
+            .set_cursor(cursor.row, cursor.col.saturating_sub(n).max(minimum));
+    }
+
+    /// HPR moves horizontally without the CUF margin clamp.
+    pub fn horizontal_position_relative(&mut self, n: usize) {
+        if self.mode.contains(TerminalMode::ORIGIN) {
+            self.cursor_forward(n);
+            return;
+        }
+        let cursor = self.grid().cursor();
+        let col = cursor.col.saturating_add(n).min(self.cols - 1);
+        self.grid_mut().set_cursor(cursor.row, col);
+    }
+
+    /// VPR moves vertically without the CUD margin clamp.
+    pub fn vertical_position_relative(&mut self, n: usize) {
+        if self.mode.contains(TerminalMode::ORIGIN) {
+            self.cursor_down(n);
+            return;
+        }
+        let cursor = self.grid().cursor();
+        let row = cursor.row.saturating_add(n).min(self.rows - 1);
+        self.grid_mut().set_cursor(row, cursor.col);
+    }
+
+    /// CHA/HPA move only the column while respecting DECOM's origin.
+    pub fn set_cursor_column(&mut self, col: usize) {
+        let cursor = self.grid().cursor();
+        let col = if self.mode.contains(TerminalMode::ORIGIN) {
+            self.scroll_left
+                .saturating_add(col.saturating_sub(1))
+                .min(self.scroll_right - 1)
+        } else {
+            col.saturating_sub(1).min(self.cols - 1)
+        };
+        self.grid_mut().set_cursor(cursor.row, col);
+    }
+
+    /// VPA moves only the row while respecting DECOM's origin.
+    pub fn set_cursor_row(&mut self, row: usize) {
+        let cursor = self.grid().cursor();
+        let row = if self.mode.contains(TerminalMode::ORIGIN) {
+            self.scroll_top
+                .saturating_add(row.saturating_sub(1))
+                .min(self.scroll_bottom - 1)
+        } else {
+            row.saturating_sub(1).min(self.rows - 1)
+        };
+        self.grid_mut().set_cursor(row, cursor.col);
     }
 
     /// Set cursor position (1-indexed input, converted to 0-indexed)
     pub fn set_cursor_position(&mut self, row: usize, col: usize) {
-        let mut row = row.saturating_sub(1);
-        if self.mode.contains(TerminalMode::ORIGIN) {
-            row = row.saturating_add(self.scroll_top);
-        }
-        let row = row.min(self.rows - 1);
-        let col = col.saturating_sub(1).min(self.cols - 1);
+        let (row, col) = if self.mode.contains(TerminalMode::ORIGIN) {
+            (
+                self.scroll_top
+                    .saturating_add(row.saturating_sub(1))
+                    .min(self.scroll_bottom - 1),
+                self.scroll_left
+                    .saturating_add(col.saturating_sub(1))
+                    .min(self.scroll_right - 1),
+            )
+        } else {
+            (
+                row.saturating_sub(1).min(self.rows - 1),
+                col.saturating_sub(1).min(self.cols - 1),
+            )
+        };
         self.grid_mut().set_cursor(row, col);
     }
 
     /// Erase in display
     pub fn erase_in_display(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
+        let blank = self.erase_cell();
+        let cols = self.cols;
+        let rows = self.rows;
 
         match mode {
             0 => {
                 // Erase from cursor to end of screen
-                self.erase_in_line(0);
-                for row in (cursor.row + 1)..self.rows {
-                    self.grid_mut().clear_row(row);
+                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                    row.erase_range(cursor.col, cols, &blank);
+                }
+                for row in (cursor.row + 1)..rows {
+                    if let Some(row) = self.grid_mut().row_mut(row) {
+                        row.erase_range(0, cols, &blank);
+                    }
                 }
             }
             1 => {
                 // Erase from start of screen to cursor
                 for row in 0..cursor.row {
-                    self.grid_mut().clear_row(row);
+                    if let Some(row) = self.grid_mut().row_mut(row) {
+                        row.erase_range(0, cols, &blank);
+                    }
                 }
-                self.erase_in_line(1);
+                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                    row.erase_range(0, cursor.col + 1, &blank);
+                }
             }
             2 => {
-                // Erase entire screen
-                self.grid_mut().clear();
+                // Erase the viewport without moving the cursor or clearing
+                // scrollback.
+                for row in 0..rows {
+                    if let Some(row) = self.grid_mut().row_mut(row) {
+                        row.erase_range(0, cols, &blank);
+                    }
+                }
+                self.graphics.clear_screen(self.alt_screen_active);
+                if !self.alt_screen_active && rows > 0 {
+                    self.shell.prompt_tracker.retire_content_in_rows(
+                        0,
+                        i32::try_from(rows.saturating_sub(1)).unwrap_or(i32::MAX),
+                    );
+                    let oldest = -(self.grid.scrollback_len() as i32);
+                    self.retain_prompt_navigation(oldest);
+                }
             }
             3 => {
-                // Erase entire screen and scrollback
-                self.grid_mut().clear();
-                self.grid_mut().clear_scrollback();
+                // Xterm extension: erase saved lines only.
+                self.clear_scrollback();
             }
             _ => {}
         }
@@ -397,6 +2499,7 @@ impl Terminal {
     /// Erase in line
     pub fn erase_in_line(&mut self, mode: u16) {
         let cursor = self.grid().cursor();
+        let blank = self.erase_cell();
 
         let (start, end) = match mode {
             0 => (cursor.col, self.cols),
@@ -405,9 +2508,753 @@ impl Terminal {
             _ => return,
         };
 
-        for col in start..end {
-            if let Some(cell) = self.grid_mut().cell_mut(cursor.row, col) {
-                cell.clear();
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            row.erase_range(start, end, &blank);
+        }
+    }
+
+    /// Selectively erase erasable cells in the display (DECSED). Protected
+    /// cells survive with their complete grapheme and presentation state.
+    pub fn selective_erase_in_display(&mut self, mode: u16) {
+        let cursor = self.grid().cursor();
+        let blank = self.erase_cell();
+        let cols = self.cols;
+        let rows = self.rows;
+
+        match mode {
+            0 => {
+                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                    row.selective_erase_range(cursor.col, cols, &blank);
+                }
+                for row in (cursor.row + 1)..rows {
+                    if let Some(row) = self.grid_mut().row_mut(row) {
+                        row.selective_erase_range(0, cols, &blank);
+                    }
+                }
+            }
+            1 => {
+                for row in 0..cursor.row {
+                    if let Some(row) = self.grid_mut().row_mut(row) {
+                        row.selective_erase_range(0, cols, &blank);
+                    }
+                }
+                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                    row.selective_erase_range(0, cursor.col + 1, &blank);
+                }
+            }
+            2 => {
+                for row in 0..rows {
+                    if let Some(row) = self.grid_mut().row_mut(row) {
+                        row.selective_erase_range(0, cols, &blank);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Selectively erase erasable cells in the current line (DECSEL).
+    pub fn selective_erase_in_line(&mut self, mode: u16) {
+        let cursor = self.grid().cursor();
+        let blank = self.erase_cell();
+        let (start, end) = match mode {
+            0 => (cursor.col, self.cols),
+            1 => (0, cursor.col + 1),
+            2 => (0, self.cols),
+            _ => return,
+        };
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            row.selective_erase_range(start, end, &blank);
+        }
+    }
+
+    /// Resolve VT's 1-indexed inclusive rectangle coordinates into an
+    /// end-exclusive active-page rectangle. With DECOM set, coordinates are
+    /// relative to and clipped by both margin pairs; otherwise margins do not
+    /// affect rectangular operations.
+    fn rectangular_area(
+        &self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) -> Option<TerminalRect> {
+        let origin = self.mode.contains(TerminalMode::ORIGIN);
+        let (row_offset, row_limit) = if origin {
+            (self.scroll_top, self.scroll_bottom)
+        } else {
+            (0, self.rows)
+        };
+        let (col_offset, col_limit) = if origin {
+            (self.scroll_left, self.scroll_right)
+        } else {
+            (0, self.cols)
+        };
+        if row_offset >= row_limit || col_offset >= col_limit {
+            return None;
+        }
+
+        let top = row_offset.saturating_add(top.max(1) - 1).min(row_limit - 1);
+        let left = col_offset
+            .saturating_add(left.max(1) - 1)
+            .min(col_limit - 1);
+        let bottom = if bottom == 0 {
+            row_limit - 1
+        } else {
+            row_offset.saturating_add(bottom - 1).min(row_limit - 1)
+        };
+        let right = if right == 0 {
+            col_limit - 1
+        } else {
+            col_offset.saturating_add(right - 1).min(col_limit - 1)
+        };
+        (top <= bottom && left <= right).then_some(TerminalRect {
+            top,
+            bottom: bottom + 1,
+            left,
+            right: right + 1,
+        })
+    }
+
+    /// Permit or deny DECRQCRA screen checksum replies. This host security
+    /// policy is intentionally independent of DECSTR and RIS terminal state.
+    pub fn set_screen_checksum_reporting(&mut self, allowed: bool) {
+        self.screen_checksum_reporting = allowed;
+    }
+
+    pub fn screen_checksum_reporting(&self) -> bool {
+        self.screen_checksum_reporting
+    }
+
+    /// Permit or deny Kitty's persistent ordinary-file transmission medium.
+    /// Like other host security policy, this survives DECSTR and RIS resets.
+    pub fn set_kitty_file_transmission(&mut self, allowed: bool) {
+        self.graphics.set_file_transmission_allowed(allowed);
+    }
+
+    pub fn kitty_file_transmission(&self) -> bool {
+        self.graphics.file_transmission_allowed()
+    }
+
+    /// DECRQCRA — report the VT420 checksum for a rectangular area. Termeric
+    /// has one page per screen buffer, so the requested page is normalized to
+    /// the active page. Invalid/reversed rectangles return the DEC zero result.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn request_checksum_rectangular_area(
+        &mut self,
+        request_id: u16,
+        _page: usize,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) {
+        if !self.screen_checksum_reporting {
+            return;
+        }
+        let checksum = self
+            .rectangular_area(top, left, bottom, right)
+            .map_or(0, |area| self.checksum_area(area));
+        self.push_event(TerminalEvent::PtyWrite(
+            format!("\x1bP{request_id}!~{checksum:04X}\x1b\\").into_bytes(),
+        ));
+    }
+
+    /// Match the default DEC/xterm algorithm: skip cells that have never held
+    /// a drawn character, omit ordinary blanks after the first drawn cell,
+    /// include the legacy presentation bits, subtract the 8-bit cell values,
+    /// and wrap the result to 16 bits. Modern colors and combining scalars are
+    /// deliberately outside the VT420 checksum.
+    fn checksum_area(&self, area: TerminalRect) -> u16 {
+        let mut total = 0_u16;
+        let mut first_drawn = true;
+        for row in area.top..area.bottom {
+            for col in area.left..area.right {
+                let Some(cell) = self.grid().cell(row, col) else {
+                    continue;
+                };
+                let Some(character) = cell.content.char() else {
+                    continue;
+                };
+                let attributes = dec_checksum_attributes(cell);
+                let value = dec_checksum_character(cell, character).wrapping_add(attributes);
+                if first_drawn || value != b' ' as u16 || attributes != 0 {
+                    total = total.wrapping_add(value);
+                }
+                first_drawn = false;
+            }
+        }
+        0_u16.wrapping_sub(total)
+    }
+
+    /// DECRQPSR — report cursor/rendition/character-set state or horizontal
+    /// tab stops using the VT420 DECCIR/DECTABSR DCS formats.
+    pub(crate) fn request_presentation_state(&mut self, report: u16) {
+        let response = match report {
+            1 => self.cursor_information_report(),
+            2 => self.tab_stop_report(),
+            _ => return,
+        };
+        self.push_event(TerminalEvent::PtyWrite(response));
+    }
+
+    fn cursor_information_report(&self) -> Vec<u8> {
+        let cursor = self.grid().cursor();
+        let mut rendition = b'@';
+        rendition |= u8::from(self.current_attrs.contains(CellAttrs::INVERSE)) << 3;
+        rendition |= u8::from(
+            self.current_attrs
+                .intersects(CellAttrs::BLINK | CellAttrs::RAPID_BLINK),
+        ) << 2;
+        rendition |= u8::from(self.current_attrs.has_underline()) << 1;
+        rendition |= u8::from(self.current_attrs.contains(CellAttrs::BOLD));
+
+        let protection = b'@' | u8::from(self.current_character_protected);
+        let mut flags = b'@';
+        flags |= u8::from(cursor.wrap_pending) << 3;
+        flags |= u8::from(self.single_shift == Some(3)) << 2;
+        flags |= u8::from(self.single_shift == Some(2)) << 1;
+        flags |= u8::from(self.mode.contains(TerminalMode::ORIGIN));
+
+        let designators: String = self
+            .g_sets
+            .iter()
+            .map(|charset| char::from(charset.designator()))
+            .collect();
+        format!(
+            "\x1bP1$u{};{};1;{};{};{};{};{};@;{}\x1b\\",
+            cursor.row + 1,
+            cursor.col + 1,
+            char::from(rendition),
+            char::from(protection),
+            char::from(flags),
+            self.gl_register,
+            self.gr_register,
+            designators,
+        )
+        .into_bytes()
+    }
+
+    fn tab_stop_report(&self) -> Vec<u8> {
+        let mut response = b"\x1bP2$u".to_vec();
+        for (column, _) in self.tabs.iter().enumerate().filter(|(_, set)| **set) {
+            if response.len() > b"\x1bP2$u".len() {
+                response.push(b'/');
+            }
+            response.extend_from_slice((column + 1).to_string().as_bytes());
+        }
+        response.extend_from_slice(b"\x1b\\");
+        response
+    }
+
+    /// DECRSPS — restore a previously reported cursor or tab-stop state.
+    /// Parsing is deliberately atomic: malformed or unsupported data leaves
+    /// the complete live state unchanged.
+    pub(crate) fn restore_presentation_state(&mut self, report: u8, data: &[u8]) {
+        match report {
+            1 => {
+                let Some(state) = CursorPresentationState::parse(data, self.rows, self.cols) else {
+                    return;
+                };
+                self.grid_mut().set_cursor(state.row, state.col);
+                self.grid_mut().set_wrap_pending(state.wrap_pending);
+                self.current_attrs.remove(
+                    CellAttrs::BOLD
+                        | CellAttrs::BLINK
+                        | CellAttrs::RAPID_BLINK
+                        | CellAttrs::INVERSE
+                        | CellAttrs::ALL_UNDERLINES,
+                );
+                self.current_attrs.set(CellAttrs::BOLD, state.bold);
+                self.current_attrs
+                    .set(CellAttrs::UNDERLINE, state.underline);
+                self.current_attrs.set(CellAttrs::BLINK, state.blink);
+                self.current_attrs.set(CellAttrs::INVERSE, state.inverse);
+                self.current_character_protected = state.protected;
+                self.set_mode(TerminalMode::ORIGIN, state.origin_mode);
+                self.g_sets = state.g_sets;
+                self.gl_register = state.gl_register;
+                self.gr_register = state.gr_register;
+                self.single_shift = state.single_shift;
+            }
+            2 => {
+                let Some(tabs) = parse_tab_stop_report(data, self.cols) else {
+                    return;
+                };
+                self.tabs = tabs;
+            }
+            _ => {}
+        }
+    }
+
+    /// DECCRA — copy an overlap-safe rectangular cell snapshot. Termeric has
+    /// one page per screen buffer, so every source/destination page value is
+    /// clamped to that sole page as DEC specifies for unavailable page numbers.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn copy_rectangular_area(
+        &mut self,
+        source_top: usize,
+        source_left: usize,
+        source_bottom: usize,
+        source_right: usize,
+        _source_page: usize,
+        destination_top: usize,
+        destination_left: usize,
+        _destination_page: usize,
+    ) {
+        let Some(source) =
+            self.rectangular_area(source_top, source_left, source_bottom, source_right)
+        else {
+            return;
+        };
+        let destination_top = destination_top.max(1);
+        let destination_left = destination_left.max(1);
+        let destination_bottom = destination_top.saturating_add(source.height() - 1);
+        let destination_right = destination_left.saturating_add(source.width() - 1);
+        let Some(destination) = self.rectangular_area(
+            destination_top,
+            destination_left,
+            destination_bottom,
+            destination_right,
+        ) else {
+            return;
+        };
+        let height = source.height().min(destination.height());
+        let width = source.width().min(destination.width());
+        if height == 0
+            || width == 0
+            || (source.top == destination.top
+                && source.left == destination.left
+                && height == source.height()
+                && width == source.width())
+        {
+            return;
+        }
+
+        let snapshot: Vec<Vec<Cell>> = (0..height)
+            .map(|offset| {
+                self.grid()
+                    .row(source.top + offset)
+                    .map(|row| row.iter().skip(source.left).take(width).cloned().collect())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let blank = self.erase_cell();
+        for (offset, cells) in snapshot.iter().enumerate() {
+            if let Some(row) = self.grid_mut().row_mut(destination.top + offset) {
+                row.replace_range(destination.left, cells, &blank);
+            }
+        }
+        self.graphics.copy_rect(
+            self.alt_screen_active,
+            source.top..source.top + height,
+            source.left..source.left + width,
+            destination.top,
+            destination.left,
+        );
+    }
+
+    /// DECFRA — fill a rectangle with a printable GL/GR character using the
+    /// current SGR and DECSCA attributes.
+    pub(crate) fn fill_rectangular_area(
+        &mut self,
+        character: u16,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) {
+        let character = if character == 0 { 32 } else { character };
+        if !((32..=126).contains(&character) || (160..=255).contains(&character)) {
+            return;
+        }
+        let Some(area) = self.rectangular_area(top, left, bottom, right) else {
+            return;
+        };
+        let mut character = char::from_u32(u32::from(character)).unwrap_or(' ');
+        let charset = if character.is_ascii() {
+            self.active_character_set()
+        } else {
+            CharacterSet::Ascii
+        };
+        character = charset.translate(character);
+        let mut flags = CellFlags::DIRTY;
+        flags.set(CellFlags::PROTECTED, self.current_character_protected);
+        flags.set(
+            CellFlags::DEC_SPECIAL_GRAPHICS,
+            charset == CharacterSet::DecSpecialGraphics,
+        );
+        flags.set(
+            CellFlags::DEC_UK_CHARSET,
+            charset == CharacterSet::UnitedKingdom,
+        );
+        let fill = Cell {
+            content: CellContent::Char(character),
+            fg: self.current_fg,
+            bg: self.current_bg,
+            fg_spec: self.current_fg_spec,
+            bg_spec: self.current_bg_spec,
+            underline_color: self.current_underline_color,
+            underline_color_spec: self.current_underline_color_spec,
+            attrs: self.current_attrs,
+            flags,
+            hyperlink_id: None,
+        };
+        let blank = self.erase_cell();
+        for row in area.top..area.bottom {
+            if let Some(row) = self.grid_mut().row_mut(row) {
+                row.fill_range(area.left, area.right, &fill, &blank);
+            }
+        }
+        self.graphics.erase_rect(
+            self.alt_screen_active,
+            area.top..area.bottom,
+            area.left..area.right,
+        );
+    }
+
+    /// DECERA — replace every cell in a rectangle with a BCE blank, ignoring
+    /// DECSCA protection and preserving the active cursor position.
+    pub(crate) fn erase_rectangular_area(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) {
+        let Some(area) = self.rectangular_area(top, left, bottom, right) else {
+            return;
+        };
+        let blank = self.erase_cell();
+        for row in area.top..area.bottom {
+            if let Some(row) = self.grid_mut().row_mut(row) {
+                row.erase_range(area.left, area.right, &blank);
+            }
+        }
+        self.graphics.erase_rect(
+            self.alt_screen_active,
+            area.top..area.bottom,
+            area.left..area.right,
+        );
+    }
+
+    /// DECSERA — erase only unprotected grapheme content while retaining each
+    /// affected cell's visual and protection attributes.
+    pub(crate) fn selective_erase_rectangular_area(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) {
+        let Some(area) = self.rectangular_area(top, left, bottom, right) else {
+            return;
+        };
+        let blank = self.erase_cell();
+        for row in area.top..area.bottom {
+            if let Some(row) = self.grid_mut().row_mut(row) {
+                row.selective_erase_range(area.left, area.right, &blank);
+            }
+        }
+    }
+
+    /// DECSACE — select whether DECCARA/DECRARA treat their endpoints as a
+    /// wrapped stream or as an exact rectangle. Invalid values retain the
+    /// existing setting.
+    pub(crate) fn select_attribute_change_extent(&mut self, parameter: u16) {
+        match parameter {
+            0 | 1 => self.rectangular_change_extent = false,
+            2 => self.rectangular_change_extent = true,
+            _ => {}
+        }
+    }
+
+    pub fn attribute_change_extent_parameter(&self) -> u8 {
+        if self.rectangular_change_extent { 2 } else { 1 }
+    }
+
+    /// DECCARA — set or clear the DEC rendition subset in the selected area.
+    /// Parameter order is significant, matching SGR-style last-change-wins
+    /// behavior. SGR 8/28 are retained as the established xterm extension.
+    pub(crate) fn change_attributes_area(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+        parameters: &[u16],
+    ) {
+        let mut change = DecAttributeChange::default();
+        for parameter in parameters {
+            match parameter {
+                0 => change.clear(
+                    CellAttrs::BOLD
+                        | CellAttrs::ALL_UNDERLINES
+                        | CellAttrs::BLINK
+                        | CellAttrs::INVERSE,
+                ),
+                1 => change.set(CellAttrs::BOLD),
+                4 => {
+                    change.clear(CellAttrs::ALL_UNDERLINES);
+                    change.set(CellAttrs::UNDERLINE);
+                }
+                5 => change.set(CellAttrs::BLINK),
+                7 => change.set(CellAttrs::INVERSE),
+                8 => change.set(CellAttrs::HIDDEN),
+                22 => change.clear(CellAttrs::BOLD),
+                24 => change.clear(CellAttrs::ALL_UNDERLINES),
+                25 => change.clear(CellAttrs::BLINK),
+                27 => change.clear(CellAttrs::INVERSE),
+                28 => change.clear(CellAttrs::HIDDEN),
+                _ => {}
+            }
+        }
+        if change.is_empty() {
+            return;
+        }
+        let Some(area) = self.rectangular_area(top, left, bottom, right) else {
+            return;
+        };
+        self.apply_attribute_area(area, |attrs| change.apply(attrs));
+    }
+
+    /// DECRARA — reverse the requested DEC rendition subset. Repeated
+    /// parameters cancel one another, and parameter 0 reverses the four DEC
+    /// base attributes without implicitly toggling xterm's hidden extension.
+    pub(crate) fn reverse_attributes_area(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+        parameters: &[u16],
+    ) {
+        let mut reverse = DecAttributeReverse::default();
+        for parameter in parameters {
+            match parameter {
+                0 => {
+                    reverse.bold ^= true;
+                    reverse.underline ^= true;
+                    reverse.blink ^= true;
+                    reverse.inverse ^= true;
+                }
+                1 => reverse.bold ^= true,
+                4 => reverse.underline ^= true,
+                5 => reverse.blink ^= true,
+                7 => reverse.inverse ^= true,
+                8 => reverse.hidden ^= true,
+                _ => {}
+            }
+        }
+        if reverse.is_empty() {
+            return;
+        }
+        let Some(area) = self.rectangular_area(top, left, bottom, right) else {
+            return;
+        };
+        self.apply_attribute_area(area, |attrs| reverse.apply(attrs));
+    }
+
+    fn apply_attribute_area(&mut self, area: TerminalRect, mut apply: impl FnMut(&mut CellAttrs)) {
+        let rectangular = self.rectangular_change_extent;
+        let cols = self.cols;
+        for row_index in area.top..area.bottom {
+            let (start, end) = if rectangular || area.height() == 1 {
+                (area.left, area.right)
+            } else if row_index == area.top {
+                (area.left, cols)
+            } else if row_index + 1 == area.bottom {
+                (0, area.right)
+            } else {
+                (0, cols)
+            };
+            let Some(row) = self.grid_mut().row_mut(row_index) else {
+                continue;
+            };
+            row.change_attributes_range(start, end, rectangular, &mut apply);
+        }
+    }
+
+    /// Apply DECSCA. Invalid parameters leave the current protection state
+    /// unchanged, while 0 and 2 select erasable text and 1 selects protected.
+    pub(crate) fn set_character_protection(&mut self, parameter: u16) {
+        match parameter {
+            0 | 2 => self.current_character_protected = false,
+            1 => self.current_character_protected = true,
+            _ => {}
+        }
+    }
+
+    pub fn character_protection_parameter(&self) -> u8 {
+        u8::from(self.current_character_protected)
+    }
+
+    /// Blank cells created by erase/insert/delete operations carry only the
+    /// active background color, matching BCE terminals and avoiding text-style
+    /// leakage into empty cells.
+    fn erase_cell(&self) -> Cell {
+        Cell {
+            bg: self.current_bg,
+            bg_spec: self.current_bg_spec,
+            flags: CellFlags::DIRTY,
+            ..Cell::default()
+        }
+    }
+
+    /// Return the setting body used by a successful DECRQSS response.
+    pub(crate) fn decrqss_status(&self, request: &[u8]) -> Option<Vec<u8>> {
+        match request {
+            b"m" => Some(self.sgr_status()),
+            b"r" => Some(format!("{};{}r", self.scroll_top + 1, self.scroll_bottom).into_bytes()),
+            b"s" => Some(format!("{};{}s", self.scroll_left + 1, self.scroll_right).into_bytes()),
+            b" q" => Some(format!("{} q", self.cursor_style_parameter()).into_bytes()),
+            b"\"q" => Some(format!("{}\"q", self.character_protection_parameter()).into_bytes()),
+            b"\"p" => Some(
+                format!(
+                    "{};{}\"p",
+                    self.dec_conformance_level + 60,
+                    u8::from(!self.use_8bit_controls)
+                )
+                .into_bytes(),
+            ),
+            b"*x" => Some(format!("{}*x", self.attribute_change_extent_parameter()).into_bytes()),
+            // Xterm answers these legacy page/screen geometry settings even
+            // when its window-operation policy denies the corresponding
+            // mutation controls. Preserve its DECSLPP 24-line floor and
+            // max-row convention; Termeric has no selectable 132-column mode,
+            // so the report remains at that setting's 80-column default.
+            b"t" => Some(format!("{}t", self.rows.saturating_sub(1).max(24)).into_bytes()),
+            b"$|" => Some(b"80$|".to_vec()),
+            b"*|" => Some(format!("{}*|", self.rows).into_bytes()),
+            b">0m" => Some(format!(">0;{}m", self.xterm_keyboard_resource.modify()).into_bytes()),
+            b">0f" => Some(format!(">0;{}f", self.xterm_keyboard_resource.format()).into_bytes()),
+            b">1m" => {
+                Some(format!(">1;{}m", self.xterm_cursor_keys.mode().parameter()).into_bytes())
+            }
+            b">1f" => {
+                Some(format!(">1;{}f", self.xterm_cursor_keys.format().parameter()).into_bytes())
+            }
+            b">2m" => {
+                Some(format!(">2;{}m", self.xterm_function_keys.mode().parameter()).into_bytes())
+            }
+            b">2f" => {
+                Some(format!(">2;{}f", self.xterm_function_keys.format().parameter()).into_bytes())
+            }
+            b">3m" => {
+                Some(format!(">3;{}m", self.xterm_keypad_keys.mode().parameter()).into_bytes())
+            }
+            b">3f" => {
+                Some(format!(">3;{}f", self.xterm_keypad_keys.format().parameter()).into_bytes())
+            }
+            b">5m" => {
+                Some(format!(">5;{}m", self.xterm_string_keys.mode().parameter()).into_bytes())
+            }
+            b">5f" => {
+                Some(format!(">5;{}f", self.xterm_string_keys.format().parameter()).into_bytes())
+            }
+            b">6m" => {
+                Some(format!(">6;{}m", self.xterm_modifier_keys.mode().parameter()).into_bytes())
+            }
+            b">6f" => {
+                Some(format!(">6;{}f", self.xterm_modifier_keys.format().parameter()).into_bytes())
+            }
+            b">7m" => {
+                Some(format!(">7;{}m", self.xterm_special_keys.mode().parameter()).into_bytes())
+            }
+            b">7f" => {
+                Some(format!(">7;{}f", self.xterm_special_keys.format().parameter()).into_bytes())
+            }
+            b">4f" => Some(
+                format!(">4;{}f", self.xterm_modify_other_keys.format().parameter()).into_bytes(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn sgr_status(&self) -> Vec<u8> {
+        let mut params = Vec::new();
+        let attrs = self.current_attrs;
+        if attrs.contains(CellAttrs::BOLD) {
+            params.push("1".to_string());
+        }
+        if attrs.contains(CellAttrs::DIM) {
+            params.push("2".to_string());
+        }
+        if attrs.contains(CellAttrs::ITALIC) {
+            params.push("3".to_string());
+        }
+        if attrs.contains(CellAttrs::CURLY_UNDERLINE) {
+            params.push("4:3".to_string());
+        } else if attrs.contains(CellAttrs::DOUBLE_UNDERLINE) {
+            params.push("4:2".to_string());
+        } else if attrs.contains(CellAttrs::DOTTED_UNDERLINE) {
+            params.push("4:4".to_string());
+        } else if attrs.contains(CellAttrs::DASHED_UNDERLINE) {
+            params.push("4:5".to_string());
+        } else if attrs.contains(CellAttrs::UNDERLINE) {
+            params.push("4".to_string());
+        }
+        if attrs.contains(CellAttrs::BLINK) {
+            params.push("5".to_string());
+        }
+        if attrs.contains(CellAttrs::RAPID_BLINK) {
+            params.push("6".to_string());
+        }
+        if attrs.contains(CellAttrs::INVERSE) {
+            params.push("7".to_string());
+        }
+        if attrs.contains(CellAttrs::HIDDEN) {
+            params.push("8".to_string());
+        }
+        if attrs.contains(CellAttrs::STRIKE) {
+            params.push("9".to_string());
+        }
+        Self::push_sgr_color(&mut params, self.current_fg_spec, true);
+        Self::push_sgr_color(&mut params, self.current_bg_spec, false);
+        if let Some(spec) = self.current_underline_color_spec {
+            Self::push_sgr_extended_color(&mut params, spec, 58);
+        }
+        if params.is_empty() {
+            params.push("0".to_string());
+        }
+        format!("{}m", params.join(";")).into_bytes()
+    }
+
+    fn push_sgr_color(params: &mut Vec<String>, spec: ColorSpec, foreground: bool) {
+        match spec {
+            ColorSpec::Default => {}
+            ColorSpec::Indexed(index @ 0..=7) => {
+                params.push((if foreground { 30 + index } else { 40 + index }).to_string());
+            }
+            ColorSpec::Indexed(index @ 8..=15) => {
+                params.push(
+                    (if foreground {
+                        90 + index - 8
+                    } else {
+                        100 + index - 8
+                    })
+                    .to_string(),
+                );
+            }
+            ColorSpec::Indexed(index) => {
+                params.push(format!("{};5;{index}", if foreground { 38 } else { 48 }))
+            }
+            ColorSpec::TrueColor(color) => params.push(format!(
+                "{};2;{};{};{}",
+                if foreground { 38 } else { 48 },
+                color.r,
+                color.g,
+                color.b
+            )),
+        }
+    }
+
+    fn push_sgr_extended_color(params: &mut Vec<String>, spec: ColorSpec, selector: u8) {
+        match spec {
+            ColorSpec::Default => {}
+            ColorSpec::Indexed(index) => params.push(format!("{selector};5;{index}")),
+            ColorSpec::TrueColor(color) => {
+                params.push(format!("{selector};2;{};{};{}", color.r, color.g, color.b))
             }
         }
     }
@@ -437,6 +3284,7 @@ impl Terminal {
         self.current_fg_spec = ColorSpec::Default;
         self.current_bg_spec = ColorSpec::Default;
         self.current_underline_color = None;
+        self.current_underline_color_spec = None;
     }
 
     /// Add text attributes to the current set
@@ -451,12 +3299,19 @@ impl Terminal {
 
     /// Set underline color
     pub fn set_underline_color(&mut self, color: Color) {
+        self.set_underline_color_spec(color, ColorSpec::TrueColor(color));
+    }
+
+    /// Set an underline color while retaining its original SGR encoding.
+    pub fn set_underline_color_spec(&mut self, color: Color, spec: ColorSpec) {
         self.current_underline_color = Some(color);
+        self.current_underline_color_spec = Some(spec);
     }
 
     /// Reset underline color (use fg color)
     pub fn reset_underline_color(&mut self) {
         self.current_underline_color = None;
+        self.current_underline_color_spec = None;
     }
 
     /// Set underline style (clears all underline flags and sets the specified style)
@@ -481,6 +3336,27 @@ impl Terminal {
     /// All characters written after this will be part of this hyperlink
     /// until `reset_hyperlink` is called.
     pub fn set_hyperlink(&mut self, url: String, id: Option<String>) {
+        const MAX_HYPERLINK_BYTES: usize = 8 * 1024;
+        if url.len() > MAX_HYPERLINK_BYTES
+            || id
+                .as_ref()
+                .is_some_and(|identifier| identifier.len() > MAX_HYPERLINK_BYTES)
+        {
+            self.current_hyperlink_id = None;
+            return;
+        }
+        if let Some(existing) = self.hyperlink_registry.find_id(&url, id.as_deref()) {
+            self.current_hyperlink_id = Some(existing);
+            return;
+        }
+        let registry_budget = (self.grid.memory_usage().scrollback_byte_limit / 4).max(1024 * 1024);
+        if self.hyperlink_registry.memory_usage_bytes() >= registry_budget {
+            self.prune_unreferenced_hyperlinks();
+            if self.hyperlink_registry.memory_usage_bytes() >= registry_budget {
+                self.current_hyperlink_id = None;
+                return;
+            }
+        }
         let hyperlink_id = self.hyperlink_registry.get_or_insert(url, id);
         self.current_hyperlink_id = Some(hyperlink_id);
     }
@@ -504,36 +3380,334 @@ impl Terminal {
 
     // === Graphics methods ===
 
-    /// Handle a Kitty graphics APC command
-    pub fn handle_graphics_command(&mut self, payload: &[u8]) {
-        if let Some(cmd) = KittyCommand::parse(payload) {
-            // Record cursor position for placement
-            let cursor = self.grid().cursor();
-            let mut cmd = cmd;
-            if let Some(ref mut placement) = cmd.placement {
-                // If no explicit position, use cursor position
-                if placement.col.is_none() {
-                    placement.col = Some(cursor.col as u32);
+    /// Permit one authenticated live-domain relay to restore decoded graphics
+    /// state. The permission survives the replica's leading RIS, consumes
+    /// itself on success or failure, and is never enabled for ordinary PTYs.
+    pub fn set_graphics_relay_snapshot_allowed(&mut self, allowed: bool) {
+        self.graphics_relay_import_allowed = allowed;
+        if !allowed {
+            self.graphics_relay_apc_data.clear();
+            self.graphics_relay_apc_active = false;
+            self.graphics_relay_apc_overflow = false;
+            self.pending_graphics_relay_import = None;
+        }
+    }
+
+    /// Capture the complete decoded graphics namespace without copying pixel
+    /// buffers. Animation clocks are advanced to the atomic attachment point.
+    pub fn graphics_relay_snapshot(&mut self, now: Instant) -> GraphicsRelaySnapshot {
+        self.graphics
+            .advance_animations(self.alt_screen_active, now);
+        self.graphics.relay_snapshot(now)
+    }
+
+    pub(crate) fn begin_graphics_relay_apc(&mut self) {
+        self.graphics_relay_apc_data.clear();
+        self.graphics_relay_apc_active = self.graphics_relay_import_allowed;
+        self.graphics_relay_apc_overflow = false;
+    }
+
+    pub(crate) fn push_graphics_relay_apc_byte(&mut self, byte: u8) {
+        if !self.graphics_relay_apc_active || self.graphics_relay_apc_overflow {
+            return;
+        }
+        if self.graphics_relay_apc_data.len() >= MAX_GRAPHICS_RELAY_APC_BYTES {
+            self.graphics_relay_apc_data.clear();
+            self.graphics_relay_apc_overflow = true;
+        } else {
+            self.graphics_relay_apc_data.push(byte);
+        }
+    }
+
+    pub(crate) fn finish_graphics_relay_apc(&mut self) {
+        if !self.graphics_relay_apc_active {
+            return;
+        }
+        self.graphics_relay_apc_active = false;
+        if self.graphics_relay_apc_overflow {
+            self.graphics_relay_apc_overflow = false;
+            self.fail_graphics_relay_import("graphics relay APC exceeds its resource limit");
+            return;
+        }
+        let payload = std::mem::take(&mut self.graphics_relay_apc_data);
+        if let Err(error) = self.handle_graphics_relay_apc(&payload) {
+            self.fail_graphics_relay_import(&error);
+        }
+    }
+
+    pub(crate) fn cancel_graphics_relay_apc(&mut self) {
+        self.graphics_relay_apc_data.clear();
+        self.graphics_relay_apc_active = false;
+        self.graphics_relay_apc_overflow = false;
+        if self.pending_graphics_relay_import.is_some() {
+            self.fail_graphics_relay_import("graphics relay APC was interrupted");
+        }
+    }
+
+    fn handle_graphics_relay_apc(&mut self, payload: &[u8]) -> Result<(), String> {
+        let payload = std::str::from_utf8(payload)
+            .map_err(|_| "graphics relay APC is not ASCII".to_string())?;
+        let mut fields = payload.split(';');
+        if fields.next() != Some("G") {
+            return Err("graphics relay APC has an invalid namespace".into());
+        }
+        match fields.next() {
+            Some("begin") => {
+                let expected_bytes = fields
+                    .next()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .ok_or_else(|| "graphics relay begin has an invalid length".to_string())?;
+                let expected_checksum = fields
+                    .next()
+                    .and_then(|value| u64::from_str_radix(value, 16).ok())
+                    .ok_or_else(|| "graphics relay begin has an invalid checksum".to_string())?;
+                if fields.next().is_some() || expected_bytes > MAX_GRAPHICS_RELAY_METADATA_BYTES {
+                    return Err("graphics relay begin exceeds its resource limit".into());
                 }
-                if placement.row.is_none() {
-                    placement.row = Some(cursor.row as u32);
+                self.graphics.reset_for_relay_snapshot();
+                self.pending_graphics_relay_import = Some(PendingGraphicsRelayImport {
+                    expected_bytes,
+                    expected_checksum,
+                    metadata: Vec::new(),
+                    started_at: Instant::now(),
+                });
+            }
+            Some("chunk") => {
+                let encoded = fields
+                    .next()
+                    .ok_or_else(|| "graphics relay chunk omits data".to_string())?;
+                if fields.next().is_some() {
+                    return Err("graphics relay chunk has trailing fields".into());
+                }
+                let decoded = STANDARD
+                    .decode(encoded)
+                    .map_err(|_| "graphics relay chunk is not valid base64".to_string())?;
+                let pending = self
+                    .pending_graphics_relay_import
+                    .as_mut()
+                    .ok_or_else(|| "graphics relay chunk arrived before begin".to_string())?;
+                let new_len = pending
+                    .metadata
+                    .len()
+                    .checked_add(decoded.len())
+                    .ok_or_else(|| "graphics relay metadata length overflow".to_string())?;
+                if new_len > pending.expected_bytes || new_len > MAX_GRAPHICS_RELAY_METADATA_BYTES {
+                    return Err("graphics relay metadata exceeds its declared length".into());
+                }
+                pending.metadata.extend_from_slice(&decoded);
+            }
+            Some("end") => {
+                if fields.next().is_some() {
+                    return Err("graphics relay end has trailing fields".into());
+                }
+                let pending = self
+                    .pending_graphics_relay_import
+                    .take()
+                    .ok_or_else(|| "graphics relay end arrived before begin".to_string())?;
+                if pending.metadata.len() != pending.expected_bytes
+                    || graphics_relay_checksum(&pending.metadata) != pending.expected_checksum
+                {
+                    return Err("graphics relay metadata is truncated or corrupt".into());
+                }
+                self.graphics
+                    .apply_relay_metadata(&pending.metadata, pending.started_at)?;
+                self.graphics
+                    .advance_animations(self.alt_screen_active, Instant::now());
+                log::debug!(
+                    "Restored live-domain graphics snapshot: {} images, {} placements, {} decoded bytes",
+                    self.graphics.image_count(),
+                    self.graphics.placement_count(),
+                    self.graphics.memory_usage()
+                );
+                self.graphics_relay_import_allowed = false;
+            }
+            _ => return Err("graphics relay APC has an invalid operation".into()),
+        }
+        Ok(())
+    }
+
+    fn fail_graphics_relay_import(&mut self, message: &str) {
+        log::warn!("Rejected live-domain graphics snapshot: {message}");
+        self.pending_graphics_relay_import = None;
+        self.graphics_relay_import_allowed = false;
+        self.graphics.reset_for_relay_snapshot();
+    }
+
+    pub(crate) fn begin_graphics_apc(&mut self) {
+        self.graphics_apc_data.clear();
+        self.graphics_apc_active = true;
+        self.graphics_apc_overflow = false;
+    }
+
+    pub(crate) fn push_graphics_apc_byte(&mut self, byte: u8) {
+        if !self.graphics_apc_active || self.graphics_apc_overflow {
+            return;
+        }
+        if self.graphics_apc_data.len() >= MAX_KITTY_APC_BYTES {
+            self.graphics_apc_data.clear();
+            self.graphics_apc_overflow = true;
+        } else {
+            self.graphics_apc_data.push(byte);
+        }
+    }
+
+    pub(crate) fn finish_graphics_apc(&mut self) {
+        if !self.graphics_apc_active {
+            return;
+        }
+        self.graphics_apc_active = false;
+        if self.graphics_apc_overflow {
+            self.graphics_apc_overflow = false;
+            let response = GraphicsResponse::too_large("graphics APC is too large");
+            self.push_event(TerminalEvent::PtyWrite(
+                response.to_escape_sequence().into_bytes(),
+            ));
+            return;
+        }
+        let payload = std::mem::take(&mut self.graphics_apc_data);
+        self.handle_graphics_command(&payload);
+    }
+
+    pub(crate) fn cancel_graphics_apc(&mut self) {
+        self.graphics_apc_data.clear();
+        self.graphics_apc_active = false;
+        self.graphics_apc_overflow = false;
+    }
+
+    /// Handle one complete Kitty graphics APC command.
+    pub fn handle_graphics_command(&mut self, payload: &[u8]) {
+        match KittyCommand::parse(payload) {
+            Ok(mut cmd) => {
+                // Record cursor position for placement
+                let cursor = self.grid().cursor();
+                cmd.placement.col = Some(cursor.col as u32);
+                cmd.placement.row = Some(cursor.row as u32);
+                let result = self.graphics.handle_command(cmd, self.alt_screen_active);
+                if let Some((cols, rows)) = result.cursor_movement {
+                    let terminal_rows = self.rows;
+                    let terminal_cols = self.cols;
+                    self.grid_mut().set_cursor(
+                        cursor
+                            .row
+                            .saturating_add(rows as usize)
+                            .min(terminal_rows - 1),
+                        cursor
+                            .col
+                            .saturating_add(cols as usize)
+                            .min(terminal_cols - 1),
+                    );
+                }
+                if let Some(response) = result.response {
+                    log::trace!("Graphics response: {:?}", response);
+                    // Emit the response as Kitty graphics ack back to the PTY,
+                    // so apps probing for image-protocol support (e.g. `icat`
+                    // in Kitty-compatible mode) get the expected reply.
+                    let bytes = response.to_escape_sequence().into_bytes();
+                    self.push_event(crate::event::TerminalEvent::PtyWrite(bytes));
                 }
             }
-
-            if let Some(response) = self.graphics.handle_command(cmd) {
-                log::trace!("Graphics response: {:?}", response);
-                // Emit the response as Kitty graphics ack back to the PTY,
-                // so apps probing for image-protocol support (e.g. `icat`
-                // in Kitty-compatible mode) get the expected reply.
-                let bytes = response.to_escape_sequence().into_bytes();
-                self.push_event(crate::event::TerminalEvent::PtyWrite(bytes));
+            Err(error) => {
+                log::debug!("Rejected Kitty graphics command: {error}");
+                self.graphics.abort_pending();
+                let response = GraphicsResponse::parse_error(&error.to_string());
+                self.push_event(TerminalEvent::PtyWrite(
+                    response.to_escape_sequence().into_bytes(),
+                ));
             }
         }
     }
 
+    pub(crate) fn handle_sixel_command(&mut self, payload: &[u8]) {
+        let cursor = self.grid().cursor();
+        match self.graphics.handle_sixel(
+            payload,
+            cursor.col as u32,
+            cursor.row as i64,
+            (self.cell_pixel_width, self.cell_pixel_height),
+            self.alt_screen_active,
+        ) {
+            Ok((cols, rows)) => {
+                log::debug!("Accepted Sixel image: cursor advance {cols}x{rows} cells");
+                self.move_after_sixel_image(cursor, rows);
+            }
+            Err(error) => log::debug!("Rejected Sixel image: {}", error.message),
+        }
+    }
+
+    pub(crate) fn handle_iterm2_image(&mut self, params: &[&[u8]]) {
+        let cursor = self.grid().cursor();
+        match self.graphics.handle_iterm2(
+            params,
+            (cursor.col as u32, cursor.row as i64),
+            (self.cols as u32, self.rows as u32),
+            (self.cell_pixel_width, self.cell_pixel_height),
+            self.alt_screen_active,
+        ) {
+            Ok(Some((cols, rows))) => {
+                log::debug!("Accepted iTerm2 inline image: cursor advance {cols}x{rows} cells");
+                self.move_after_inline_image(cursor, cols, rows);
+            }
+            Ok(None) => {}
+            Err(error) => log::debug!("Rejected iTerm2 inline image: {}", error.message),
+        }
+    }
+
+    fn move_after_inline_image(&mut self, cursor: crate::grid::Cursor, cols: u32, rows: u32) {
+        let row = cursor
+            .row
+            .saturating_add(rows as usize)
+            .min(self.rows.saturating_sub(1));
+        let col = if cols == 0 {
+            0
+        } else {
+            cursor
+                .col
+                .saturating_add(cols as usize)
+                .min(self.cols.saturating_sub(1))
+        };
+        self.grid_mut().set_cursor(row, col);
+    }
+
+    fn move_after_sixel_image(&mut self, cursor: crate::grid::Cursor, rows: u32) {
+        let row = cursor
+            .row
+            .saturating_add(rows as usize)
+            .min(self.rows.saturating_sub(1));
+        let col = cursor.col.min(self.cols.saturating_sub(1));
+        self.grid_mut().set_cursor(row, col);
+    }
+
     /// Get all image placements for rendering
-    pub fn graphics_placements(&self) -> &[ImagePlacement] {
-        self.graphics.placements()
+    pub fn graphics_placements(&self) -> impl Iterator<Item = &ImagePlacement> {
+        self.graphics.placements(self.alt_screen_active)
+    }
+
+    /// Image placements and decoded data corresponding to the presentation
+    /// grid. Snapshot ownership keeps deletions and ID reuse during a
+    /// synchronized update from leaking into an intermediate frame.
+    pub fn presentation_images(&self) -> Vec<PresentationImage> {
+        if let Some(snapshot) = &self.synchronized_output_snapshot {
+            snapshot.images.clone()
+        } else {
+            self.graphics.presentation_images(
+                self.grid(),
+                self.alt_screen_active,
+                self.cell_pixel_width,
+                self.cell_pixel_height,
+            )
+        }
+    }
+
+    /// Next exact frame boundary for a visible Kitty animation.
+    pub fn graphics_animation_deadline(&self) -> Option<Instant> {
+        self.graphics
+            .next_animation_deadline(self.alt_screen_active)
+    }
+
+    /// Advance visible Kitty animations through every elapsed frame boundary.
+    pub fn advance_graphics_animations(&mut self, now: Instant) -> bool {
+        self.graphics
+            .advance_animations(self.alt_screen_active, now)
     }
 
     /// Get image data for rendering
@@ -543,27 +3717,136 @@ impl Terminal {
 
     /// Check if there are images to render
     pub fn has_images(&self) -> bool {
-        self.graphics.has_images()
+        self.graphics.has_images(self.alt_screen_active)
+    }
+
+    /// Decoded image bytes retained by this terminal's bounded image cache.
+    pub fn graphics_memory_usage(&self) -> usize {
+        self.graphics.memory_usage()
+    }
+
+    /// Decoded images retained by this terminal's bounded image cache.
+    pub fn graphics_image_count(&self) -> usize {
+        self.graphics.image_count()
+    }
+
+    /// Live image placements across both screen buffers.
+    pub fn graphics_placement_count(&self) -> usize {
+        self.graphics.placement_count()
     }
 
     // === Shell integration methods ===
 
     /// Handle OSC 133 shell integration sequence
     pub fn handle_osc_133(&mut self, params: &[&[u8]]) {
+        if self.alt_screen_active {
+            log::trace!("Ignoring OSC 133 from the alternate screen");
+            return;
+        }
         let cursor_row = self.grid().cursor().row;
+        if params.first().is_some_and(|value| *value == b"A") {
+            self.prompt_navigation = None;
+        }
         self.shell.handle_osc_133(params, cursor_row);
     }
 
-    /// Get the previous prompt row from the current position
-    pub fn previous_prompt(&self) -> Option<usize> {
-        let current_row = self.grid().cursor().row as i32;
-        self.shell.previous_prompt(current_row)
+    /// Navigate to the previous retained OSC 133 prompt from the current
+    /// prompt-navigation cursor or the top of a manually scrolled viewport.
+    pub fn previous_prompt(&mut self) -> Option<i32> {
+        if self.alt_screen_active {
+            self.prompt_navigation = None;
+            return None;
+        }
+        let from_row = self.prompt_navigation_origin(true);
+        let row = self.shell.previous_prompt(from_row)?;
+        self.reveal_prompt(row);
+        Some(row)
     }
 
-    /// Get the next prompt row from the current position
-    pub fn next_prompt(&self) -> Option<usize> {
-        let current_row = self.grid().cursor().row as i32;
-        self.shell.next_prompt(current_row)
+    /// Navigate to the next retained OSC 133 prompt from the current
+    /// prompt-navigation cursor or the bottom of a manually scrolled viewport.
+    pub fn next_prompt(&mut self) -> Option<i32> {
+        if self.alt_screen_active {
+            self.prompt_navigation = None;
+            return None;
+        }
+        let from_row = self.prompt_navigation_origin(false);
+        let row = self.shell.next_prompt(from_row)?;
+        self.reveal_prompt(row);
+        Some(row)
+    }
+
+    fn prompt_navigation_origin(&mut self, previous: bool) -> i32 {
+        let offset = self.grid().scroll_offset();
+        if let Some(navigation) = self.prompt_navigation
+            && navigation.scroll_offset == offset
+            && self
+                .shell
+                .prompt_tracker
+                .all_prompts()
+                .any(|row| row == navigation.row)
+        {
+            return navigation.row;
+        }
+        self.prompt_navigation = None;
+
+        if offset == 0 {
+            return i32::try_from(self.grid().cursor().row).unwrap_or(i32::MAX);
+        }
+        let offset = i32::try_from(offset).unwrap_or(i32::MAX);
+        if previous {
+            offset.saturating_neg()
+        } else {
+            i32::try_from(self.rows)
+                .unwrap_or(i32::MAX)
+                .saturating_sub(1)
+                .saturating_sub(offset)
+        }
+    }
+
+    fn reveal_prompt(&mut self, row: i32) {
+        let offset = if row < 0 {
+            usize::try_from(row.saturating_neg()).unwrap_or(usize::MAX)
+        } else {
+            0
+        };
+        self.grid_mut().set_scroll_offset(offset);
+        self.prompt_navigation = Some(PromptNavigationState {
+            row,
+            scroll_offset: self.grid().scroll_offset(),
+        });
+    }
+
+    fn retain_prompt_navigation(&mut self, oldest_retained_row: i32) {
+        let retained = self.prompt_navigation.is_some_and(|navigation| {
+            navigation.row >= oldest_retained_row
+                && self
+                    .shell
+                    .prompt_tracker
+                    .all_prompts()
+                    .any(|row| row == navigation.row)
+        });
+        if retained {
+            let row = self.prompt_navigation.unwrap().row;
+            if row < 0 && self.grid.scroll_offset() == 0 {
+                let offset = usize::try_from(row.saturating_neg()).unwrap_or(usize::MAX);
+                self.grid.set_scroll_offset(offset);
+            }
+            if let Some(navigation) = &mut self.prompt_navigation {
+                navigation.scroll_offset = self.grid.scroll_offset();
+            }
+        } else {
+            self.prompt_navigation = None;
+        }
+    }
+
+    fn invalidate_prompt_navigation_after_manual_scroll(&mut self) {
+        if self
+            .prompt_navigation
+            .is_some_and(|navigation| navigation.scroll_offset != self.grid.scroll_offset())
+        {
+            self.prompt_navigation = None;
+        }
     }
 
     /// Get shell integration state
@@ -576,6 +3859,25 @@ impl Terminal {
         self.mode.contains(TerminalMode::SYNCHRONIZED_OUTPUT)
     }
 
+    /// Monotonic recovery deadline for an active synchronized-output batch.
+    pub fn synchronized_output_deadline(&self) -> Option<Instant> {
+        self.synchronized_output_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.started_at + SYNCHRONIZED_OUTPUT_TIMEOUT)
+    }
+
+    /// End a synchronized-output batch that outlived the safety timeout.
+    /// Returns whether presentation was released and therefore needs a frame.
+    pub fn expire_synchronized_output(&mut self, now: Instant) -> bool {
+        let expired = self
+            .synchronized_output_deadline()
+            .is_some_and(|deadline| now >= deadline);
+        if expired {
+            self.set_mode(TerminalMode::SYNCHRONIZED_OUTPUT, false);
+        }
+        expired
+    }
+
     /// Set a tab stop at the current column
     pub fn set_tab_stop(&mut self) {
         let cursor = self.grid().cursor();
@@ -584,50 +3886,125 @@ impl Terminal {
         }
     }
 
+    /// Clear the tab stop at the current column.
+    pub fn clear_tab_stop(&mut self) {
+        let cursor = self.grid().cursor();
+        if let Some(tab) = self.tabs.get_mut(cursor.col) {
+            *tab = false;
+        }
+    }
+
     /// Clear all tab stops
     pub fn clear_tab_stops(&mut self) {
-        for tab in &mut self.tabs {
-            *tab = false;
+        self.tabs.fill(false);
+    }
+
+    /// Restore DEC's default horizontal tab stops at columns 9, 17, ...
+    pub fn reset_tab_stops(&mut self) {
+        self.clear_tab_stops();
+        for i in (TAB_INTERVAL..self.cols).step_by(TAB_INTERVAL) {
+            self.tabs[i] = true;
         }
     }
 
     /// Set the scroll region (1-indexed, inclusive) for DECSTBM
     pub fn set_scroll_region(&mut self, top: usize, bottom: usize) {
-        let top = top.saturating_sub(1);
-        let bottom = bottom.min(self.rows);
-        if bottom <= top || bottom == 0 {
-            self.scroll_top = 0;
-            self.scroll_bottom = self.rows;
-        } else {
-            self.scroll_top = top.min(self.rows.saturating_sub(1));
-            self.scroll_bottom = bottom;
+        if top == 0 || top >= bottom || bottom > self.rows {
+            return;
         }
+        self.scroll_top = top - 1;
+        self.scroll_bottom = bottom;
         self.set_cursor_position(1, 1);
+    }
+
+    /// Return the active scrolling region as zero-based, end-exclusive rows.
+    ///
+    /// Exposing this state keeps conformance and fuzz harnesses from having to
+    /// infer parser invariants through cursor side effects.
+    pub fn scroll_region(&self) -> std::ops::Range<usize> {
+        self.scroll_top..self.scroll_bottom
+    }
+
+    /// Set DECSLRM's 1-indexed inclusive horizontal margins. Invalid pairs
+    /// leave both margins and the cursor unchanged.
+    pub fn set_left_right_margins(&mut self, left: usize, right: usize) {
+        if !self.mode.contains(TerminalMode::LEFT_RIGHT_MARGIN)
+            || left == 0
+            || left >= right
+            || right > self.cols
+        {
+            return;
+        }
+        self.scroll_left = left - 1;
+        self.scroll_right = right;
+        self.set_cursor_position(1, 1);
+    }
+
+    /// Return DECSLRM's zero-based, end-exclusive horizontal region.
+    pub fn horizontal_scroll_region(&self) -> std::ops::Range<usize> {
+        self.scroll_left..self.scroll_right
+    }
+
+    /// Set or reset DECLRMM. Either transition restores page-width margins,
+    /// but does not move the cursor.
+    pub(crate) fn set_left_right_margin_mode(&mut self, enable: bool) {
+        self.set_mode(TerminalMode::LEFT_RIGHT_MARGIN, enable);
+        self.scroll_left = 0;
+        self.scroll_right = self.cols;
     }
 
     /// Reverse index (move up, scroll down if at top of region)
     pub fn reverse_index(&mut self) {
         let cursor = self.grid().cursor();
-        if cursor.row <= self.scroll_top {
+        if cursor.row == self.scroll_top && self.col_inside_horizontal_margins(cursor.col) {
             self.scroll_down(1);
-        } else {
-            self.cursor_up(1);
+        } else if cursor.row > 0 {
+            self.grid_mut().set_cursor(cursor.row - 1, cursor.col);
         }
     }
 
     /// Insert blank characters at cursor position
     pub fn insert_chars(&mut self, count: usize) {
         let cursor = self.grid().cursor();
-        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-            row.insert_cells(cursor.col, count);
+        let blank = self.erase_cell();
+        let (left, right) = if self.row_inside_vertical_margins(cursor.row) {
+            (self.scroll_left, self.scroll_right)
+        } else {
+            (0, self.cols)
+        };
+        if cursor.col >= left
+            && cursor.col < right
+            && let Some(row) = self.grid_mut().row_mut(cursor.row)
+        {
+            row.insert_cells_bounded(cursor.col, right, count, &blank);
+            self.grid_mut().set_wrap_pending(false);
         }
     }
 
     /// Delete characters at cursor position
     pub fn delete_chars(&mut self, count: usize) {
         let cursor = self.grid().cursor();
+        let blank = self.erase_cell();
+        let (left, right) = if self.row_inside_vertical_margins(cursor.row) {
+            (self.scroll_left, self.scroll_right)
+        } else {
+            (0, self.cols)
+        };
+        if cursor.col >= left
+            && cursor.col < right
+            && let Some(row) = self.grid_mut().row_mut(cursor.row)
+        {
+            row.delete_cells_bounded(cursor.col, right, count, &blank);
+            self.grid_mut().set_wrap_pending(false);
+        }
+    }
+
+    /// Erase characters at the cursor without moving it.
+    pub fn erase_chars(&mut self, count: usize) {
+        let cursor = self.grid().cursor();
+        let blank = self.erase_cell();
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-            row.delete_cells(cursor.col, count);
+            row.erase_range(cursor.col, cursor.col.saturating_add(count), &blank);
         }
     }
 
@@ -635,11 +4012,33 @@ impl Terminal {
     pub fn insert_lines(&mut self, count: usize) {
         let cursor = self.grid().cursor();
         let scroll_bottom = self.scroll_bottom;
-        if cursor.row < scroll_bottom {
+        let scroll_left = self.scroll_left;
+        let scroll_right = self.scroll_right;
+        if self.row_inside_vertical_margins(cursor.row)
+            && self.col_inside_horizontal_margins(cursor.col)
+        {
+            let blank = self.erase_cell();
             for _ in 0..count {
-                self.grid_mut()
-                    .scroll_region_down(cursor.row, scroll_bottom);
+                if scroll_left == 0 && scroll_right == self.cols {
+                    self.grid_mut()
+                        .scroll_region_down(cursor.row, scroll_bottom);
+                } else {
+                    self.grid_mut().scroll_rect_down(
+                        cursor.row,
+                        scroll_bottom,
+                        scroll_left,
+                        scroll_right,
+                        &blank,
+                    );
+                }
             }
+            self.graphics.scroll_down(
+                self.alt_screen_active,
+                cursor.row..scroll_bottom,
+                scroll_left..scroll_right,
+                count,
+            );
+            self.grid_mut().set_cursor(cursor.row, scroll_left);
         }
     }
 
@@ -647,24 +4046,53 @@ impl Terminal {
     pub fn delete_lines(&mut self, count: usize) {
         let cursor = self.grid().cursor();
         let scroll_bottom = self.scroll_bottom;
-        if cursor.row < scroll_bottom {
+        let scroll_left = self.scroll_left;
+        let scroll_right = self.scroll_right;
+        if self.row_inside_vertical_margins(cursor.row)
+            && self.col_inside_horizontal_margins(cursor.col)
+        {
+            let blank = self.erase_cell();
             for _ in 0..count {
-                self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
+                if scroll_left == 0 && scroll_right == self.cols {
+                    self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
+                } else {
+                    self.grid_mut().scroll_rect_up(
+                        cursor.row,
+                        scroll_bottom,
+                        scroll_left,
+                        scroll_right,
+                        &blank,
+                    );
+                }
             }
+            self.graphics.scroll_up(
+                self.alt_screen_active,
+                cursor.row..scroll_bottom,
+                scroll_left..scroll_right,
+                count,
+                false,
+                self.grid().scrollback_len(),
+            );
+            self.grid_mut().set_cursor(cursor.row, scroll_left);
         }
     }
 
     /// Switch to alternate screen buffer
     pub fn enter_alt_screen(&mut self) {
+        self.mode.insert(TerminalMode::ALT_SCREEN);
         if !self.alt_screen_active {
+            self.graphics.clear_screen_all(true);
             self.alt_screen_active = true;
             self.alt_grid.clear();
+            self.alt_grid.clear_scrollback();
         }
     }
 
     /// Switch back to primary screen buffer
     pub fn exit_alt_screen(&mut self) {
+        self.mode.remove(TerminalMode::ALT_SCREEN);
         if self.alt_screen_active {
+            self.graphics.clear_screen_all(true);
             self.alt_screen_active = false;
         }
     }
@@ -681,6 +4109,14 @@ impl Terminal {
             fg_spec: self.current_fg_spec,
             bg_spec: self.current_bg_spec,
             underline_color: self.current_underline_color,
+            underline_color_spec: self.current_underline_color_spec,
+            g_sets: self.g_sets,
+            gl_register: self.gl_register,
+            gr_register: self.gr_register,
+            single_shift: self.single_shift,
+            character_protected: self.current_character_protected,
+            wrap_pending: cursor.wrap_pending,
+            origin_mode: self.mode.contains(TerminalMode::ORIGIN),
         };
 
         if self.alt_screen_active {
@@ -693,29 +4129,67 @@ impl Terminal {
     /// Restore cursor position
     pub fn restore_cursor(&mut self) {
         let saved = if self.alt_screen_active {
-            self.alt_saved_cursor.take()
+            self.alt_saved_cursor.clone()
         } else {
-            self.saved_cursor.take()
-        };
-
-        if let Some(saved) = saved {
-            self.grid_mut().set_cursor(saved.row, saved.col);
-            self.current_attrs = saved.attrs;
-            self.current_fg = saved.fg;
-            self.current_bg = saved.bg;
-            self.current_fg_spec = saved.fg_spec;
-            self.current_bg_spec = saved.bg_spec;
-            self.current_underline_color = saved.underline_color;
+            self.saved_cursor.clone()
         }
+        .unwrap_or_default();
+
+        self.grid_mut().set_cursor(saved.row, saved.col);
+        self.grid_mut().set_wrap_pending(saved.wrap_pending);
+        self.current_attrs = saved.attrs;
+        self.current_fg = saved.fg;
+        self.current_bg = saved.bg;
+        self.current_fg_spec = saved.fg_spec;
+        self.current_bg_spec = saved.bg_spec;
+        self.current_underline_color = saved.underline_color;
+        self.current_underline_color_spec = saved.underline_color_spec;
+        self.g_sets = saved.g_sets;
+        self.gl_register = saved.gl_register;
+        self.gr_register = saved.gr_register;
+        self.single_shift = saved.single_shift;
+        self.current_character_protected = saved.character_protected;
+        self.set_mode(TerminalMode::ORIGIN, saved.origin_mode);
     }
 
     /// Set cursor visibility
     pub fn set_cursor_visible(&mut self, visible: bool) {
-        self.grid_mut().set_cursor_visible(visible);
+        self.grid.set_cursor_visible(visible);
+        self.alt_grid.set_cursor_visible(visible);
+        self.set_mode(TerminalMode::CURSOR_VISIBLE, visible);
+    }
+
+    /// Apply the ATT610 cursor-blink mode without replacing the cursor shape
+    /// selected by DECSCUSR. The explicit override survives screen switches
+    /// and is cleared by RIS.
+    pub(crate) fn set_cursor_blinking(&mut self, blinking: bool) {
+        self.set_mode(TerminalMode::CURSOR_BLINKING, blinking);
+        self.cursor_blink_override = Some(blinking);
     }
 
     /// Set a terminal mode
     pub fn set_mode(&mut self, mode: TerminalMode, enable: bool) {
+        if mode == TerminalMode::SYNCHRONIZED_OUTPUT {
+            if enable {
+                if self.synchronized_output_snapshot.is_none() {
+                    let images = self.presentation_images();
+                    self.synchronized_output_snapshot = Some(SynchronizedOutputSnapshot {
+                        grid: self.grid().visible_snapshot(),
+                        alternate_screen: self.alt_screen_active,
+                        dynamic_colors: self.dynamic_colors.clone(),
+                        cursor_style: self.cursor_style,
+                        cursor_blink_override: self.cursor_blink_override,
+                        images,
+                        started_at: Instant::now(),
+                    });
+                }
+                self.mode.insert(mode);
+            } else {
+                self.mode.remove(mode);
+                self.synchronized_output_snapshot = None;
+            }
+            return;
+        }
         if enable {
             self.mode.insert(mode);
         } else {
@@ -723,24 +4197,120 @@ impl Terminal {
         }
     }
 
+    /// Soft terminal reset (DECSTR).
+    ///
+    /// DECSTR restores the session control state used by ordinary terminal
+    /// applications without erasing either screen, scrollback, tab stops, or
+    /// unrelated modern input modes. Kitty's screen-local flags are preserved,
+    /// while xterm modifier resources return to their startup values. As in
+    /// xterm, autowrap returns to this terminal's startup default (enabled),
+    /// rather than the VT420 hardware default (disabled).
+    pub fn soft_reset(&mut self) {
+        self.mode.remove(
+            TerminalMode::INSERT
+                | TerminalMode::CURSOR_KEYS_APPLICATION
+                | TerminalMode::ORIGIN
+                | TerminalMode::CURSOR_BLINKING
+                | TerminalMode::KEYPAD_APPLICATION
+                | TerminalMode::LEFT_RIGHT_MARGIN,
+        );
+        self.mode.insert(TerminalMode::AUTOWRAP);
+        self.set_cursor_visible(true);
+        self.cursor_style = None;
+        self.cursor_blink_override = None;
+        self.xterm_keyboard_resource = XtermKeyboardResource::default();
+        self.xterm_cursor_keys = XtermCursorKeys::default();
+        self.xterm_function_keys = XtermFunctionKeys::default();
+        self.xterm_keypad_keys = XtermKeypadKeys::default();
+        self.xterm_string_keys = XtermStringKeys::default();
+        self.xterm_modifier_keys = XtermModifierKeys::default();
+        self.xterm_special_keys = XtermSpecialKeys::default();
+        self.xterm_modify_other_keys = XtermModifyOtherKeys::default();
+
+        self.scroll_top = 0;
+        self.scroll_bottom = self.rows;
+        self.scroll_left = 0;
+        self.scroll_right = self.cols;
+        self.grid_mut().set_wrap_pending(false);
+
+        self.reset_attrs();
+        self.current_character_protected = false;
+        self.g_sets = [CharacterSet::Ascii; 4];
+        self.gl_register = 0;
+        self.gr_register = 2;
+        self.single_shift = None;
+
+        let saved = Some(SavedCursor::default());
+        if self.alt_screen_active {
+            self.alt_saved_cursor = saved;
+        } else {
+            self.saved_cursor = saved;
+        }
+    }
+
     /// Full reset (RIS)
     pub fn reset(&mut self) {
+        if self.rows > 0 {
+            self.shell.prompt_tracker.retire_content_in_rows(
+                0,
+                i32::try_from(self.rows.saturating_sub(1)).unwrap_or(i32::MAX),
+            );
+        }
+        self.prompt_navigation = None;
         self.grid.clear();
         self.alt_grid.clear();
+        self.grid.set_scroll_offset(0);
+        self.alt_grid.set_scroll_offset(0);
         self.alt_screen_active = false;
         self.mode = TerminalMode::default();
-        self.mode.insert(TerminalMode::AUTOWRAP);
+        self.mode
+            .insert(TerminalMode::AUTOWRAP | TerminalMode::CURSOR_VISIBLE);
+        self.use_8bit_controls = false;
+        self.dec_conformance_level = 4;
+        self.grid.set_cursor_visible(true);
+        self.alt_grid.set_cursor_visible(true);
+        self.cursor_style = None;
+        self.cursor_blink_override = None;
+        self.keyboard = keyboard::KittyKeyboardState::default();
+        self.alt_keyboard = keyboard::KittyKeyboardState::default();
+        self.xterm_keyboard_type = self.initial_xterm_keyboard_type;
+        self.saved_xterm_keyboard_type = None;
+        self.xterm_user_defined_keys.clear();
+        self.xterm_keyboard_resource = XtermKeyboardResource::default();
+        self.xterm_cursor_keys = XtermCursorKeys::default();
+        self.xterm_function_keys = XtermFunctionKeys::default();
+        self.xterm_keypad_keys = XtermKeypadKeys::default();
+        self.xterm_string_keys = XtermStringKeys::default();
+        self.xterm_modifier_keys = XtermModifierKeys::default();
+        self.xterm_special_keys = XtermSpecialKeys::default();
+        self.xterm_modify_other_keys = XtermModifyOtherKeys::default();
         self.reset_attrs();
+        self.current_character_protected = false;
+        self.rectangular_change_extent = false;
+        self.g_sets = [CharacterSet::Ascii; 4];
+        self.gl_register = 0;
+        self.gr_register = 2;
+        self.single_shift = None;
+        self.last_graphic = None;
         self.saved_cursor = None;
         self.alt_saved_cursor = None;
         self.scroll_top = 0;
         self.scroll_bottom = self.rows;
+        self.scroll_left = 0;
+        self.scroll_right = self.cols;
         self.selection = None;
+        self.graphics.clear_screen(false);
+        self.graphics.clear_screen_all(true);
+        self.graphics_apc_data.clear();
+        self.graphics_apc_active = false;
+        self.graphics_apc_overflow = false;
+        self.graphics_relay_apc_data.clear();
+        self.graphics_relay_apc_active = false;
+        self.graphics_relay_apc_overflow = false;
+        self.pending_graphics_relay_import = None;
+        self.synchronized_output_snapshot = None;
 
-        // Reset tab stops
-        for (i, tab) in self.tabs.iter_mut().enumerate() {
-            *tab = i % TAB_INTERVAL == 0;
-        }
+        self.reset_tab_stops();
     }
 
     /// Extract the text on rows `[start_row..=end_row_inclusive]` from the
@@ -754,16 +4324,7 @@ impl Terminal {
         let mut out = String::new();
         for row in start_row..=end_row_inclusive {
             if let Some(grid_row) = self.grid().row_at_offset(row) {
-                let mut line = String::new();
-                for col in 0..self.cols {
-                    if let Some(cell) = grid_row.get(col) {
-                        match &cell.content {
-                            CellContent::Empty => line.push(' '),
-                            CellContent::Char(c) => line.push(*c),
-                            CellContent::Grapheme(g) => line.push_str(g),
-                        }
-                    }
-                }
+                let line = grid_row.plain_text(self.cols);
                 out.push_str(line.trim_end());
             }
             if row != end_row_inclusive {
@@ -771,6 +4332,61 @@ impl Terminal {
             }
         }
         out
+    }
+
+    /// Extract a row range without allocating beyond an explicit UTF-8 byte
+    /// budget. This is intended for semantic-region consumers that must not
+    /// materialize an arbitrarily large command or output block before
+    /// applying their own retention policy.
+    ///
+    /// The oldest requested text is retained. `truncated` is true when rows
+    /// were no longer retained or the byte budget cut the requested range.
+    pub fn bounded_rows_text(
+        &self,
+        start_row: i32,
+        end_row_inclusive: i32,
+        max_bytes: usize,
+    ) -> (String, bool) {
+        if end_row_inclusive < start_row {
+            return (String::new(), false);
+        }
+        let oldest = -i32::try_from(self.grid().scrollback_len()).unwrap_or(i32::MAX);
+        let newest = i32::try_from(self.rows.saturating_sub(1)).unwrap_or(i32::MAX);
+        let start = start_row.max(oldest);
+        let end = end_row_inclusive.min(newest);
+        let mut truncated = start != start_row || end != end_row_inclusive;
+        if start > end || max_bytes == 0 {
+            return (String::new(), truncated || start <= end);
+        }
+
+        let mut output = String::with_capacity(max_bytes.min(4096));
+        for row_index in start..=end {
+            if row_index != start {
+                if output.len() == max_bytes {
+                    return (output, true);
+                }
+                output.push('\n');
+            }
+            let line = self
+                .grid()
+                .row_at_offset(row_index)
+                .map(|row| row.plain_text(self.cols))
+                .unwrap_or_default();
+            let line = line.trim_end();
+            let remaining = max_bytes.saturating_sub(output.len());
+            if line.len() <= remaining {
+                output.push_str(line);
+                continue;
+            }
+            let mut end = remaining;
+            while !line.is_char_boundary(end) {
+                end = end.saturating_sub(1);
+            }
+            output.push_str(&line[..end]);
+            truncated = true;
+            break;
+        }
+        (output, truncated)
     }
 
     /// Expand a click point to its word boundaries (for double-click semantic
@@ -781,8 +4397,16 @@ impl Terminal {
         let Some(row) = self.grid().row_at_offset(point.row) else {
             return (point, point);
         };
-        let cell_char =
-            |col: usize| -> Option<char> { row.get(col).and_then(|c| c.content.char()) };
+        let cell_char = |col: usize| -> Option<char> {
+            let cell = row.get(col)?;
+            if cell.is_wide_char_spacer() {
+                col.checked_sub(1)
+                    .and_then(|leader| row.get(leader))
+                    .and_then(|leader| leader.content.char())
+            } else {
+                cell.content.char()
+            }
+        };
 
         // Anchor must itself be a word char, otherwise don't expand.
         match cell_char(point.col) {
@@ -850,7 +4474,7 @@ impl Terminal {
             };
 
             // Resolve the column range based on selection type.
-            let (start_col, end_col) = match selection.ty {
+            let (mut start_col, end_col) = match selection.ty {
                 SelectionType::Simple | SelectionType::Semantic => {
                     let s = if row == start.row { start.col } else { 0 };
                     let e = if row == end.row { end.col } else { max_col };
@@ -864,8 +4488,18 @@ impl Terminal {
                 }
             };
 
+            if grid_row
+                .get(start_col)
+                .is_some_and(|cell| cell.is_wide_char_spacer())
+            {
+                start_col = start_col.saturating_sub(1);
+            }
+
             for col in start_col..=end_col {
                 if let Some(cell) = grid_row.get(col) {
+                    if cell.is_wide_char_spacer() {
+                        continue;
+                    }
                     match &cell.content {
                         CellContent::Empty => text.push(' '),
                         CellContent::Char(c) => text.push(*c),
@@ -898,11 +4532,56 @@ fn is_word_char(c: char) -> bool {
 mod tests {
     use super::*;
 
+    fn assert_wide_invariants(term: &Terminal) {
+        for row in 0..term.rows() {
+            for col in 0..term.cols() {
+                let cell = term.grid().cell(row, col).unwrap();
+                if cell.is_wide_char() {
+                    assert!(col + 1 < term.cols(), "wide leader at final column");
+                    assert!(
+                        term.grid()
+                            .cell(row, col + 1)
+                            .unwrap()
+                            .is_wide_char_spacer(),
+                        "wide leader at {row}:{col} has no spacer"
+                    );
+                }
+                if cell.is_wide_char_spacer() {
+                    assert!(col > 0, "wide spacer at column zero");
+                    assert!(
+                        term.grid().cell(row, col - 1).unwrap().is_wide_char(),
+                        "wide spacer at {row}:{col} has no leader"
+                    );
+                    assert!(cell.content.is_empty());
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_terminal_creation() {
         let term = Terminal::new(80, 24);
         assert_eq!(term.cols(), 80);
         assert_eq!(term.rows(), 24);
+    }
+
+    #[test]
+    fn bounded_row_extraction_never_splits_utf8_or_allocates_the_unread_suffix() {
+        let mut term = Terminal::new(10, 3);
+        term.process("界abc\r\nsecond".as_bytes());
+
+        let (text, truncated) = term.bounded_rows_text(0, 1, 5);
+        assert_eq!(text, "界ab");
+        assert!(truncated);
+        assert!(text.len() <= 5);
+
+        let (text, truncated) = term.bounded_rows_text(0, 1, 64);
+        assert_eq!(text, "界abc\nsecond");
+        assert!(!truncated);
+
+        let (text, truncated) = term.bounded_rows_text(-100, 1, 64);
+        assert_eq!(text, "界abc\nsecond");
+        assert!(truncated);
     }
 
     #[test]
@@ -914,6 +4593,681 @@ mod tests {
 
         let cell = term.grid().cell(0, 0).unwrap();
         assert_eq!(cell.content.char(), Some('A'));
+    }
+
+    #[test]
+    fn unicode_clusters_use_terminal_width_and_one_leader() {
+        for (text, width) in [
+            ("界", 2),
+            ("e\u{301}", 1),
+            ("·", 1),
+            ("☺\u{fe0e}", 1),
+            ("☺\u{fe0f}", 2),
+            ("🇺🇸", 2),
+            ("👍🏽", 2),
+            ("👩\u{200d}💻", 2),
+        ] {
+            let mut term = Terminal::new(20, 3);
+            term.process(text.as_bytes());
+            assert_eq!(term.grid().cursor().col, width, "{text:?}");
+            assert_eq!(term.grid().cell(0, 0).unwrap().content.to_text(), text);
+            assert_eq!(term.grid().cell(0, 0).unwrap().width(), width);
+            assert_wide_invariants(&term);
+        }
+    }
+
+    #[test]
+    fn orphan_combining_mark_composes_over_a_blank_cell() {
+        let mut term = Terminal::new(4, 2);
+        term.process("\u{301}".as_bytes());
+        assert_eq!(term.grid().cursor().col, 1);
+        assert_eq!(
+            term.grid().cell(0, 0).unwrap().content.to_text(),
+            " \u{301}"
+        );
+    }
+
+    #[test]
+    fn wide_clusters_wrap_before_the_final_column() {
+        let mut term = Terminal::new(4, 3);
+        term.process("abc界".as_bytes());
+        assert!(term.grid().row(0).unwrap().is_wrapped());
+        assert_eq!(term.grid().cell(1, 0).unwrap().content.to_text(), "界");
+        assert_eq!(term.grid().cursor().col, 2);
+        assert_wide_invariants(&term);
+
+        let mut presentation_change = Terminal::new(4, 3);
+        presentation_change.process("abc☺\u{fe0f}".as_bytes());
+        assert!(presentation_change.grid().row(0).unwrap().is_wrapped());
+        assert_eq!(
+            presentation_change
+                .grid()
+                .cell(1, 0)
+                .unwrap()
+                .content
+                .to_text(),
+            "☺\u{fe0f}"
+        );
+        assert_wide_invariants(&presentation_change);
+    }
+
+    #[test]
+    fn cell_edits_and_reflow_never_orphan_wide_pairs() {
+        let mut term = Terminal::new(12, 4);
+        term.process("A界B👍🏽C👩\u{200d}💻D".as_bytes());
+        assert_wide_invariants(&term);
+
+        for col in 0..12 {
+            term.grid_mut().set_cursor(0, col);
+            term.insert_chars(1);
+            assert_wide_invariants(&term);
+            term.delete_chars(1);
+            assert_wide_invariants(&term);
+        }
+
+        for cols in [7, 3, 1, 16, 5, 12] {
+            term.resize(cols, 4);
+            assert_wide_invariants(&term);
+        }
+
+        let mut one_column = Terminal::new(4, 4);
+        one_column.process("界".as_bytes());
+        one_column.resize(1, 4);
+        assert_eq!(one_column.rows_text(0, 3), "界\n\n\n");
+        one_column.resize(4, 4);
+        assert!(one_column.rows_text(0, 3).contains('界'));
+        assert_wide_invariants(&one_column);
+    }
+
+    #[test]
+    fn classic_csi_repetition_and_erasure_preserve_unicode_cells() {
+        let mut term = Terminal::new(20, 3);
+        term.process(b"\x1b[5b");
+        assert!(term.grid().row(0).unwrap().to_string().is_empty());
+
+        term.process("e\u{301}".as_bytes());
+        term.process(b"\x1b[2b");
+        assert_eq!(
+            term.grid().row(0).unwrap().to_string(),
+            "e\u{301}e\u{301}e\u{301}"
+        );
+        assert_eq!(term.grid().cursor().col, 3);
+        for col in 0..3 {
+            assert_eq!(
+                term.grid().cell(0, col).unwrap().content.to_text(),
+                "e\u{301}"
+            );
+        }
+
+        // REP uses the current rendition rather than cloning the source cell.
+        term.process(b"\r\x1b[2K\x1b[31mA\x1b[32m\x1b[2b");
+        assert_eq!(
+            term.grid().cell(0, 0).unwrap().fg_spec,
+            ColorSpec::Indexed(1)
+        );
+        assert_eq!(
+            term.grid().cell(0, 1).unwrap().fg_spec,
+            ColorSpec::Indexed(2)
+        );
+        assert_eq!(
+            term.grid().cell(0, 2).unwrap().fg_spec,
+            ColorSpec::Indexed(2)
+        );
+
+        let mut wide = Terminal::new(10, 2);
+        wide.process("A界B".as_bytes());
+        wide.process(b"\x1b[41m\x1b[1;3H\x1b[X");
+        assert_eq!(wide.grid().cursor().col, 2);
+        assert!(wide.grid().cell(0, 1).unwrap().is_empty());
+        assert!(wide.grid().cell(0, 2).unwrap().is_empty());
+        assert_eq!(
+            wide.grid().cell(0, 1).unwrap().bg_spec,
+            ColorSpec::Indexed(1)
+        );
+        assert_eq!(
+            wide.grid().cell(0, 2).unwrap().bg_spec,
+            ColorSpec::Indexed(1)
+        );
+        assert_eq!(wide.grid().cell(0, 3).unwrap().content.char(), Some('B'));
+        assert_wide_invariants(&wide);
+
+        // Singular scalar parameters are required for these controls.
+        wide.process(b"\x1b[1;1H\x1b[2;3b\x1b[1:2X");
+        assert_eq!(wide.grid().cell(0, 0).unwrap().content.char(), Some('A'));
+
+        wide.process(b"\x1bc\x1b[3b");
+        assert!(wide.grid().row(0).unwrap().to_string().is_empty());
+        wide.last_graphic = Some((
+            CellContent::Grapheme("x".repeat(MAX_REPEAT_GRAPHEME_BYTES + 1).into_boxed_str()),
+            CharacterSet::Ascii,
+        ));
+        wide.repeat_last_graphic(1);
+        assert!(wide.grid().row(0).unwrap().to_string().is_empty());
+    }
+
+    #[test]
+    fn repeat_state_keeps_single_scalars_inline_and_clusters_owned() {
+        let mut term = Terminal::new(10, 2);
+
+        term.process(b"A");
+        assert!(matches!(
+            term.last_graphic,
+            Some((CellContent::Char('A'), CharacterSet::Ascii))
+        ));
+
+        term.process("e\u{301}".as_bytes());
+        assert!(matches!(
+            term.last_graphic,
+            Some((CellContent::Grapheme(ref cluster), CharacterSet::Ascii))
+                if cluster.as_ref() == "e\u{301}"
+        ));
+        term.process(b"\x1b[2b");
+        assert_eq!(
+            term.grid().row(0).unwrap().to_string(),
+            "Ae\u{301}e\u{301}e\u{301}"
+        );
+    }
+
+    #[test]
+    fn erase_and_character_edits_honor_bce_without_moving_the_cursor() {
+        let mut term = Terminal::new(8, 3);
+        term.process(b"one\r\ntwo\r\nthree\r\nfour");
+        assert!(term.grid().scrollback_len() > 0);
+        let history = term.grid().scrollback_len();
+        let cursor = term.grid().cursor();
+        let cursor_state = (cursor.row, cursor.col, cursor.wrap_pending, cursor.visible);
+
+        term.process(b"\x1b[44m\x1b[2J");
+        let cursor = term.grid().cursor();
+        assert_eq!(
+            (cursor.row, cursor.col, cursor.wrap_pending, cursor.visible),
+            cursor_state
+        );
+        assert_eq!(term.grid().scrollback_len(), history);
+        for row in 0..term.rows() {
+            assert!(!term.grid().row(row).unwrap().is_wrapped());
+            for col in 0..term.cols() {
+                let cell = term.grid().cell(row, col).unwrap();
+                assert!(cell.is_empty());
+                assert_eq!(cell.bg_spec, ColorSpec::Indexed(4));
+                assert!(cell.attrs.is_empty());
+            }
+        }
+
+        term.process(b"Z");
+        let visible = term.rows_text(0, term.rows() as i32 - 1);
+        let cursor = term.grid().cursor();
+        let cursor_state = (cursor.row, cursor.col, cursor.wrap_pending, cursor.visible);
+        term.process(b"\x1b[3J");
+        assert_eq!(term.grid().scrollback_len(), 0);
+        assert_eq!(term.rows_text(0, term.rows() as i32 - 1), visible);
+        let cursor = term.grid().cursor();
+        assert_eq!(
+            (cursor.row, cursor.col, cursor.wrap_pending, cursor.visible),
+            cursor_state
+        );
+
+        let mut edits = Terminal::new(8, 2);
+        edits.process(b"ABCD\x1b[1;2H\x1b[42m\x1b[2@");
+        assert_eq!(
+            edits.grid().cell(0, 1).unwrap().bg_spec,
+            ColorSpec::Indexed(2)
+        );
+        assert_eq!(
+            edits.grid().cell(0, 2).unwrap().bg_spec,
+            ColorSpec::Indexed(2)
+        );
+        edits.process(b"\x1b[2P");
+        assert_eq!(
+            edits.grid().cell(0, 6).unwrap().bg_spec,
+            ColorSpec::Indexed(2)
+        );
+        assert_eq!(
+            edits.grid().cell(0, 7).unwrap().bg_spec,
+            ColorSpec::Indexed(2)
+        );
+
+        let mut wide_edits = Terminal::new(8, 2);
+        wide_edits.process("A界B".as_bytes());
+        wide_edits.process(b"\x1b[1;3H\x1b[43m\x1b[@");
+        assert_wide_invariants(&wide_edits);
+        assert_eq!(
+            wide_edits.grid().cell(0, 1).unwrap().bg_spec,
+            ColorSpec::Indexed(3)
+        );
+        assert_eq!(
+            wide_edits.grid().cell(0, 3).unwrap().bg_spec,
+            ColorSpec::Indexed(3)
+        );
+    }
+
+    #[test]
+    fn tabulation_controls_preserve_custom_stops_across_resize_and_ris() {
+        let mut term = Terminal::new(24, 3);
+        term.process(b"\t\x1b[I\x1b[Z");
+        assert_eq!(term.grid().cursor().col, 8);
+
+        term.process(b"\x1b[g\r\x1b[I");
+        assert_eq!(term.grid().cursor().col, 16);
+        term.process(b"\x1b[3g\r\x1b[I");
+        assert_eq!(term.grid().cursor().col, 23);
+
+        term.process(b"\x1b[?5W\r\x1b[2I");
+        assert_eq!(term.grid().cursor().col, 16);
+        term.process(b"\x1b[2Z");
+        assert_eq!(term.grid().cursor().col, 0);
+
+        // A retained custom stop survives growth, while newly exposed columns
+        // receive defaults. Stops lost to a shrink are defaulted when regrown.
+        term.process(b"\x1b[3g\x1b[5G\x1bH");
+        term.resize(30, 3);
+        term.process(b"\r\x1b[I");
+        assert_eq!(term.grid().cursor().col, 4);
+        term.process(b"\x1b[I");
+        assert_eq!(term.grid().cursor().col, 24);
+        term.resize(3, 3);
+        term.resize(20, 3);
+        term.process(b"\r\x1b[2I");
+        assert_eq!(term.grid().cursor().col, 16);
+
+        term.process(b"\x1b[2;2H\x1b[3a\x1b[2e\x1b[7`");
+        assert_eq!(term.grid().cursor().row, 2);
+        assert_eq!(term.grid().cursor().col, 6);
+
+        term.process(b"\x1b[3g\x1bc\t");
+        assert_eq!(term.grid().cursor().col, 8);
+    }
+
+    #[test]
+    fn declrmm_negotiates_queries_resets_and_disambiguates_csi_s() {
+        let mut term = Terminal::new(10, 5);
+        term.grid_mut().set_cursor(2, 4);
+        term.process(b"\x1b[s");
+        term.grid_mut().set_cursor(0, 0);
+        term.process(b"\x1b[u");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (2, 4));
+
+        term.process(b"\x1b[?69h\x1b[3;8s");
+        assert!(term.mode().contains(TerminalMode::LEFT_RIGHT_MARGIN));
+        assert_eq!(term.horizontal_scroll_region(), 2..8);
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (0, 0));
+
+        term.process(b"\x1bP$qs\x1b\\");
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP1$r3;8s\x1b\\".to_vec())]
+        );
+
+        term.grid_mut().set_cursor(3, 6);
+        term.process(b"\x1b[8;3s\x1b[2:4s\x1b[1;2;3s");
+        assert_eq!(term.horizontal_scroll_region(), 2..8);
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (3, 6));
+
+        term.process(b"\x1b[s");
+        assert_eq!(term.horizontal_scroll_region(), 0..10);
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (0, 0));
+        term.process(b"\x1b[3;8s");
+        term.grid_mut().set_cursor(3, 6);
+
+        term.process(b"\x1b[?69l");
+        assert!(!term.mode().contains(TerminalMode::LEFT_RIGHT_MARGIN));
+        assert_eq!(term.horizontal_scroll_region(), 0..10);
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (3, 6));
+
+        // A parameterized DECSLRM-shaped sequence is not a cursor save alias
+        // once mode 69 is off.
+        term.process(b"\x1b[3;8s");
+        term.grid_mut().set_cursor(0, 0);
+        term.process(b"\x1b[u");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (2, 4));
+
+        term.process(b"\x1b[?69h\x1b[2;9s");
+        term.resize(8, 5);
+        assert!(term.mode().contains(TerminalMode::LEFT_RIGHT_MARGIN));
+        assert_eq!(term.horizontal_scroll_region(), 0..8);
+        term.process(b"\x1bc");
+        assert!(!term.mode().contains(TerminalMode::LEFT_RIGHT_MARGIN));
+        assert_eq!(term.horizontal_scroll_region(), 0..8);
+    }
+
+    #[test]
+    fn horizontal_margins_constrain_dec_cursor_motion_origin_and_tabs() {
+        let mut term = Terminal::new(10, 5);
+        term.process(b"\x1b[2;4r\x1b[?69h\x1b[3;8s\x1b[?6h");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (1, 2));
+
+        term.process(b"\x1b[99;99H");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (3, 7));
+        term.process(b"\x1b[99A\x1b[99D");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (1, 2));
+        term.process(b"\x1b[99a\x1b[99e");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (3, 7));
+
+        term.process(b"\x1b[?6l\x1b[3;1H\x1b[99C");
+        assert_eq!(term.grid().cursor().col, 7);
+        term.process(b"\x1b[99D");
+        assert_eq!(term.grid().cursor().col, 2);
+        term.process(b"\x1b[99a");
+        assert_eq!(term.grid().cursor().col, 9);
+
+        term.process(b"\x1b[3;3H\x1b[I");
+        assert_eq!(term.grid().cursor().col, 7);
+        term.process(b"\x1b[Z");
+        assert_eq!(term.grid().cursor().col, 2);
+
+        term.process(b"\x1b[3;10H\r");
+        assert_eq!(term.grid().cursor().col, 2);
+        term.process(b"\x1b[3;2H\r");
+        assert_eq!(term.grid().cursor().col, 0);
+    }
+
+    #[test]
+    fn margin_wrap_and_scroll_preserve_cells_outside_the_rectangle() {
+        let mut term = Terminal::new(10, 4);
+        term.process(
+            b"AAAAAAAAAA\r\nBBBBBBBBBB\r\nCCCCCCCCCC\r\nDDDDDDDDDD\x1b[2;4r\x1b[?69h\x1b[3;8s\x1b[4;3H123456X",
+        );
+
+        assert_eq!(term.grid().row(0).unwrap().to_string(), "AAAAAAAAAA");
+        assert_eq!(term.grid().row(1).unwrap().to_string(), "BBCCCCCCBB");
+        assert_eq!(term.grid().row(2).unwrap().to_string(), "CC123456CC");
+        assert_eq!(term.grid().row(3).unwrap().to_string(), "DDX     DD");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (3, 3));
+        assert_eq!(term.grid().scrollback_len(), 0);
+        assert!(!term.grid().row(2).unwrap().is_wrapped());
+
+        term.process(b"\x1b[3;8H");
+        term.process("界".as_bytes());
+        assert_eq!(term.grid().cell(3, 2).unwrap().content.to_text(), "界");
+        assert_wide_invariants(&term);
+
+        let mut boundary = Terminal::new(6, 3);
+        boundary.process(b"\x1b[2;2H");
+        boundary.process("界".as_bytes());
+        boundary.process(b"\x1b[?69h\x1b[3;5s\x1b[S");
+        assert!(boundary.grid().cell(1, 1).unwrap().is_empty());
+        assert!(boundary.grid().cell(1, 2).unwrap().is_empty());
+        assert_wide_invariants(&boundary);
+    }
+
+    #[test]
+    fn margin_character_and_line_edits_are_bounded_and_use_bce() {
+        let mut term = Terminal::new(10, 4);
+        term.process(
+            b"AAAAAAAAAA\r\nBBBBBBBBBB\r\nCCCCCCCCCC\r\nDDDDDDDDDD\x1b[2;4r\x1b[?69h\x1b[3;8s\x1b[2;4H\x1b[44m\x1b[2@",
+        );
+        assert_eq!(term.grid().row(1).unwrap().to_string(), "BBB  BBBBB");
+        for col in 3..5 {
+            assert_eq!(
+                term.grid().cell(1, col).unwrap().bg_spec,
+                ColorSpec::Indexed(4)
+            );
+        }
+
+        term.process(b"\x1b[2P");
+        assert_eq!(term.grid().row(1).unwrap().to_string(), "BBBBBB  BB");
+        term.process(b"\x1b[L");
+        assert_eq!(term.grid().cursor().col, 2);
+        assert_eq!(term.grid().row(1).unwrap().to_string(), "BB      BB");
+        assert_eq!(term.grid().row(2).unwrap().to_string(), "CCBBBB  CC");
+        assert_eq!(term.grid().row(3).unwrap().to_string(), "DDCCCCCCDD");
+
+        let preserved = term.rows_text(0, 3);
+        term.process(b"\x1b[1;4H\x1b[L\x1b[M");
+        assert_eq!(term.rows_text(0, 3), preserved);
+        assert_wide_invariants(&term);
+    }
+
+    #[test]
+    fn margin_index_reverse_index_and_explicit_scroll_share_the_rectangle() {
+        fn populated() -> Terminal {
+            let mut term = Terminal::new(8, 4);
+            term.process(
+                b"AAAAAAAA\r\nBBBBBBBB\r\nCCCCCCCC\r\nDDDDDDDD\x1b[2;4r\x1b[?69h\x1b[3;6s",
+            );
+            term
+        }
+
+        for sequence in [b"\x1bD".as_slice(), b"\x1b[S".as_slice()] {
+            let mut term = populated();
+            term.process(b"\x1b[4;4H");
+            term.process(sequence);
+            assert_eq!(term.grid().row(1).unwrap().to_string(), "BBCCCCBB");
+            assert_eq!(term.grid().row(2).unwrap().to_string(), "CCDDDDCC");
+            assert_eq!(term.grid().row(3).unwrap().to_string(), "DD    DD");
+        }
+
+        let mut next_line = populated();
+        next_line.process(b"\x1b[4;5H\x1bE");
+        assert_eq!(next_line.grid().row(1).unwrap().to_string(), "BBCCCCBB");
+        assert_eq!(next_line.grid().cursor().col, 2);
+
+        for sequence in [b"\x1bM".as_slice(), b"\x1b[T".as_slice()] {
+            let mut term = populated();
+            term.process(b"\x1b[2;4H");
+            term.process(sequence);
+            assert_eq!(term.grid().row(1).unwrap().to_string(), "BB    BB");
+            assert_eq!(term.grid().row(2).unwrap().to_string(), "CCBBBBCC");
+            assert_eq!(term.grid().row(3).unwrap().to_string(), "DDCCCCDD");
+        }
+    }
+
+    #[test]
+    fn images_scroll_only_when_fully_inside_horizontal_margins() {
+        let mut term = Terminal::new(10, 4);
+        term.grid_mut().set_cursor(2, 3);
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=1,c=1,r=1,C=1;AQIDBA==");
+        term.grid_mut().set_cursor(2, 0);
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=2,c=1,r=1,C=1;AQIDBA==");
+        term.grid_mut().set_cursor(2, 7);
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=3,c=2,r=1,C=1;AQIDBA==");
+
+        term.process(b"\x1b[2;4r\x1b[?69h\x1b[3;8s\x1b[S");
+        let placements: Vec<_> = term
+            .graphics_placements()
+            .map(|placement| (placement.image_id, placement.col, placement.row))
+            .collect();
+        assert!(placements.contains(&(ImageId(1), 3, 1)));
+        assert!(placements.contains(&(ImageId(2), 0, 2)));
+        assert!(placements.contains(&(ImageId(3), 7, 2)));
+    }
+
+    #[test]
+    fn decstr_resets_only_the_documented_session_state() {
+        let mut term = Terminal::new(12, 3);
+        term.process(b"one\r\ntwo\r\nthree\r\nfour");
+        assert!(term.grid().scrollback_len() > 0);
+
+        // Install a non-default tab stop, then establish every supported
+        // DECSTR-controlled state and several unrelated modern modes.
+        term.process(
+            b"\x1b[3g\x1b[5G\x1bH\x1b[2;3r\x1b[?69h\x1b[3;10s\x1b[?1;6;12h\x1b[?7;25l\x1b[4;20h\x1b=\x1b[?1000;1004;1006;1007;2004h\x1b[31;42;1m\x1b[1\"q\x1b(0\x1b[6 q",
+        );
+        term.save_cursor();
+        term.grid_mut().set_cursor(1, 4);
+        term.grid_mut().set_wrap_pending(true);
+
+        let preserved_text = term.rows_text(0, term.rows() as i32 - 1);
+        let preserved_scrollback = term.grid().scrollback_len();
+        let preserved_modes = TerminalMode::LINEFEED_NEWLINE
+            | TerminalMode::MOUSE_TRACKING
+            | TerminalMode::FOCUS_EVENTS
+            | TerminalMode::MOUSE_SGR
+            | TerminalMode::ALTERNATE_SCROLL
+            | TerminalMode::BRACKETED_PASTE;
+        assert!(term.mode().contains(preserved_modes));
+
+        // Feed DECSTR one byte at a time so the parser's intermediate survives
+        // arbitrary PTY read boundaries.
+        for byte in b"\x1b[!p" {
+            term.process(&[*byte]);
+        }
+
+        assert_eq!(term.rows_text(0, term.rows() as i32 - 1), preserved_text);
+        assert_eq!(term.grid().scrollback_len(), preserved_scrollback);
+        assert_eq!(term.scroll_region(), 0..term.rows());
+        assert_eq!(term.horizontal_scroll_region(), 0..term.cols());
+        let cursor = term.grid().cursor();
+        assert_eq!((cursor.row, cursor.col), (1, 4));
+        assert!(!cursor.wrap_pending);
+        assert!(cursor.visible);
+        assert!(term.mode().contains(TerminalMode::AUTOWRAP));
+        assert!(term.mode().contains(preserved_modes));
+        assert!(!term.mode().intersects(
+            TerminalMode::INSERT
+                | TerminalMode::CURSOR_KEYS_APPLICATION
+                | TerminalMode::ORIGIN
+                | TerminalMode::CURSOR_BLINKING
+                | TerminalMode::KEYPAD_APPLICATION
+                | TerminalMode::LEFT_RIGHT_MARGIN,
+        ));
+        assert_eq!(term.cursor_style(), None);
+        assert_eq!(term.cursor_blink_override(), None);
+        assert_eq!(term.character_protection_parameter(), 0);
+
+        // SGR, DECSCA, and G0/GL return to defaults for subsequent text.
+        term.write_char('q');
+        let cell = term.grid().cell(1, 4).unwrap();
+        assert_eq!(cell.content.char(), Some('q'));
+        assert_eq!(cell.attrs, CellAttrs::empty());
+        assert_eq!(cell.fg_spec, ColorSpec::Default);
+        assert_eq!(cell.bg_spec, ColorSpec::Default);
+        assert!(!cell.flags.contains(crate::grid::CellFlags::PROTECTED));
+
+        // DECSTR replaces the active screen's DECSC state with home/defaults,
+        // while preserving the custom tab-stop table.
+        term.restore_cursor();
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (0, 0));
+        term.process(b"\t");
+        assert_eq!(term.grid().cursor().col, 4);
+    }
+
+    #[test]
+    fn decstr_preserves_the_active_screen_and_rejects_malformed_forms() {
+        let mut term = Terminal::new(8, 3);
+        term.process(b"P\x1b[2;3H\x1b7\x1b[?1047hA\x1b[3;4H\x1b7");
+        assert!(term.mode().contains(TerminalMode::ALT_SCREEN));
+
+        // Nonzero, plural, and subparameter forms are not DECSTR.
+        term.process(b"\x1b[4h\x1b[1!p\x1b[0;0!p\x1b[0:0!p");
+        assert!(term.mode().contains(TerminalMode::INSERT));
+        assert_eq!(term.grid().row(0).unwrap().to_string(), "A");
+
+        term.process(b"\x1b[!p");
+        assert!(term.mode().contains(TerminalMode::ALT_SCREEN));
+        assert!(!term.mode().contains(TerminalMode::INSERT));
+        assert_eq!(term.grid().row(0).unwrap().to_string(), "A");
+        term.restore_cursor();
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (0, 0));
+
+        // The inactive primary screen and its saved cursor remain untouched.
+        term.exit_alt_screen();
+        assert_eq!(term.grid().row(0).unwrap().to_string(), "P");
+        term.restore_cursor();
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (1, 2));
+    }
+
+    #[test]
+    fn decscl_soft_resets_and_reports_bounded_level_and_c1_state() {
+        let mut term = Terminal::new(12, 3);
+        assert_eq!(term.dec_conformance_level(), 4);
+        assert!(!term.uses_8bit_controls());
+
+        term.process(b"keep\x1b[3g\x1b[6G\x1bH\x1b[4h\x1b[62;0\"p");
+        assert_eq!(term.grid().row(0).unwrap().to_string(), "keep");
+        assert!(!term.mode().contains(TerminalMode::INSERT));
+        assert_eq!(term.dec_conformance_level(), 2);
+        assert!(term.uses_8bit_controls());
+        term.process(b"\x1bP$q\"p\x1b\\");
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x901$r62;0\"p\x9c".to_vec())]
+        );
+
+        // An invalid level or level-2+ C1 selector changes nothing, including
+        // state that would have been cleared by the DECSCL soft reset.
+        term.process(b"\x1b[4h\x1b[66;1\"p\x1b[63;3\"p\x1b[64;1;2\"p\x1b[64:1\"p");
+        assert!(term.mode().contains(TerminalMode::INSERT));
+        assert_eq!(term.dec_conformance_level(), 2);
+        assert!(term.uses_8bit_controls());
+
+        // Pc is ignored at level 1, whose replies are necessarily 7-bit.
+        term.process(b"\x1b[61;9\"p\x1bP$q\"p\x1b\\");
+        assert!(!term.mode().contains(TerminalMode::INSERT));
+        assert_eq!(term.dec_conformance_level(), 1);
+        assert!(!term.uses_8bit_controls());
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP1$r61;1\"p\x1b\\".to_vec())]
+        );
+
+        // An omitted Pc defaults to 8-bit controls above level 1. RIS returns
+        // to Termeric's level-4, 7-bit startup profile.
+        term.process(b"\x1b[65\"p");
+        assert_eq!(term.dec_conformance_level(), 5);
+        assert!(term.uses_8bit_controls());
+        term.process(b"\x1bc");
+        assert_eq!(term.dec_conformance_level(), 4);
+        assert!(!term.uses_8bit_controls());
+    }
+
+    #[test]
+    fn selection_and_export_emit_each_grapheme_once_without_spacers() {
+        let mut term = Terminal::new(8, 2);
+        term.process("A界e\u{301}👍🏽".as_bytes());
+        let mut selection = Selection::new(
+            Point::new(0, 2), // select from the spacer half of 界
+            SelectionType::Simple,
+        );
+        selection.update(Point::new(0, 5));
+        term.set_selection(Some(selection));
+        assert_eq!(term.get_selection_text().as_deref(), Some("界e\u{301}👍🏽"));
+        let exported = term.grid().export_scrollback_text().join("\n");
+        assert_eq!(exported, "A界e\u{301}👍🏽");
+    }
+
+    #[test]
+    fn hidden_text_remains_copyable() {
+        let mut term = Terminal::new(20, 2);
+        term.process(b"\x1b[8msecret\x1b[28m");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 5));
+        term.set_selection(Some(selection));
+
+        assert_eq!(term.get_selection_text().as_deref(), Some("secret"));
+        assert!(
+            term.grid()
+                .cell(0, 0)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::HIDDEN)
+        );
+    }
+
+    #[test]
+    fn wide_pair_property_holds_across_seeded_edit_sequences() {
+        for seed in 0..64_u64 {
+            let mut state = seed + 1;
+            let mut term = Terminal::new(12, 4);
+            term.process("A界e\u{301}👍🏽👩\u{200d}💻Z".as_bytes());
+            for _ in 0..128 {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let cols = term.cols();
+                let col = (state as usize >> 8) % cols.max(1);
+                term.grid_mut().set_cursor(0, col);
+                match state % 6 {
+                    0 => term.insert_chars((state as usize % 3) + 1),
+                    1 => term.delete_chars((state as usize % 3) + 1),
+                    2 => term.erase_in_line((state % 3) as u16),
+                    3 => term.write_char('界'),
+                    4 => term.write_char('\u{301}'),
+                    _ => term.resize((state as usize % 16) + 1, 4),
+                }
+                assert_wide_invariants(&term);
+            }
+        }
     }
 
     fn write_line(term: &mut Terminal, s: &str) {
@@ -973,9 +5327,227 @@ mod tests {
         let mut term = Terminal::new(80, 24);
         term.write_char('A');
         term.enter_alt_screen();
+        assert!(term.mode().contains(TerminalMode::ALT_SCREEN));
         assert!(term.grid().cell(0, 0).unwrap().is_empty());
         term.exit_alt_screen();
+        assert!(!term.mode().contains(TerminalMode::ALT_SCREEN));
         assert_eq!(term.grid().cell(0, 0).unwrap().content.char(), Some('A'));
+    }
+
+    #[test]
+    fn mouse_focus_paste_and_alternate_scroll_modes_parse_and_reset() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[?9;1000;1002;1003;1004;1005;1006;1007;2004h");
+        let expected = TerminalMode::MOUSE_X10
+            | TerminalMode::MOUSE_TRACKING
+            | TerminalMode::MOUSE_BUTTON_EVENT
+            | TerminalMode::MOUSE_ANY_EVENT
+            | TerminalMode::FOCUS_EVENTS
+            | TerminalMode::MOUSE_UTF8
+            | TerminalMode::MOUSE_SGR
+            | TerminalMode::ALTERNATE_SCROLL
+            | TerminalMode::BRACKETED_PASTE;
+        assert!(term.mode().contains(expected));
+
+        term.process(b"\x1b[?9;1000;1002;1003;1004;1005;1006;1007;2004l");
+        assert!(!term.mode().intersects(expected));
+    }
+
+    #[test]
+    fn application_keyboard_modes_set_and_restore_through_the_parser() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[?1h\x1b=");
+        assert!(term.mode().contains(TerminalMode::CURSOR_KEYS_APPLICATION));
+        assert!(term.mode().contains(TerminalMode::KEYPAD_APPLICATION));
+
+        term.process(b"\x1b[?1l\x1b>");
+        assert!(
+            !term.mode().intersects(
+                TerminalMode::CURSOR_KEYS_APPLICATION | TerminalMode::KEYPAD_APPLICATION
+            )
+        );
+    }
+
+    #[test]
+    fn xterm_keyboard_types_are_exclusive_queryable_and_reset_with_xterm_lifecycle() {
+        let mut term = Terminal::new(80, 24);
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Normal);
+
+        term.process(b"\x1b[?1060h");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Legacy);
+        assert_eq!(term.mode_status(true, 1060), 1);
+        assert_eq!(term.mode_status(true, 1061), 2);
+
+        term.process(b"\x1b[?1061h");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Vt220);
+        assert_eq!(term.mode_status(true, 1060), 2);
+        assert_eq!(term.mode_status(true, 1061), 1);
+
+        // Xterm leaves the configured/runtime keyboard type alone on DECSTR,
+        // while resetting either type mode selects the normal type.
+        term.process(b"\x1b[!p");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Vt220);
+        term.process(b"\x1b[?1060l");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Normal);
+
+        term.process(b"\x1b[?1060h\x1bc");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Normal);
+    }
+
+    #[test]
+    fn configured_xterm_keyboard_type_and_private_save_restore_have_distinct_lifecycles() {
+        let mut term = Terminal::new(80, 24);
+        term.configure_xterm_keyboard_type(XtermKeyboardType::Legacy, true);
+        assert_eq!(
+            term.initial_xterm_keyboard_type(),
+            XtermKeyboardType::Legacy
+        );
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Legacy);
+
+        // DECRST still selects xterm's normal/default type. With no explicit
+        // save, a private-mode restore falls back to the configured baseline.
+        term.process(b"\x1b[?1061l\x1b[?1060r");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Legacy);
+
+        // Both mode numbers address the same saved keyboard-type slot.
+        term.process(b"\x1b[?1061h\x1b[?1060s\x1b[?1060h\x1b[?1061r");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Vt220);
+
+        // Malformed subparameters do not overwrite the saved VT220 value.
+        term.process(b"\x1b[?1060:1061s\x1b[?1060h\x1b[?1060r");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Vt220);
+
+        term.soft_reset();
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Vt220);
+        term.reset();
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Legacy);
+
+        // A changed live configuration establishes a new current/RIS baseline
+        // and clears an obsolete saved mode value.
+        term.configure_xterm_keyboard_type(XtermKeyboardType::Normal, true);
+        term.process(b"\x1b[?1060r");
+        assert_eq!(term.xterm_keyboard_type(), XtermKeyboardType::Normal);
+    }
+
+    #[test]
+    fn decudk_definitions_are_bounded_preservable_and_reset_only_by_ris() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1bP0;1|17/68656c6c6f;1/1b5b41;34/00ff;35/aa;18/0;19/zz\x1b\\");
+        assert_eq!(term.xterm_user_defined_key(17), Some(b"hello".as_slice()));
+        assert_eq!(term.xterm_user_defined_key(1), Some(b"\x1b[A".as_slice()));
+        assert_eq!(term.xterm_user_defined_key(34), Some(b"\0\xff".as_slice()));
+        assert_eq!(term.xterm_user_defined_key(18), None);
+        assert_eq!(term.xterm_user_defined_key(19), None);
+        assert_eq!(term.xterm_user_defined_key(35), None);
+
+        // Nonzero first parameters preserve other entries. Xterm accepts the
+        // lock parameter but keeps UDKs unlocked, so a later definition wins.
+        term.process(b"\x1bP1;0|17/776f726c64;18/21\x1b\\");
+        assert_eq!(term.xterm_user_defined_key(17), Some(b"world".as_slice()));
+        assert_eq!(term.xterm_user_defined_key(18), Some(b"!".as_slice()));
+        assert_eq!(term.xterm_user_defined_key(1), Some(b"\x1b[A".as_slice()));
+
+        term.soft_reset();
+        assert_eq!(term.xterm_user_defined_key(17), Some(b"world".as_slice()));
+        term.process(b"\x1bc");
+        assert_eq!(term.xterm_user_defined_key(17), None);
+        assert_eq!(term.xterm_user_defined_key_bytes(), 0);
+
+        // Level 1 predates DECUDK. Returning to level 2 admits it again.
+        term.process(b"\x1b[61\"p\x1bP0;1|17/61\x1b\\");
+        assert_eq!(term.xterm_user_defined_key(17), None);
+        term.process(b"\x1b[62;1\"p\x1bP0;1|17/62\x1b\\");
+        assert_eq!(term.xterm_user_defined_key(17), Some(b"b".as_slice()));
+
+        let oversized = "ab".repeat(MAX_USER_DEFINED_KEY_BYTES + 1);
+        term.process(format!("\x1bP1;1|18/{oversized}\x1b\\").as_bytes());
+        assert_eq!(term.xterm_user_defined_key(18), None);
+
+        let maximum = "ab".repeat(MAX_USER_DEFINED_KEY_BYTES);
+        for code in 0..XTERM_USER_DEFINED_KEY_COUNT as u16 {
+            term.process(format!("\x1bP1;1|{code}/{maximum}\x1b\\").as_bytes());
+        }
+        assert!(term.xterm_user_defined_key_bytes() <= MAX_USER_DEFINED_KEYS_BYTES);
+        assert_eq!(
+            term.xterm_user_defined_keys().count(),
+            MAX_USER_DEFINED_KEYS_BYTES / MAX_USER_DEFINED_KEY_BYTES
+        );
+    }
+
+    #[test]
+    fn reserved_xterm_string_key_resource_is_queryable_resettable_and_encoder_neutral() {
+        let mut term = Terminal::new(80, 24);
+        term.process(
+            b"\x1b[?5m\x1b[?5g\x1b[>5;4m\x1b[>5;1f\x1b[?5m\x1b[?5g\x1bP$q>5m\x1b\\\x1bP$q>5f\x1b\\",
+        );
+        assert_eq!(
+            term.xterm_string_keys(),
+            XtermStringKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
+        assert_eq!(
+            term.drain_events(),
+            vec![
+                TerminalEvent::PtyWrite(b"\x1b[>5;0m".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1b[>5;0f".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1b[>5;4m".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1b[>5;1f".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP1$r>5;4m\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP1$r>5;1f\x1b\\".to_vec()),
+            ]
+        );
+
+        // Out-of-range and malformed shapes are atomic. The reserved state is
+        // global across screens and has no effect on ordinary screen content.
+        term.process(b"\x1b[>5;9m\x1b[>5;2f\x1b[>5:1m\x1b[?1049hX");
+        assert_eq!(
+            term.xterm_string_keys(),
+            XtermStringKeys::new(XtermKeyMode::Extended, XtermKeyFormat::CsiU)
+        );
+        assert_eq!(term.grid().cell(0, 0).unwrap().content.char(), Some('X'));
+
+        term.process(b"\x1b[>5n");
+        assert_eq!(term.xterm_string_keys().mode(), XtermKeyMode::Disabled);
+        term.process(b"\x1b[>5m");
+        assert_eq!(term.xterm_string_keys().mode(), XtermKeyMode::Original);
+        term.process(b"\x1b[>5;4m\x1b[>5;1f\x1b[!p");
+        assert_eq!(term.xterm_string_keys(), XtermStringKeys::default());
+        term.process(b"\x1b[>5;4m\x1b[>5;1f\x1bc");
+        assert_eq!(term.xterm_string_keys(), XtermStringKeys::default());
+    }
+
+    #[test]
+    fn decrqss_reports_legacy_geometry_without_enabling_window_mutation() {
+        let mut term = Terminal::new(132, 40);
+        term.process(b"\x1bP$qt\x1b\\\x1bP$q$|\x1b\\\x1bP$q*|\x1b\\\x1bP$q$}\x1b\\\x1bP$q$~\x1b\\");
+        assert_eq!(
+            term.drain_events(),
+            vec![
+                TerminalEvent::PtyWrite(b"\x1bP1$r39t\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP1$r80$|\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP1$r40*|\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP0$r\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP0$r\x1b\\".to_vec()),
+            ]
+        );
+
+        // Geometry and DEC status-line mutations remain application/window
+        // policy operations and are deliberately ignored by the core.
+        term.process(b"\x1b[50t\x1b[132$|\x1b[99*|\x1b[1$}\x1b[1$~");
+        assert_eq!((term.cols(), term.rows()), (132, 40));
+        assert!(term.drain_events().is_empty());
+
+        // External geometry remains observable. Current xterm reports a
+        // minimum DECSLPP value of 24, while DECSNLS reports the exact rows.
+        term.resize(100, 24);
+        term.process(b"\x1b G\x90$qt\x9c\x90$q$|\x9c\x90$q*|\x9c");
+        assert_eq!(
+            term.drain_events(),
+            vec![
+                TerminalEvent::PtyWrite(b"\x901$r24t\x9c".to_vec()),
+                TerminalEvent::PtyWrite(b"\x901$r80$|\x9c".to_vec()),
+                TerminalEvent::PtyWrite(b"\x901$r24*|\x9c".to_vec()),
+            ]
+        );
     }
 
     /// Helper: collect all non-empty characters from scrollback + visible area.
@@ -1270,5 +5842,1928 @@ mod tests {
             before, after,
             "Characters lost after expanding from 20 to 80 cols"
         );
+    }
+
+    #[test]
+    fn byte_eviction_clears_selection_that_no_longer_has_backing_rows() {
+        let mut term = Terminal::new(20, 2);
+        term.set_scrollback_limits(10_000, 512);
+        term.set_selection(Some(Selection::new(
+            Point::new(0, 0),
+            SelectionType::Simple,
+        )));
+        for line in 0..100 {
+            term.process(format!("line-{line:03}\r\n").as_bytes());
+        }
+        assert!(term.selection().is_none());
+        assert!(term.memory_usage().scrollback_bytes <= 512);
+    }
+
+    #[test]
+    fn alternate_screen_is_viewport_only_and_cannot_double_the_history_budget() {
+        let mut term = Terminal::new(24, 2);
+        term.enter_alt_screen();
+        for line in 0..50 {
+            term.process(format!("default-alt-{line:03}\r\n").as_bytes());
+        }
+        assert_eq!(term.grid().scrollback_len(), 0);
+        term.exit_alt_screen();
+
+        term.set_scrollback_limits(10_000, 8 * 1024);
+        for line in 0..100 {
+            term.process(format!("primary-{line:03}\r\n").as_bytes());
+        }
+        let primary = term.memory_usage();
+        assert!(primary.scrollback_lines > 0);
+        assert!(primary.scrollback_bytes <= 8 * 1024);
+
+        term.enter_alt_screen();
+        for line in 0..500 {
+            term.process(
+                format!("\x1b[3{}malt-{line:03}-界-e\u{301}\x1b[0m\r\n", line % 8).as_bytes(),
+            );
+        }
+        assert_eq!(term.grid().scrollback_len(), 0);
+        let with_alternate_output = term.memory_usage();
+        assert_eq!(
+            with_alternate_output.scrollback_bytes,
+            primary.scrollback_bytes
+        );
+        assert_eq!(
+            with_alternate_output.scrollback_lines,
+            primary.scrollback_lines
+        );
+
+        // Runtime reductions remain authoritative even while the primary
+        // screen is inactive, and alternate output cannot consume the share.
+        term.set_scrollback_limits(10_000, 512);
+        let reduced = term.memory_usage();
+        assert!(reduced.scrollback_bytes <= 512);
+        assert_eq!(term.grid().scrollback_len(), 0);
+
+        term.exit_alt_screen();
+        assert!(term.grid().scrollback_len() > 0);
+        assert!(term.memory_usage().scrollback_bytes <= 512);
+    }
+
+    #[test]
+    fn hyperlink_registry_is_bounded_and_pruned_with_history() {
+        let mut term = Terminal::new(20, 2);
+        term.set_scrollback_limits(10_000, 4 * 1024);
+        for line in 0..700 {
+            term.set_hyperlink(
+                format!("https://example.com/{line}/{}", "x".repeat(1024)),
+                None,
+            );
+            term.process(b"x");
+            term.reset_hyperlink();
+            term.process(b"\r\n");
+        }
+        let usage = term.memory_usage();
+        assert!(usage.scrollback_bytes <= 4 * 1024);
+        assert!(usage.hyperlink_bytes < 1024 * 1024);
+        assert!(term.hyperlink_registry().len() < 256);
+    }
+
+    #[test]
+    fn dynamic_colors_are_terminal_local_resettable_and_generation_checked() {
+        use crate::event::{DynamicColorOperation, DynamicColorTarget};
+        let mut first = Terminal::new(10, 2);
+        let second = Terminal::new(10, 2);
+        let color = Color::rgb(12, 34, 56);
+        first.apply_dynamic_color(DynamicColorOperation::Set {
+            target: DynamicColorTarget::Palette(42),
+            color,
+        });
+        assert_eq!(first.dynamic_colors().palette(42), Some(color));
+        assert_eq!(second.dynamic_colors().palette(42), None);
+        let generation = first.dynamic_colors().generation();
+        first.apply_dynamic_color(DynamicColorOperation::Set {
+            target: DynamicColorTarget::Palette(42),
+            color,
+        });
+        assert_eq!(first.dynamic_colors().generation(), generation);
+        first.apply_dynamic_color(DynamicColorOperation::Reset(DynamicColorTarget::Palette(
+            42,
+        )));
+        assert_eq!(first.dynamic_colors().palette(42), None);
+        assert!(first.dynamic_colors().generation() > generation);
+    }
+
+    #[test]
+    fn synchronized_output_freezes_text_colors_and_images_at_the_mode_boundary() {
+        use crate::event::{DynamicColorOperation, DynamicColorTarget};
+
+        let mut term = Terminal::new(12, 3);
+        term.process(b"old");
+        term.apply_dynamic_color(DynamicColorOperation::Set {
+            target: DynamicColorTarget::Foreground,
+            color: Color::rgb(1, 2, 3),
+        });
+        term.process(b"\x1b[3 q");
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=7,C=1;AQIDBA==");
+        let live_pixels = term.get_image(ImageId(7)).unwrap().data.clone();
+
+        // Output after DECSET 2026 in the same parser call must remain live
+        // internally without becoming presentable.
+        term.process(b"\x1b[?2026h\rnew");
+        term.apply_dynamic_color(DynamicColorOperation::Set {
+            target: DynamicColorTarget::Foreground,
+            color: Color::rgb(9, 8, 7),
+        });
+        term.process(b"\x1b[6 q");
+        term.handle_graphics_command(b"a=d,d=a");
+
+        assert!(term.is_synchronized_output());
+        assert!(term.rows_text(0, 0).starts_with("new"));
+        assert_eq!(term.bounded_presentation_text(0, 64).0, "old");
+        assert_eq!(term.presentation_grid().row(0).unwrap().to_string(), "old");
+        assert_eq!(
+            term.presentation_dynamic_colors().foreground(),
+            Some(Color::rgb(1, 2, 3))
+        );
+        assert_eq!(term.graphics_placement_count(), 0);
+        assert_eq!(term.cursor_style_parameter(), 6);
+        assert_eq!(
+            term.presentation_cursor_style()
+                .map(TerminalCursorStyle::parameter),
+            Some(3)
+        );
+        assert_eq!(term.presentation_images().len(), 1);
+        assert!(std::sync::Arc::ptr_eq(
+            &live_pixels,
+            &term.presentation_images()[0].image.data
+        ));
+
+        term.process(b"\x1b[?2026l");
+        assert!(!term.is_synchronized_output());
+        assert!(
+            term.presentation_grid()
+                .row(0)
+                .unwrap()
+                .to_string()
+                .starts_with("new")
+        );
+        assert_eq!(
+            term.presentation_dynamic_colors().foreground(),
+            Some(Color::rgb(9, 8, 7))
+        );
+        assert!(term.presentation_images().is_empty());
+        assert_eq!(
+            term.presentation_cursor_style()
+                .map(TerminalCursorStyle::parameter),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn bounded_presentation_text_is_utf8_safe_and_alternate_screen_is_viewport_only() {
+        let mut term = Terminal::new(8, 2);
+        term.process(b"old-one\r\nold-two\r\n");
+        let (text, history, truncated) = term.bounded_presentation_text(8, 4);
+        assert!(std::str::from_utf8(text.as_bytes()).is_ok());
+        assert!(text.len() <= 4);
+        assert!(truncated);
+        assert!(history <= 8);
+
+        term.enter_alt_screen();
+        term.process("界".as_bytes());
+        let (text, history, _) = term.bounded_presentation_text(8, 4);
+        assert_eq!(text, "界");
+        assert_eq!(history, 0);
+        assert!(term.alternate_screen_active());
+
+        term.exit_alt_screen();
+        term.process(b"\x1b[?2026h\x1b[?1049halt");
+        assert!(term.alternate_screen_active());
+        assert!(!term.presentation_alternate_screen_active());
+        assert!(!term.bounded_presentation_text(8, 64).0.contains("alt"));
+        term.process(b"\x1b[?2026l");
+        assert!(term.presentation_alternate_screen_active());
+    }
+
+    #[test]
+    fn synchronized_output_repeated_begin_does_not_extend_the_recovery_deadline() {
+        let mut term = Terminal::new(8, 2);
+        term.process(b"\x1b[?2026h");
+        let deadline = term.synchronized_output_deadline().unwrap();
+
+        term.process(b"\x1b[?2026h");
+        assert_eq!(term.synchronized_output_deadline(), Some(deadline));
+        assert!(!term.expire_synchronized_output(deadline - Duration::from_millis(1)));
+        assert!(term.expire_synchronized_output(deadline));
+        assert!(!term.is_synchronized_output());
+        assert!(term.synchronized_output_deadline().is_none());
+    }
+
+    #[test]
+    fn dec_special_graphics_maps_the_complete_vt100_repertoire() {
+        let mut term = Terminal::new(80, 2);
+        term.process(b"\x1b(0_`abcdefghijklmnopqrstuvwxyz{|}~");
+        assert_eq!(term.rows_text(0, 0), " ◆▒␉␌␍␊°±␤␋┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£·");
+    }
+
+    #[test]
+    fn g0_g1_shift_save_restore_alt_screen_and_ris_do_not_leak() {
+        let mut term = Terminal::new(20, 2);
+        term.process(b"q\x1b)0q\x0eq\x0fq\x1b(A#");
+        assert_eq!(term.rows_text(0, 0), "qq─q£");
+
+        let mut saved = Terminal::new(20, 2);
+        saved.process(b"\x1b(0\x1b7\x1b(Bq\x1b8q");
+        assert_eq!(saved.rows_text(0, 0), "─");
+
+        let mut alternate = Terminal::new(20, 2);
+        alternate.process(b"\x1b(0\x1b[?1049h\x1b(Bq\x1b[?1049lq");
+        assert_eq!(alternate.rows_text(0, 0), "─");
+
+        alternate.process(b"\x1bcq");
+        assert_eq!(alternate.rows_text(0, 0), "q");
+    }
+
+    #[test]
+    fn g2_g3_single_and_locking_shifts_are_one_shot_saved_and_resettable() {
+        let mut term = Terminal::new(20, 2);
+        term.process(b"\x1b*0\x1b+A\x1b(B\x1bNqq\x1bO##\x1bnq\x1bo#");
+        assert_eq!(term.rows_text(0, 0), "─q£#─£");
+
+        let mut saved = Terminal::new(10, 2);
+        saved.process(b"\x1b*0\x1b+A\x1bn\x1bO\x1b7\x1b*B\x1b(B\x1b8#q");
+        assert_eq!(saved.rows_text(0, 0), "£─");
+
+        saved.process(b"\x1bc\x1bNq");
+        assert_eq!(saved.rows_text(0, 0), "q");
+    }
+
+    #[test]
+    fn presentation_state_reports_are_byte_exact_bounded_and_strict() {
+        let mut term = Terminal::new(12, 4);
+        term.process(
+            b"\x1b(A\x1b)0\x1b*A\x1b+0\x1bo\x1b~\x1b[1;2;3;4:3;6;7m\x1b[1\"q\x1b[?6h\x1b[4;12HX\x1bN\x1b[1$w",
+        );
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(
+                b"\x1bP1$u4;12;1;O;A;K;3;1;@;A0A0\x1b\\".to_vec()
+            )]
+        );
+
+        term.process(b"\x1b[3g\x1b[1;3H\x1bH\x1b[1;7H\x1bH\x1b[2$w");
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP2$u3/7\x1b\\".to_vec())]
+        );
+
+        // Zero/unknown reports, plural/subparameter forms, and unrelated
+        // intermediates are ignored without a misleading response.
+        term.process(b"\x1b[$w\x1b[0$w\x1b[3$w\x1b[1;2$w\x1b[1:0$w\x1b[1*w");
+        assert!(term.drain_events().is_empty());
+    }
+
+    #[test]
+    fn presentation_state_restore_round_trips_and_rejects_atomically() {
+        let mut source = Terminal::new(12, 4);
+        source.process(
+            b"\x1b(A\x1b)0\x1b*A\x1b+0\x1bo\x1b~\x1b[1;4:3;6;7m\x1b[1\"q\x1b[?6h\x1b[4;12HX\x1bN\x1b[1$w",
+        );
+        let mut events = source.drain_events();
+        let Some(TerminalEvent::PtyWrite(mut cursor_report)) = events.pop() else {
+            panic!("expected one cursor information report");
+        };
+        assert!(events.is_empty());
+        cursor_report[4] = b't';
+
+        source.process(b"\x1b[3g\x1b[1;3H\x1bH\x1b[1;7H\x1bH\x1b[2$w");
+        let mut events = source.drain_events();
+        let Some(TerminalEvent::PtyWrite(mut tab_report)) = events.pop() else {
+            panic!("expected one tab stop report");
+        };
+        assert!(events.is_empty());
+        tab_report[4] = b't';
+
+        let mut restored = Terminal::new(12, 4);
+        restored.process(b"\x1b[8;9m");
+        restored.process(&cursor_report);
+        restored.process(&tab_report);
+        assert!(restored.current_attrs.contains(CellAttrs::HIDDEN));
+        assert!(restored.current_attrs.contains(CellAttrs::STRIKE));
+
+        restored.process(b"\x1b[1$w\x1b[2$w");
+        assert_eq!(
+            restored.drain_events(),
+            vec![
+                TerminalEvent::PtyWrite(b"\x1bP1$u4;12;1;O;A;K;3;1;@;A0A0\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP2$u3/7\x1b\\".to_vec()),
+            ]
+        );
+
+        // Invalid cursor coordinates/designators and malformed tab lists are
+        // all-or-nothing and cannot partially replace live state.
+        restored.process(
+            b"\x1bP1$t99;12;1;O;A;K;3;1;@;A0A0\x1b\\\x1bP1$t4;12;1;O;A;K;3;1;@;A0AZ\x1b\\\x1bP1$t4;12;1;O;A;F;3;1;@;A0A0\x1b\\\x1bP2$t3//7\x1b\\",
+        );
+        restored.restore_presentation_state(1, &[b'1'; 129]);
+        restored.restore_presentation_state(2, &[b'1'; 12 * 3 + 1]);
+        restored.process(b"\x1b[1$w\x1b[2$w");
+        assert_eq!(
+            restored.drain_events(),
+            vec![
+                TerminalEvent::PtyWrite(b"\x1bP1$u4;12;1;O;A;K;3;1;@;A0A0\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP2$u3/7\x1b\\".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn dec_saved_cursor_restores_origin_delayed_wrap_and_screen_local_state() {
+        let mut term = Terminal::new(4, 4);
+        term.process(b"\x1b[2;4r\x1b[?6h\x1b[2;4HX\x1b7");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (2, 3));
+        assert!(term.grid().cursor().wrap_pending);
+
+        term.process(b"\x1b[?6l\x1b[HY\x1b8");
+        assert!(term.mode().contains(TerminalMode::ORIGIN));
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (2, 3));
+        assert!(term.grid().cursor().wrap_pending);
+
+        // Restored pending wrap is observable on the next graphic, and the
+        // saved state remains available for repeated DECRC operations.
+        term.process(b"Z");
+        assert_eq!(term.grid().cell(3, 0).unwrap().content.char(), Some('Z'));
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (3, 1));
+        term.process(b"\x1b8");
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (2, 3));
+        assert!(term.grid().cursor().wrap_pending);
+
+        // DECAWM is a live mode, not part of the saved cursor. Changing it
+        // after DECSC remains authoritative after DECRC.
+        term.process(b"\x1b[?7l\x1b7\x1b[?7h\x1b8");
+        assert!(term.mode().contains(TerminalMode::AUTOWRAP));
+
+        // Primary and alternate screens retain independent saved states.
+        let mut screens = Terminal::new(6, 4);
+        screens.process(b"\x1b[1;2H\x1b7\x1b[?47h\x1b[2;4r\x1b[?6h\x1b[2;5H\x1b7");
+        screens.process(b"\x1b[?47l\x1b[H\x1b8");
+        assert!(!screens.mode().contains(TerminalMode::ORIGIN));
+        assert_eq!(
+            (screens.grid().cursor().row, screens.grid().cursor().col),
+            (0, 1)
+        );
+        screens.process(b"\x1b[?47h\x1b[H\x1b8");
+        assert!(screens.mode().contains(TerminalMode::ORIGIN));
+        assert_eq!(
+            (screens.grid().cursor().row, screens.grid().cursor().col),
+            (2, 4)
+        );
+
+        // With no prior DECSC, DECRC restores the defined home/default state.
+        let mut unsaved = Terminal::new(6, 4);
+        unsaved.process(b"\x1b[31m\x1b[1\"q\x1b[?6h\x1b[3;3H\x1b8Q");
+        assert!(!unsaved.mode().contains(TerminalMode::ORIGIN));
+        assert_eq!(
+            (unsaved.grid().cursor().row, unsaved.grid().cursor().col),
+            (0, 1)
+        );
+        let cell = unsaved.grid().cell(0, 0).unwrap();
+        assert_eq!(cell.content.char(), Some('Q'));
+        assert_eq!(cell.fg_spec, ColorSpec::Default);
+        assert!(!cell.flags.contains(CellFlags::PROTECTED));
+
+        // A saved absolute position remains memory-safe across a resize and
+        // is clamped by the destination grid while retaining delayed wrap.
+        let mut resized = Terminal::new(8, 4);
+        resized.process(b"\x1b[4;8HX\x1b7");
+        resized.resize(3, 2);
+        resized.process(b"\x1b8");
+        assert_eq!(
+            (resized.grid().cursor().row, resized.grid().cursor().col),
+            (1, 2)
+        );
+        assert!(resized.grid().cursor().wrap_pending);
+    }
+
+    #[test]
+    fn kitty_apc_survives_arbitrary_process_boundaries() {
+        let mut term = Terminal::new(8, 4);
+        term.process(b"\x1b_Ga=t,f=32,s=1,");
+        term.process(b"v=1,i=44;AQ");
+        term.process(b"IDBA==\x1b");
+        term.process(b"\\");
+
+        assert_eq!(
+            term.get_image(ImageId(44)).unwrap().data.as_ref(),
+            [1, 2, 3, 4]
+        );
+        assert!(term.drain_events().iter().any(|event| matches!(
+            event,
+            TerminalEvent::PtyWrite(bytes) if bytes == b"\x1b_Gi=44;OK\x1b\\"
+        )));
+    }
+
+    #[test]
+    fn kitty_unicode_placeholders_follow_grid_text_and_exact_color_ids() {
+        let mut term = Terminal::new(4, 3);
+        term.set_pixel_geometry(4, 3);
+        let cursor = term.grid().cursor();
+        term.handle_graphics_command(
+            b"a=T,U=1,i=42,p=7,c=2,r=2,f=32,s=2,v=2;AQIDBAUGBwgJCgsMDQ4PEA==",
+        );
+        assert_eq!(term.grid().cursor().row, cursor.row);
+        assert_eq!(term.grid().cursor().col, cursor.col);
+        assert_eq!(term.graphics_placements().count(), 0);
+
+        term.process(
+            "\x1b[38;5;42;58;5;7m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\r\n\u{10eeee}\u{030d}\u{10eeee}\x1b[0m"
+                .as_bytes(),
+        );
+        let first_cell = term.grid().cell(0, 0).unwrap();
+        assert_eq!(first_cell.fg_spec, ColorSpec::Indexed(42));
+        assert_eq!(first_cell.underline_color_spec, Some(ColorSpec::Indexed(7)));
+
+        let presentations = term.presentation_images();
+        assert_eq!(presentations.len(), 4);
+        let positions: Vec<_> = presentations
+            .iter()
+            .map(|presentation| {
+                (
+                    presentation.placement.col,
+                    presentation.placement.row,
+                    presentation.source_uv,
+                )
+            })
+            .collect();
+        assert_eq!(
+            positions,
+            vec![
+                (0, 0, Some([0.0, 0.0, 0.5, 0.5])),
+                (1, 0, Some([0.5, 0.0, 1.0, 0.5])),
+                (0, 1, Some([0.0, 0.5, 0.5, 1.0])),
+                (1, 1, Some([0.5, 0.5, 1.0, 1.0])),
+            ]
+        );
+
+        // The displayed instances are derived from the underlying cells, not
+        // protocol placements, so editing text removes only that tile.
+        term.set_cursor_position(1, 1);
+        term.process(b"X");
+        assert_eq!(term.presentation_images().len(), 3);
+        term.handle_graphics_command(b"a=d,d=a");
+        assert_eq!(term.presentation_images().len(), 3);
+        term.handle_graphics_command(b"a=d,d=i,i=42,p=7");
+        assert!(term.presentation_images().is_empty());
+        assert!(term.get_image(ImageId(42)).is_some());
+    }
+
+    #[test]
+    fn kitty_unicode_placeholders_follow_scrollback_and_screen_ownership() {
+        let mut term = Terminal::new(3, 2);
+        term.set_pixel_geometry(3, 2);
+        term.handle_graphics_command(b"a=T,U=1,i=9,c=1,r=1,f=32,s=1,v=1;AQIDBA==");
+        term.process("\x1b[38;5;9m\u{10eeee}\x1b[0m\r\none\r\ntwo".as_bytes());
+        term.grid_mut().set_scroll_offset(1);
+        let history = term.presentation_images();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].placement.row, -1);
+
+        term.grid_mut().set_scroll_offset(0);
+        term.process(b"\x1b[?1049h");
+        term.process("\x1b[38;5;9m\u{10eeee}\x1b[0m".as_bytes());
+        assert!(term.presentation_images().is_empty());
+        term.process(b"\x1b[?1049l");
+        term.grid_mut().set_scroll_offset(1);
+        assert_eq!(term.presentation_images().len(), 1);
+
+        term.grid_mut().set_scroll_offset(0);
+        term.process(b"\x1b[?1049h");
+        term.handle_graphics_command(b"a=T,U=1,i=10,c=1,r=1,f=32,s=1,v=1;AQIDBA==");
+        term.process("\x1b[38;5;10m\u{10eeee}\x1b[0m".as_bytes());
+        assert_eq!(term.presentation_images().len(), 1);
+        term.process(b"\x1b[?1049l\x1b[?1049h");
+        term.process("\x1b[38;5;10m\u{10eeee}\x1b[0m".as_bytes());
+        assert!(term.presentation_images().is_empty());
+    }
+
+    #[test]
+    fn kitty_animation_revisions_reach_presentation_without_leaking_through_sync() {
+        let mut term = Terminal::new(4, 2);
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=71,c=1,r=1,C=1;AQIDBA==");
+        term.handle_graphics_command(b"a=f,f=32,s=1,v=1,i=71,z=10;BQYHCA==");
+        term.handle_graphics_command(b"a=a,i=71,r=1,z=10,s=3");
+
+        let root = term.presentation_images()[0].image.clone();
+        assert_eq!(root.data.as_ref(), &[1, 2, 3, 4]);
+        let deadline = term.graphics_animation_deadline().unwrap();
+        term.process(b"\x1b[?2026h");
+        assert!(term.advance_graphics_animations(deadline));
+        let frozen = term.presentation_images()[0].image.clone();
+        assert_eq!(frozen.data.as_ref(), &[1, 2, 3, 4]);
+        assert_eq!(frozen.revision, root.revision);
+
+        term.process(b"\x1b[?2026l");
+        let animated = term.presentation_images()[0].image.clone();
+        assert_eq!(animated.data.as_ref(), &[5, 6, 7, 8]);
+        assert_ne!(animated.revision, root.revision);
+    }
+
+    #[test]
+    fn live_domain_graphics_relay_restores_decoded_namespace_once_without_replies() {
+        let pixels = STANDARD.encode([
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ]);
+        let alternate = STANDARD.encode([
+            0, 0, 0, 0, 32, 32, 32, 128, 64, 64, 64, 255, 96, 96, 96, 255,
+        ]);
+        let mut source = Terminal::new(8, 3);
+        source.process(format!("\x1b_Ga=t,f=32,s=2,v=2,I=44;{pixels}\x1b\\").as_bytes());
+        source.process(b"\x1b[2;3H\x1b_Ga=p,I=44,p=5,c=2,r=2,C=1\x1b\\");
+        source.process(format!("\x1b_Ga=f,f=32,s=2,v=2,i=1,r=2,z=80;{alternate}\x1b\\").as_bytes());
+        source.process(b"\x1b_Ga=a,i=1,s=1,c=2\x1b\\");
+        source.drain_events();
+        let expected = source.presentation_images();
+        assert_eq!(expected.len(), 1);
+        assert_eq!(
+            expected[0].image.data.as_ref(),
+            STANDARD.decode(alternate).unwrap()
+        );
+
+        let snapshot = source.graphics_relay_snapshot(Instant::now());
+        let mut chunks = Vec::new();
+        snapshot
+            .for_each_escape_chunk(|chunk| {
+                chunks.push(chunk);
+                true
+            })
+            .unwrap();
+        assert!(chunks.iter().all(|chunk| chunk.len() < 64 * 1024));
+
+        let mut replica = Terminal::new(8, 3);
+        replica.set_graphics_relay_snapshot_allowed(true);
+        for chunk in &chunks {
+            for fragment in chunk.as_bytes().chunks(7) {
+                replica.process(fragment);
+            }
+        }
+        let restored = replica.presentation_images();
+        assert_eq!(restored.len(), expected.len());
+        assert_eq!(
+            restored[0].placement.image_id,
+            expected[0].placement.image_id
+        );
+        assert_eq!(restored[0].placement.placement_id, Some(5));
+        assert_eq!(
+            (restored[0].placement.col, restored[0].placement.row),
+            (2, 1)
+        );
+        assert_eq!(restored[0].image.data, expected[0].image.data);
+        assert_eq!(restored[0].image.revision, expected[0].image.revision);
+        assert!(replica.drain_events().is_empty());
+
+        // Image-number aliases remain usable by later live PTY output.
+        replica.process(b"\x1b[1;1H\x1b_Ga=p,I=44,p=6,C=1\x1b\\");
+        assert_eq!(replica.presentation_images().len(), 2);
+
+        // The internal import permission consumed itself at commit. A later
+        // application-emitted begin marker cannot clear the restored state.
+        replica.process(b"\x1b_TG;begin;0;cbf29ce484222325\x1b\\");
+        assert_eq!(replica.presentation_images().len(), 2);
+
+        let mut ordinary = Terminal::new(8, 3);
+        for chunk in &chunks {
+            ordinary.process(chunk.as_bytes());
+        }
+        // Standard quiet Kitty pixel loads are harmless, but the private
+        // placement/counter commit is ignored outside an opted-in relay pane.
+        assert!(ordinary.presentation_images().is_empty());
+        assert!(ordinary.drain_events().is_empty());
+
+        let mut rejected = Terminal::new(8, 3);
+        rejected.set_graphics_relay_snapshot_allowed(true);
+        rejected.process(b"\x1b_TG;begin;1;0000000000000000\x1b\\");
+        rejected.process(b"\x1b_TG;chunk;%%%\x1b\\");
+        for chunk in &chunks {
+            rejected.process(chunk.as_bytes());
+        }
+        assert!(rejected.presentation_images().is_empty());
+        assert!(rejected.drain_events().is_empty());
+    }
+
+    #[test]
+    fn live_domain_graphics_relay_restores_virtual_and_relative_placement_identity() {
+        const PLACEHOLDERS: &str = "\x1b[38;5;42;58;5;7m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\r\n\u{10eeee}\u{030d}\u{10eeee}\x1b[0m";
+        let mut source = Terminal::new(6, 3);
+        source.set_pixel_geometry(6, 3);
+        source.handle_graphics_command(
+            b"a=T,U=1,i=42,p=7,c=2,r=2,f=32,s=2,v=2;AQIDBAUGBwgJCgsMDQ4PEA==",
+        );
+        source.process(PLACEHOLDERS.as_bytes());
+        source.process(b"\x1b[2;3H\x1b_Ga=p,i=42,p=8,c=2,r=2,C=1\x1b\\");
+        source.process(b"\x1b_Ga=p,i=42,p=9,P=42,Q=8,H=-1,V=1,c=2,r=2,C=1\x1b\\");
+        source.drain_events();
+        let expected = source.presentation_images();
+        assert_eq!(expected.len(), 6);
+
+        let snapshot = source.graphics_relay_snapshot(Instant::now());
+        let mut replica = Terminal::new(6, 3);
+        replica.set_pixel_geometry(6, 3);
+        replica.process(PLACEHOLDERS.as_bytes());
+        replica.set_graphics_relay_snapshot_allowed(true);
+        snapshot
+            .for_each_escape_chunk(|chunk| {
+                replica.process(chunk.as_bytes());
+                true
+            })
+            .unwrap();
+        let restored = replica.presentation_images();
+        assert_eq!(restored.len(), expected.len());
+        for (restored, expected) in restored.iter().zip(&expected) {
+            assert_eq!(restored.placement.image_id, expected.placement.image_id);
+            assert_eq!(
+                restored.placement.placement_id,
+                expected.placement.placement_id
+            );
+            assert_eq!(
+                (restored.placement.col, restored.placement.row),
+                (expected.placement.col, expected.placement.row)
+            );
+            assert_eq!(restored.pixel_rect, expected.pixel_rect);
+            assert_eq!(restored.source_uv, expected.source_uv);
+        }
+
+        // Deleting the restored named parent still cascades to its relative
+        // child, proving that stable internal placement UIDs survived.
+        replica.handle_graphics_command(b"a=d,d=i,i=42,p=8");
+        assert_eq!(replica.presentation_images().len(), 4);
+    }
+
+    #[test]
+    fn kitty_unicode_placeholders_follow_reflow_and_synchronized_output() {
+        let mut term = Terminal::new(4, 2);
+        term.set_pixel_geometry(4, 2);
+        term.handle_graphics_command(b"a=T,U=1,i=5,c=1,r=1,f=32,s=1,v=1;AQIDBA==");
+        term.process("AB\x1b[38;5;5m\u{10eeee}\x1b[0m".as_bytes());
+        assert_eq!(
+            (
+                term.presentation_images()[0].placement.col,
+                term.presentation_images()[0].placement.row,
+            ),
+            (2, 0)
+        );
+
+        term.resize(2, 3);
+        let reflowed = term.presentation_images();
+        assert_eq!(reflowed.len(), 1);
+        assert_eq!(
+            (reflowed[0].placement.col, reflowed[0].placement.row),
+            (0, 1)
+        );
+
+        term.process(b"\x1b[?2026h");
+        term.process(b"\x1b[2;1HX");
+        assert_eq!(term.presentation_images().len(), 1);
+        term.process(b"\x1b[?2026l");
+        assert!(term.presentation_images().is_empty());
+    }
+
+    #[test]
+    fn kitty_relative_placements_follow_unicode_parent_text_and_lifetime() {
+        let mut term = Terminal::new(10, 6);
+        term.handle_graphics_command(b"a=T,U=1,i=42,p=7,c=1,r=1,f=32,s=1,v=1;AQIDBA==");
+        term.handle_graphics_command(b"a=t,i=8,f=32,s=1,v=1;BQYHCA==");
+        let cursor_before = term.grid().cursor();
+        term.handle_graphics_command(b"a=p,i=8,p=8,P=42,Q=7,H=1,V=2,c=1,r=1");
+        assert_eq!(
+            (term.grid().cursor().col, term.grid().cursor().row),
+            (cursor_before.col, cursor_before.row)
+        );
+        assert!(term.presentation_images().is_empty());
+
+        term.process(b"\x1b[4;5H\x1b[38;5;42;58;5;7m");
+        term.process("\u{10eeee}\u{0305}\u{0305}".as_bytes());
+        let positions = |term: &Terminal| {
+            term.presentation_images()
+                .into_iter()
+                .map(|image| {
+                    (
+                        image.placement.image_id,
+                        image.placement.col,
+                        image.placement.row,
+                    )
+                })
+                .collect::<HashSet<_>>()
+        };
+        assert_eq!(
+            positions(&term),
+            HashSet::from([(ImageId(42), 4, 3), (ImageId(8), 5, 5)])
+        );
+
+        // The virtual parent's origin is the independent minimum x/y across
+        // all live placeholder cells that refer to its prototype.
+        term.process(b"\x1b[5;3H");
+        term.process("\u{10eeee}\u{0305}\u{0305}".as_bytes());
+        assert!(positions(&term).contains(&(ImageId(8), 3, 5)));
+
+        term.handle_graphics_command(b"a=d,d=i,i=42,p=7");
+        assert!(term.presentation_images().is_empty());
+        assert!(term.get_image(ImageId(8)).is_none());
+    }
+
+    #[test]
+    fn kitty_image_numbers_allocate_reply_and_place_at_the_terminal_cursor() {
+        let mut term = Terminal::new(8, 4);
+        term.set_cursor_position(3, 2);
+        term.handle_graphics_command(b"a=T,I=13,N=1,f=32,s=1,v=1,p=7,c=1,r=1,C=1;AQIDBA==");
+
+        let placement = term.graphics_placements().next().unwrap();
+        assert_eq!(placement.image_id, ImageId(1));
+        assert_eq!(placement.placement_id, Some(7));
+        assert_eq!((placement.col, placement.row), (1, 2));
+        assert_eq!(
+            term.get_image(ImageId(1)).unwrap().data.as_ref(),
+            [1, 2, 3, 4]
+        );
+        assert!(term.drain_events().iter().any(|event| matches!(
+            event,
+            TerminalEvent::PtyWrite(bytes)
+                if bytes == b"\x1b_Gi=1,I=13,p=7;OK\x1b\\"
+        )));
+    }
+
+    #[test]
+    fn kitty_placements_follow_screen_scroll_clear_and_alternate_lifecycle() {
+        let mut term = Terminal::new(8, 4);
+        term.set_cursor_position(3, 2);
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=1,c=1,r=1,C=1;AQIDBA==");
+        assert_eq!(term.graphics_placements().next().unwrap().row, 2);
+
+        term.scroll_up(1);
+        assert_eq!(term.graphics_placements().next().unwrap().row, 1);
+        term.enter_alt_screen();
+        assert!(term.graphics_placements().next().is_none());
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=2,c=1,r=1,C=1;AQIDBA==");
+        assert_eq!(term.graphics_placements().count(), 1);
+        term.exit_alt_screen();
+        assert_eq!(
+            term.graphics_placements().next().unwrap().image_id,
+            ImageId(1)
+        );
+        term.enter_alt_screen();
+        assert!(term.graphics_placements().next().is_none());
+        term.exit_alt_screen();
+
+        term.erase_in_display(2);
+        assert!(term.graphics_placements().next().is_none());
+        // ED2 clears visibility but leaves reusable image data intact.
+        assert!(term.get_image(ImageId(1)).is_some());
+    }
+
+    #[test]
+    fn oversized_kitty_apc_is_bounded_and_reports_e2big() {
+        let mut term = Terminal::new(8, 4);
+        let mut sequence = b"\x1b_Ga=t,i=3;".to_vec();
+        sequence.extend(std::iter::repeat_n(b'A', MAX_KITTY_APC_BYTES + 1));
+        sequence.extend_from_slice(b"\x1b\\");
+        term.process(&sequence);
+        assert!(term.drain_events().iter().any(|event| matches!(
+            event,
+            TerminalEvent::PtyWrite(bytes) if bytes.starts_with(b"\x1b_Gi=0;E2BIG:")
+        )));
+        assert!(term.get_image(ImageId(3)).is_none());
+    }
+
+    #[test]
+    fn kitty_placements_remain_addressable_in_primary_scrollback() {
+        let mut term = Terminal::new(8, 4);
+        term.set_cursor_position(1, 1);
+        term.handle_graphics_command(b"a=T,f=32,s=1,v=1,i=6,c=1,r=1,C=1;AQIDBA==");
+        term.scroll_up(1);
+        let placement = term.graphics_placements().next().unwrap();
+        assert_eq!(placement.row, -1);
+        assert_eq!(term.grid().scrollback_len(), 1);
+        term.grid_mut().set_scroll_offset(1);
+        assert_eq!(term.graphics_placements().next().unwrap().row, -1);
+    }
+
+    #[test]
+    fn sixel_and_iterm2_framing_render_per_terminal_without_pty_leakage() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[255, 0, 0, 255, 0, 255, 0, 255])
+                .unwrap();
+        }
+        let encoded = STANDARD.encode(png_bytes);
+        let osc =
+            format!("\x1b]1337;File=inline=1;width=2;height=1;preserveAspectRatio=0:{encoded}\x07");
+
+        let mut first_pane = Terminal::new(20, 10);
+        first_pane.set_pixel_geometry(200, 100);
+        first_pane.process(b"\x1b_Ga=T,f=32,s=1,v=1,i=7,C=1;AQIDBA==\x1b\\");
+        first_pane.process(b"\x1bP0;1q\"1;1;4;6#1;2;100;0;0!4~\x1b\\");
+        first_pane.process(osc.as_bytes());
+
+        assert_eq!(first_pane.graphics_placement_count(), 3);
+        assert_eq!(first_pane.graphics_image_count(), 3);
+        assert!(first_pane.graphics_memory_usage() <= 64 * 1024 * 1024);
+        assert!(first_pane.graphics_placements().any(|placement| {
+            placement.pixel_width == Some(4) && placement.pixel_height == Some(6)
+        }));
+        assert!(first_pane.graphics_placements().any(|placement| {
+            placement.pixel_width == Some(20) && placement.pixel_height == Some(10)
+        }));
+
+        let second_pane = Terminal::new(20, 10);
+        assert_eq!(second_pane.graphics_placement_count(), 0);
+        assert_eq!(second_pane.graphics_image_count(), 0);
+        assert!(first_pane.drain_events().iter().all(
+            |event| matches!(event, TerminalEvent::PtyWrite(bytes) if bytes.starts_with(b"\x1b_G"))
+        ));
+    }
+
+    #[test]
+    fn fragmented_sixel_aspect_controls_display_footprint_and_cursor_advance() {
+        let mut term = Terminal::new(20, 10);
+        term.set_pixel_geometry(40, 30);
+        term.set_cursor_position(2, 4);
+
+        term.process(b"\x1bP7q\"2;");
+        assert_eq!(term.graphics_placement_count(), 0);
+        term.process(b"1;2;6!2~\x1b");
+        assert_eq!(term.graphics_placement_count(), 0);
+        term.process(b"\\");
+
+        let placement = term.graphics_placements().next().unwrap();
+        assert_eq!((placement.col, placement.row), (3, 1));
+        assert_eq!((placement.width, placement.height), (Some(1), Some(4)));
+        assert_eq!(
+            (placement.pixel_width, placement.pixel_height),
+            (Some(2), Some(12))
+        );
+        let image = term.get_image(placement.image_id).unwrap();
+        assert_eq!((image.width, image.height), (2, 6));
+        assert_eq!(term.graphics_memory_usage(), 2 * 6 * 4);
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (5, 3));
+    }
+
+    #[test]
+    fn repeated_sixel_images_remain_inside_shared_resource_limits() {
+        let mut term = Terminal::new(8, 4);
+        term.set_pixel_geometry(80, 40);
+        for _ in 0..300 {
+            term.process(b"\x1bP0;1q!4~\x1b\\");
+        }
+        assert!(term.graphics_image_count() <= 256);
+        assert!(term.graphics_placement_count() <= 256);
+        assert!(term.graphics_memory_usage() <= 64 * 1024 * 1024);
+
+        term.erase_in_display(2);
+        assert_eq!(term.graphics_image_count(), 0);
+        assert_eq!(term.graphics_memory_usage(), 0);
+    }
+
+    #[test]
+    fn selective_erase_preserves_protected_unicode_and_cell_style() {
+        let mut term = Terminal::new(8, 3);
+        term.process(b"\x1b[1\"qA\x1b[0\"qB\x1b[1\"q");
+        term.process("界".as_bytes());
+        term.process(b"\x1b[2\"qC\x1b[48;2;1;2;3m\x1b[?2K");
+
+        assert_eq!((term.grid().cursor().row, term.grid().cursor().col), (0, 5));
+        assert_eq!(term.rows_text(0, 0), "A 界");
+        for col in [0, 2, 3] {
+            assert!(
+                term.grid()
+                    .cell(0, col)
+                    .unwrap()
+                    .flags
+                    .contains(CellFlags::PROTECTED)
+            );
+        }
+        assert!(term.grid().cell(0, 2).unwrap().is_wide_char());
+        assert!(term.grid().cell(0, 3).unwrap().is_wide_char_spacer());
+        for col in [1, 4, 6, 7] {
+            let cell = term.grid().cell(0, col).unwrap();
+            assert!(cell.content.is_empty());
+            assert_eq!(cell.bg_spec, ColorSpec::Default);
+            assert!(!cell.flags.contains(CellFlags::PROTECTED));
+        }
+
+        // Invalid, plural, and subparameter DECSCA forms are ignored. The
+        // following character therefore remains protected.
+        term.process(b"\x1b[1\"q\x1b[0m\x1b[9\"q\x1b[1;0\"q\x1b[1:0\"q\x1b7\x1b[0\"q\x1b8D");
+        assert!(
+            term.grid()
+                .cell(0, 5)
+                .unwrap()
+                .flags
+                .contains(CellFlags::PROTECTED)
+        );
+
+        // Ordinary EL ignores selective protection, and RIS returns DECSCA
+        // to erasable without changing the semantics of SGR.
+        term.process(b"\x1b[2K\x1b[1\"q\x1bcE");
+        let cell = term.grid().cell(0, 0).unwrap();
+        assert_eq!(cell.content.char(), Some('E'));
+        assert!(!cell.flags.contains(CellFlags::PROTECTED));
+
+        // Protection is durable cell state, not parser-only state: compact
+        // scrollback and subsequent reflow retain it.
+        let mut history = Terminal::new(4, 2);
+        history.process(b"\x1b[1\"qA\r\n\x1b[0\"qB\r\nC");
+        history.resize(2, 2);
+        let oldest = -(history.grid().scrollback_len() as i32);
+        let retained = (oldest..history.rows() as i32).any(|row| {
+            history.grid().row_at_offset(row).is_some_and(|row| {
+                row.iter().any(|cell| {
+                    cell.content.char() == Some('A') && cell.flags.contains(CellFlags::PROTECTED)
+                })
+            })
+        });
+        assert!(retained);
+    }
+
+    #[test]
+    fn rectangular_fill_and_erase_apply_attributes_clipping_and_origin() {
+        let mut term = Terminal::new(8, 4);
+        term.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx\r\nyz012345");
+        term.process(b"\x1b[2;7H\x1b[1;38;5;2;48;2;1;2;3m\x1b[1\"q");
+        let cursor = term.grid().cursor();
+        term.process(b"\x1b[88;2;2;3;4$x");
+
+        assert_eq!(
+            (term.grid().cursor().row, term.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+        assert_eq!(term.grid().cursor().wrap_pending, cursor.wrap_pending);
+        assert_eq!(
+            term.rows_text(0, 3),
+            "abcdefgh\niXXXmnop\nqXXXuvwx\nyz012345"
+        );
+        for row in 1..=2 {
+            for col in 1..=3 {
+                let cell = term.grid().cell(row, col).unwrap();
+                assert_eq!(cell.content.char(), Some('X'));
+                assert!(cell.attrs.contains(CellAttrs::BOLD));
+                assert_eq!(cell.fg_spec, ColorSpec::Indexed(2));
+                assert_eq!(cell.bg_spec, ColorSpec::TrueColor(Color::rgb(1, 2, 3)));
+                assert!(cell.flags.contains(CellFlags::PROTECTED));
+            }
+        }
+
+        // Invalid fill characters, reversed rectangles, extra parameters, and
+        // subparameters are ignored without moving the cursor.
+        let before = term.rows_text(0, 3);
+        term.process(b"\x1b[127;1;1;4;8$x\x1b[88;3;3;2;4$x\x1b[88;1;1;2;2;9$x\x1b[88:1;1;1;2;2$x");
+        assert_eq!(term.rows_text(0, 3), before);
+        assert_eq!(
+            (term.grid().cursor().row, term.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+
+        // DECERA ignores protection, applies BCE, and clips oversized bounds.
+        term.process(b"\x1b[48;5;5m\x1b[2;3;99;99$z");
+        assert_eq!(term.rows_text(0, 3), "abcdefgh\niX\nqX\nyz");
+        for row in 1..4 {
+            for col in 2..8 {
+                let cell = term.grid().cell(row, col).unwrap();
+                assert!(cell.content.is_empty());
+                assert_eq!(cell.bg_spec, ColorSpec::Indexed(5));
+                assert!(!cell.flags.contains(CellFlags::PROTECTED));
+            }
+        }
+
+        // DECOM makes rectangle coordinates relative to both margin pairs.
+        term.process(b"\x1b[0m\x1b[2;4r\x1b[?69h\x1b[3;7s\x1b[?6h\x1b[90;1;1;2;2$x");
+        assert_eq!(term.grid().cell(1, 2).unwrap().content.char(), Some('Z'));
+        assert_eq!(term.grid().cell(2, 3).unwrap().content.char(), Some('Z'));
+        assert_ne!(term.grid().cell(0, 0).unwrap().content.char(), Some('Z'));
+        assert_ne!(term.grid().cell(3, 4).unwrap().content.char(), Some('Z'));
+
+        let mut defaulted = Terminal::new(3, 2);
+        defaulted.process(b"\x1b(0\x1b[113$x");
+        assert_eq!(defaulted.rows_text(0, 1), "───\n───");
+        defaulted.process(b"\x1b[$z");
+        assert_eq!(defaulted.rows_text(0, 1), "\n");
+        defaulted.process(b"\x1b[160;1;1;1;1$x");
+        assert_eq!(
+            defaulted.grid().cell(0, 0).unwrap().content.char(),
+            Some('\u{a0}')
+        );
+    }
+
+    #[test]
+    fn rectangular_selective_erase_retains_cell_attributes_and_wide_integrity() {
+        let mut term = Terminal::new(8, 2);
+        term.process(b"\x1b[1;31mA\x1b[1\"qB\x1b[0\"q");
+        term.process("界".as_bytes());
+        term.process(b"C");
+        let cursor = term.grid().cursor();
+        term.process(b"\x1b[1;1;1;4${");
+
+        assert_eq!(
+            (term.grid().cursor().row, term.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+        assert_eq!(term.grid().cursor().wrap_pending, cursor.wrap_pending);
+        let erased = term.grid().cell(0, 0).unwrap();
+        assert!(erased.content.is_empty());
+        assert!(erased.attrs.contains(CellAttrs::BOLD));
+        assert_eq!(erased.fg_spec, ColorSpec::Indexed(1));
+        assert_eq!(term.grid().cell(0, 1).unwrap().content.char(), Some('B'));
+        assert!(
+            term.grid()
+                .cell(0, 1)
+                .unwrap()
+                .flags
+                .contains(CellFlags::PROTECTED)
+        );
+        for col in 2..=3 {
+            let cell = term.grid().cell(0, col).unwrap();
+            assert!(cell.content.is_empty());
+            assert!(cell.attrs.contains(CellAttrs::BOLD));
+            assert!(!cell.is_wide_char());
+            assert!(!cell.is_wide_char_spacer());
+        }
+        assert_eq!(term.grid().cell(0, 4).unwrap().content.char(), Some('C'));
+    }
+
+    #[test]
+    fn rectangular_copy_is_overlap_safe_clipped_and_copies_complete_state() {
+        let mut term = Terminal::new(8, 3);
+        term.process(b"\x1b[1;34mAB\x1b[1\"qC\x1b[0\"qDEFGH");
+        let cursor = term.grid().cursor();
+        term.process(b"\x1b[1;1;1;6;1;1;3;1$v");
+        assert_eq!(term.rows_text(0, 0), "ABABCDEF");
+        assert_eq!(
+            (term.grid().cursor().row, term.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+        assert_eq!(term.grid().cursor().wrap_pending, cursor.wrap_pending);
+        assert!(
+            term.grid()
+                .cell(0, 4)
+                .unwrap()
+                .flags
+                .contains(CellFlags::PROTECTED)
+        );
+        assert_eq!(
+            term.grid().cell(0, 2).unwrap().fg_spec,
+            ColorSpec::Indexed(4)
+        );
+
+        // Reverse-direction overlap must also read from the pre-copy snapshot.
+        term.process(b"\x1b[1;3;1;8;9;1;1;7$v");
+        assert_eq!(term.rows_text(0, 0), "ABCDEFEF");
+
+        // Destination coordinates beyond the sole page clamp to its last cell;
+        // page parameters likewise resolve to the only available page.
+        term.process(b"\x1b[1;1;3;8;42;99;99;77$v");
+        assert_eq!(term.grid().cell(2, 7).unwrap().content.char(), Some('A'));
+
+        // A source boundary that intersects a wide pair cannot leave an orphan
+        // half at the destination or damage the cursor.
+        let mut wide = Terminal::new(6, 2);
+        wide.process("A界BCD".as_bytes());
+        let cursor = wide.grid().cursor();
+        wide.process(b"\x1b[1;3;1;5;1;2;2;1$v");
+        assert_eq!(
+            (wide.grid().cursor().row, wide.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+        assert_eq!(wide.grid().cursor().wrap_pending, cursor.wrap_pending);
+        for row in 0..wide.rows() {
+            for col in 0..wide.cols() {
+                let cell = wide.grid().cell(row, col).unwrap();
+                if cell.is_wide_char() {
+                    assert!(
+                        wide.grid()
+                            .cell(row, col + 1)
+                            .unwrap()
+                            .is_wide_char_spacer()
+                    );
+                }
+                if cell.is_wide_char_spacer() {
+                    assert!(col > 0 && wide.grid().cell(row, col - 1).unwrap().is_wide_char());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rectangular_text_operations_share_image_placement_geometry() {
+        let mut erased = Terminal::new(8, 4);
+        erased.process(b"\x1b_Ga=T,f=32,s=1,v=1,i=7,c=4,r=4,C=1;AQIDBA==\x1b\\");
+        assert_eq!(erased.graphics_placement_count(), 1);
+        erased.process(b"\x1b[88;2;2;3;3$x");
+        let fragments: Vec<_> = erased.graphics_placements().collect();
+        assert_eq!(fragments.len(), 4);
+        for row in 1..3_i64 {
+            for col in 1..3_u32 {
+                assert!(fragments.iter().all(|placement| {
+                    col < placement.col
+                        || col >= placement.col + placement.width.unwrap_or(1)
+                        || row < placement.row
+                        || row >= placement.row + i64::from(placement.height.unwrap_or(1))
+                }));
+            }
+        }
+
+        let mut copied = Terminal::new(8, 4);
+        copied.process(b"\x1b_Ga=T,f=32,s=1,v=1,i=8,c=2,r=2,C=1;AQIDBA==\x1b\\");
+        copied.process(b"\x1b[1;1;2;2;1;3;5;1$v");
+        assert_eq!(copied.graphics_placement_count(), 2);
+        assert!(copied.graphics_placements().any(|placement| {
+            placement.col == 4
+                && placement.row == 2
+                && placement.width == Some(2)
+                && placement.height == Some(2)
+        }));
+
+        // DECSERA is character-selective; image pixels do not carry DECSCA.
+        copied.process(b"\x1b[3;5;4;6${");
+        assert_eq!(copied.graphics_placement_count(), 2);
+    }
+
+    #[test]
+    fn attribute_change_extent_obeys_stream_rectangle_origin_and_reset_lifecycle() {
+        let mut term = Terminal::new(6, 3);
+        term.process(b"AB\x1b[2;3HCD\x1b[3;5HEF");
+        let cursor = term.grid().cursor();
+
+        // Stream mode is the default. It wraps over the full page width but
+        // changes only cells that have actually been drawn.
+        term.process(b"\x1b[1;2;3;5;1$r");
+        for (row, col) in [(0, 1), (1, 2), (1, 3), (2, 4)] {
+            assert!(
+                term.grid()
+                    .cell(row, col)
+                    .unwrap()
+                    .attrs
+                    .contains(CellAttrs::BOLD)
+            );
+        }
+        for (row, col) in [(0, 0), (2, 5)] {
+            assert!(
+                !term
+                    .grid()
+                    .cell(row, col)
+                    .unwrap()
+                    .attrs
+                    .contains(CellAttrs::BOLD)
+            );
+        }
+        let untouched = term.grid().cell(1, 0).unwrap();
+        assert!(untouched.content.is_empty());
+        assert!(untouched.attrs.is_empty());
+
+        // Exact rectangle mode changes only the requested columns and turns
+        // never-drawn cells into explicit spaces. A later stream operation
+        // therefore recognizes those cells as drawn.
+        term.process(b"\x1b[2*x\x1b[1;2;3;5;7$r");
+        let materialized = term.grid().cell(1, 1).unwrap();
+        assert_eq!(materialized.content.char(), Some(' '));
+        assert!(materialized.attrs.contains(CellAttrs::INVERSE));
+        assert!(term.grid().cell(1, 0).unwrap().content.is_empty());
+        term.process(b"\x1b[1*x\x1b[1;2;3;5;8$r");
+        assert!(
+            term.grid()
+                .cell(1, 1)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::HIDDEN)
+        );
+
+        assert_eq!(
+            (term.grid().cursor().row, term.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+        assert_eq!(term.grid().cursor().wrap_pending, cursor.wrap_pending);
+
+        // DECOM affects both endpoints before stream wrapping. Horizontal
+        // margins do not constrain the wrapped portion itself.
+        let mut origin = Terminal::new(8, 4);
+        origin.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx\r\nyz012345");
+        origin.process(b"\x1b[2;4r\x1b[?69h\x1b[3;7s\x1b[?6h\x1b[1;2;2;3;1$r");
+        assert!(
+            !origin
+                .grid()
+                .cell(0, 0)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::BOLD)
+        );
+        assert!(
+            !origin
+                .grid()
+                .cell(1, 2)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::BOLD)
+        );
+        assert!(
+            origin
+                .grid()
+                .cell(1, 3)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::BOLD)
+        );
+        assert!(
+            origin
+                .grid()
+                .cell(1, 7)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::BOLD)
+        );
+        assert!(
+            origin
+                .grid()
+                .cell(2, 0)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::BOLD)
+        );
+        assert!(
+            origin
+                .grid()
+                .cell(2, 4)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::BOLD)
+        );
+        assert!(
+            !origin
+                .grid()
+                .cell(2, 5)
+                .unwrap()
+                .attrs
+                .contains(CellAttrs::BOLD)
+        );
+
+        assert_eq!(origin.attribute_change_extent_parameter(), 1);
+        origin.process(b"\x1b[2*x\x1b[3*x\x1b[2;1*x\x1b[2:1*x");
+        assert_eq!(origin.attribute_change_extent_parameter(), 2);
+        origin.process(b"\x1b[!p");
+        assert_eq!(origin.attribute_change_extent_parameter(), 2);
+        origin.process(b"\x1bc");
+        assert_eq!(origin.attribute_change_extent_parameter(), 1);
+    }
+
+    #[test]
+    fn attribute_change_and_reverse_apply_only_the_documented_rendition_subset() {
+        let mut term = Terminal::new(5, 2);
+        term.process(
+            b"\x1b]8;;https://example.com\x07\x1b[1\"q\x1b[1;2;4:3;6;7;8;31;44mX\x1b]8;;\x07\x1b[0\"q",
+        );
+        let cursor = term.grid().cursor();
+        let original = term.grid().cell(0, 0).unwrap().clone();
+        assert!(
+            original
+                .flags
+                .contains(CellFlags::PROTECTED | CellFlags::HYPERLINK)
+        );
+
+        term.process(b"\x1b[1;1;1;1;0$r");
+        let attrs = term.grid().cell(0, 0).unwrap().attrs;
+        assert!(attrs.contains(CellAttrs::DIM | CellAttrs::RAPID_BLINK | CellAttrs::HIDDEN));
+        assert!(!attrs.intersects(
+            CellAttrs::BOLD | CellAttrs::ALL_UNDERLINES | CellAttrs::BLINK | CellAttrs::INVERSE
+        ));
+
+        term.process(b"\x1b[1;1;1;1;1;4;5;7;8$r");
+        let attrs = term.grid().cell(0, 0).unwrap().attrs;
+        assert!(attrs.contains(
+            CellAttrs::BOLD
+                | CellAttrs::UNDERLINE
+                | CellAttrs::BLINK
+                | CellAttrs::RAPID_BLINK
+                | CellAttrs::INVERSE
+                | CellAttrs::HIDDEN
+                | CellAttrs::DIM
+        ));
+        assert!(!attrs.intersects(
+            CellAttrs::DOUBLE_UNDERLINE
+                | CellAttrs::CURLY_UNDERLINE
+                | CellAttrs::DOTTED_UNDERLINE
+                | CellAttrs::DASHED_UNDERLINE
+        ));
+
+        term.process(b"\x1b[1;1;1;1;22;24;25;27;28$r");
+        let attrs = term.grid().cell(0, 0).unwrap().attrs;
+        assert_eq!(attrs, CellAttrs::DIM | CellAttrs::RAPID_BLINK);
+
+        term.process(b"\x1b[1;1;1;1;0;8$t");
+        let reversed = term.grid().cell(0, 0).unwrap().attrs;
+        assert!(reversed.contains(
+            CellAttrs::DIM
+                | CellAttrs::RAPID_BLINK
+                | CellAttrs::BOLD
+                | CellAttrs::UNDERLINE
+                | CellAttrs::BLINK
+                | CellAttrs::INVERSE
+                | CellAttrs::HIDDEN
+        ));
+        term.process(b"\x1b[1;1;1;1;1;1;4;4;5;5;7;7;8;8$t");
+        assert_eq!(term.grid().cell(0, 0).unwrap().attrs, reversed);
+
+        // Empty/unknown parameter lists and malformed subparameters are true
+        // no-ops. Exact DECRARA materializes untouched cells without changing
+        // colors, protection, hyperlinks, cursor state, or wide-cell flags.
+        term.process(b"\x1b[1;1;1;1$t\x1b[1;1;1;1;99$t\x1b[1:2;1;1;1;1$r");
+        let retained = term.grid().cell(0, 0).unwrap();
+        assert_eq!(retained.attrs, reversed);
+        assert_eq!(retained.content, original.content);
+        assert_eq!(retained.fg_spec, ColorSpec::Indexed(1));
+        assert_eq!(retained.bg_spec, ColorSpec::Indexed(4));
+        assert_eq!(retained.hyperlink_id, original.hyperlink_id);
+        assert!(
+            retained
+                .flags
+                .contains(CellFlags::PROTECTED | CellFlags::HYPERLINK)
+        );
+        term.process(b"\x1b[2*x\x1b[2;2;2;2;7$t");
+        let blank = term.grid().cell(1, 1).unwrap();
+        assert_eq!(blank.content.char(), Some(' '));
+        assert!(blank.attrs.contains(CellAttrs::INVERSE));
+        assert_eq!(blank.fg_spec, ColorSpec::Default);
+        assert_eq!(blank.bg_spec, ColorSpec::Default);
+        assert_eq!(
+            (term.grid().cursor().row, term.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+        assert_eq!(term.grid().cursor().wrap_pending, cursor.wrap_pending);
+
+        let mut wide = Terminal::new(4, 1);
+        wide.process("界".as_bytes());
+        wide.process(b"\x1b[2*x\x1b[1;2;1;2;7$r");
+        assert!(wide.grid().cell(0, 0).unwrap().is_wide_char());
+        assert!(wide.grid().cell(0, 1).unwrap().is_wide_char_spacer());
+    }
+
+    #[test]
+    fn rectangular_checksum_is_policy_gated_bounded_and_vt420_compatible() {
+        let mut term = Terminal::new(5, 2);
+        term.process(b"A B");
+        let cursor = term.grid().cursor();
+
+        // A child cannot scrape visible cells until the embedding application
+        // explicitly enables reports.
+        term.process(b"\x1b[7;99;1;1;1;3*y");
+        assert!(term.drain_events().is_empty());
+        assert!(!term.screen_checksum_reporting());
+
+        term.set_screen_checksum_reporting(true);
+        term.process(b"\x1b[7;99;1;1;1;3*y");
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP7!~FF7D\x1b\\".to_vec())]
+        );
+
+        // Reversed rectangles produce a zero report. Excess and subparameter
+        // forms are malformed and cannot accidentally trigger a reply.
+        term.process(b"\x1b[8;1;2;2;1;1*y\x1b[1;1;1;1;1;1;1*y\x1b[1:2;1*y");
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP8!~0000\x1b\\".to_vec())]
+        );
+        assert_eq!(
+            (term.grid().cursor().row, term.grid().cursor().col),
+            (cursor.row, cursor.col)
+        );
+        assert_eq!(term.grid().cursor().wrap_pending, cursor.wrap_pending);
+
+        // The host policy is not terminal state and survives both resets.
+        term.process(b"\x1b[!p\x1bc\x1b[9;1;1;1;1;1*y");
+        assert!(term.screen_checksum_reporting());
+        assert_eq!(
+            term.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP9!~0000\x1b\\".to_vec())]
+        );
+    }
+
+    #[test]
+    fn kitty_file_policy_defaults_off_and_survives_terminal_resets() {
+        let mut term = Terminal::new(5, 2);
+        assert!(!term.kitty_file_transmission());
+        term.set_kitty_file_transmission(true);
+        term.process(b"\x1b[!p\x1bc");
+        assert!(term.kitty_file_transmission());
+        term.set_kitty_file_transmission(false);
+        assert!(!term.kitty_file_transmission());
+    }
+
+    #[test]
+    fn rectangular_checksum_reports_legacy_attributes_origin_and_dec_graphics() {
+        let mut attributes = Terminal::new(3, 1);
+        attributes.set_screen_checksum_reporting(true);
+        attributes.process(b"\x1b[1\"q\x1b[1;2;3;4:2;5;6;7;8;9;38;2;1;2;3;48;5;4mA");
+        attributes.process(b"\x1b[4;1;1;1;1;1*y");
+        assert_eq!(
+            attributes.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP4!~FEC3\x1b\\".to_vec())]
+        );
+
+        // Never-drawn cells are skipped. The first drawn space is included,
+        // while later ordinary spaces are omitted like DEC/xterm defaults.
+        let mut blanks = Terminal::new(4, 1);
+        blanks.set_screen_checksum_reporting(true);
+        blanks.process(b" A B\x1b[5;1;1;1;1;4*y");
+        assert_eq!(
+            blanks.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP5!~FF5D\x1b\\".to_vec())]
+        );
+
+        let mut origin = Terminal::new(4, 3);
+        origin.set_screen_checksum_reporting(true);
+        origin.process(b"ABCD\r\nEFGH\r\nIJKL");
+        origin.process(b"\x1b[2;3r\x1b[?69h\x1b[2;4s\x1b[?6h\x1b[6;0;1;1;1;1*y");
+        assert_eq!(
+            origin.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP6!~FFBA\x1b\\".to_vec())]
+        );
+
+        let mut graphics = Terminal::new(2, 1);
+        graphics.set_screen_checksum_reporting(true);
+        graphics.process(b"\x1b(0q_\x1b[10;1;1;1;1;1*y\x1b[11;1;1;2;1;2*y");
+        assert_eq!(
+            graphics.grid().cell(0, 0).unwrap().content.char(),
+            Some('─')
+        );
+        assert_eq!(
+            graphics.grid().cell(0, 1).unwrap().content.char(),
+            Some(' ')
+        );
+        assert_eq!(
+            graphics.drain_events(),
+            vec![
+                TerminalEvent::PtyWrite(b"\x1bP10!~FF8F\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1bP11!~FFA1\x1b\\".to_vec()),
+            ]
+        );
+
+        let mut uk = Terminal::new(1, 1);
+        uk.set_screen_checksum_reporting(true);
+        uk.process(b"\x1b(A#\x1b[12;1;1;1;1;1*y");
+        assert_eq!(uk.grid().cell(0, 0).unwrap().content.char(), Some('£'));
+        assert_eq!(
+            uk.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP12!~FFDD\x1b\\".to_vec())]
+        );
+
+        let mut repeated = Terminal::new(2, 1);
+        repeated.set_screen_checksum_reporting(true);
+        repeated.process(b"\x1b(0q\x1b(B\x1b[b\x1b[13;1;1;2;1;2*y");
+        assert_eq!(
+            repeated.grid().cell(0, 1).unwrap().content.char(),
+            Some('─')
+        );
+        assert_eq!(
+            repeated.drain_events(),
+            vec![TerminalEvent::PtyWrite(b"\x1bP13!~FF8F\x1b\\".to_vec())]
+        );
+    }
+
+    #[test]
+    fn decsed_modes_are_bounded_and_reject_malformed_requests() {
+        let mut term = Terminal::new(4, 3);
+        term.process(b"\x1b[1\"qA\x1b[0\"qa\r\n\x1b[1\"qB\x1b[0\"qb\r\n\x1b[1\"qC\x1b[0\"qc");
+
+        // Mode 0 starts at the cursor, preserving both protected cells and
+        // erasable text before the cursor.
+        term.process(b"\x1b[2;2H\x1b[?0J");
+        assert_eq!(term.rows_text(0, 2), "Aa\nB\nC");
+
+        // Restore erasable suffixes, then mode 1 erases through the cursor.
+        term.process(b"\x1b[2;2Ha\x1b[3;2Hb\x1b[2;2H\x1b[?1J");
+        assert_eq!(term.rows_text(0, 2), "A\nB\nCb");
+
+        // Plural and subparameter private requests are malformed and must not
+        // accidentally fall through to ordinary ED. Singular mode 2 then
+        // erases every erasable cell while retaining protected letters.
+        term.process(b"\x1b[?1;2J\x1b[?2:0J");
+        assert_eq!(term.rows_text(0, 2), "A\nB\nCb");
+        term.process(b"\x1b[?2J");
+        assert_eq!(term.rows_text(0, 2), "A\nB\nC");
+    }
+
+    #[test]
+    fn shell_regions_follow_scrollback_and_retire_live_text_after_eviction() {
+        let mut term = Terminal::new(16, 3);
+        term.process(
+            b"\x1b]133;A\x07\x1b]133;B\x07echo stable\r\n\x1b]133;C\x07stable\r\n\x1b]133;D;0\x07",
+        );
+        let id = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region(0)
+            .unwrap()
+            .id;
+        term.process(b"one\r\ntwo\r\n");
+
+        let region = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region_by_id(id)
+            .unwrap();
+        assert_eq!(region.prompt_row, -2);
+        assert_eq!(region.output_row, Some(-1));
+        assert_eq!(
+            term.rows_text(region.command_row.unwrap(), region.command_row.unwrap()),
+            "echo stable"
+        );
+
+        term.set_scrollback_limits(1, 1024 * 1024);
+        let evicted = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region_by_id(id)
+            .unwrap();
+        assert!(!evicted.content_available);
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .command_at(evicted.prompt_row)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn shell_region_boundaries_follow_column_reflow() {
+        let mut term = Terminal::new(12, 4);
+        term.process(
+            b"\x1b]133;A\x07\x1b]133;B\x07echo 12345678\r\n\x1b]133;C\x07result value\r\n\x1b]133;D;0\x07",
+        );
+        term.process(b"later one\r\nlater two\r\n");
+        let before = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region(0)
+            .unwrap()
+            .clone();
+        assert!(before.prompt_row < 0);
+        let command_before = term.rows_text(
+            before.command_row.unwrap(),
+            before.output_row.unwrap().saturating_sub(1),
+        );
+        let output_before = term.rows_text(
+            before.output_row.unwrap(),
+            before.finish_row.unwrap().saturating_sub(1),
+        );
+
+        term.resize(6, 7);
+
+        let after = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region_by_id(before.id)
+            .unwrap();
+        let command_after = term.rows_text(
+            after.command_row.unwrap(),
+            after.output_row.unwrap().saturating_sub(1),
+        );
+        let output_after = term.rows_text(
+            after.output_row.unwrap(),
+            after.finish_row.unwrap().saturating_sub(1),
+        );
+        let compact = |text: &str| text.split_whitespace().collect::<String>();
+        assert_eq!(compact(&command_after), compact(&command_before));
+        assert_eq!(compact(&output_after), compact(&output_before));
+        assert_eq!(
+            term.shell_integration()
+                .prompt_tracker
+                .command_at(after.output_row.unwrap())
+                .unwrap()
+                .id,
+            before.id
+        );
+    }
+
+    #[test]
+    fn prompt_navigation_walks_history_and_survives_reflow_without_stale_rows() {
+        let mut term = Terminal::new(14, 4);
+        for index in 0..5 {
+            term.process(b"\x1b]133;A\x07\x1b]133;B\x07");
+            term.process(format!("echo {index}\r\n").as_bytes());
+            term.process(b"\x1b]133;C\x07output\r\n\x1b]133;D;0\x07");
+        }
+        term.process(b"\x1b]133;A\x07");
+
+        let cursor_row = i32::try_from(term.grid().cursor().row).unwrap();
+        let prompts = term
+            .shell_integration()
+            .prompt_tracker
+            .all_prompts()
+            .collect::<Vec<_>>();
+        let backwards = prompts
+            .iter()
+            .copied()
+            .filter(|row| *row < cursor_row)
+            .rev()
+            .collect::<Vec<_>>();
+        assert!(backwards.len() >= 4);
+        assert!(backwards.iter().any(|row| *row < 0));
+
+        for expected in &backwards {
+            assert_eq!(term.previous_prompt(), Some(*expected));
+            assert_eq!(
+                term.grid().scroll_offset(),
+                usize::try_from(expected.saturating_neg()).unwrap_or(0)
+            );
+        }
+        assert_eq!(term.previous_prompt(), None);
+
+        for expected in prompts
+            .iter()
+            .copied()
+            .filter(|row| *row > *backwards.last().unwrap())
+        {
+            assert_eq!(term.next_prompt(), Some(expected));
+        }
+        assert_eq!(term.next_prompt(), None);
+
+        // Direct scrolling invalidates the navigation cursor. Starting again
+        // from the live viewport must select the newest prior prompt, not
+        // continue from an invisible stale selection.
+        let newest_previous = backwards[0];
+        assert_eq!(term.previous_prompt(), Some(newest_previous));
+        let reflow_target = term.previous_prompt().unwrap();
+        assert!(reflow_target < 0);
+        let target_region_id = term
+            .shell_integration()
+            .prompt_tracker
+            .command_at(reflow_target)
+            .unwrap()
+            .id;
+        term.grid_mut().set_scroll_offset(0);
+        assert_eq!(term.previous_prompt(), Some(newest_previous));
+        assert_eq!(term.previous_prompt(), Some(reflow_target));
+
+        term.resize(7, 6);
+        let remapped_target = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region_by_id(target_region_id)
+            .unwrap()
+            .prompt_row;
+        let expected_older = term
+            .shell_integration()
+            .prompt_tracker
+            .previous_prompt(remapped_target);
+        assert_eq!(term.previous_prompt(), expected_older);
+
+        term.set_scrollback_limits(0, 0);
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .all_prompts()
+                .all(|row| row >= 0)
+        );
+        assert!(term.previous_prompt().is_none_or(|row| row >= 0));
+
+        term.process(b"\x1b[?1049h");
+        assert_eq!(term.previous_prompt(), None);
+        assert_eq!(term.next_prompt(), None);
+    }
+
+    #[test]
+    fn selected_prompt_stays_visible_during_output_until_the_user_scrolls() {
+        let mut term = Terminal::new(14, 4);
+        for index in 0..3 {
+            term.process(b"\x1b]133;A\x07\x1b]133;B\x07");
+            term.process(format!("echo {index}\r\n").as_bytes());
+            term.process(b"\x1b]133;C\x07output\r\n\x1b]133;D;0\x07");
+        }
+        term.process(b"\x1b]133;A\x07");
+
+        let selected = term.previous_prompt().unwrap();
+        assert!(selected >= 0);
+        let selected_id = term
+            .shell_integration()
+            .prompt_tracker
+            .command_at(selected)
+            .unwrap()
+            .id;
+        assert_eq!(term.grid().scroll_offset(), 0);
+
+        term.process(b"more\r\nmore\r\n");
+        let moved = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region_by_id(selected_id)
+            .unwrap()
+            .prompt_row;
+        assert!(moved < 0);
+        assert_eq!(
+            term.grid().scroll_offset(),
+            usize::try_from(moved.saturating_neg()).unwrap()
+        );
+
+        // A direct scroll is an explicit change of navigation origin. Later
+        // PTY output must not pull the user back to the old selected prompt.
+        term.grid_mut().set_scroll_offset(0);
+        term.process(b"new-output\r\n");
+        assert_eq!(term.grid().scroll_offset(), 0);
+    }
+
+    #[test]
+    fn destructive_screen_lifecycle_retires_only_erased_shell_content() {
+        let mut term = Terminal::new(16, 4);
+        term.process(
+            b"\x1b]133;A\x07\x1b]133;B\x07echo old\r\n\x1b]133;C\x07old\r\n\x1b]133;D;0\x07",
+        );
+        term.process(b"one\r\ntwo\r\nthree\r\nfour\r\n");
+        let historical = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region(0)
+            .unwrap()
+            .clone();
+        assert!(historical.finish_row.unwrap() < 0);
+
+        term.process(b"\x1b]133;A\x07\x1b]133;B\x07echo active\x1b]133;C\x07");
+        let active_id = term
+            .shell_integration()
+            .prompt_tracker
+            .active_region()
+            .unwrap()
+            .id;
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .active_region()
+                .unwrap()
+                .prompt_row
+                >= 0
+        );
+
+        term.process(b"\x1b[2J");
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .completed_region_by_id(historical.id)
+                .unwrap()
+                .content_available
+        );
+        assert!(
+            !term
+                .shell_integration()
+                .prompt_tracker
+                .active_region()
+                .unwrap()
+                .content_available
+        );
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .all_prompts()
+                .all(|row| row < 0)
+        );
+
+        // Completion identity survives the erase and is still emitted once;
+        // only its authority to resolve erased terminal text is retired.
+        term.process(b"\x1b]133;D;1\x07");
+        let active_completion = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region_by_id(active_id)
+            .unwrap();
+        assert!(!active_completion.content_available);
+        assert_eq!(active_completion.exit_code, Some(1));
+
+        term.clear_scrollback();
+        assert_eq!(term.grid().scrollback_len(), 0);
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .all_prompts()
+                .all(|row| row >= 0)
+        );
+        assert!(
+            !term
+                .shell_integration()
+                .prompt_tracker
+                .completed_region_by_id(historical.id)
+                .unwrap()
+                .content_available
+        );
+    }
+
+    #[test]
+    fn ris_preserves_valid_historical_marks_but_retires_the_erased_viewport() {
+        let mut term = Terminal::new(16, 4);
+        term.process(
+            b"\x1b]133;A\x07\x1b]133;B\x07echo old\r\n\x1b]133;C\x07old\r\n\x1b]133;D;0\x07",
+        );
+        term.process(b"one\r\ntwo\r\nthree\r\nfour\r\n");
+        let historical = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region(0)
+            .unwrap()
+            .clone();
+        assert!(historical.finish_row.unwrap() < 0);
+
+        term.process(b"\x1b]133;A\x07\x1b]133;B\x07echo visible\x1b]133;C\x07\x1b]133;D;0\x07");
+        let visible = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region(1)
+            .unwrap()
+            .clone();
+        assert!(visible.prompt_row >= 0);
+        let oldest_offset = term.grid().scrollback_len();
+        term.grid_mut().set_scroll_offset(oldest_offset);
+
+        term.process(b"\x1bc");
+        assert_eq!(term.grid().scroll_offset(), 0);
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .completed_region_by_id(historical.id)
+                .unwrap()
+                .content_available
+        );
+        assert!(
+            !term
+                .shell_integration()
+                .prompt_tracker
+                .completed_region_by_id(visible.id)
+                .unwrap()
+                .content_available
+        );
+        assert!(
+            term.shell_integration()
+                .prompt_tracker
+                .all_prompts()
+                .all(|row| row < 0)
+        );
+    }
+
+    #[test]
+    fn alternate_screen_cannot_publish_primary_shell_marks() {
+        let mut term = Terminal::new(16, 4);
+        term.process(b"\x1b]133;A\x07");
+        let prompts_before = term
+            .shell_integration()
+            .prompt_tracker
+            .all_prompts()
+            .collect::<Vec<_>>();
+        let regions_before = term.shell_integration().prompt_tracker.completed_count();
+
+        term.process(b"\x1b[?1049h");
+        term.process(b"\x1b]133;A\x07\x1b]133;B\x07untrusted\x1b]133;C\x07\x1b]133;D;9\x07");
+        term.process(b"\x1b[3J\x1b[?1049l");
+
+        assert_eq!(
+            term.shell_integration()
+                .prompt_tracker
+                .all_prompts()
+                .collect::<Vec<_>>(),
+            prompts_before
+        );
+        assert_eq!(
+            term.shell_integration().prompt_tracker.completed_count(),
+            regions_before
+        );
+    }
+
+    #[test]
+    fn fragmented_osc_133_lifecycle_is_strict_and_streaming_safe() {
+        let mut term = Terminal::new(16, 4);
+        let valid =
+            b"\x1b]133;A\x07\x1b]133;B\x07echo split\r\n\x1b]133;C\x07out\r\n\x1b]133;D;255\x07";
+        for byte in valid {
+            term.process(std::slice::from_ref(byte));
+        }
+        let first = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region(0)
+            .unwrap();
+        assert_eq!(first.exit_code, Some(255));
+
+        // Prompt-only and out-of-order cycles must not add completed regions.
+        let malformed =
+            b"\x1b]133;A\x07\x1b]133;B\x07\x1b]133;D;0\x07\x1b]133;C\x07\x1b]133;D;0\x07";
+        for split in malformed.chunks(2) {
+            term.process(split);
+        }
+        assert_eq!(term.shell_integration().prompt_tracker.completed_count(), 1);
+
+        term.process(
+            b"\x1b]133;A\x07\x1b]133;B\x07echo recover\r\n\x1b]133;C\x07out\r\n\x1b]133;D;256\x07",
+        );
+        let recovered = term
+            .shell_integration()
+            .prompt_tracker
+            .completed_region(1)
+            .unwrap();
+        assert_eq!(recovered.exit_code, None);
     }
 }

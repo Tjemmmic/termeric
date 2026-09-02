@@ -1,11 +1,175 @@
-//! Image rendering pipeline for Kitty Graphics Protocol
+//! Shared image rendering pipeline for terminal graphics protocols.
 //!
 //! Renders inline images using wgpu textures.
 
 use std::collections::HashMap;
-use termeric_core::{ImageId, StoredImage};
-use wgpu::util::DeviceExt;
+use termeric_core::{ImageId, PresentationImage, StoredImage};
 use wgpu::*;
+
+use super::buffer::{BufferStats, GrowableBuffer};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct PlacementGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub u_min: f32,
+    pub v_min: f32,
+    pub u_max: f32,
+    pub v_max: f32,
+}
+
+pub(super) fn placement_geometry(
+    placement: &termeric_core::ImagePlacement,
+    image: &StoredImage,
+    cell_width: f32,
+    cell_height: f32,
+    scroll_offset: usize,
+    viewport: Option<(f32, f32)>,
+) -> Option<PlacementGeometry> {
+    let source_x = placement.source_x.min(image.width);
+    let source_y = placement.source_y.min(image.height);
+    let source_width = placement
+        .source_width
+        .unwrap_or(image.width.saturating_sub(source_x))
+        .min(image.width.saturating_sub(source_x));
+    let source_height = placement
+        .source_height
+        .unwrap_or(image.height.saturating_sub(source_y))
+        .min(image.height.saturating_sub(source_y));
+    if source_width == 0 || source_height == 0 || image.width == 0 || image.height == 0 {
+        return None;
+    }
+
+    let x = placement.col as f32 * cell_width + placement.x_offset as f32;
+    let visual_row = placement.row.saturating_add(scroll_offset as i64);
+    let y = visual_row as f32 * cell_height + placement.y_offset as f32;
+    let aspect = source_width as f32 / source_height as f32;
+    let (width, height) = match (placement.pixel_width, placement.pixel_height) {
+        (Some(width), Some(height)) => (width as f32, height as f32),
+        (Some(width), None) => {
+            let width = width as f32;
+            (width, width / aspect)
+        }
+        (None, Some(height)) => {
+            let height = height as f32;
+            (height * aspect, height)
+        }
+        (None, None) => match (placement.width, placement.height) {
+            (Some(cols), Some(rows)) => (cols as f32 * cell_width, rows as f32 * cell_height),
+            (Some(cols), None) => {
+                let width = cols as f32 * cell_width;
+                (width, width / aspect)
+            }
+            (None, Some(rows)) => {
+                let height = rows as f32 * cell_height;
+                (height * aspect, height)
+            }
+            (None, None) => (source_width as f32, source_height as f32),
+        },
+    };
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let (visible_x, visible_y, clipped_width, clipped_height) = viewport
+        .map(|(viewport_width, viewport_height)| {
+            let visible_x = x.max(0.0);
+            let visible_y = y.max(0.0);
+            let right = (x + width).min(viewport_width);
+            let bottom = (y + height).min(viewport_height);
+            (
+                visible_x,
+                visible_y,
+                (right - visible_x).max(0.0),
+                (bottom - visible_y).max(0.0),
+            )
+        })
+        .unwrap_or((x, y, width, height));
+    if clipped_width <= 0.0 || clipped_height <= 0.0 {
+        return None;
+    }
+    Some(PlacementGeometry {
+        x: visible_x,
+        y: visible_y,
+        width: clipped_width,
+        height: clipped_height,
+        u_min: (source_x as f32 + source_width as f32 * (visible_x - x) / width)
+            / image.width as f32,
+        v_min: (source_y as f32 + source_height as f32 * (visible_y - y) / height)
+            / image.height as f32,
+        u_max: (source_x as f32 + source_width as f32 * ((visible_x - x) + clipped_width) / width)
+            / image.width as f32,
+        v_max: (source_y as f32
+            + source_height as f32 * ((visible_y - y) + clipped_height) / height)
+            / image.height as f32,
+    })
+}
+
+pub(super) fn presentation_geometry(
+    presentation: &PresentationImage,
+    cell_width: f32,
+    cell_height: f32,
+    scroll_offset: usize,
+    viewport: Option<(f32, f32)>,
+) -> Option<PlacementGeometry> {
+    let (pixel_rect, source_uv) = match (presentation.pixel_rect, presentation.source_uv) {
+        (Some(pixel_rect), Some(source_uv)) => (pixel_rect, source_uv),
+        (None, None) => {
+            return placement_geometry(
+                &presentation.placement,
+                &presentation.image,
+                cell_width,
+                cell_height,
+                scroll_offset,
+                viewport,
+            );
+        }
+        _ => return None,
+    };
+    let placement = &presentation.placement;
+    let x = placement.col as f32 * cell_width + pixel_rect[0];
+    let visual_row = placement.row.saturating_add(scroll_offset as i64);
+    let y = visual_row as f32 * cell_height + pixel_rect[1];
+    let width = pixel_rect[2];
+    let height = pixel_rect[3];
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let (visible_x, visible_y, clipped_width, clipped_height) = viewport
+        .map(|(viewport_width, viewport_height)| {
+            let visible_x = x.max(0.0);
+            let visible_y = y.max(0.0);
+            let right = (x + width).min(viewport_width);
+            let bottom = (y + height).min(viewport_height);
+            (
+                visible_x,
+                visible_y,
+                (right - visible_x).max(0.0),
+                (bottom - visible_y).max(0.0),
+            )
+        })
+        .unwrap_or((x, y, width, height));
+    if clipped_width <= 0.0 || clipped_height <= 0.0 {
+        return None;
+    }
+    let u_span = source_uv[2] - source_uv[0];
+    let v_span = source_uv[3] - source_uv[1];
+    Some(PlacementGeometry {
+        x: visible_x,
+        y: visible_y,
+        width: clipped_width,
+        height: clipped_height,
+        u_min: source_uv[0] + u_span * (visible_x - x) / width,
+        v_min: source_uv[1] + v_span * (visible_y - y) / height,
+        u_max: source_uv[0] + u_span * ((visible_x - x) + clipped_width) / width,
+        v_max: source_uv[1] + v_span * ((visible_y - y) + clipped_height) / height,
+    })
+}
+
+/// Image IDs are terminal-local, so the GPU cache key must include the owning
+/// grid identity when multiple terminals are visible in one tab.
+pub(super) type ImageKey = (usize, ImageId);
 
 /// Vertex for image rendering
 #[repr(C)]
@@ -15,6 +179,8 @@ pub struct ImageVertex {
     pub position: [f32; 2],
     /// Texture coordinates (u, v)
     pub tex_coords: [f32; 2],
+    /// Per-placement alpha multiplier.
+    pub opacity: f32,
 }
 
 /// A GPU texture for an image
@@ -24,8 +190,7 @@ struct GpuImage {
     #[allow(dead_code)]
     view: TextureView,
     bind_group: BindGroup,
-    width: u32,
-    height: u32,
+    revision: u64,
 }
 
 /// Image rendering pipeline
@@ -35,19 +200,27 @@ pub struct ImagePipeline {
     uniform_bind_group: BindGroup,
     texture_bind_group_layout: BindGroupLayout,
     sampler: Sampler,
-    images: HashMap<ImageId, GpuImage>,
-    vertex_buffer: Option<Buffer>,
-    index_buffer: Option<Buffer>,
+    images: HashMap<ImageKey, GpuImage>,
+    vertex_buffer: GrowableBuffer,
+    index_buffer: GrowableBuffer,
     instances: Vec<ImageInstance>,
+    vertices: Vec<ImageVertex>,
+    indices: Vec<u16>,
 }
 
 /// Instance of an image to render
 struct ImageInstance {
-    image_id: ImageId,
+    image_key: ImageKey,
     x: f32,
     y: f32,
     width: f32,
     height: f32,
+    u_min: f32,
+    v_min: f32,
+    u_max: f32,
+    v_max: f32,
+    z_index: i32,
+    opacity: f32,
 }
 
 impl ImagePipeline {
@@ -133,7 +306,7 @@ impl ImagePipeline {
                 buffers: &[VertexBufferLayout {
                     array_stride: std::mem::size_of::<ImageVertex>() as BufferAddress,
                     step_mode: VertexStepMode::Vertex,
-                    attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                    attributes: &vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32],
                 }],
                 compilation_options: Default::default(),
             },
@@ -174,9 +347,11 @@ impl ImagePipeline {
             texture_bind_group_layout,
             sampler,
             images: HashMap::new(),
-            vertex_buffer: None,
-            index_buffer: None,
+            vertex_buffer: GrowableBuffer::new("Image Vertex Buffer", BufferUsages::VERTEX),
+            index_buffer: GrowableBuffer::new("Image Index Buffer", BufferUsages::INDEX),
             instances: Vec::new(),
+            vertices: Vec::new(),
+            indices: Vec::new(),
         })
     }
 
@@ -192,9 +367,19 @@ impl ImagePipeline {
     }
 
     /// Upload an image to the GPU
-    pub fn upload_image(&mut self, device: &Device, queue: &Queue, image: &StoredImage) {
-        if self.images.contains_key(&image.id) {
-            return; // Already uploaded
+    pub fn upload_image(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        key: ImageKey,
+        image: &StoredImage,
+    ) {
+        if self
+            .images
+            .get(&key)
+            .is_some_and(|existing| existing.revision == image.revision)
+        {
+            return;
         }
 
         let texture = device.create_texture(&TextureDescriptor {
@@ -250,36 +435,58 @@ impl ImagePipeline {
         });
 
         self.images.insert(
-            image.id,
+            key,
             GpuImage {
                 texture,
                 view,
                 bind_group,
-                width: image.width,
-                height: image.height,
+                revision: image.revision,
             },
         );
     }
 
     /// Queue an image for rendering
-    pub fn push_image(&mut self, image_id: ImageId, x: f32, y: f32, width: f32, height: f32) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_image(
+        &mut self,
+        image_key: ImageKey,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        u_min: f32,
+        v_min: f32,
+        u_max: f32,
+        v_max: f32,
+        opacity: f32,
+        z_index: i32,
+    ) {
         self.instances.push(ImageInstance {
-            image_id,
+            image_key,
             x,
             y,
             width,
             height,
+            u_min,
+            v_min,
+            u_max,
+            v_max,
+            opacity: opacity.clamp(0.0, 1.0),
+            z_index,
         });
     }
 
     /// Upload vertex data for rendering
-    pub fn upload(&mut self, device: &Device, _queue: &Queue) {
+    pub fn upload(&mut self, device: &Device, queue: &Queue) {
         if self.instances.is_empty() {
             return;
         }
 
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
+        self.instances
+            .sort_by_key(|instance| (instance.z_index, instance.image_key.1.0));
+
+        self.vertices.clear();
+        self.indices.clear();
 
         for instance in &self.instances {
             let x = instance.x;
@@ -287,88 +494,95 @@ impl ImagePipeline {
             let w = instance.width;
             let h = instance.height;
 
-            let base_idx = vertices.len() as u16;
+            let Ok(base_idx) = u16::try_from(self.vertices.len()) else {
+                log::warn!("Too many image placements for the u16 index buffer");
+                break;
+            };
 
             // Four corners
-            vertices.push(ImageVertex {
+            self.vertices.push(ImageVertex {
                 position: [x, y],
-                tex_coords: [0.0, 0.0],
+                tex_coords: [instance.u_min, instance.v_min],
+                opacity: instance.opacity,
             });
-            vertices.push(ImageVertex {
+            self.vertices.push(ImageVertex {
                 position: [x + w, y],
-                tex_coords: [1.0, 0.0],
+                tex_coords: [instance.u_max, instance.v_min],
+                opacity: instance.opacity,
             });
-            vertices.push(ImageVertex {
+            self.vertices.push(ImageVertex {
                 position: [x + w, y + h],
-                tex_coords: [1.0, 1.0],
+                tex_coords: [instance.u_max, instance.v_max],
+                opacity: instance.opacity,
             });
-            vertices.push(ImageVertex {
+            self.vertices.push(ImageVertex {
                 position: [x, y + h],
-                tex_coords: [0.0, 1.0],
+                tex_coords: [instance.u_min, instance.v_max],
+                opacity: instance.opacity,
             });
 
             // Two triangles
-            indices.push(base_idx);
-            indices.push(base_idx + 1);
-            indices.push(base_idx + 2);
-            indices.push(base_idx);
-            indices.push(base_idx + 2);
-            indices.push(base_idx + 3);
+            self.indices.push(base_idx);
+            self.indices.push(base_idx + 1);
+            self.indices.push(base_idx + 2);
+            self.indices.push(base_idx);
+            self.indices.push(base_idx + 2);
+            self.indices.push(base_idx + 3);
         }
 
-        self.vertex_buffer = Some(device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Image Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: BufferUsages::VERTEX,
-        }));
+        self.vertex_buffer
+            .upload(device, queue, bytemuck::cast_slice(&self.vertices));
+        self.index_buffer
+            .upload(device, queue, bytemuck::cast_slice(&self.indices));
+    }
 
-        self.index_buffer = Some(device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Image Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: BufferUsages::INDEX,
-        }));
+    pub(super) fn buffer_stats(&self) -> (BufferStats, BufferStats) {
+        (self.vertex_buffer.stats(), self.index_buffer.stats())
     }
 
     /// Remove an image from the GPU
-    pub fn remove_image(&mut self, id: ImageId) {
-        self.images.remove(&id);
-    }
-
-    /// Check if an image is loaded
-    pub fn has_image(&self, id: ImageId) -> bool {
-        self.images.contains_key(&id)
-    }
-
-    /// Get the pixel dimensions of a loaded image, or `None` if not uploaded.
-    pub fn image_dimensions(&self, id: ImageId) -> Option<(u32, u32)> {
-        self.images.get(&id).map(|img| (img.width, img.height))
+    pub fn remove_image(&mut self, key: ImageKey) {
+        self.images.remove(&key);
     }
 
     /// Remove images that are no longer referenced by any active placement.
     ///
     /// `active_ids` is the set of image IDs that are still in use.
-    pub fn gc_images(&mut self, active_ids: &[ImageId]) {
-        let stale: Vec<ImageId> = self
+    pub fn gc_images(&mut self, active_keys: &[ImageKey]) {
+        let stale: Vec<ImageKey> = self
             .images
             .keys()
-            .filter(|id| !active_ids.contains(id))
+            .filter(|key| !active_keys.contains(key))
             .copied()
             .collect();
-        for id in stale {
-            self.remove_image(id);
+        for key in stale {
+            self.remove_image(key);
         }
     }
 
-    /// Draw all queued images
-    pub fn draw<'a>(&'a self, render_pass: &mut RenderPass<'a>) {
+    /// Draw images below terminal text (negative z-index).
+    pub fn draw_below_text<'a>(&'a self, render_pass: &mut RenderPass<'a>) {
+        self.draw_matching(render_pass, |z_index| z_index < 0);
+    }
+
+    /// Draw images above terminal text (zero or positive z-index).
+    pub fn draw_above_text<'a>(&'a self, render_pass: &mut RenderPass<'a>) {
+        self.draw_matching(render_pass, |z_index| z_index >= 0);
+    }
+
+    fn draw_matching<'a>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        predicate: impl Fn(i32) -> bool,
+    ) {
         if self.instances.is_empty() {
             return;
         }
 
-        let Some(vertex_buffer) = &self.vertex_buffer else {
+        let Some(vertex_buffer) = self.vertex_buffer.buffer() else {
             return;
         };
-        let Some(index_buffer) = &self.index_buffer else {
+        let Some(index_buffer) = self.index_buffer.buffer() else {
             return;
         };
 
@@ -379,11 +593,192 @@ impl ImagePipeline {
 
         let mut index_offset = 0u32;
         for instance in &self.instances {
-            if let Some(gpu_image) = self.images.get(&instance.image_id) {
+            if predicate(instance.z_index)
+                && let Some(gpu_image) = self.images.get(&instance.image_key)
+            {
                 render_pass.set_bind_group(1, &gpu_image.bind_group, &[]);
                 render_pass.draw_indexed(index_offset..index_offset + 6, 0, 0..1);
             }
             index_offset += 6;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_destination_aspect_offsets_and_viewport_clipping_share_one_geometry_path() {
+        let image = StoredImage {
+            id: ImageId(1),
+            width: 100,
+            height: 50,
+            data: Vec::new().into(),
+            revision: 1,
+        };
+        let placement = termeric_core::ImagePlacement {
+            image_id: image.id,
+            placement_id: Some(2),
+            col: 2,
+            row: 1,
+            alternate_screen: false,
+            source_x: 10,
+            source_y: 5,
+            source_width: Some(40),
+            source_height: Some(20),
+            x_offset: 3,
+            y_offset: 4,
+            width: Some(4),
+            height: None,
+            pixel_width: None,
+            pixel_height: None,
+            z_index: -1,
+        };
+        let geometry =
+            placement_geometry(&placement, &image, 10.0, 20.0, 0, Some((50.0, 40.0))).unwrap();
+        assert_eq!((geometry.x, geometry.y), (23.0, 24.0));
+        assert_eq!((geometry.width, geometry.height), (27.0, 16.0));
+        assert!((geometry.u_min - 0.1).abs() < f32::EPSILON);
+        assert!((geometry.v_min - 0.1).abs() < f32::EPSILON);
+        assert!((geometry.u_max - 0.37).abs() < 0.0001);
+        assert!((geometry.v_max - 0.42).abs() < 0.0001);
+
+        let mut history_placement = placement.clone();
+        history_placement.row = -1;
+        history_placement.y_offset = 0;
+        let history = placement_geometry(
+            &history_placement,
+            &image,
+            10.0,
+            20.0,
+            1,
+            Some((100.0, 100.0)),
+        )
+        .unwrap();
+        assert_eq!(history.y, 0.0);
+    }
+
+    #[test]
+    fn unicode_placeholder_geometry_preserves_subcell_uvs_when_clipped() {
+        let image = StoredImage {
+            id: ImageId(9),
+            width: 20,
+            height: 20,
+            data: Vec::new().into(),
+            revision: 1,
+        };
+        let presentation = PresentationImage {
+            placement: termeric_core::ImagePlacement {
+                image_id: image.id,
+                placement_id: Some(3),
+                col: 1,
+                row: 0,
+                alternate_screen: false,
+                source_x: 0,
+                source_y: 0,
+                source_width: Some(20),
+                source_height: Some(20),
+                x_offset: 0,
+                y_offset: 0,
+                width: Some(1),
+                height: Some(1),
+                pixel_width: None,
+                pixel_height: None,
+                z_index: -1,
+            },
+            image,
+            pixel_rect: Some([2.0, 3.0, 8.0, 10.0]),
+            source_uv: Some([0.25, 0.1, 0.75, 0.9]),
+        };
+        let geometry =
+            presentation_geometry(&presentation, 10.0, 20.0, 0, Some((16.0, 8.0))).unwrap();
+        assert_eq!((geometry.x, geometry.y), (12.0, 3.0));
+        assert_eq!((geometry.width, geometry.height), (4.0, 5.0));
+        assert!((geometry.u_min - 0.25).abs() < f32::EPSILON);
+        assert!((geometry.v_min - 0.1).abs() < f32::EPSILON);
+        assert!((geometry.u_max - 0.5).abs() < f32::EPSILON);
+        assert!((geometry.v_max - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn negative_relative_geometry_clips_pixels_and_texture_at_the_left_edge() {
+        let image = StoredImage {
+            id: ImageId(10),
+            width: 20,
+            height: 10,
+            data: Vec::new().into(),
+            revision: 1,
+        };
+        let presentation = PresentationImage {
+            placement: termeric_core::ImagePlacement {
+                image_id: image.id,
+                placement_id: Some(4),
+                col: 0,
+                row: 1,
+                alternate_screen: false,
+                source_x: 0,
+                source_y: 0,
+                source_width: Some(20),
+                source_height: Some(10),
+                x_offset: 0,
+                y_offset: 0,
+                width: Some(2),
+                height: Some(1),
+                pixel_width: None,
+                pixel_height: None,
+                z_index: 0,
+            },
+            image,
+            pixel_rect: Some([-10.0, 0.0, 20.0, 10.0]),
+            source_uv: Some([0.0, 0.0, 1.0, 1.0]),
+        };
+        let geometry =
+            presentation_geometry(&presentation, 10.0, 10.0, 0, Some((80.0, 40.0))).unwrap();
+        assert_eq!((geometry.x, geometry.y), (0.0, 10.0));
+        assert_eq!((geometry.width, geometry.height), (10.0, 10.0));
+        assert!((geometry.u_min - 0.5).abs() < f32::EPSILON);
+        assert!((geometry.u_max - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn pixel_addressed_protocols_keep_exact_extent_and_pane_clipping() {
+        let image = StoredImage {
+            id: ImageId(9),
+            width: 4,
+            height: 6,
+            data: vec![0; 4 * 6 * 4].into(),
+            revision: 1,
+        };
+        let placement = termeric_core::ImagePlacement {
+            image_id: image.id,
+            placement_id: None,
+            col: 1,
+            row: 1,
+            alternate_screen: false,
+            source_x: 0,
+            source_y: 0,
+            source_width: Some(4),
+            source_height: Some(6),
+            x_offset: 0,
+            y_offset: 0,
+            width: Some(1),
+            height: Some(1),
+            pixel_width: Some(4),
+            pixel_height: Some(6),
+            z_index: 0,
+        };
+
+        let exact = placement_geometry(&placement, &image, 10.0, 20.0, 0, None).unwrap();
+        assert_eq!(
+            (exact.x, exact.y, exact.width, exact.height),
+            (10.0, 20.0, 4.0, 6.0)
+        );
+
+        let clipped =
+            placement_geometry(&placement, &image, 10.0, 20.0, 0, Some((12.0, 24.0))).unwrap();
+        assert_eq!((clipped.width, clipped.height), (2.0, 4.0));
+        assert!((clipped.u_max - 0.5).abs() < f32::EPSILON);
+        assert!((clipped.v_max - (4.0 / 6.0)).abs() < 0.0001);
     }
 }

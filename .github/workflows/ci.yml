@@ -5,6 +5,8 @@ on:
     branches: [main, improvements]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * 1"
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,10 +23,43 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev pkg-config libfontconfig1-dev libwayland-dev \
+          sudo apt-get install -y desktop-file-utils dpkg-dev pkg-config libfontconfig1-dev libwayland-dev \
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
-            libvulkan-dev mesa-vulkan-drivers
+            libvulkan-dev mesa-vulkan-drivers ncurses-bin vim less tmux zsh fish
       - run: cargo fmt --all -- --check
+      - name: Check local Markdown links
+        run: |
+          python3 scripts/check_markdown_links.py
+          python3 -m unittest scripts.test_check_markdown_links
+      - name: Check feature-support contract
+        run: |
+          python3 scripts/check_feature_support.py
+          python3 -m unittest scripts.test_check_feature_support
+      - name: Prove resource-ceiling regression detection
+        run: |
+          python3 -m unittest scripts.test_run_soak
+          python3 -m unittest scripts.test_ci_resource_contract
+      - name: Prove terminal fuzz-corpus encoding
+        run: python3 -m unittest scripts.test_materialize_fuzz_corpus
+      - name: Prove native GUI harness contracts
+        run: |
+          python3 -m unittest scripts.test_gui_acceptance
+          python3 -m unittest scripts.test_check_gui_visual
+      - name: Prove native evidence-record contracts
+        run: python3 -m unittest scripts.test_native_acceptance_record
+      - name: Prove integration evidence-record contracts
+        run: python3 -m unittest scripts.test_integration_acceptance_record
+      - name: Prove Debian package-checker contracts
+        run: python3 -m unittest scripts.test_check_debian_package
+      - name: Compile and exercise the terminfo contract
+        run: python3 scripts/check_terminfo.py --require-apps
+      - name: Exercise Bash, Zsh, and Fish shell integration
+        env:
+          TERMERIC_REQUIRE_SHELL_ACCEPTANCE: "1"
+        run: >-
+          cargo test -p termeric --locked
+          supported_shells_preserve_user_rc_and_emit_multiline_exit_regions
+          -- --nocapture
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - run: cargo build --workspace --locked
@@ -41,16 +76,37 @@ jobs:
           cargo deb -p termeric --locked
           package="$(find target/debian -maxdepth 1 -name 'termeric_*.deb' -print -quit)"
           test -n "$package"
-          dpkg-deb --contents "$package" | grep -q './usr/bin/termeric'
-          dpkg-deb --contents "$package" | grep -q './usr/share/doc/termeric/copyright'
-          dpkg-deb --contents "$package" | grep -q './usr/share/applications/termeric.desktop'
-          dpkg-deb --contents "$package" | grep -q './usr/share/icons/hicolor/1024x1024/apps/termeric.png'
-          test -n "$(dpkg-deb --field "$package" Depends)"
+          python3 scripts/check_debian_package.py "$package" \
+            --report target/debian/package-acceptance.json
+      - name: Exercise fresh-host Debian package lifecycle
+        run: |
+          package="$(find target/debian -maxdepth 1 -name 'termeric_*.deb' -print -quit)"
+          test -n "$package"
+          sudo TERMERIC_PACKAGE_LIFECYCLE_ACCEPT=1 python3 \
+            scripts/check_debian_package.py "$package" --system-lifecycle \
+            --report target/debian/package-acceptance.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: termeric-debian
-          path: target/debian/*.deb
+          path: |
+            target/debian/*.deb
+            target/debian/package-acceptance.json
           if-no-files-found: error
+
+  portable-build-and-unit-tests:
+    name: Build and unit test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --locked
 
   linux-gpu-smoke:
     runs-on: ubuntu-latest
@@ -66,8 +122,279 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
-            libvulkan-dev mesa-vulkan-drivers
+            libvulkan-dev mesa-vulkan-drivers fonts-noto-color-emoji
       - name: Submit headless WGPU render pass
         run: >-
           cargo test -p termeric --locked
           linux_headless_gpu_render_smoke_when_requested -- --nocapture
+
+  linux-native-gui-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native GUI and software-renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
+            libvulkan-dev mesa-vulkan-drivers xvfb xauth xdotool xclip \
+            imagemagick ffmpeg python3-pil fonts-dejavu-core fonts-noto-color-emoji vim less tmux \
+            libsixel-bin timg openbox sway weston wl-clipboard wtype util-linux
+      - name: Build the native application
+        run: cargo build -p termeric --locked
+      - name: Check native harness record analysis
+        run: |
+          python3 -m unittest scripts/test_gui_acceptance.py
+          python3 -m unittest scripts.test_run_native_gui_soak
+      - name: Run X11 interaction and visual scenarios
+        run: >-
+          env WGPU_BACKEND=gl EGL_PLATFORM=x11
+          xvfb-run -a -s "-screen 0 1280x800x24"
+          python3 scripts/gui_acceptance.py --backend x11
+          --start-window-manager
+          --force-surface-loss
+          --force-surface-outdated
+          --force-device-loss
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/x11
+          --skip-visual-checks
+      - name: Render and compare the deterministic GUI visual baseline
+        env:
+          TERMERIC_GPU_SMOKE: "1"
+          TERMERIC_GUI_VISUAL_OUTPUT: ${{ github.workspace }}/target/gui-acceptance/renderer.png
+          WGPU_BACKEND: vulkan
+        run: |
+          cargo test -p termeric --locked linux_headless_gpu_render_smoke_when_requested -- --nocapture
+          python3 scripts/check_gui_visual.py target/gui-acceptance/renderer.png
+      - name: Run Wayland launch/render/close scenario
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/gui_acceptance.py --backend wayland --start-weston
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/wayland
+      - name: Run Wayland fullscreen and sibling-isolation scenario
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/gui_acceptance.py --backend wayland --start-sway
+          --scenario fullscreen
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/wayland-fullscreen
+      - name: Run Wayland keyboard, pane, and clipboard scenario
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/gui_acceptance.py --backend wayland --start-sway
+          --scenario interaction
+          --force-surface-loss
+          --force-surface-outdated
+          --force-device-loss
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/wayland-interaction
+      - name: Run 30-second displayed Wayland resource soak
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/run_native_gui_soak.py
+          --duration-seconds 30
+          --binary target/debug/termeric
+          --artifacts target/gui-acceptance/native-soak
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-native-gui-acceptance
+          path: target/gui-acceptance/
+          if-no-files-found: error
+
+  linux-resource-soak-smoke:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software-renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
+            libvulkan-dev mesa-vulkan-drivers
+      - name: Run 30-second resource soak
+        run: >-
+          python3 scripts/run_soak.py --duration-seconds 30 --gpu-smoke
+          --output target/soak/ci-smoke.json
+          --log target/soak/ci-smoke.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-resource-soak-smoke
+          path: target/soak/
+          if-no-files-found: error
+
+  scheduled-linux-resource-soak:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software-renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
+            libvulkan-dev mesa-vulkan-drivers fonts-dejavu-core ncurses-bin sway wtype
+      - name: Run 10-minute resource soak
+        run: >-
+          python3 scripts/run_soak.py --duration-seconds 600 --gpu-smoke
+          --output target/soak/scheduled.json
+          --log target/soak/scheduled.log
+      - name: Build the native application
+        run: cargo build -p termeric --locked
+      - name: Run 10-minute displayed Wayland resource soak
+        run: >-
+          env WGPU_BACKEND=gl
+          python3 scripts/run_native_gui_soak.py
+          --duration-seconds 600
+          --binary target/debug/termeric
+          --artifacts target/soak/native-gui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scheduled-linux-resource-soak
+          path: target/soak/
+          if-no-files-found: error
+
+  performance-regression:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WGPU_BACKEND: vulkan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install software-renderer dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
+            libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
+            libvulkan-dev mesa-vulkan-drivers
+      - name: Prove budget regression detection
+        run: python3 -m unittest scripts.test_run_benchmarks
+      - name: Run release benchmark budgets
+        run: >-
+          python3 scripts/run_benchmarks.py --skip-displayed
+          --baseline benchmarks/baselines/2026-08-25-linux.json
+          --output target/benchmarks/ci.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-results
+          path: target/benchmarks/ci.json
+          if-no-files-found: error
+
+  parser-fuzz-smoke:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Materialize reviewed seed corpus
+        run: python3 scripts/materialize_fuzz_corpus.py /tmp/termeric-fuzz-corpus
+      - name: Run bounded parser fuzz smoke
+        run: >-
+          cargo fuzz run terminal_bytes /tmp/termeric-fuzz-corpus --
+          -dict=fuzz/terminal.dict -max_len=65536 -timeout=5 -max_total_time=30
+      - name: Run bounded domain-protocol fuzz smoke
+        run: >-
+          cargo fuzz run domain_protocol fuzz/corpus/domain_protocol --
+          -max_len=262144 -timeout=5 -max_total_time=20
+      - name: Run bounded graphics-protocol fuzz smoke
+        run: >-
+          cargo fuzz run graphics_protocols fuzz/corpus/graphics_protocols --
+          -max_len=1048576 -timeout=5 -max_total_time=30
+      - name: Minimize replayable failures
+        if: failure()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for artifact in fuzz/artifacts/terminal_bytes/*; do
+            cargo fuzz tmin terminal_bytes "$artifact" -- -max_total_time=60 || true
+          done
+          for artifact in fuzz/artifacts/domain_protocol/*; do
+            cargo fuzz tmin domain_protocol "$artifact" -- -max_total_time=60 || true
+          done
+          for artifact in fuzz/artifacts/graphics_protocols/*; do
+            cargo fuzz tmin graphics_protocols "$artifact" -- -max_total_time=60 || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: parser-fuzz-smoke-crashes
+          path: |
+            fuzz/artifacts/terminal_bytes/
+            fuzz/artifacts/domain_protocol/
+            fuzz/artifacts/graphics_protocols/
+          if-no-files-found: ignore
+
+  scheduled-parser-fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # The target budgets total seven minutes. Leave bounded room for a clean
+    # cargo-fuzz install/build and one 60-second crash-minimization pass.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Materialize reviewed seed corpus
+        run: python3 scripts/materialize_fuzz_corpus.py /tmp/termeric-fuzz-corpus
+      - name: Fuzz terminal parser and grid mutations
+        run: >-
+          cargo fuzz run terminal_bytes /tmp/termeric-fuzz-corpus --
+          -dict=fuzz/terminal.dict -max_len=65536 -timeout=5 -max_total_time=180
+      - name: Fuzz domain protocol serialization
+        run: >-
+          cargo fuzz run domain_protocol fuzz/corpus/domain_protocol --
+          -max_len=1048576 -timeout=5 -max_total_time=60
+      - name: Fuzz graphics protocol framing and decoders
+        run: >-
+          cargo fuzz run graphics_protocols fuzz/corpus/graphics_protocols --
+          -max_len=1048576 -timeout=5 -max_total_time=180
+      - name: Minimize replayable failures
+        if: failure()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for artifact in fuzz/artifacts/terminal_bytes/*; do
+            cargo fuzz tmin terminal_bytes "$artifact" -- -max_total_time=60 || true
+          done
+          for artifact in fuzz/artifacts/domain_protocol/*; do
+            cargo fuzz tmin domain_protocol "$artifact" -- -max_total_time=60 || true
+          done
+          for artifact in fuzz/artifacts/graphics_protocols/*; do
+            cargo fuzz tmin graphics_protocols "$artifact" -- -max_total_time=60 || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: scheduled-parser-fuzz-crashes
+          path: |
+            fuzz/artifacts/terminal_bytes/
+            fuzz/artifacts/domain_protocol/
+            fuzz/artifacts/graphics_protocols/
+          if-no-files-found: ignore

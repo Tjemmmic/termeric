@@ -14,6 +14,8 @@ use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 pub enum CommandSource {
     /// Built-in core command
     Core,
+    /// User-configured reusable terminal profiles.
+    LaunchProfiles,
     /// From a plugin
     Plugin(String),
 }
@@ -173,11 +175,19 @@ pub struct PaletteInfo {
     pub total_entries: usize,
     /// Animation progress (0.0 = closed, 1.0 = open)
     pub animation: f32,
+    /// Empty-input guidance for this palette's purpose.
+    pub placeholder: String,
+    /// Singular noun used by the result counter.
+    pub item_noun: String,
+    /// Label shown beside the Escape key hint.
+    pub escape_label: String,
 }
 
 /// Display info for a single palette entry
 #[derive(Debug, Clone)]
 pub struct PaletteEntryInfo {
+    /// Stable command identifier used for semantic actions and diagnostics.
+    pub id: String,
     pub title: String,
     pub category: String,
     pub shortcut: Option<String>,
@@ -204,6 +214,9 @@ pub struct CommandPalette {
     recently_used: Vec<String>,
     /// Maximum visible entries
     max_visible: usize,
+    placeholder: String,
+    item_noun: String,
+    escape_label: String,
 }
 
 impl CommandPalette {
@@ -218,7 +231,18 @@ impl CommandPalette {
             scroll_offset: 0,
             recently_used: Vec::new(),
             max_visible: 9,
+            placeholder: "Search commands...".into(),
+            item_noun: "command".into(),
+            escape_label: "Close".into(),
         }
+    }
+
+    /// Customize the shared palette chrome for another bounded selection
+    /// workflow while retaining identical keyboard/mouse geometry.
+    pub fn set_presentation(&mut self, placeholder: &str, item_noun: &str, escape_label: &str) {
+        self.placeholder = placeholder.to_string();
+        self.item_noun = item_noun.to_string();
+        self.escape_label = escape_label.to_string();
     }
 
     /// Register commands, replacing any existing ones from the same source
@@ -229,7 +253,7 @@ impl CommandPalette {
             self.registry.retain(|c| &c.source != source);
         }
         self.registry.extend(commands);
-        // Re-sort: Core first, then Plugin, alphabetically within
+        // Re-sort by visible category/title across core, profile, and plugin sources.
         self.registry.sort_by(|a, b| {
             a.category
                 .cmp(&b.category)
@@ -237,10 +261,38 @@ impl CommandPalette {
         });
     }
 
+    /// Replace the complete registry for a dedicated palette instance.
+    pub fn replace_all_commands(&mut self, mut commands: Vec<RegisteredCommand>) {
+        commands.sort_by(|a, b| {
+            a.category
+                .cmp(&b.category)
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        self.registry = commands;
+        if self.animation.is_active() {
+            self.update_entries();
+        }
+    }
+
     /// Replace every plugin-owned command while preserving core/theme entries.
     pub fn replace_plugin_commands(&mut self, commands: Vec<RegisteredCommand>) {
         self.registry
             .retain(|command| !matches!(command.source, CommandSource::Plugin(_)));
+        self.registry.extend(commands);
+        self.registry.sort_by(|a, b| {
+            a.category
+                .cmp(&b.category)
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        if self.animation.is_active() {
+            self.update_entries();
+        }
+    }
+
+    /// Replace every user-configured terminal-profile command.
+    pub fn replace_launch_profile_commands(&mut self, commands: Vec<RegisteredCommand>) {
+        self.registry
+            .retain(|command| command.source != CommandSource::LaunchProfiles);
         self.registry.extend(commands);
         self.registry.sort_by(|a, b| {
             a.category
@@ -271,9 +323,47 @@ impl CommandPalette {
         self.animation.is_active()
     }
 
+    /// Stable identifiers in the current registry. Accessibility uses this
+    /// borrowed view to retire removed command nodes without cloning the whole
+    /// registry into every renderer snapshot.
+    pub fn command_ids(&self) -> impl Iterator<Item = &str> {
+        self.registry.iter().map(|command| command.id.as_str())
+    }
+
+    /// Keep keyboard selection and wheel scrolling aligned with the rows the
+    /// shared layout can actually render.
+    pub fn set_max_visible(&mut self, max_visible: usize) {
+        self.max_visible = max_visible.max(1);
+        let max_offset = self.entries.len().saturating_sub(self.max_visible);
+        self.scroll_offset = self.scroll_offset.min(max_offset);
+        if self.selected < self.scroll_offset {
+            self.selected = self.scroll_offset;
+        } else if self.selected >= self.scroll_offset + self.max_visible {
+            self.selected = self.scroll_offset + self.max_visible - 1;
+        }
+    }
+
+    /// Replace search text from a semantic text-input action. The same bound
+    /// applies to dedicated palette workflows so accessibility cannot create
+    /// an unbounded or multiline filter that keyboard input could not express.
+    pub fn accessibility_set_input(&mut self, value: &str) -> bool {
+        if value.chars().count() > 256 || value.chars().any(char::is_control) {
+            return false;
+        }
+        self.input.replace(value);
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.update_entries();
+        true
+    }
+
     /// Update animation, returns true if still animating
     pub fn update_animation(&mut self) -> bool {
         self.animation.update()
+    }
+
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.animation.set_reduced_motion(reduced_motion);
     }
 
     /// Handle a character input
@@ -379,12 +469,39 @@ impl CommandPalette {
 
             match source {
                 CommandSource::Plugin(_) => PaletteResult::RunPluginCommand(id),
-                CommandSource::Core => PaletteResult::RunAction(id),
+                CommandSource::Core | CommandSource::LaunchProfiles => PaletteResult::RunAction(id),
             }
         } else {
             self.close();
             PaletteResult::Cancelled
         }
+    }
+
+    /// Select a currently filtered command by its stable identifier.
+    ///
+    /// This is used by accessibility actions, whose target must remain tied to
+    /// the announced command rather than to a row that can change after a
+    /// filter or registry update.
+    pub fn select_command(&mut self, id: &str) -> bool {
+        let Some(index) = self.entries.iter().position(|entry| {
+            self.registry
+                .get(entry.registry_index)
+                .is_some_and(|command| command.id == id)
+        }) else {
+            return false;
+        };
+        self.selected = index;
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        } else if self.selected >= self.scroll_offset + self.max_visible {
+            self.scroll_offset = self.selected + 1 - self.max_visible;
+        }
+        true
+    }
+
+    /// Execute a currently filtered command by stable identifier.
+    pub fn execute_command(&mut self, id: &str) -> Option<PaletteResult> {
+        self.select_command(id).then(|| self.execute())
     }
 
     /// Build display info for the renderer
@@ -397,6 +514,7 @@ impl CommandPalette {
             .map(|e| {
                 let cmd = &self.registry[e.registry_index];
                 PaletteEntryInfo {
+                    id: cmd.id.clone(),
                     title: cmd.title.clone(),
                     category: cmd.category.clone(),
                     shortcut: cmd.shortcut.clone(),
@@ -416,6 +534,9 @@ impl CommandPalette {
             total_count: self.registry.len(),
             total_entries: self.entries.len(),
             animation: self.animation.eased(),
+            placeholder: self.placeholder.clone(),
+            item_noun: self.item_noun.clone(),
+            escape_label: self.escape_label.clone(),
         }
     }
 
@@ -531,6 +652,42 @@ pub fn core_commands(
     let mut commands = vec![
         // ── Core ──
         RegisteredCommand {
+            id: "core.new-window".into(),
+            title: "New Window".into(),
+            category: "Core".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
+            id: "core.toggle-fullscreen".into(),
+            title: "Toggle Fullscreen".into(),
+            category: "Core".into(),
+            shortcut: shortcut(BindableAction::ToggleFullscreen),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
+            id: "core.attach-domain".into(),
+            title: "Attach Live Domain...".into(),
+            category: "Core".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
+            id: "core.cancel-file-upload".into(),
+            title: "Cancel Upload".into(),
+            category: "Core".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: true,
+        },
+        RegisteredCommand {
             id: "core.new-tab".into(),
             title: "New Tab".into(),
             category: "Core".into(),
@@ -572,6 +729,24 @@ pub fn core_commands(
             title: "Find".into(),
             category: "Search".into(),
             shortcut: shortcut(BindableAction::ToggleSearch),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
+            id: "core.copy-mode".into(),
+            title: "Keyboard Copy Mode".into(),
+            category: "Search".into(),
+            shortcut: shortcut(BindableAction::ToggleCopyMode),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
+            id: "core.quick-select".into(),
+            title: "Quick Select Links and Matches".into(),
+            category: "Search".into(),
+            shortcut: shortcut(BindableAction::QuickSelect),
             icon: None,
             source: CommandSource::Core,
             destructive: false,
@@ -622,11 +797,30 @@ pub fn core_commands(
             source: CommandSource::Core,
             destructive: true,
         },
-        // ── Sessions ──
+        // ── Workspaces ──
+        RegisteredCommand {
+            id: "core.save-workspace".into(),
+            title: "Save Workspace".into(),
+            category: "Workspaces".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        RegisteredCommand {
+            id: "core.workspace-manager".into(),
+            title: "Workspace Manager".into(),
+            category: "Workspaces".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+        // ── Legacy single-terminal snapshots ──
         RegisteredCommand {
             id: "core.save-session".into(),
-            title: "Save Open Tabs as Sessions".into(),
-            category: "Sessions".into(),
+            title: "Save Open Tabs as Legacy Snapshots".into(),
+            category: "Legacy Snapshots".into(),
             shortcut: None,
             icon: None,
             source: CommandSource::Core,
@@ -634,8 +828,8 @@ pub fn core_commands(
         },
         RegisteredCommand {
             id: "core.session-manager".into(),
-            title: "Session Manager".into(),
-            category: "Sessions".into(),
+            title: "Legacy Snapshot Manager".into(),
+            category: "Legacy Snapshots".into(),
             shortcut: None,
             icon: None,
             source: CommandSource::Core,
@@ -840,6 +1034,118 @@ pub fn core_commands(
             destructive: false,
         });
     }
+    for (id, title, action, destructive) in [
+        (
+            "core.rename-tab",
+            "Rename Tab",
+            BindableAction::RenameTab,
+            false,
+        ),
+        (
+            "core.move-tab-left",
+            "Move Tab Left",
+            BindableAction::MoveTabLeft,
+            false,
+        ),
+        (
+            "core.move-tab-right",
+            "Move Tab Right",
+            BindableAction::MoveTabRight,
+            false,
+        ),
+        (
+            "core.move-tab-next-window",
+            "Move Tab to Next Window",
+            BindableAction::MoveTabToNextWindow,
+            false,
+        ),
+        (
+            "core.toggle-pin-tab",
+            "Pin or Unpin Tab",
+            BindableAction::TogglePinTab,
+            false,
+        ),
+        (
+            "core.toggle-pane-zoom",
+            "Zoom Pane",
+            BindableAction::TogglePaneZoom,
+            false,
+        ),
+        (
+            "core.toggle-pane-read-only",
+            "Toggle Pane Read-only",
+            BindableAction::TogglePaneReadOnly,
+            false,
+        ),
+        (
+            "core.swap-pane-next",
+            "Swap Pane with Next",
+            BindableAction::SwapPaneNext,
+            false,
+        ),
+        (
+            "core.balance-panes",
+            "Balance Panes",
+            BindableAction::BalancePanes,
+            false,
+        ),
+        (
+            "core.move-pane-next-tab",
+            "Move Pane to Next Tab",
+            BindableAction::MovePaneToNextTab,
+            false,
+        ),
+        (
+            "core.move-pane-next-window",
+            "Move Pane to Next Window",
+            BindableAction::MovePaneToNextWindow,
+            false,
+        ),
+        (
+            "core.layout-columns",
+            "Layout: Columns",
+            BindableAction::LayoutColumns,
+            false,
+        ),
+        (
+            "core.layout-rows",
+            "Layout: Rows",
+            BindableAction::LayoutRows,
+            false,
+        ),
+        (
+            "core.layout-grid",
+            "Layout: Grid",
+            BindableAction::LayoutGrid,
+            false,
+        ),
+        (
+            "core.cycle-pane-cwd",
+            "Cycle New Pane Directory",
+            BindableAction::CyclePaneCwdMode,
+            false,
+        ),
+        (
+            "core.toggle-broadcast",
+            "Toggle Broadcast Input",
+            BindableAction::ToggleBroadcast,
+            true,
+        ),
+    ] {
+        commands.push(RegisteredCommand {
+            id: id.into(),
+            title: title.into(),
+            category: if id.contains("tab") && !id.contains("pane") {
+                "Tabs".into()
+            } else {
+                "Panes".into()
+            },
+            shortcut: shortcut(action),
+            icon: None,
+            source: CommandSource::Core,
+            destructive,
+        });
+    }
 
     // ── Theme commands — generated dynamically from all available themes ──
     for name in crate::config::theme::Theme::list_available() {
@@ -925,8 +1231,66 @@ mod tests {
         let commands = core_commands(false, &ShortcutRegistry::new());
         assert!(commands.iter().any(|command| {
             command.id == "core.save-session"
-                && command.title == "Save Open Tabs as Sessions"
-                && command.category == "Sessions"
+                && command.title == "Save Open Tabs as Legacy Snapshots"
+                && command.category == "Legacy Snapshots"
+        }));
+    }
+
+    #[test]
+    fn live_domain_picker_is_discoverable() {
+        let commands = core_commands(false, &ShortcutRegistry::new());
+        assert!(commands.iter().any(|command| {
+            command.id == "core.attach-domain" && command.title == "Attach Live Domain..."
+        }));
+    }
+
+    #[test]
+    fn active_file_upload_cancellation_is_discoverable() {
+        let commands = core_commands(false, &ShortcutRegistry::new());
+        assert!(commands.iter().any(|command| {
+            command.id == "core.cancel-file-upload"
+                && command.title == "Cancel Upload"
+                && command.destructive
+        }));
+    }
+
+    #[test]
+    fn complete_workspace_save_and_manager_are_discoverable() {
+        let commands = core_commands(false, &ShortcutRegistry::new());
+        assert!(commands.iter().any(|command| {
+            command.id == "core.save-workspace"
+                && command.title == "Save Workspace"
+                && command.category == "Workspaces"
+        }));
+        assert!(commands.iter().any(|command| {
+            command.id == "core.workspace-manager"
+                && command.title == "Workspace Manager"
+                && command.category == "Workspaces"
+        }));
+    }
+
+    #[test]
+    fn window_controls_are_discoverable() {
+        let commands = core_commands(false, &ShortcutRegistry::new());
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.id == "core.new-window" && command.title == "New Window")
+        );
+        assert!(commands.iter().any(|command| {
+            command.id == "core.toggle-fullscreen"
+                && command.title == "Toggle Fullscreen"
+                && command.shortcut.as_deref() == Some("F11")
+        }));
+        assert!(commands.iter().any(|command| {
+            command.id == "core.move-tab-next-window"
+                && command.title == "Move Tab to Next Window"
+                && command.category == "Tabs"
+        }));
+        assert!(commands.iter().any(|command| {
+            command.id == "core.move-pane-next-window"
+                && command.title == "Move Pane to Next Window"
+                && command.category == "Panes"
         }));
     }
 
@@ -938,16 +1302,33 @@ mod tests {
             .filter(|command| command.category == "Panes")
             .collect();
 
-        assert_eq!(pane_commands.len(), 7);
-        assert!(
+        assert_eq!(pane_commands.len(), 18);
+        assert_eq!(
             pane_commands
                 .iter()
-                .all(|command| command.shortcut.is_some())
+                .filter(|command| command.shortcut.is_some())
+                .count(),
+            7
         );
         assert!(pane_commands.iter().any(|command| {
             command.id == "core.split-vertical"
                 && command.shortcut.as_deref() == Some("Alt+Shift+Right")
         }));
+        for id in [
+            "core.toggle-pane-zoom",
+            "core.toggle-pane-read-only",
+            "core.swap-pane-next",
+            "core.balance-panes",
+            "core.move-pane-next-tab",
+            "core.move-pane-next-window",
+            "core.layout-columns",
+            "core.layout-rows",
+            "core.layout-grid",
+            "core.cycle-pane-cwd",
+            "core.toggle-broadcast",
+        ] {
+            assert!(pane_commands.iter().any(|command| command.id == id));
+        }
     }
 
     #[test]
@@ -1105,6 +1486,43 @@ mod tests {
                 .registry
                 .iter()
                 .any(|command| matches!(command.source, CommandSource::Plugin(_)))
+        );
+        assert!(
+            palette
+                .registry
+                .iter()
+                .any(|command| command.id == "core.new-tab")
+        );
+    }
+
+    #[test]
+    fn terminal_profile_commands_replace_cleanly_and_execute_as_app_actions() {
+        let mut palette = CommandPalette::new();
+        palette.register_commands(core_commands(true, &ShortcutRegistry::new()));
+        palette.replace_launch_profile_commands(vec![RegisteredCommand {
+            id: "profile.open.dev".into(),
+            title: "New Tab: dev".into(),
+            category: "Terminal Profiles".into(),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::LaunchProfiles,
+            destructive: false,
+        }]);
+        palette.open();
+        palette.handle_char('d');
+        palette.handle_char('e');
+        palette.handle_char('v');
+        assert!(matches!(
+            palette.execute(),
+            PaletteResult::RunAction(id) if id == "profile.open.dev"
+        ));
+
+        palette.replace_launch_profile_commands(Vec::new());
+        assert!(
+            !palette
+                .registry
+                .iter()
+                .any(|command| command.source == CommandSource::LaunchProfiles)
         );
         assert!(
             palette

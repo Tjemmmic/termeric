@@ -16,7 +16,7 @@ pub struct GitRepo {
 }
 
 /// Compact git status for display
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitStatus {
     /// Current HEAD branch name (None if detached)
     pub branch: Option<String>,
@@ -29,10 +29,14 @@ pub struct GitStatus {
 }
 
 impl GitRepo {
-    /// Open a git repository containing the given path.
-    /// Walks upward to find the repo root (supports being in subdirectories).
-    pub fn open(path: &Path) -> Option<Self> {
-        Repository::discover(path).ok().map(|repo| Self { repo })
+    /// Discover a repository containing the path, distinguishing a normal
+    /// non-repository directory from an actionable libgit2 failure.
+    pub(crate) fn discover(path: &Path) -> Result<Option<Self>, git2::Error> {
+        match Repository::discover(path) {
+            Ok(repo) => Ok(Some(Self { repo })),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Get the current branch name (None if HEAD is detached)
@@ -48,29 +52,28 @@ impl GitRepo {
     }
 
     /// Check if the working tree has any changes (modified, staged, or untracked)
-    pub fn is_dirty(&self) -> bool {
+    fn is_dirty(&self) -> Result<bool, git2::Error> {
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true)
             .recurse_untracked_dirs(false)
             .exclude_submodules(true);
 
-        match self.repo.statuses(Some(&mut opts)) {
-            Ok(statuses) => !statuses.is_empty(),
-            Err(_) => false,
-        }
+        self.repo
+            .statuses(Some(&mut opts))
+            .map(|statuses| !statuses.is_empty())
     }
 
     /// Get full git status (branch, dirty, ahead/behind)
-    pub fn status(&self) -> GitStatus {
+    pub(crate) fn status(&self) -> Result<GitStatus, git2::Error> {
         let branch = self.current_branch();
-        let dirty = self.is_dirty();
+        let dirty = self.is_dirty()?;
         let (ahead, behind) = self.ahead_behind().unwrap_or((0, 0));
-        GitStatus {
+        Ok(GitStatus {
             branch,
             dirty,
             ahead,
             behind,
-        }
+        })
     }
 
     /// Calculate ahead/behind counts relative to upstream
@@ -87,76 +90,67 @@ impl GitRepo {
     }
 
     /// List all local branch names
-    pub fn local_branches(&self) -> Vec<String> {
+    fn local_branches(&self) -> Result<Vec<String>, git2::Error> {
         let mut branches = Vec::new();
-        if let Ok(iter) = self.repo.branches(Some(git2::BranchType::Local)) {
-            for entry in iter.flatten() {
-                let (branch, _) = entry;
-                if let Ok(Some(name)) = branch.name() {
-                    branches.push(name.to_string());
-                }
+        for entry in self.repo.branches(Some(git2::BranchType::Local))? {
+            let (branch, _) = entry?;
+            if let Some(name) = branch.name()? {
+                branches.push(name.to_string());
             }
         }
         branches.sort();
-        branches
+        Ok(branches)
     }
 
     /// List all remote branch names (without "origin/" prefix)
-    pub fn remote_branches(&self) -> Vec<String> {
+    fn remote_branches(&self) -> Result<Vec<String>, git2::Error> {
         let mut branches = Vec::new();
-        if let Ok(iter) = self.repo.branches(Some(git2::BranchType::Remote)) {
-            for entry in iter.flatten() {
-                let (branch, _) = entry;
-                if let Ok(Some(name)) = branch.name() {
-                    // Strip "origin/" prefix for cleaner display
-                    let short = name.strip_prefix("origin/").unwrap_or(name);
-                    // Skip HEAD pointer
-                    if short != "HEAD" {
-                        branches.push(short.to_string());
-                    }
+        for entry in self.repo.branches(Some(git2::BranchType::Remote))? {
+            let (branch, _) = entry?;
+            if let Some(name) = branch.name()? {
+                // Strip "origin/" prefix for cleaner display
+                let short = name.strip_prefix("origin/").unwrap_or(name);
+                // Skip HEAD pointer
+                if short != "HEAD" {
+                    branches.push(short.to_string());
                 }
             }
         }
         branches.sort();
         branches.dedup();
-        branches
+        Ok(branches)
     }
 
-    /// Complete a partial branch name against local + remote branches.
-    /// Returns matches sorted by relevance (exact prefix first, then fuzzy).
-    pub fn complete_branch(&self, partial: &str) -> Vec<String> {
-        if partial.is_empty() {
-            // Show all local branches when no partial is typed
-            return self.local_branches();
-        }
-
-        let partial_lower = partial.to_lowercase();
-        let mut exact_prefix = Vec::new();
-        let mut contains = Vec::new();
-
-        // Collect all branch names (local first, then remote-only)
-        let local = self.local_branches();
-        let remote = self.remote_branches();
-
-        let mut all_names: Vec<String> = local.clone();
-        for r in &remote {
-            if !local.contains(r) {
-                all_names.push(r.clone());
+    pub(crate) fn branch_names(&self) -> Result<Vec<String>, git2::Error> {
+        let mut names = self.local_branches()?;
+        for remote in self.remote_branches()? {
+            if !names.contains(&remote) {
+                names.push(remote);
             }
         }
-
-        for name in &all_names {
-            let name_lower = name.to_lowercase();
-            if name_lower.starts_with(&partial_lower) {
-                exact_prefix.push(name.clone());
-            } else if name_lower.contains(&partial_lower) {
-                contains.push(name.clone());
-            }
-        }
-
-        exact_prefix.extend(contains);
-        exact_prefix
+        Ok(names)
     }
+}
+
+fn filter_branches(branches: &[String], partial: &str) -> Vec<String> {
+    if partial.is_empty() {
+        return branches.to_vec();
+    }
+
+    let partial_lower = partial.to_lowercase();
+    let mut exact_prefix = Vec::new();
+    let mut contains = Vec::new();
+    for name in branches {
+        let name_lower = name.to_lowercase();
+        if name_lower.starts_with(&partial_lower) {
+            exact_prefix.push(name.clone());
+        } else if name_lower.contains(&partial_lower) {
+            contains.push(name.clone());
+        }
+    }
+
+    exact_prefix.extend(contains);
+    exact_prefix
 }
 
 /// Git subcommands that accept branch names as arguments

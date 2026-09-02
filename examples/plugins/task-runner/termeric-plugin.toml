@@ -1,0 +1,22 @@
+api_version = 1
+id = "task-runner"
+name = "Task Runner"
+version = "1.0.0"
+description = "Example local profiles for common project tasks"
+permissions = ["process-spawn"]
+
+[[profiles]]
+id = "tests"
+name = "Project Tests"
+description = "Open a tab running the project's test command"
+program = "cargo"
+args = ["test"]
+working_directory = "active"
+
+[[profiles]]
+id = "shell"
+name = "Clean Shell"
+description = "Open a shell without selecting the active terminal directory"
+program = "sh"
+args = []
+working_directory = "inherit"

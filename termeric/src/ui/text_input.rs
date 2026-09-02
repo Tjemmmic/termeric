@@ -37,6 +37,12 @@ impl TextInput {
         self.cursor = 0;
     }
 
+    /// Replace the complete buffer and place the cursor at its end.
+    pub fn replace(&mut self, value: impl Into<String>) {
+        self.buffer = value.into();
+        self.cursor = self.buffer.len();
+    }
+
     /// Insert a character at the cursor position and advance cursor.
     pub fn insert_char(&mut self, c: char) {
         self.buffer.insert(self.cursor, c);
@@ -264,6 +270,14 @@ mod tests {
         input.clear();
         assert!(input.is_empty());
         assert_eq!(input.cursor(), 0);
+    }
+
+    #[test]
+    fn test_replace_moves_cursor_to_utf8_end() {
+        let mut input = TextInput::from("old");
+        input.replace("new 🫚");
+        assert_eq!(input.text(), "new 🫚");
+        assert_eq!(input.cursor(), "new 🫚".len());
     }
 
     #[test]

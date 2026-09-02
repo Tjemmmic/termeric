@@ -162,9 +162,6 @@ impl Renderer {
         let scrollbar_width = 4.0;
         let binding_right = panel_x + panel_width - padding - scrollbar_width - cell_width * 0.5;
 
-        // Track the selectable index for highlighting
-        let mut selectable_idx: usize = 0;
-
         for (row_idx, entry) in info.entries.iter().enumerate() {
             let entry_y = list_y + row_idx as f32 * row_height;
 
@@ -205,8 +202,7 @@ impl Renderer {
                 continue;
             }
 
-            let is_selected = selectable_idx == info.selected;
-            selectable_idx += 1;
+            let is_selected = entry.selected;
 
             // ── Row background ──
             if is_selected {
@@ -318,8 +314,8 @@ impl Renderer {
         }
 
         // ── Scrollbar ──
-        let selectable_total = info.total_entries;
-        if selectable_total > rows_that_fit && rows_that_fit > 0 {
+        let total_rows = info.total_rows;
+        if total_rows > rows_that_fit && rows_that_fit > 0 {
             let track_x = panel_x + panel_width - padding * 0.5 - scrollbar_width;
             let track_y = list_y;
             let track_h = list_height;
@@ -334,9 +330,9 @@ impl Renderer {
                 2.0,
             );
 
-            let thumb_frac = rows_that_fit as f32 / selectable_total as f32;
+            let thumb_frac = rows_that_fit as f32 / total_rows as f32;
             let thumb_h = (track_h * thumb_frac).max(cell_height);
-            let max_scroll = selectable_total.saturating_sub(rows_that_fit);
+            let max_scroll = total_rows.saturating_sub(rows_that_fit);
             let scroll_frac = if max_scroll > 0 {
                 info.scroll_offset as f32 / max_scroll as f32
             } else {

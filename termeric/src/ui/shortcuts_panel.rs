@@ -8,8 +8,12 @@ use super::text_input::TextInput;
 use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
 
 /// Result of a user action in the shortcuts panel
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShortcutsAction {
+    /// Begin recording a replacement chord for one stable action.
+    StartRecording(BindableAction),
+    /// Clear one action's current binding.
+    ClearShortcut(BindableAction),
     /// Set a keyboard shortcut binding
     SetShortcut {
         action: BindableAction,
@@ -47,6 +51,8 @@ pub struct ShortcutEntry {
     pub action: BindableAction,
     /// Whether this is a category header (non-selectable separator)
     pub is_header: bool,
+    /// Whether this action is the keyboard-selected entry.
+    pub selected: bool,
 }
 
 /// Display snapshot for the renderer
@@ -60,16 +66,30 @@ pub struct ShortcutsPanelInfo {
     pub cursor: usize,
     /// Visible entries (sliced for scroll)
     pub entries: Vec<ShortcutEntry>,
-    /// Index of selected entry (relative to visible slice)
-    pub selected: usize,
     /// Scroll offset
     pub scroll_offset: usize,
     /// Total filtered entry count (for scrollbar)
     pub total_entries: usize,
+    /// Total rendered rows, including category headings.
+    pub total_rows: usize,
     /// Whether we're in recording mode
     pub recording: bool,
     /// Conflict label after reassignment
     pub conflict_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShortcutsPanelRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl ShortcutsPanelRect {
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
 }
 
 /// Shared shortcuts-modal geometry for rendering and outside-click routing.
@@ -87,6 +107,8 @@ pub struct ShortcutsPanelLayout {
     pub separator_height: f32,
     pub list_height: f32,
     pub rows_that_fit: usize,
+    pub input: ShortcutsPanelRect,
+    pub list: ShortcutsPanelRect,
 }
 
 impl ShortcutsPanelLayout {
@@ -115,6 +137,9 @@ impl ShortcutsPanelLayout {
         let panel_height = header_area + list_height + footer_area;
         let panel_y = window_height * 0.10 + (1.0 - animation) * -30.0;
 
+        let title_y = panel_y + padding;
+        let input_y = title_y + cell_height * 1.4 + gap;
+        let list_y = input_y + input_height + gap + separator_height + gap;
         Self {
             panel_x,
             panel_y,
@@ -128,6 +153,18 @@ impl ShortcutsPanelLayout {
             separator_height,
             list_height,
             rows_that_fit,
+            input: ShortcutsPanelRect {
+                x: panel_x + padding,
+                y: input_y,
+                width: panel_width - padding * 2.0,
+                height: input_height,
+            },
+            list: ShortcutsPanelRect {
+                x: panel_x + padding * 0.5,
+                y: list_y,
+                width: panel_width - padding,
+                height: list_height,
+            },
         }
     }
 
@@ -136,6 +173,23 @@ impl ShortcutsPanelLayout {
             && x <= self.panel_x + self.panel_width
             && y >= self.panel_y
             && y <= self.panel_y + self.panel_height
+    }
+
+    pub fn row(&self, visible_index: usize) -> ShortcutsPanelRect {
+        ShortcutsPanelRect {
+            x: self.list.x,
+            y: self.list.y + visible_index as f32 * self.row_height,
+            width: self.list.width,
+            height: self.row_height,
+        }
+    }
+
+    pub fn row_at(&self, x: f32, y: f32, visible_rows: usize) -> Option<usize> {
+        if !self.list.contains(x, y) || self.row_height <= 0.0 {
+            return None;
+        }
+        let row = ((y - self.list.y) / self.row_height).floor() as usize;
+        (row < visible_rows).then_some(row)
     }
 }
 
@@ -226,6 +280,12 @@ impl ShortcutsPanel {
         false
     }
 
+    pub fn recording_deadline(&self, timeout: std::time::Duration) -> Option<std::time::Instant> {
+        self.recording
+            .then_some(self.recording_started?)
+            .map(|started| started + timeout)
+    }
+
     /// Toggle open/close
     pub fn toggle(&mut self) {
         if self.is_active() {
@@ -253,6 +313,10 @@ impl ShortcutsPanel {
     /// Update animation state. Returns true if still animating.
     pub fn update_animation(&mut self) -> bool {
         self.animation.update()
+    }
+
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.animation.set_reduced_motion(reduced_motion);
     }
 
     /// Build the filtered entries list from the registry
@@ -283,6 +347,7 @@ impl ShortcutsPanel {
                     binding: String::new(),
                     action,
                     is_header: true,
+                    selected: false,
                 });
                 last_category = Some(meta.category);
             }
@@ -297,6 +362,7 @@ impl ShortcutsPanel {
                 binding,
                 action,
                 is_header: false,
+                selected: false,
             });
         }
         entries
@@ -390,14 +456,14 @@ impl ShortcutsPanel {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                self.ensure_visible(selectable);
+                self.ensure_visible(&entries);
                 ShortcutsAction::None
             }
             ShortcutsKey::Down => {
                 if selectable > 0 && self.selected + 1 < selectable {
                     self.selected += 1;
                 }
-                self.ensure_visible(selectable);
+                self.ensure_visible(&entries);
                 ShortcutsAction::None
             }
             ShortcutsKey::Enter => {
@@ -405,10 +471,7 @@ impl ShortcutsPanel {
                 let idx = self.selectable_index(&entries, self.selected);
                 if let Some(entry) = entries.get(idx) {
                     if !entry.is_header {
-                        self.recording = true;
-                        self.recording_action = Some(entry.action);
-                        self.recording_started = Some(std::time::Instant::now());
-                        self.conflict_label = None;
+                        self.start_recording(entry.action);
                     }
                 }
                 ShortcutsAction::None
@@ -443,12 +506,83 @@ impl ShortcutsPanel {
     }
 
     /// Ensure the selected item is visible within the scroll window
-    fn ensure_visible(&mut self, _selectable: usize) {
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + self.max_visible {
-            self.scroll_offset = self.selected + 1 - self.max_visible;
+    fn ensure_visible(&mut self, entries: &[ShortcutEntry]) {
+        let selected_row = self.selectable_index(entries, self.selected);
+        if selected_row < self.scroll_offset {
+            self.scroll_offset = selected_row;
+        } else if selected_row >= self.scroll_offset + self.max_visible {
+            self.scroll_offset = selected_row + 1 - self.max_visible;
         }
+    }
+
+    pub fn set_max_visible(&mut self, max_visible: usize) {
+        self.max_visible = max_visible.max(1);
+    }
+
+    pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
+        if value.chars().count() > 128 || value.chars().any(char::is_control) {
+            return false;
+        }
+        self.filter.replace(value);
+        self.selected = 0;
+        self.scroll_offset = 0;
+        true
+    }
+
+    /// Enter recording mode for a stable action identity.
+    pub fn start_recording(&mut self, action: BindableAction) {
+        self.recording = true;
+        self.recording_action = Some(action);
+        self.recording_started = Some(std::time::Instant::now());
+        self.conflict_label = None;
+    }
+
+    pub fn select_action(&mut self, action: BindableAction, registry: &ShortcutRegistry) -> bool {
+        let entries = self.build_entries(registry);
+        let mut selectable = 0;
+        for entry in &entries {
+            if entry.is_header {
+                continue;
+            }
+            if entry.action == action {
+                self.selected = selectable;
+                self.ensure_visible(&entries);
+                return true;
+            }
+            selectable += 1;
+        }
+        false
+    }
+
+    /// Resolve a pointer click through the same stable action path as keyboard
+    /// and accessibility activation.
+    pub fn handle_click(
+        &mut self,
+        x: f32,
+        y: f32,
+        layout: &ShortcutsPanelLayout,
+        registry: &ShortcutRegistry,
+    ) -> ShortcutsAction {
+        let info = self.build_info(registry);
+        let Some(row) = layout.row_at(x, y, info.entries.len()) else {
+            return ShortcutsAction::None;
+        };
+        let Some(entry) = info.entries.get(row) else {
+            return ShortcutsAction::None;
+        };
+        if entry.is_header {
+            return ShortcutsAction::None;
+        }
+        self.select_action(entry.action, registry);
+        ShortcutsAction::StartRecording(entry.action)
+    }
+
+    /// Whether an action is still part of the current filtered result set.
+    pub fn is_visible_action(&self, action: BindableAction, registry: &ShortcutRegistry) -> bool {
+        self.build_info(registry)
+            .entries
+            .iter()
+            .any(|entry| !entry.is_header && entry.action == action)
     }
 
     /// Scroll up by n lines (for mouse wheel)
@@ -459,48 +593,32 @@ impl ShortcutsPanel {
     /// Scroll down by n lines (for mouse wheel)
     pub fn scroll_down(&mut self, n: usize, registry: &ShortcutRegistry) {
         let entries = self.build_entries(registry);
-        let selectable = self.selectable_count(&entries);
-        let max = selectable.saturating_sub(self.max_visible);
-        self.scroll_offset = (self.scroll_offset + n).min(max);
+        let max = entries.len().saturating_sub(self.max_visible);
+        self.scroll_offset = self.scroll_offset.saturating_add(n).min(max);
     }
 
     /// Build display info for the renderer
     pub fn build_info(&self, registry: &ShortcutRegistry) -> ShortcutsPanelInfo {
         let all_entries = self.build_entries(registry);
         let selectable = self.selectable_count(&all_entries);
-
-        // Build the visible slice: we need to map selectable indices to entry indices,
-        // including headers that fall within the visible range
-        let mut visible = Vec::new();
-        let mut selectable_idx = 0;
-        let visible_end = (self.scroll_offset + self.max_visible).min(selectable);
-
-        for entry in &all_entries {
-            if entry.is_header {
-                // Include header if the next selectable item after it is in visible range
-                // We do this by checking if we're in the visible selectable range
-                if selectable_idx >= self.scroll_offset && selectable_idx < visible_end {
-                    visible.push(entry.clone());
-                }
-            } else {
-                if selectable_idx >= self.scroll_offset && selectable_idx < visible_end {
-                    visible.push(entry.clone());
-                }
-                selectable_idx += 1;
-            }
+        let total_rows = all_entries.len();
+        let scroll_offset = self
+            .scroll_offset
+            .min(total_rows.saturating_sub(self.max_visible));
+        let visible_end = (scroll_offset + self.max_visible).min(total_rows);
+        let selected_row = self.selectable_index(&all_entries, self.selected);
+        let mut visible = all_entries[scroll_offset..visible_end].to_vec();
+        for (row, entry) in visible.iter_mut().enumerate() {
+            entry.selected = scroll_offset + row == selected_row;
         }
-
-        // Selected index relative to visible selectable items
-        let relative_selected = self.selected.saturating_sub(self.scroll_offset);
-
         ShortcutsPanelInfo {
             animation: self.animation.eased(),
             filter: self.filter.text().to_string(),
             cursor: self.filter.cursor(),
             entries: visible,
-            selected: relative_selected,
-            scroll_offset: self.scroll_offset,
+            scroll_offset,
             total_entries: selectable,
+            total_rows,
             recording: self.recording,
             conflict_label: self.conflict_label.clone(),
         }
@@ -622,5 +740,61 @@ mod tests {
         // Second escape closes
         panel.handle_key(ShortcutsKey::Escape, &registry);
         // close() was called but animation may still be visible
+    }
+
+    #[test]
+    fn pointer_rows_resolve_stable_actions_through_shared_geometry() {
+        let mut panel = ShortcutsPanel::new();
+        let registry = ShortcutRegistry::new();
+        panel.open();
+        panel.set_max_visible(4);
+        let info = panel.build_info(&registry);
+        let action_row = info
+            .entries
+            .iter()
+            .position(|entry| !entry.is_header)
+            .unwrap();
+        let expected = info.entries[action_row].action;
+        let layout =
+            ShortcutsPanelLayout::calculate(1200.0, 800.0, 10.0, 20.0, 1.0, info.entries.len());
+        let row = layout.row(action_row);
+        let action = panel.handle_click(
+            row.x + row.width / 2.0,
+            row.y + row.height / 2.0,
+            &layout,
+            &registry,
+        );
+        assert_eq!(action, ShortcutsAction::StartRecording(expected));
+        assert!(
+            panel
+                .build_info(&registry)
+                .entries
+                .iter()
+                .any(|entry| { !entry.is_header && entry.action == expected && entry.selected })
+        );
+    }
+
+    #[test]
+    fn scrolling_is_bounded_by_rendered_rows_including_headings() {
+        let mut panel = ShortcutsPanel::new();
+        let registry = ShortcutRegistry::new();
+        panel.open();
+        panel.set_max_visible(5);
+        panel.scroll_down(usize::MAX, &registry);
+        let info = panel.build_info(&registry);
+        assert_eq!(info.entries.len(), 5);
+        assert_eq!(info.scroll_offset, info.total_rows - 5);
+        assert!(info.scroll_offset + info.entries.len() <= info.total_rows);
+    }
+
+    #[test]
+    fn semantic_filter_replacement_is_utf8_aware_single_line_and_bounded() {
+        let mut panel = ShortcutsPanel::new();
+        assert!(panel.accessibility_set_filter("copy 🫚"));
+        assert_eq!(panel.filter.text(), "copy 🫚");
+        assert!(!panel.accessibility_set_filter("copy\npaste"));
+        assert_eq!(panel.filter.text(), "copy 🫚");
+        assert!(!panel.accessibility_set_filter(&"x".repeat(129)));
+        assert_eq!(panel.filter.text(), "copy 🫚");
     }
 }

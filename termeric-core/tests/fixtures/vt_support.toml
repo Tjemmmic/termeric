@@ -1,0 +1,624 @@
+manifest_version = 1
+baseline = "Termeric protocol support reconciled against the improvements working tree on 2026-08-27; release evidence still requires an immutable candidate commit"
+
+# Status describes the named layer, not the complete desktop product:
+# - supported: implemented and linked to repeatable evidence
+# - experimental: implemented behind an explicitly experimental contract
+# - partial: a documented subset is implemented
+# - parsed_only: state or syntax is recognized but the user path is disconnected
+# - unsupported: no implementation is claimed
+
+[[sequence]]
+id = "c0-printing-and-layout"
+family = "C0"
+syntax = "printable UTF-8, BS, HT, LF, VT, FF, CR"
+layer = "core"
+status = "supported"
+evidence = ["fixture:cursor-position", "fixture:unicode-graphemes", "test:src/ansi/processor.rs#test_newline", "test:src/term/mod.rs#unicode_clusters_use_terminal_width_and_one_leader", "test:src/term/mod.rs#cell_edits_and_reflow_never_orphan_wide_pairs"]
+notes = "Left-to-right extended grapheme clusters use the documented narrow ambiguous-width policy; bidi layout is outside this claim."
+
+[[sequence]]
+id = "c0-bell"
+family = "C0"
+syntax = "BEL"
+layer = "core"
+status = "supported"
+evidence = ["fixture:bell"]
+notes = "Emits TerminalEvent::Bell."
+
+[[sequence]]
+id = "c0-shift-in-out"
+family = "C0"
+syntax = "SO, SI"
+layer = "core"
+status = "supported"
+evidence = ["fixture:g0-g1-shifts", "test:src/term/mod.rs#g0_g1_shift_save_restore_alt_screen_and_ris_do_not_leak"]
+notes = "SO invokes the designated G1 set into GL and SI restores G0; state streams across parser chunks and participates in VT100 cursor save/restore."
+
+[[sequence]]
+id = "esc-indexing"
+family = "ESC"
+syntax = "IND, NEL, RI, HTS"
+layer = "core"
+status = "supported"
+evidence = ["test:src/term/mod.rs#test_cursor_movement", "test:src/term/mod.rs#tabulation_controls_preserve_custom_stops_across_resize_and_ris"]
+notes = "Core cursor/tab behavior only."
+
+[[sequence]]
+id = "esc-cursor-save-restore"
+family = "ESC"
+syntax = "DECSC, DECRC"
+layer = "core"
+status = "supported"
+evidence = ["fixture:dec-saved-cursor-state", "test:src/ansi/processor.rs#alternate_screen_restores_cursor_and_rendition_state", "test:src/term/mod.rs#dec_saved_cursor_restores_origin_delayed_wrap_and_screen_local_state", "test:src/term/mod.rs#g0_g1_shift_save_restore_alt_screen_and_ris_do_not_leak", "test:src/term/mod.rs#g2_g3_single_and_locking_shifts_are_one_shot_saved_and_resettable"]
+notes = "Cursor position, rendition, G0-G3/GL/GR charset state, pending SS2/SS3, DECOM, delayed wrap, and DECSCA protection are screen-local and repeatably restored. An unsaved DECRC uses the defined home/default state; DECAWM itself is not saved. CSI s/u and mode 1048 share this state contract."
+
+[[sequence]]
+id = "esc-reset"
+family = "ESC"
+syntax = "RIS"
+layer = "core"
+status = "supported"
+evidence = ["fixture:ris-reset", "test:src/term/mod.rs#g0_g1_shift_save_restore_alt_screen_and_ris_do_not_leak", "test:src/term/mod.rs#g2_g3_single_and_locking_shifts_are_one_shot_saved_and_resettable"]
+notes = "Resets core grid, modes, rendition, G0-G3/GL/GR charset state, pending single shift, scroll region, and tab stops."
+
+[[sequence]]
+id = "esc-character-sets"
+family = "ESC"
+syntax = "SCS G0-G3 designations for ASCII (B), UK (A), and DEC Special Graphics (0); SI/SO, SS2/SS3, LS2/LS3, LS1R/LS2R/LS3R"
+layer = "core"
+status = "supported"
+evidence = ["fixture:dec-special-graphics", "fixture:g0-g1-shifts", "fixture:presentation-state-roundtrip", "test:src/term/mod.rs#dec_special_graphics_maps_the_complete_vt100_repertoire", "test:src/term/mod.rs#g0_g1_shift_save_restore_alt_screen_and_ris_do_not_leak", "test:src/term/mod.rs#g2_g3_single_and_locking_shifts_are_one_shot_saved_and_resettable"]
+notes = "The three resident 94-character sets are terminal state and map GL bytes before grapheme storage. G2/G3 single and locking shifts are implemented. GR invocation is stored, saved, and reportable, but UTF-8 non-ASCII scalars are not remapped through GR. Optional ROM sets, 96-character sets, later NRC sets, and ISO-2022/UTF-8 mode-selection controls are not claimed."
+
+[[sequence]]
+id = "esc-keypad-mode"
+family = "ESC"
+syntax = "DECKPAM, DECKPNM"
+layer = "app"
+status = "supported"
+evidence = ["fixture:private-modes", "test:src/term/mod.rs#application_keyboard_modes_set_and_restore_through_the_parser", "test:tests/terminal_conformance.rs#real_full_screen_traces_request_application_keyboard_modes", "test:../termeric/src/input/keyboard.rs#application_keypad_uses_physical_identity_and_normal_mode_restores_text", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane"]
+notes = "The focused terminal mode drives physical-key-aware VT keypad encoding. The separate resource-3 claim covers xterm modifyKeypadKeys negotiation and mode-4 encoding."
+
+[[sequence]]
+id = "c1-control-framing"
+family = "C1/ESC"
+syntax = "8-bit IND, NEL, HTS, RI, SS2, SS3, DCS, DECID, CSI, ST, OSC, APC; S7C1T/S8C1T; GR-byte folding in control bodies"
+layer = "app"
+status = "supported"
+evidence = ["fixture:c1-control-framing", "fixture:c1-high-bit-control-bodies", "test:src/ansi/processor.rs#c1_input_is_utf8_safe_and_s7c1t_s8c1t_frame_every_core_reply", "test:../termeric/src/app/desktop_io.rs#app_mediated_osc_replies_use_the_origin_terminal_c1_mode"]
+notes = "Supported raw C1 introducers and single controls are equivalent to their 7-bit forms. GR bytes in ESC/CSI bodies and supported DCS/OSC/APC protocol fields are normalized to their 7-bit equivalents, including a high-bit final in ESC ST; UTF-8 user text in title, hyperlink, and notification OSC families is deliberately preserved. Valid UTF-8 continuation bytes in ground text are never reinterpreted as C1 controls. Input accepts both representations independently of S7C1T/S8C1T; the terminal-local transmission preference frames core CSI/DCS/APC replies and origin-addressed OSC clipboard/color replies, survives DECSTR, and resets to 7-bit on RIS. Unsupported C1 functions remain outside this claim."
+
+[[sequence]]
+id = "csi-dec-conformance-level"
+family = "CSI/DCS"
+syntax = "DECSCL (CSI 61-65 ; 0/1/2 \" p), DECRQSS \" p"
+layer = "core"
+status = "partial"
+evidence = ["fixture:dec-conformance-level", "test:src/term/mod.rs#decscl_soft_resets_and_reports_bounded_level_and_c1_state", "test:src/ansi/processor.rs#decrqss_reports_rendition_margins_and_cursor_style_and_recovers_from_cancel"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "Accepts DEC operating levels 1-5, applies DECSTR-compatible soft-reset semantics without erasing screen or scrollback, selects and reports 7/8-bit reply framing, ignores Pc at level 1, rejects invalid higher-level Pc atomically, and resets to the level-4/7-bit startup profile on RIS. The stored level is negotiation/reporting state: Termeric does not hide implemented modern controls or change DA/terminfo identity when a lower level is selected, so strict historical feature gating is not claimed."
+
+[[sequence]]
+id = "csi-cursor-movement"
+family = "CSI"
+syntax = "CUU, CUD, CUF/HPR, CUB, CNL, CPL, CHA/HPA, VPA/VPR, CUP, HVP"
+layer = "core"
+status = "supported"
+evidence = ["fixture:cursor-position", "fixture:classic-csi-editing-and-tabs", "test:src/ansi/processor.rs#test_cursor_movement", "test:src/term/mod.rs#tabulation_controls_preserve_custom_stops_across_resize_and_ris"]
+notes = "Cell-based cursor motion within the active grid."
+
+[[sequence]]
+id = "csi-erase"
+family = "CSI"
+syntax = "ED, EL"
+layer = "core"
+status = "supported"
+evidence = ["test:src/ansi/processor.rs#test_clear_screen", "test:src/term/mod.rs#erase_and_character_edits_honor_bce_without_moving_the_cursor"]
+notes = "ED 0/1/2 and EL 0/1/2 preserve cursor position and use the current background color. ED 2 preserves scrollback; xterm ED 3 clears only saved lines. Protected selective erase is tracked separately below."
+
+[[sequence]]
+id = "csi-selective-erase"
+family = "CSI"
+syntax = "DECSCA, DECSED, DECSEL"
+layer = "core"
+status = "supported"
+evidence = ["fixture:dec-selective-erase", "test:src/term/mod.rs#selective_erase_preserves_protected_unicode_and_cell_style", "test:src/term/mod.rs#decsed_modes_are_bounded_and_reject_malformed_requests", "test:src/grid/row.rs#ansi_export_preserves_dec_character_protection_without_leaking", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "DECSCA 0/1/2 marks subsequent cells erasable/protected independently from SGR. DECSED/DECSEL 0/1/2 erase only erasable cell content, retain each cell's visual/protection attributes, preserve the cursor, and treat wide pairs atomically. Protection survives DECSC/DECRC, reflow, compact history, ANSI export, RIS, and live-domain attachment."
+
+[[sequence]]
+id = "csi-edit-characters"
+family = "CSI"
+syntax = "ICH, DCH, ECH, REP"
+layer = "core"
+status = "supported"
+evidence = ["fixture:delete-characters", "fixture:insert-characters", "fixture:classic-csi-editing-and-tabs", "test:src/term/mod.rs#classic_csi_repetition_and_erasure_preserve_unicode_cells", "test:src/term/mod.rs#erase_and_character_edits_honor_bce_without_moving_the_cursor"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/25"
+notes = "ECH atomically clears any intersected wide pair without moving the cursor. REP remembers one bounded Unicode grapheme, repeats it with the current rendition, and resets on RIS; pathological graphemes above 1 KiB are deliberately not amplified."
+
+[[sequence]]
+id = "csi-tabulation"
+family = "CSI"
+syntax = "CHT, CBT, TBC 0/3, DECST8C"
+layer = "core"
+status = "supported"
+evidence = ["fixture:classic-csi-editing-and-tabs", "test:src/term/mod.rs#tabulation_controls_preserve_custom_stops_across_resize_and_ris"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/25"
+notes = "Forward/backward traversal honors customized stops, current/all clearing, and DEC default restoration. Resize preserves retained custom stops and installs defaults only in newly exposed columns; RIS restores columns 9, 17, and so on. Other ECMA-48 CTC operations are not claimed."
+
+[[sequence]]
+id = "csi-edit-lines"
+family = "CSI"
+syntax = "IL, DL"
+layer = "core"
+status = "supported"
+evidence = ["fixture:insert-delete-lines"]
+notes = "Operates within the active scroll region."
+
+[[sequence]]
+id = "csi-scroll"
+family = "CSI"
+syntax = "SU, SD, DECSTBM"
+layer = "core"
+status = "supported"
+evidence = ["fixture:scroll-region"]
+notes = "Top/bottom scroll-region state and movement are covered."
+
+[[sequence]]
+id = "csi-horizontal-margins"
+family = "CSI"
+syntax = "DECLRMM, DECSLRM, margin-aware IND/NEL/RI/SU/SD/IL/DL/ICH/DCH, DECRQM, DECRQSS s"
+layer = "core"
+status = "supported"
+evidence = ["fixture:left-right-margins", "test:src/term/mod.rs#declrmm_negotiates_queries_resets_and_disambiguates_csi_s", "test:src/term/mod.rs#horizontal_margins_constrain_dec_cursor_motion_origin_and_tabs", "test:src/term/mod.rs#margin_wrap_and_scroll_preserve_cells_outside_the_rectangle", "test:src/term/mod.rs#margin_character_and_line_edits_are_bounded_and_use_bce", "test:src/term/mod.rs#margin_index_reverse_index_and_explicit_scroll_share_the_rectangle", "test:src/term/mod.rs#images_scroll_only_when_fully_inside_horizontal_margins", "test:src/ansi/processor.rs#decrqss_reports_rendition_margins_and_cursor_style_and_recovers_from_cancel", "test:src/ansi/processor.rs#decrqm_reports_only_authoritative_standard_and_private_mode_state"]
+notes = "Mode 69 disambiguates CSI s from cursor save and resets horizontal margins on either transition. Valid margins are at least two columns, home the cursor, combine with DECSTBM/DECOM, bound wrapping, cursor/tab controls and editing/scrolling, preserve independent cells outside the rectangle, atomically clear a wide grapheme that straddles an edit boundary, avoid false whole-row reflow links, and move only fully enclosed inline-image placements. Erase controls remain page-wide as specified."
+
+[[sequence]]
+id = "csi-rectangular-area-operations"
+family = "CSI"
+syntax = "DECCRA, DECFRA, DECERA, DECSERA"
+layer = "core"
+status = "supported"
+evidence = ["fixture:rectangular-area-operations", "test:src/term/mod.rs#rectangular_fill_and_erase_apply_attributes_clipping_and_origin", "test:src/term/mod.rs#rectangular_selective_erase_retains_cell_attributes_and_wide_integrity", "test:src/term/mod.rs#rectangular_copy_is_overlap_safe_clipped_and_copies_complete_state", "test:src/term/mod.rs#rectangular_text_operations_share_image_placement_geometry", "test:src/graphics/mod.rs#rectangular_text_operations_crop_erase_and_copy_image_coverage"]
+notes = "The VT400 copy/fill/erase family accepts defaulted and clipped coordinates, obeys DECOM without otherwise being constrained by margins, leaves the cursor unchanged, and rejects malformed/reversed requests. DECCRA is overlap-safe and maps every page parameter to the sole page available in each Termeric screen buffer. DECFRA accepts the DEC GL/GR printable ranges and applies current SGR/DECSCA state. DECERA applies BCE regardless of protection; DECSERA retains visual/protection attributes and protected graphemes. All operations repair boundary-straddling wide graphemes atomically. Copy/fill/erase also copy, crop, or clear normalized static-image placement coverage at cell boundaries. Attribute changes and checksum reports are covered by adjacent claims."
+
+[[sequence]]
+id = "csi-rectangular-checksum"
+family = "CSI/DCS"
+syntax = "DECRQCRA, DECCKSR"
+layer = "app"
+status = "supported"
+evidence = ["fixture:rectangular-checksum-report", "test:src/term/mod.rs#rectangular_checksum_is_policy_gated_bounded_and_vt420_compatible", "test:src/term/mod.rs#rectangular_checksum_reports_legacy_attributes_origin_and_dec_graphics", "test:../termeric/src/config/mod.rs#terminal_data_security_defaults_are_conservative_and_bounded", "test:../termeric/src/tabs/mod.rs#screen_checksum_policy_updates_existing_and_future_tabs", "test:../termeric/src/panes/mod.rs#screen_checksum_policy_updates_existing_and_future_panes", "test:../termeric/src/domain/server.rs#domain_panes_inherit_the_server_checksum_policy"]
+notes = "The opt-in VT420 checksum request accepts defaulted and clipped DECOM-relative rectangles, normalizes every page parameter to the single active page, preserves cursor state, and returns an uppercase 16-bit DEC/xterm checksum in a DECCKSR DCS response. The base VT420 algorithm covers drawn-cell blank rules, original DEC Special Graphics and UK G-set bytes, and protected/invisible/underline/inverse/blink/bold attribute weights without adding VT525 color extensions. Invalid or reversed rectangles report zero; malformed sequences are ignored. Reports are disabled by default because repeated one-cell requests can scrape visible terminal contents. XTCHECKSUM extensions are not claimed."
+
+[[sequence]]
+id = "csi-attribute-change-areas"
+family = "CSI"
+syntax = "DECSACE, DECCARA, DECRARA, DECRQSS *x"
+layer = "core"
+status = "supported"
+evidence = ["fixture:attribute-change-areas", "test:src/term/mod.rs#attribute_change_extent_obeys_stream_rectangle_origin_and_reset_lifecycle", "test:src/term/mod.rs#attribute_change_and_reverse_apply_only_the_documented_rendition_subset", "test:src/ansi/processor.rs#decrqss_reports_rendition_margins_and_cursor_style_and_recovers_from_cancel"]
+notes = "DECSACE selects the default drawn-cell-only wrapped stream or an exact rectangle that materializes untouched cells as spaces. Both forms apply DECOM to their endpoints; stream wrapping then spans the full page width. DECCARA supports ordered set/reset operations for bold, single underline, blink, inverse, and xterm hidden text while preserving unrelated modern attributes and all cell content, colors, protection, hyperlink, and width state. DECRARA reverses that subset with repeated parameters cancelling. Cursor and delayed-wrap state remain unchanged. DECRQSS reports 1*x or 2*x; DECSTR preserves the selection and RIS resets it to stream."
+
+[[sequence]]
+id = "csi-soft-reset"
+family = "CSI"
+syntax = "DECSTR (CSI ! p)"
+layer = "core"
+status = "supported"
+evidence = ["fixture:dec-soft-reset", "test:src/term/mod.rs#decstr_resets_only_the_documented_session_state", "test:src/term/mod.rs#decstr_preserves_the_active_screen_and_rejects_malformed_forms"]
+notes = "Restores cursor visibility/style, IRM, DECOM, disabled DECLRMM, the xterm-compatible enabled DECAWM default, application cursor/keypad modes, both margin pairs, SGR, G0-G3/GL/GR and pending single-shift state, DECSCA, and the active screen's saved cursor. Active cursor position, primary/alternate selection, screen and scrollback contents, custom tabs, unrelated modern modes, and the inactive screen's saved cursor are preserved. Nonzero, plural, and subparameter forms are ignored."
+
+[[sequence]]
+id = "csi-sgr-colors"
+family = "CSI"
+syntax = "SGR 16/256/truecolor, semicolon and colon forms"
+layer = "core"
+status = "supported"
+evidence = ["test:src/ansi/processor.rs#semicolon_and_colon_extended_colors_are_consumed_atomically"]
+notes = "Parser/cell color state only; dynamic OSC colors are separate."
+
+[[sequence]]
+id = "csi-sgr-attributes"
+family = "CSI"
+syntax = "SGR bold/dim/italic/underline variants/slow+rapid blink/inverse/hidden/strike"
+layer = "render"
+status = "supported"
+evidence = [
+  "test:src/ansi/processor.rs#every_rendered_sgr_attribute_sets_and_resets_without_leaking",
+  "test:src/grid/row.rs#ansi_export_preserves_every_supported_sgr_attribute",
+  "test:../termeric/src/test_support.rs#linux_headless_gpu_render_smoke_when_requested",
+  "test:../termeric/src/app/tests.rs#real_pty_sgr_attributes_reach_the_terminal_grid_without_leaking",
+  "test:../termeric/src/app/tests.rs#representative_git_color_output_maps_to_rendered_sgr_state",
+]
+notes = "All represented attributes map through the resolved renderer style; visual font quality remains a manual release row."
+
+[[sequence]]
+id = "csi-dsr"
+family = "CSI"
+syntax = "DSR 5, CPR 6"
+layer = "core"
+status = "supported"
+evidence = ["fixture:device-status-reports"]
+notes = "Emits PtyWrite replies; pane delivery is tracked separately."
+
+[[sequence]]
+id = "csi-xtwinops-geometry-reports"
+family = "CSI"
+syntax = "XTWINOPS CSI 14 t, CSI 16 t, CSI 18 t"
+layer = "core"
+status = "supported"
+evidence = ["fixture:xtwinops-geometry-reports", "test:src/ansi/processor.rs#xtwinops_reports_exact_text_cell_and_character_geometry_only", "test:src/pty/mod.rs#kernel_winsize_preserves_nonzero_pixels_at_spawn_and_resize", "test:../termeric/src/tabs/mod.rs#tab_spawn_and_pixel_only_resize_reach_kernel_winsize"]
+notes = "Read-only reports return the terminal-local represented text-area pixels, rounded-up cell pixels used by graphics, and current rows/columns in the selected S7C1T/S8C1T framing. Malformed variants, outer-window/screen geometry, position/state/title reports, title stacks, and every window mutation are ignored. Legacy page/screen-size setting queries are covered separately by the DECRQSS claim."
+
+[[sequence]]
+id = "csi-presentation-state"
+family = "CSI/DCS"
+syntax = "DECRQPSR, DECCIR, DECTABSR, DECRSPS"
+layer = "core"
+status = "supported"
+evidence = ["fixture:presentation-state-roundtrip", "test:src/term/mod.rs#presentation_state_reports_are_byte_exact_bounded_and_strict", "test:src/term/mod.rs#presentation_state_restore_round_trips_and_rejects_atomically", "test:src/term/mod.rs#g2_g3_single_and_locking_shifts_are_one_shot_saved_and_resettable"]
+notes = "DECRQPSR 1/2 returns byte-exact cursor-information or tab-stop DCS data using the selected 7-bit/8-bit reply framing. Cursor state covers the sole active page, bounded coordinates, DEC write rendition/protection, delayed wrap, DECOM, G0-G3 designations, GL/GR, and pending SS2/SS3. Tab state is a bounded 1-based column list. DECRSPS accepts either framing, validates the complete payload before applying it, preserves unrelated modern rendition flags, and leaves state unchanged on malformed data. Only the three supported 94-character sets are accepted; 96-character-set state, multiple pages, and extended reports are outside this claim."
+
+[[sequence]]
+id = "csi-device-attributes"
+family = "CSI"
+syntax = "DA1, DA2"
+layer = "app"
+status = "supported"
+evidence = ["fixture:device-attributes", "test:src/ansi/handler.rs#device_attributes_are_byte_exact_and_reject_non_requests", "test:../termeric/src/tabs/mod.rs#inactive_tab_panes_poll_replies_and_tag_app_events_without_stealing_focus"]
+notes = "DA1 replies CSI ? 1 ; 2 ; 4 ; 8 c and DA2 replies CSI > 0 ; 1 ; 0 c; DECID aliases DA1, and every PtyWrite response returns through its exact terminal owner. Parameter 4 advertises only the bounded static Sixel profile and parameter 8 advertises bounded DECUDK support; no printer, ReGIS, or unrelated later DEC capability is advertised."
+
+[[sequence]]
+id = "csi-standard-modes"
+family = "CSI"
+syntax = "IRM, LNM"
+layer = "core"
+status = "supported"
+evidence = ["fixture:standard-modes", "test:src/ansi/processor.rs#decrqm_reports_only_authoritative_standard_and_private_mode_state"]
+notes = "Mode state and core write/newline effects are covered."
+
+[[sequence]]
+id = "csi-dec-layout-modes"
+family = "CSI"
+syntax = "DECOM, DECAWM, DECTCEM, DECLRMM"
+layer = "core"
+status = "supported"
+evidence = ["fixture:private-modes", "test:src/term/mod.rs#test_autowrap_sets_wrapped_flag", "test:src/ansi/processor.rs#decrqm_reports_only_authoritative_standard_and_private_mode_state"]
+notes = "DECOM applies to both vertical and horizontal margins, and DECAWM affects the active grid. DECLRMM is detailed in the horizontal-margin claim. DECTCEM is one authoritative terminal-wide visibility state across both screens and RIS restores a visible cursor."
+
+[[sequence]]
+id = "csi-cursor-blink-mode"
+family = "CSI"
+syntax = "ATT610 cursor blink mode (DECSET/DECRST 12)"
+layer = "render"
+status = "supported"
+evidence = ["test:src/ansi/processor.rs#decrqm_reports_only_authoritative_standard_and_private_mode_state", "test:../termeric/src/app/mod.rs#terminal_cursor_style_overrides_shape_and_blink_until_reset", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "An explicit set/reset overrides only cursor blinking, preserving the configured or DECSCUSR shape; a later DECSCUSR becomes the new authoritative shape/blink choice. The mode is terminal-wide, survives screen changes, is frozen by synchronized output, round-trips through live-domain attachment, and RIS returns control to user configuration."
+
+[[sequence]]
+id = "csi-mode-status"
+family = "CSI"
+syntax = "DECRQM/DECRPM for ANSI 4/20 and DEC 1/6/7/9/12/25/69/1000/1002/1003/1004/1005/1006/1007/2004/2026"
+layer = "core"
+status = "supported"
+evidence = ["test:src/ansi/processor.rs#decrqm_reports_only_authoritative_standard_and_private_mode_state"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "Singular scalar requests return exact set/reset state; unknown modes return status 0 and malformed plural/subparameter requests are ignored. Alternate-screen aliases, momentary save/restore operations, permanent-state reports, and modes outside the documented list are not claimed."
+
+[[sequence]]
+id = "csi-application-cursor-mode"
+family = "CSI"
+syntax = "DECCKM"
+layer = "app"
+status = "supported"
+evidence = ["fixture:private-modes", "test:src/term/mod.rs#application_keyboard_modes_set_and_restore_through_the_parser", "test:tests/terminal_conformance.rs#real_full_screen_traces_request_application_keyboard_modes", "test:../termeric/src/input/keyboard.rs#application_cursor_mode_changes_arrows_home_and_end_only_when_unmodified", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/app/tests.rs#real_bash_readline_accepts_normal_and_application_home_from_the_encoder"]
+notes = "The focused terminal mode selects CSI or SS3 for arrows/Home/End; modified keys use xterm parameters 2-8."
+
+[[sequence]]
+id = "csi-cursor-style"
+family = "CSI"
+syntax = "DECSCUSR (CSI Ps SP q)"
+layer = "render"
+status = "supported"
+evidence = ["test:src/ansi/processor.rs#decrqss_reports_rendition_margins_and_cursor_style_and_recovers_from_cancel", "test:src/term/mod.rs#synchronized_output_freezes_text_colors_and_images_at_the_mode_boundary", "test:../termeric/src/app/mod.rs#terminal_cursor_style_overrides_shape_and_blink_until_reset"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "Parameters 0-6 select blinking/steady block, underline, or beam cursors for the focused terminal. Invalid parameters are ignored; an explicit DEC mode 12 setting can subsequently override blink without changing shape. RIS restores the user's configured cursor, and synchronized output preserves its presentation boundary."
+
+[[sequence]]
+id = "csi-mouse-modes"
+family = "CSI"
+syntax = "DECSET 9/1000/1002/1003/1005/1006/1007"
+layer = "app"
+status = "supported"
+evidence = ["fixture:private-modes", "test:src/term/mod.rs#mouse_focus_paste_and_alternate_scroll_modes_parse_and_reset", "test:../termeric/src/input/terminal_protocol.rs#default_encoding_covers_press_release_wheel_and_modifiers", "test:../termeric/src/input/terminal_protocol.rs#tracking_modes_filter_motion_and_release", "test:../termeric/src/input/terminal_protocol.rs#sgr_encoding_is_unbounded_and_distinguishes_release", "test:../termeric/src/app/tests.rs#mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order"]
+notes = "The focused terminal receives byte-exact X10, VT200, button-event, any-event, UTF-8, or SGR reports; Shift bypasses reporting for native selection. DECSET 1007 converts alternate-screen vertical wheel steps to cursor keys."
+
+[[sequence]]
+id = "csi-focus-events"
+family = "CSI"
+syntax = "DECSET 1004"
+layer = "app"
+status = "supported"
+evidence = ["fixture:private-modes", "test:../termeric/src/input/terminal_protocol.rs#focus_paste_and_alternate_scroll_are_mode_gated", "test:../termeric/src/app/tests.rs#mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order"]
+notes = "CSI I/O is sent once per real native-window transition to the focused terminal that requested reports."
+
+[[sequence]]
+id = "csi-alternate-screen"
+family = "CSI"
+syntax = "DECSET/DECRST 47, 1047, 1048, 1049"
+layer = "core"
+status = "supported"
+evidence = ["fixture:alternate-screen", "fixture:dec-saved-cursor-state", "test:src/ansi/processor.rs#alternate_screen_restores_cursor_and_rendition_state", "test:src/term/mod.rs#alternate_screen_is_viewport_only_and_cannot_double_the_history_budget", "test:src/term/mod.rs#dec_saved_cursor_restores_origin_delayed_wrap_and_screen_local_state", "test:src/term/mod.rs#g0_g1_shift_save_restore_alt_screen_and_ris_do_not_leak", "test:src/term/mod.rs#g2_g3_single_and_locking_shifts_are_one_shot_saved_and_resettable"]
+notes = "Mode 1048 and 1049 use the complete screen-local saved-cursor contract: position, rendition, G0-G3/GL/GR charset state, pending SS2/SS3, DECOM, delayed wrap, and DECSCA protection. Mode 1049 clears the alternate screen and restores primary state on exit; 47/1047 intentionally do not imply a save. Alternate screens retain no scrollback, so their output cannot double the configured primary-history memory budget."
+
+[[sequence]]
+id = "csi-bracketed-paste"
+family = "CSI"
+syntax = "DECSET/DECRST 2004"
+layer = "app"
+status = "supported"
+evidence = ["fixture:private-modes", "test:../termeric/src/input/terminal_protocol.rs#focus_paste_and_alternate_scroll_are_mode_gated", "test:../termeric/src/app/tests.rs#mouse_focus_and_bracketed_paste_reach_the_focused_pane_in_order"]
+notes = "Clipboard text is framed only when the focused terminal requests it, and the complete frame is one ordered PTY write."
+
+[[sequence]]
+id = "csi-synchronized-output"
+family = "CSI"
+syntax = "DECSET/DECRST 2026"
+layer = "app"
+status = "supported"
+evidence = ["fixture:private-modes", "test:src/term/mod.rs#synchronized_output_freezes_text_colors_and_images_at_the_mode_boundary", "test:src/term/mod.rs#synchronized_output_repeated_begin_does_not_extend_the_recovery_deadline", "test:../termeric/src/app/tests.rs#idle_deadline_releases_stalled_synchronized_output_and_requests_the_final_frame", "test:../termeric/src/app/tests.rs#synchronized_output_timeout_is_terminal_local_even_when_its_pane_is_unfocused"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/6"
+notes = "Each terminal freezes a bounded visible-grid/color/image presentation snapshot at DECSET 2026 while its live state continues processing. Other panes and native UI remain presentable; DECRST releases the latest state, and a terminal-local one-second safety deadline releases stalled batches and requests the final frame."
+
+[[sequence]]
+id = "csi-xtversion"
+family = "CSI"
+syntax = "XTVERSION (CSI > 0 q)"
+layer = "core"
+status = "supported"
+evidence = ["test:src/ansi/processor.rs#fish_startup_queries_receive_truthful_bounded_replies"]
+notes = "Returns a bounded static terminal protocol revision. Other xterm private CSI > q operations are not part of this claim."
+
+[[sequence]]
+id = "csi-kitty-keyboard-state-query"
+family = "CSI"
+syntax = "Kitty keyboard protocol state query (CSI ? u)"
+layer = "core"
+status = "supported"
+evidence = ["test:src/ansi/processor.rs#fish_startup_queries_receive_truthful_bounded_replies"]
+notes = "Returns the active screen's negotiated enhancement flags. Main and alternate screens keep independent bounded flag stacks."
+
+[[sequence]]
+id = "csi-kitty-keyboard-enhancements"
+family = "CSI"
+syntax = "Kitty keyboard protocol flag negotiation and enhanced key events"
+layer = "app"
+status = "partial"
+evidence = ["test:src/ansi/processor.rs#kitty_keyboard_negotiation_is_screen_local_stack_based_and_resettable", "test:src/term/keyboard.rs#set_add_and_remove_ignore_unknown_flags_and_invalid_modes", "test:src/term/keyboard.rs#overflow_retires_oldest_entry_and_over_pop_resets_flags", "test:../termeric/src/input/keyboard.rs#kitty_csi_u_encodes_alternate_keys_events_and_associated_text", "test:../termeric/src/input/keyboard.rs#kitty_functional_keys_report_press_repeat_and_release", "test:../termeric/src/input/keyboard.rs#kitty_all_keys_covers_keypad_extended_functions_and_modifier_bits", "test:../termeric/src/input/keyboard.rs#kitty_ime_text_is_encoded_only_when_both_required_flags_are_active", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "Implements all five progressive flags, set/add/remove and bounded push/pop negotiation, screen- and pane-local state, disambiguated/all-key CSI-u encoding, physical base-layout alternates, common functional and keypad keys, Super, press/repeat/release, and associated keyboard/IME text. Winit does not expose initial Caps/Num-lock state or held Hyper/Meta state in ModifiersState, so those modifier bits are not claimed; native-client interoperability remains a release check."
+
+[[sequence]]
+id = "csi-xterm-modify-other-keys"
+family = "CSI"
+syntax = "XTMODKEYS/XTQMODKEYS modifyOtherKeys resource 4 (CSI > 4 ; Pv [: Pm] m, CSI ? 4 m, CSI > 4 n)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-modify-other-keys", "test:src/ansi/processor.rs#xterm_modify_other_keys_is_bounded_queryable_and_resettable", "test:../termeric/src/input/keyboard.rs#xterm_modify_other_keys_levels_masks_and_unicode_are_unambiguous", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "The terminal-local profile accepts xterm levels 0-3, optional four-bit Shift/Alt/Control/Super-Meta masks, query, omitted-value reset, and disable forms. It emits the format selected by resource-4 XTFMTKEYS for the documented ordinary-key subset, preserves familiar level-1 mappings and AltGr text, gives negotiated Kitty flags precedence, follows focused/broadcast pane ownership, survives screen changes, replicates across local-domain attachment, and resets on DECSTR/RIS. Query replies follow S7C1T/S8C1T."
+
+[[sequence]]
+id = "csi-xterm-format-other-keys"
+family = "CSI"
+syntax = "XTFMTKEYS/XTQFMTKEYS formatOtherKeys resource 4 (CSI > 4 ; Pv f, CSI > 4 f, CSI > f, CSI ? 4 g, DCS $ q > 4 f ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-modify-other-keys", "test:src/ansi/processor.rs#xterm_other_key_format_is_bounded_queryable_and_resettable", "test:../termeric/src/input/keyboard.rs#xterm_modify_other_keys_csi_u_format_preserves_codes_and_modifiers", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "The terminal-local formatOtherKeys resource accepts the documented values 0 (function-key-27) and 1 (CSI-u), singular direct and DECRQSS queries, resource/all reset forms, S7C1T/S8C1T replies, screen persistence, focused/broadcast pane ownership, live-domain replication, and DECSTR/RIS reset. Invalid values and shapes are ignored atomically. Resource 4 changes only keys selected by modifyOtherKeys; resource-zero formatKeyboard is independent opaque compatibility state."
+
+[[sequence]]
+id = "csi-xterm-keyboard-resource-zero"
+family = "CSI"
+syntax = "XTMODKEYS/XTQMODKEYS and XTFMTKEYS/XTQFMTKEYS resource 0 (CSI > 0 ; Pv m/f, CSI ? 0 m/g, CSI > 0 n, DCS $ q > 0 m/f ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-keyboard-resource-zero", "fixture:xterm-keyboard-types", "test:src/ansi/processor.rs#xterm_keyboard_resource_zero_is_exact_queryable_and_resettable", "test:src/term/mod.rs#xterm_keyboard_types_are_exclusive_queryable_and_reset_with_xterm_lifecycle", "test:src/term/mod.rs#configured_xterm_keyboard_type_and_private_save_restore_have_distinct_lifecycles", "test:../termeric/src/input/keyboard.rs#legacy_and_vt220_profiles_match_xterm_function_and_editing_keys", "test:../termeric/src/input/keyboard.rs#modify_keyboard_bits_gate_each_historical_profile_category", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/app/tests.rs#config_reload_only_overrides_application_keyboard_type_when_profile_changes", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "The terminal-local resource-zero state accepts, stores, and reports the complete 16-bit xterm wire domain for modifyKeyboard and formatKeyboard, including the unsigned 65535 representation produced by the disable spelling. Direct/DECRQSS queries, resource/all reset, S7C1T/S8C1T, screen and focused-pane ownership, live-domain replication, and DECSTR/RIS reset are covered. Mutually exclusive DECSET/DECRST 1060/1061 runtime keyboard types reproduce xterm's legacy F1-F4, VT220 Find/Select and keypad translations, Control function-key remapping, and low-four-bit numeric/editing/function/misc modifier permissions; the normal type leaves resource zero encoder-neutral. Soft reset preserves the selected type, RIS restores the configured initial type, and formatKeyboard remains stored/reportable but encoder-neutral as in xterm."
+
+[[sequence]]
+id = "dec-xterm-keyboard-types"
+family = "CSI"
+syntax = "Xterm legacy/VT220 keyboard types (DECSET/DECRST 1060/1061, DECRQM CSI ? Ps $ p, DEC private save/restore CSI ? Ps s/r)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-keyboard-types", "test:src/term/mod.rs#xterm_keyboard_types_are_exclusive_queryable_and_reset_with_xterm_lifecycle", "test:src/term/mod.rs#configured_xterm_keyboard_type_and_private_save_restore_have_distinct_lifecycles", "test:../termeric/src/config/mod.rs#xterm_keyboard_type_defaults_to_normal_and_round_trips_historical_types", "test:../termeric/src/input/keyboard.rs#legacy_and_vt220_profiles_match_xterm_function_and_editing_keys", "test:../termeric/src/input/keyboard.rs#modify_keyboard_bits_gate_each_historical_profile_category", "test:../termeric/src/tabs/mod.rs#xterm_keyboard_profile_updates_existing_and_future_tabs", "test:../termeric/src/panes/mod.rs#xterm_keyboard_profile_updates_existing_and_future_panes", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/app/tests.rs#config_reload_only_overrides_application_keyboard_type_when_profile_changes", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_forces_normal_keyboard_type_on_configured_replica", "test:../termeric/src/domain/server.rs#domain_panes_inherit_the_server_checksum_policy"]
+notes = "DECSET 1060 and 1061 select mutually exclusive runtime legacy and VT220 keyboard types; DECRST of either returns to normal and DECRQM reports the live selection. CSI ? Ps s/r uses xterm's shared save slot for both modes. The `[keyboard] xterm_type` setting selects normal, legacy, or VT220 for startup, future tabs/panes, configured RIS, and daemon-owned domains; an unrelated live reload preserves application-selected state, while changing the setting applies it immediately. The types are global to their terminal owner, survive DECSTR and screen changes, follow focused and broadcast input, and replicate during local-domain attachment. Legacy F1-F4/Delete, VT220 Find/Select and numeric-keypad translations, Control F-key remapping, and resource-zero modifier permissions match the bounded portable xterm subset."
+
+[[sequence]]
+id = "csi-xterm-cursor-key-resources"
+family = "CSI"
+syntax = "XTMODKEYS/XTQMODKEYS and XTFMTKEYS/XTQFMTKEYS resource 1 (CSI > 1 ; Pv m/f, CSI ? 1 m/g, CSI > 1 n, DCS $ q > 1 m/f ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-cursor-key-resources", "test:src/ansi/processor.rs#xterm_cursor_key_resources_are_bounded_queryable_and_resettable", "test:../termeric/src/input/keyboard.rs#xterm_cursor_key_modes_formats_and_codes_match_xterm", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "The terminal-local modifyCursorKeys resource accepts xterm's disabled state and modes 0-4, defaults to mode 2, and applies to arrows plus Home/End/PageUp/PageDown/Insert/Delete. Modes 0-3 emit xterm's control, parameter, and private legacy forms; mode 4 emits xterm keysym-to-Unicode codes in function-key-27 or CSI-u form selected by formatCursorKeys. Direct/DECRQSS queries, resource/all reset, S7C1T/S8C1T, pane/broadcast ownership, screen persistence, live-domain replication, and DECSTR/RIS reset are covered. Winit exposes no Begin named key, so that xterm editing-key member is not encodable."
+
+[[sequence]]
+id = "csi-xterm-function-key-resources"
+family = "CSI"
+syntax = "XTMODKEYS/XTQMODKEYS and XTFMTKEYS/XTQFMTKEYS resource 2 (CSI > 2 ; Pv m/f, CSI ? 2 m/g, CSI > 2 n, DCS $ q > 2 m/f ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-function-key-resources", "test:src/ansi/processor.rs#xterm_function_key_resources_are_bounded_queryable_and_resettable", "test:../termeric/src/input/keyboard.rs#xterm_function_key_modes_formats_remapping_and_codes_match_xterm", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "The terminal-local modifyFunctionKeys resource accepts xterm's disabled state and modes 0-4, defaults to mode 2, and covers Winit's complete F1-F35 range. Modes 0-3 emit the SS3, CSI, parameter, and private legacy forms; disabled mode reproduces current xterm's ctrlFKeys=10 Shift/Control remapping; mode 4 emits U+E2BE through U+E2E0 in function-key-27 or CSI-u form selected by formatFunctionKeys. Direct/DECRQSS queries, resource/all reset, S7C1T/S8C1T, pane/broadcast ownership, screen persistence, live-domain replication, and DECSTR/RIS reset are covered."
+
+[[sequence]]
+id = "csi-xterm-keypad-key-resources"
+family = "CSI"
+syntax = "XTMODKEYS/XTQMODKEYS and XTFMTKEYS/XTQFMTKEYS resource 3 (CSI > 3 ; Pv m/f, CSI ? 3 m/g, CSI > 3 n, DCS $ q > 3 m/f ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-keypad-key-resources", "test:src/ansi/processor.rs#xterm_keypad_key_resources_are_bounded_queryable_and_resettable", "test:../termeric/src/input/keyboard.rs#xterm_keypad_modes_formats_and_codes_match_xterm", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "The terminal-local modifyKeypadKeys resource accepts xterm's disabled state and modes 0-4 and defaults to mode 0. Modes -1 and 0-3 retain conventional physical numeric/application keypad encoding; application mode carries xterm's modifier parameter. Mode 4 reports all 18 portable Winit numeric-keypad keys plus their 11 Num Lock-off navigation identities with xterm's U+E28D/U+E295-U+E29F/U+E2AA-U+E2B9/U+E2BD keysym mapping in function-key-27 or CSI-u form selected by formatKeypadKeys, independently of DECKPAM. Direct/DECRQSS queries, resource/all reset, S7C1T/S8C1T, pane/broadcast ownership, screen persistence, live-domain replication, and DECSTR/RIS reset are covered. Winit's additional calculator/phone keypad codes do not correspond to xterm's numeric-keypad keysym set and remain outside this claim."
+
+[[sequence]]
+id = "csi-xterm-string-key-resources"
+family = "CSI/DCS"
+syntax = "Reserved XTMODKEYS/XTFMTKEYS resource 5 (set, query, disable, reset, DECRQSS)"
+layer = "core"
+status = "supported"
+evidence = ["fixture:xterm-string-key-resources", "test:src/term/mod.rs#reserved_xterm_string_key_resource_is_queryable_resettable_and_encoder_neutral", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "Stores xterm's reserved modifyStringKeys mode (-1/0-4) and formatStringKeys value (0/1), with direct and DECRQSS query, resource/all reset, disable, screen persistence, DECSTR/RIS lifecycle, and local-domain replication. Xterm defines no encoder consumer for this reserved resource, so Termeric intentionally keeps it encoder-neutral rather than inventing key behavior."
+
+[[sequence]]
+id = "csi-xterm-modifier-key-resources"
+family = "CSI"
+syntax = "XTMODKEYS/XTQMODKEYS and XTFMTKEYS/XTQFMTKEYS resource 6 (CSI > 6 ; Pv m/f, CSI ? 6 m/g, CSI > 6 n, DCS $ q > 6 m/f ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-modifier-key-resources", "test:src/ansi/processor.rs#xterm_modifier_key_resources_are_bounded_queryable_and_resettable", "test:../termeric/src/input/keyboard.rs#xterm_modifier_key_mode_four_matches_portable_xterm_keysym_codes", "test:../termeric/src/input/keyboard.rs#xterm_modifier_keys_are_silent_before_mode_four_and_honor_csi_u", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "The terminal-local modifyModifierKeys resource accepts xterm's disabled state and modes 0-4 and defaults to mode 0. Modes -1 and 0-3 leave modifier presses silent; mode 4 reports Winit's portable left/right Shift, Control, Alt, and Super identities plus Caps Lock, Num Lock, AltGraph/ISO Level 3 Shift, and unsided Meta/Hyper using xterm's keysym-to-private-use mapping in function-key-27 or CSI-u form selected by formatModifierKeys. Direct/DECRQSS queries, resource/all reset, S7C1T/S8C1T, pane/broadcast ownership, screen persistence, live-domain replication, Kitty precedence, and DECSTR/RIS reset are covered. Winit cannot expose Shift Lock, the wider ISO lock family, Mode Switch as distinct from AltGraph, or left/right Meta and Hyper; unsided Meta/Hyper use the left-hand xterm identity."
+
+[[sequence]]
+id = "csi-xterm-special-key-resources"
+family = "CSI"
+syntax = "XTMODKEYS/XTQMODKEYS and XTFMTKEYS/XTQFMTKEYS resource 7 (CSI > 7 ; Pv m/f, CSI ? 7 m/g, CSI > 7 n, DCS $ q > 7 m/f ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xterm-special-key-resources", "test:src/ansi/processor.rs#xterm_special_key_resources_are_bounded_queryable_and_resettable", "test:../termeric/src/input/keyboard.rs#xterm_special_mode_four_covers_control_compose_and_ime_keysyms", "test:../termeric/src/input/keyboard.rs#xterm_special_mode_four_covers_unambiguous_xf86_named_keys", "test:../termeric/src/input/keyboard.rs#xterm_special_raw_xkb_path_is_exact_bounded_and_category_safe", "test:../termeric/src/app/tests.rs#keyboard_mode_snapshot_follows_the_focused_pane", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "The terminal-local modifySpecialKeys resource accepts xterm's disabled state and modes 0-4 and defaults to mode 0. Modes -1 and 0-3 preserve conventional encoding; mode 4 reports 72 canonical Winit control, Compose/IME, and unambiguous XF86 named identities, plus otherwise-unmapped convertible Linux XKB special keysyms with their exact identity, in function-key-27 or CSI-u form selected by formatSpecialKeys. Xterm category checks prevent cursor, function, keypad, modifier, Delete, and ordinary keysyms from leaking into resource 7. Direct/DECRQSS queries, resource/all reset, S7C1T/S8C1T, pane/broadcast ownership, screen persistence, live-domain replication, Kitty precedence, and DECSTR/RIS reset are covered. Winit aliases which collapse different X keysyms, including Print/SysReq, Pause/Break under Control, PowerDown/PowerOff, Standby/Sleep/Suspend, Calculator/Calculater, Refresh/Reload, Favorites/MySites, Kana Lock/Shift, and Eisu Shift/Toggle, are not guessed; an exact NativeKey::Xkb identity remains encodable when Winit leaves it unidentified."
+
+[[sequence]]
+id = "osc-title"
+family = "OSC"
+syntax = "OSC 0, OSC 2"
+layer = "app"
+status = "supported"
+evidence = ["test:src/ansi/handler.rs#title_accepts_bel_and_st_preserves_semicolons_and_rejects_bad_input", "test:../termeric/src/app/tests.rs#osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins"]
+notes = "A bounded, sanitized title overrides the exact originating tab's derived title; an empty title restores the explicit-or-derived fallback. OSC 1 icon names are not claimed."
+
+[[sequence]]
+id = "osc-current-directory"
+family = "OSC"
+syntax = "OSC 7 file://host/path"
+layer = "app"
+status = "supported"
+evidence = ["fixture:osc7-current-directory", "test:src/ansi/handler.rs#osc7_retains_only_bounded_valid_file_directory_reports", "test:src/ansi/processor.rs#osc7_directory_reports_stream_without_leaking_into_terminal_text", "test:../termeric/src/tabs/title.rs#reported_directory_accepts_local_authorities_and_rejects_remote_hosts", "test:../termeric/src/tabs/mod.rs#focused_osc7_directory_drives_title_but_remote_paths_stay_display_only", "test:../termeric/src/panes/mod.rs#each_new_pane_cwd_policy_uses_its_declared_process_source", "test:../termeric/src/domain/server.rs#local_server_survives_disconnect_and_supports_the_complete_control_surface", "test:../termeric/src/terminal/shell_integration.rs#supported_shells_preserve_user_rc_and_emit_multiline_exit_regions"]
+notes = "Bounded 7-bit or 8-bit reports preserve the URI authority and a strict percent-decoded absolute UTF-8 path as terminal-owner metadata. Empty, localhost, loopback, and exact local-host authorities may drive local Git/plugin/spawn/persistence context; remote authorities are display-only and never become local filesystem paths. Bash/Zsh/Fish integration emits hostless local reports; unambiguous modern Nushell REPL launches enable its native producer. An opt-in Elvish module emits the same report after one rc import. Nushell and Elvish real-PTY acceptance is pending. Invalid reports leave the last valid value unchanged, and presentation resets preserve it."
+
+[[sequence]]
+id = "osc-dynamic-colors"
+family = "OSC"
+syntax = "OSC 4/10/11/12 and OSC 104/110/111/112"
+layer = "app"
+status = "supported"
+evidence = ["test:src/ansi/handler.rs#dynamic_colors_parse_set_query_and_reset_families", "test:src/term/mod.rs#dynamic_colors_are_terminal_local_resettable_and_generation_checked", "test:../termeric/src/app/tests.rs#osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins", "test:../termeric/src/renderer/mod.rs#terminal_local_dynamic_colors_override_and_reset_theme_resolution"]
+notes = "Set, query, and reset are terminal-local; palette indices 0-255 and foreground/background/cursor defaults are rendered, with xterm-style 16-bit query replies."
+
+[[sequence]]
+id = "osc-hyperlinks"
+family = "OSC"
+syntax = "OSC 8"
+layer = "app"
+status = "supported"
+evidence = ["fixture:osc-hyperlink", "test:../termeric/src/test_support.rs#ansi_hyperlink_and_semantic_marks_cross_the_parser_grid_and_harvest", "test:../termeric/src/terminal/copy_mode.rs#quick_select_prioritizes_osc_links_and_maps_regex_bytes_to_cells"]
+notes = "Semantic links retain bounded pane-local and scrollback-aware cell metadata, participate in keyboard quick-select, and take precedence over detected URLs for native activation. Desktop opener behavior remains environment-dependent."
+
+[[sequence]]
+id = "osc-notifications"
+family = "OSC"
+syntax = "OSC 9, OSC 777 notify"
+layer = "core"
+status = "supported"
+evidence = ["fixture:notifications"]
+notes = "Emits typed notification events; desktop delivery is separately unverified."
+
+[[sequence]]
+id = "osc-clipboard"
+family = "OSC"
+syntax = "OSC 52"
+layer = "app"
+status = "supported"
+evidence = ["test:src/ansi/handler.rs#osc52_parses_queries_writes_empty_fields_and_rejects_malformed_payloads", "test:../termeric/src/app/tests.rs#app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus"]
+notes = "Clipboard and primary selections support bounded UTF-8 writes and base64 queries under explicit read/write policy. Reads are denied by default and return an empty, target-preserving ST reply."
+
+[[sequence]]
+id = "osc-shell-semantics"
+family = "OSC"
+syntax = "OSC 133 A/B/C/D"
+layer = "app"
+status = "supported"
+evidence = ["test:src/shell/prompt.rs#test_prompt_tracking", "test:../termeric/src/test_support.rs#ansi_hyperlink_and_semantic_marks_cross_the_parser_grid_and_harvest", "test:../termeric/src/terminal/shell_integration.rs#supported_shells_receive_semantic_prompt_integration", "test:../termeric/src/terminal/shell_integration.rs#supported_shells_preserve_user_rc_and_emit_multiline_exit_regions", "test:../termeric/src/terminal/shell_integration.rs#nushell_only_modifies_unambiguous_repl_launches", "test:../termeric/src/terminal/shell_integration.rs#nushell_native_integration_preserves_user_config_and_emits_regions_when_available", "test:../termeric/src/terminal/shell_integration.rs#elvish_exposes_a_manual_module_without_replacing_user_startup", "test:../termeric/src/terminal/shell_integration.rs#elvish_only_exposes_the_module_to_rc_loading_repls", "test:../termeric/src/terminal/shell_integration.rs#elvish_module_preserves_user_config_and_emits_regions_when_available"]
+notes = "Bash, Zsh, and Fish launches preserve user startup files and emit accepted pane-local prompt/command/output/exit regions on Linux. Unambiguous Nushell REPL launches enable native OSC 7/133 after user config. Interactive Elvish launches expose an opt-in module without replacing user startup. Both later shells have deterministic routing but pending real-PTY evidence. Unsupported shells and command/script/special-mode launches are intentionally not modified; Harvest remains a separate experimental consumer."
+
+[[sequence]]
+id = "osc-iterm2-inline-images"
+family = "OSC"
+syntax = "OSC 1337 File"
+layer = "core"
+status = "partial"
+evidence = ["test:src/term/mod.rs#sixel_and_iterm2_framing_render_per_terminal_without_pty_leakage", "test:src/graphics/iterm2.rs#independent_imgcat_fixture_decodes_png_and_mixed_dimensions", "test:src/graphics/iterm2.rs#downloads_malformed_base64_non_png_and_oversize_metadata_are_rejected", "test:src/graphics/mod.rs#static_pixel_protocols_share_scroll_resize_screen_and_cleanup_lifecycle", "test:src/graphics/mod.rs#all_protocols_share_one_bounded_cache_and_normalized_placement_model"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/31"
+notes = "The bounded static inline-PNG subset supports validated metadata, exact pixel/cell sizing, pane-local placement, scrolling, resize, alternate-screen lifecycle, and shared image limits. Downloads, multipart transfer, non-PNG media, animation, and newer proprietary commands are unsupported."
+
+[[sequence]]
+id = "apc-kitty-graphics"
+family = "APC"
+syntax = "Kitty Graphics Protocol"
+layer = "core"
+status = "partial"
+evidence = ["test:src/graphics/kitty.rs#strictly_decodes_data_and_rejects_invalid_controls", "test:src/graphics/kitty.rs#parses_local_media_size_and_offset", "test:src/graphics/kitty.rs#parses_image_numbers_and_ignorable_usage_hints_exclusively", "test:src/graphics/kitty.rs#parses_only_the_defined_unicode_placeholder_flag", "test:src/graphics/kitty.rs#parses_signed_relative_placement_controls", "test:src/graphics/placeholder.rs#decodes_explicit_coordinates_ids_and_placement_colors", "test:src/graphics/placeholder.rs#inherits_omitted_coordinates_only_across_compatible_runs", "test:src/graphics/mod.rs#png_and_zlib_are_decoded_within_bounds", "test:src/graphics/mod.rs#disabled_file_media_and_animations_report_truthfully", "test:src/graphics/mod.rs#image_numbers_allocate_ids_resolve_newest_and_fall_back_after_deletion", "test:src/graphics/mod.rs#numbered_chunking_preserves_allocated_response_identity", "test:src/graphics/mod.rs#image_number_indices_follow_id_allocation_and_storage_eviction", "test:src/graphics/mod.rs#queries_require_ids_and_reject_image_numbers_truthfully", "test:src/graphics/mod.rs#unicode_virtual_placements_are_invisible_bounded_prototypes", "test:src/graphics/mod.rs#unicode_virtual_placements_are_pruned_with_storage_eviction", "test:src/graphics/mod.rs#unicode_virtual_placements_follow_number_and_range_deletion", "test:src/graphics/mod.rs#unicode_placeholder_presentations_fit_and_crop_each_visible_cell", "test:src/graphics/mod.rs#relative_placements_follow_named_parents_and_delete_as_groups", "test:src/graphics/mod.rs#relative_placements_clip_negative_columns_and_reject_virtual_children", "test:src/graphics/mod.rs#relative_placement_depth_is_bounded_above_the_required_minimum", "test:src/graphics/mod.rs#relative_placements_follow_scrolling_and_screen_ownership", "test:src/graphics/mod.rs#relative_descendants_are_pruned_when_the_parent_hits_the_placement_cap", "test:src/graphics/mod.rs#opted_in_ordinary_file_range_is_loaded_without_deletion", "test:src/graphics/mod.rs#opted_in_ordinary_files_follow_safe_symlinks_but_reject_unsafe_targets", "test:src/graphics/mod.rs#oversized_ordinary_file_is_rejected_without_deletion", "test:src/graphics/mod.rs#temporary_file_range_is_loaded_deleted_and_queryable", "test:src/graphics/mod.rs#local_media_policy_rejects_unsafe_paths_and_special_files", "test:src/graphics/mod.rs#oversized_safe_temporary_file_is_rejected_and_removed", "test:src/graphics/mod.rs#shared_memory_range_is_loaded_unlinked_and_queryable", "test:src/graphics/mod.rs#shared_memory_policy_rejects_public_and_invalid_names", "test:src/graphics/mod.rs#oversized_private_shared_memory_is_rejected_and_unlinked", "test:src/graphics/mod.rs#compressed_local_media_uses_format_specific_size_semantics", "test:src/graphics/mod.rs#referenced_images_evict_after_unplaced_cache_entries", "test:src/graphics/mod.rs#repeated_display_of_one_image_has_a_bounded_fifo_placement_window", "test:src/term/mod.rs#kitty_apc_survives_arbitrary_process_boundaries", "test:src/term/mod.rs#kitty_image_numbers_allocate_reply_and_place_at_the_terminal_cursor", "test:src/term/mod.rs#kitty_unicode_placeholders_follow_grid_text_and_exact_color_ids", "test:src/term/mod.rs#kitty_unicode_placeholders_follow_scrollback_and_screen_ownership", "test:src/term/mod.rs#kitty_unicode_placeholders_follow_reflow_and_synchronized_output", "test:src/term/mod.rs#kitty_relative_placements_follow_unicode_parent_text_and_lifetime", "test:src/term/mod.rs#kitty_file_policy_defaults_off_and_survives_terminal_resets", "test:../termeric/src/renderer/image.rs#unicode_placeholder_geometry_preserves_subcell_uvs_when_clipped", "test:../termeric/src/config/mod.rs#terminal_data_security_defaults_are_conservative_and_bounded", "test:../termeric/src/tabs/mod.rs#screen_checksum_policy_updates_existing_and_future_tabs", "test:../termeric/src/panes/mod.rs#screen_checksum_policy_updates_existing_and_future_panes", "test:../termeric/src/domain/server.rs#domain_panes_inherit_the_server_checksum_policy", "test:src/graphics/kitty.rs#parses_action_dependent_animation_controls", "test:src/graphics/mod.rs#animation_frames_load_edit_blend_replace_and_inherit_a_base", "test:src/graphics/mod.rs#animation_frame_chunks_retain_first_command_metadata", "test:src/graphics/mod.rs#frame_composition_is_bounded_and_supports_replace_and_source_over", "test:src/graphics/mod.rs#animation_control_uses_exact_deadlines_loading_and_finite_loops", "test:src/graphics/mod.rs#frame_deletion_promotes_root_and_uppercase_removes_last_frame_image", "test:src/graphics/mod.rs#animation_frame_count_is_bounded_without_losing_existing_frames", "test:src/term/mod.rs#kitty_animation_revisions_reach_presentation_without_leaking_through_sync", "test:../termeric/src/app/tests.rs#kitty_animation_uses_its_exact_deadline_and_requests_one_frame", "test:src/graphics/mod.rs#replacing_an_image_id_releases_all_animation_storage", "test:src/graphics/mod.rs#animation_frames_use_the_supported_temporary_file_medium"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/12"
+notes = "The bounded profile supports direct RGB/RGBA/PNG, zlib across direct and local media, chunking, non-unique image numbers with allocated collision-free IDs and newest-retained lookup, advisory usage hints, Unicode placeholders with bounded virtual prototypes and grid-derived per-cell crops, relative placements with bounded typed ancestry, and Kitty frame loading/editing/composition/control/deletion with exact active-screen deadlines and independent frame/memory caps. Unix temporary files are restricted to marked regular non-symlink files directly inside known temporary roots; private same-user POSIX shared-memory objects and default-denied opt-in Unix ordinary files work in non-domain local terminals with format-correct S/O range semantics and identity checks. Domain-owned PTYs and GUI relay replicas always deny ordinary-file reads. Temporary and shared-memory names are cleaned up; ordinary files are never modified or deleted and protected system roots are denied. It also covers placement geometry, queries, screen lifecycle, reference-aware 256-image/64-MiB root storage and image-number indexing, independent ordinary/virtual placement caps, synchronized-output image snapshots, and truthful replies. Relayed decoded images remain explicitly unsupported."
+
+[[sequence]]
+id = "dcs-sixel"
+family = "DCS"
+syntax = "Sixel (DCS ... q ... ST)"
+layer = "core"
+status = "partial"
+evidence = ["test:src/term/mod.rs#sixel_and_iterm2_framing_render_per_terminal_without_pty_leakage", "test:src/term/mod.rs#fragmented_sixel_aspect_controls_display_footprint_and_cursor_advance", "test:src/term/mod.rs#repeated_sixel_images_remain_inside_shared_resource_limits", "test:src/graphics/sixel.rs#macro_and_raster_pixel_aspects_produce_bounded_display_geometry", "test:src/graphics/sixel.rs#transparent_background_and_graphics_newline_are_preserved", "test:src/graphics/sixel.rs#malformed_dimensions_repeats_aspects_and_palettes_fail_before_allocation", "test:src/graphics/mod.rs#static_pixel_protocols_share_scroll_resize_screen_and_cleanup_lifecycle", "test:src/graphics/mod.rs#all_protocols_share_one_bounded_cache_and_normalized_placement_model"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/31"
+notes = "The bounded static subset supports 7-bit or 8-bit DCS framing, GR-byte folding, introducer parameters, every defined DEC macro aspect, raster Pan:Pad overrides and declared extents, compact logical RGBA storage, DEC HLS/RGB palettes, repeats, carriage return/newline, fragmented input, aspect-aware placement/cursor movement, lifecycle, and shared image limits. ReGIS, stored Sixel macro definition/recall, printer behavior, and private extensions are unsupported."
+
+[[sequence]]
+id = "dcs-xtgettcap"
+family = "DCS"
+syntax = "XTGETTCAP (DCS + q ... ST)"
+layer = "core"
+status = "partial"
+evidence = ["test:src/ansi/processor.rs#fish_startup_queries_receive_truthful_bounded_replies", "test:src/ansi/processor.rs#xtgettcap_is_bounded_multi_name_and_matches_the_native_terminfo_contract", "test:src/ansi/processor.rs#unknown_and_oversized_dcs_are_negative_or_discarded_without_leaking_text"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/25"
+notes = "One bounded response handles up to 64 hexadecimal names and stops at the first malformed or unknown name, matching xterm list semantics. TN/name reports the exact identity exported to the child, including compatibility fallback; Co/colors reports 256, RGB reports depth 8, and Fish indn/query-os-name plus every special-key string advertised by the native xterm-termeric entry are supported, including termcap aliases. Both 7-bit and 8-bit DCS framing and GR-byte request bodies are accepted. Host-database lookup, XTSETTCAP, and keys outside the documented native contract are unsupported."
+
+[[sequence]]
+id = "dcs-decrqss"
+family = "DCS"
+syntax = "DECRQSS (DCS $ q Pt ST)"
+layer = "app"
+status = "partial"
+evidence = ["fixture:decrqss-legacy-geometry", "test:src/ansi/processor.rs#decrqss_reports_rendition_margins_and_cursor_style_and_recovers_from_cancel", "test:src/ansi/processor.rs#xterm_keyboard_resource_zero_is_exact_queryable_and_resettable", "test:src/ansi/processor.rs#xterm_cursor_key_resources_are_bounded_queryable_and_resettable", "test:src/ansi/processor.rs#xterm_function_key_resources_are_bounded_queryable_and_resettable", "test:src/ansi/processor.rs#xterm_keypad_key_resources_are_bounded_queryable_and_resettable", "test:src/ansi/processor.rs#xterm_other_key_format_is_bounded_queryable_and_resettable", "test:src/term/mod.rs#reserved_xterm_string_key_resource_is_queryable_resettable_and_encoder_neutral", "test:src/ansi/processor.rs#xterm_modifier_key_resources_are_bounded_queryable_and_resettable", "test:src/ansi/processor.rs#xterm_special_key_resources_are_bounded_queryable_and_resettable", "test:src/term/mod.rs#decrqss_reports_legacy_geometry_without_enabling_window_mutation", "test:../termeric/src/app/mod.rs#terminal_cursor_style_overrides_shape_and_blink_until_reset"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "Bounded, fragmented 7-bit or 8-bit requests return current SGR, DECSTBM, DECSLRM, DECSCUSR, DECSCA, DECSCL, DECSACE, legacy DECSLPP/DECSCPP/DECSNLS geometry, and xterm resources 0-7 modifier/format settings with exact positive/negative framing. The legacy geometry replies match xterm's 24-line DECSLPP floor, max-row convention, 80-column default, and exact screen-line count without enabling the corresponding window mutations. CAN, SUB, and non-ST ESC cancel safely. DEC status lines, VT525 color settings, and XTSMTITLE remain unsupported."
+
+[[sequence]]
+id = "dcs-dec-user-defined-keys"
+family = "DCS"
+syntax = "DECUDK (DCS Ps ; Ps | key/hex[;key/hex...] ST)"
+layer = "app"
+status = "supported"
+evidence = ["fixture:dec-user-defined-keys", "test:src/term/mod.rs#decudk_definitions_are_bounded_preservable_and_reset_only_by_ris", "test:../termeric/src/input/keyboard.rs#vt220_shift_keys_use_decudk_definitions_before_xterm_resources", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_is_bounded_and_resets_the_replica"]
+notes = "Accepts fragmented 7-bit/8-bit DECUDK definitions for DEC codes below 35, strict hexadecimal values, clear/preserve semantics, and xterm's always-unlocked treatment of the second parameter. Decoded state is bounded to 4 KiB per key and 64 KiB per terminal, survives DECSTR, clears on RIS, follows focused/broadcast ownership, and replicates across local-domain attachment. With the VT220 keyboard type, Shift invokes editing-key and F1-F20 definitions; Control first maps Fn to F(n+10), matching xterm. Kitty negotiation takes precedence. Primary DA parameter 8 advertises this support."
+
+[[sequence]]
+id = "dcs-other-protocols"
+family = "DCS"
+syntax = "DCS protocols other than the documented Sixel, DECUDK, XTGETTCAP, DECRQSS, and DECRSPS subsets"
+layer = "core"
+status = "unsupported"
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/16"
+notes = "Unknown DCS payloads are ignored. ReGIS, termcap operations beyond the documented XTGETTCAP subset, downloadable character sets, and other DCS families are not implemented."

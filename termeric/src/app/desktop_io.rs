@@ -1,39 +1,669 @@
 //! Terminal-event bridges for clipboard, notifications, links, and PTY input.
 
+const MAX_DROPPED_PATH_BYTES: usize = 4_096;
+const FILE_UPLOAD_PROGRESS_EVENT_BYTES: u64 = 1024 * 1024;
+
 use super::*;
+use anyhow::Context as _;
+
+enum DroppedPathAction {
+    InsertLocal(String),
+    ConfirmUpload {
+        source: PathBuf,
+        authority: crate::domain::DomainAuthority,
+        domain_id: String,
+        pane_id: u32,
+        name: String,
+        source_kind: FileUploadSourceKind,
+        source_identity: Option<(u64, u64)>,
+    },
+}
+
+struct ValidatedUploadSource {
+    name: String,
+    source_kind: FileUploadSourceKind,
+    identity: Option<(u64, u64)>,
+}
 
 impl App {
+    /// Validate and quote one compositor-provided local path without reading
+    /// file contents or crossing a terminal/domain/plugin trust boundary.
+    #[cfg(test)]
+    pub(super) fn dropped_path_payload(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<String, String> {
+        match self.dropped_path_action(path)? {
+            DroppedPathAction::InsertLocal(payload) => Ok(payload),
+            DroppedPathAction::ConfirmUpload { .. } => {
+                Err("A live-domain file drop requires explicit upload confirmation".into())
+            }
+        }
+    }
+
+    pub(super) fn dropped_path_allowed(&self, path: &std::path::Path) -> bool {
+        self.dropped_path_action(path).is_ok()
+    }
+
+    fn dropped_path_action(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<DroppedPathAction, String> {
+        if self.file_drop_input_blocked() {
+            return Err("Close the active panel or input mode before dropping a file".into());
+        }
+        if !matches!(self.broadcast, super::BroadcastState::Inactive) {
+            return Err("File paths are not inserted while pane broadcast is active".into());
+        }
+        let tab = self
+            .tabs
+            .as_ref()
+            .and_then(crate::tabs::TabManager::active_tab)
+            .filter(|tab| !tab.closed && !tab.is_closing())
+            .ok_or_else(|| "No live terminal is available for the dropped path".to_string())?;
+        if tab.focused_pane_read_only() {
+            return Err("The focused pane is read-only".into());
+        }
+        if let Some((domain_id, pane_id)) = tab.live_domain_focus_route() {
+            if self.active_file_upload.is_some() || self.pending_file_upload.is_some() {
+                return Err("Another file upload is already pending for this window".into());
+            }
+            let authority = self
+                .live_domain_authority
+                .clone()
+                .ok_or_else(|| "Live-domain upload authority is unavailable".to_string())?;
+            let source = validate_upload_source(path)?;
+            return Ok(DroppedPathAction::ConfirmUpload {
+                source: path.to_path_buf(),
+                authority,
+                domain_id: domain_id.to_string(),
+                pane_id,
+                name: source.name,
+                source_kind: source.source_kind,
+                source_identity: source.identity,
+            });
+        }
+        match &tab.tab_type {
+            crate::tabs::TabType::Plugin { .. } => {
+                return Err(
+                    "File drops are disabled for plugin tabs to prevent accidental data disclosure"
+                        .into(),
+                );
+            }
+            crate::tabs::TabType::Serial { .. } => {
+                return Err("File paths cannot be dropped into a serial terminal".into());
+            }
+            crate::tabs::TabType::Shell | crate::tabs::TabType::Profile { .. } => {}
+        }
+        quote_local_drop_path(path).map(DroppedPathAction::InsertLocal)
+    }
+
+    pub(super) fn handle_dropped_path(&mut self, path: &std::path::Path) -> bool {
+        let action = match self.dropped_path_action(path) {
+            Ok(action) => action,
+            Err(reason) => {
+                self.toasts
+                    .warning(format!("File was not dropped: {reason}"));
+                return false;
+            }
+        };
+        match action {
+            DroppedPathAction::InsertLocal(payload) => {
+                if self.write_paste_text(&payload) {
+                    self.toasts
+                        .success("Inserted quoted local path; press Enter to use it");
+                    true
+                } else {
+                    self.toasts
+                        .error("Dropped path could not be written to the focused terminal");
+                    false
+                }
+            }
+            DroppedPathAction::ConfirmUpload {
+                source,
+                authority,
+                domain_id,
+                pane_id,
+                name,
+                source_kind,
+                source_identity,
+            } => {
+                let (noun, size) = match source_kind {
+                    FileUploadSourceKind::File { bytes } => {
+                        ("file", format!("Size: {bytes} bytes"))
+                    }
+                    FileUploadSourceKind::Directory => (
+                        "directory",
+                        "Size: calculated after confirmation; maximum archive 64 MiB".into(),
+                    ),
+                };
+                let lines = vec![
+                    format!("Upload this local {noun} to the focused live-domain pane?"),
+                    String::new(),
+                    format!("Source: {}", source.display()),
+                    format!("Destination: domain {domain_id}, pane {pane_id}, cwd/{name}"),
+                    size,
+                    String::new(),
+                    "The destination must not exist. Termeric will not overwrite it.".into(),
+                    "After upload, the quoted remote path is inserted without Enter.".into(),
+                    String::new(),
+                    "  U  Upload".into(),
+                    "  C  Cancel".into(),
+                ];
+                self.pending_profile_selection = None;
+                let request_id = self.info_overlay.show_choices(
+                    "Confirm live-domain upload",
+                    lines,
+                    vec![
+                        crate::ui::info_overlay::InfoOverlayChoice::new(
+                            "file-upload-confirm",
+                            "Upload",
+                            9,
+                            Some('u'),
+                        ),
+                        crate::ui::info_overlay::InfoOverlayChoice::new(
+                            "file-upload-cancel",
+                            "Cancel",
+                            10,
+                            Some('c'),
+                        ),
+                    ],
+                );
+                self.pending_file_upload = Some(PendingFileUpload {
+                    request_id,
+                    source,
+                    authority,
+                    domain_id,
+                    pane_id,
+                    name,
+                    source_kind,
+                    source_identity,
+                });
+                true
+            }
+        }
+    }
+
+    pub(super) fn start_file_upload(&mut self, upload: PendingFileUpload) {
+        let request_id = upload.request_id;
+        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+            self.toasts
+                .error("Live-domain uploads require an attached native window");
+            return;
+        };
+        let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() else {
+            self.toasts
+                .error("Live-domain upload event channel is unavailable");
+            return;
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let initial_total = match upload.source_kind {
+            FileUploadSourceKind::File { bytes } => Some(bytes),
+            FileUploadSourceKind::Directory => None,
+        };
+        let initial_message = match initial_total {
+            Some(bytes) => format!(
+                "Uploading {}: 0% (0/{bytes} bytes). Commands → Cancel Upload",
+                upload.name
+            ),
+            None => format!(
+                "Preparing directory {}. Commands → Cancel Upload",
+                upload.name
+            ),
+        };
+        let progress_toast_id = self.toasts.persistent_info(initial_message);
+        self.active_file_upload = Some(ActiveFileUpload {
+            request_id,
+            name: upload.name.clone(),
+            bytes_sent: 0,
+            total_bytes: initial_total,
+            cancellation: Arc::clone(&cancellation),
+            cancel_requested: false,
+            progress_toast_id,
+        });
+        let spawn = std::thread::Builder::new()
+            .name("termeric-domain-upload".into())
+            .spawn(move || {
+                let result = (|| -> anyhow::Result<FileUploadCompletion> {
+                    let client = upload.authority.client()?;
+                    let metadata = std::fs::symlink_metadata(&upload.source)
+                        .context("revalidate confirmed upload source")?;
+                    if metadata.file_type().is_symlink()
+                        || !match upload.source_kind {
+                            FileUploadSourceKind::File { bytes } => {
+                                metadata.is_file() && metadata.len() == bytes
+                            }
+                            FileUploadSourceKind::Directory => metadata.is_dir(),
+                        }
+                    {
+                        anyhow::bail!("upload source changed after confirmation");
+                    }
+                    #[cfg(unix)]
+                    if let Some((device, inode)) = upload.source_identity {
+                        use std::os::unix::fs::MetadataExt;
+                        if metadata.dev() != device || metadata.ino() != inode {
+                            anyhow::bail!("upload source identity changed after confirmation");
+                        }
+                    }
+                    let progress_proxy = proxy.clone();
+                    let mut last_reported = 0_u64;
+                    let mut announced_total = false;
+                    let progress = |bytes_sent: u64, total_bytes: u64| {
+                        if !announced_total
+                            || bytes_sent == total_bytes
+                            || bytes_sent.saturating_sub(last_reported)
+                                >= FILE_UPLOAD_PROGRESS_EVENT_BYTES
+                        {
+                            announced_total = true;
+                            last_reported = bytes_sent;
+                            let _ = progress_proxy.send_event(AppEvent::FileUploadProgress {
+                                window_id,
+                                request_id,
+                                bytes_sent,
+                                total_bytes,
+                            });
+                        }
+                    };
+                    let response = match upload.source_kind {
+                        FileUploadSourceKind::File { .. } => {
+                            #[cfg(unix)]
+                            use std::os::unix::fs::OpenOptionsExt;
+                            let mut options = std::fs::OpenOptions::new();
+                            options.read(true);
+                            #[cfg(unix)]
+                            options.custom_flags(libc::O_NOFOLLOW);
+                            let file = options.open(&upload.source).with_context(|| {
+                                format!("open confirmed upload source {}", upload.source.display())
+                            })?;
+                            client.upload_open_file_with_control(
+                                upload.domain_id.clone(),
+                                upload.pane_id,
+                                file,
+                                upload.name,
+                                &cancellation,
+                                progress,
+                            )?
+                        }
+                        FileUploadSourceKind::Directory => client.upload_directory_with_control(
+                            upload.domain_id.clone(),
+                            upload.pane_id,
+                            &upload.source,
+                            Some(upload.name),
+                            upload.source_identity,
+                            &cancellation,
+                            progress,
+                        )?,
+                    };
+                    let (path, bytes, entries) = match response {
+                        crate::domain::protocol::Response::FileUploaded { path, bytes } => {
+                            (path, bytes, None)
+                        }
+                        crate::domain::protocol::Response::DirectoryUploaded {
+                            path,
+                            bytes,
+                            entries,
+                        } => (path, bytes, Some(entries)),
+                        crate::domain::protocol::Response::UploadCancelled { bytes_received } => {
+                            return Ok(FileUploadCompletion::Cancelled { bytes_received });
+                        }
+                        _ => anyhow::bail!("domain server returned an invalid upload response"),
+                    };
+                    let insertion_error = (|| -> anyhow::Result<()> {
+                        let quoted = quote_posix_path_text(&path)?;
+                        client
+                            .request(crate::domain::protocol::Request::SendPaste {
+                                domain: upload.domain_id,
+                                pane: upload.pane_id,
+                                text: quoted,
+                            })
+                            .and_then(|response| match response {
+                                crate::domain::protocol::Response::Ok { .. } => Ok(()),
+                                _ => anyhow::bail!(
+                                    "domain server returned an invalid input response"
+                                ),
+                            })
+                    })()
+                    .err()
+                    .map(|error| format!("{error:#}"));
+                    Ok(FileUploadCompletion::Uploaded(FileUploadOutcome {
+                        path,
+                        bytes,
+                        entries,
+                        insertion_error,
+                    }))
+                })()
+                .map_err(|error| format!("{error:#}"));
+                let _ = proxy.send_event(AppEvent::FileUploadCompleted {
+                    window_id,
+                    request_id,
+                    result,
+                });
+            });
+        if let Err(error) = spawn {
+            if let Some(active) = self.active_file_upload.take() {
+                self.toasts.dismiss(active.progress_toast_id);
+            }
+            self.toasts
+                .error(format!("Could not start live-domain upload: {error}"));
+        }
+    }
+
+    pub(super) fn handle_file_upload_completed(
+        &mut self,
+        request_id: u64,
+        result: std::result::Result<FileUploadCompletion, String>,
+    ) {
+        if self
+            .active_file_upload
+            .as_ref()
+            .is_none_or(|active| active.request_id != request_id)
+        {
+            return;
+        }
+        let active = self
+            .active_file_upload
+            .take()
+            .expect("checked active upload");
+        self.toasts.dismiss(active.progress_toast_id);
+        match result {
+            Ok(FileUploadCompletion::Uploaded(outcome)) if outcome.insertion_error.is_none() => {
+                let summary = outcome.entries.map_or_else(
+                    || format!("{} bytes", outcome.bytes),
+                    |entries| {
+                        format!(
+                            "directory with {entries} entries ({} archive bytes)",
+                            outcome.bytes
+                        )
+                    },
+                );
+                self.toasts.success(format!(
+                    "Uploaded {summary} and inserted {} without Enter",
+                    outcome.path
+                ));
+            }
+            Ok(FileUploadCompletion::Uploaded(outcome)) => {
+                let summary = outcome.entries.map_or_else(
+                    || format!("{} bytes", outcome.bytes),
+                    |entries| {
+                        format!(
+                            "directory with {entries} entries ({} archive bytes)",
+                            outcome.bytes
+                        )
+                    },
+                );
+                self.toasts.warning(format!(
+                    "Uploaded {summary} to {}, but could not insert the path: {}",
+                    outcome.path,
+                    outcome.insertion_error.unwrap_or_default()
+                ));
+            }
+            Ok(FileUploadCompletion::Cancelled { bytes_received }) => {
+                let progress = active.total_bytes.map_or_else(
+                    || format!("after {bytes_received} bytes"),
+                    |total| format!("after {bytes_received}/{total} bytes"),
+                );
+                self.toasts.info(format!(
+                    "Cancelled upload of {} {progress}; no destination was published",
+                    active.name
+                ));
+            }
+            Err(error) => self
+                .toasts
+                .error(format!("Live-domain upload failed: {error}")),
+        }
+    }
+
+    pub(super) fn handle_file_upload_progress(
+        &mut self,
+        request_id: u64,
+        bytes_sent: u64,
+        total_bytes: u64,
+    ) {
+        let Some(active) = self.active_file_upload.as_mut() else {
+            return;
+        };
+        if active.request_id != request_id
+            || active
+                .total_bytes
+                .is_some_and(|expected| expected != total_bytes)
+            || bytes_sent < active.bytes_sent
+            || bytes_sent > total_bytes
+        {
+            return;
+        }
+        active.total_bytes = Some(total_bytes);
+        active.bytes_sent = bytes_sent;
+        if !active.cancel_requested {
+            let percent = if total_bytes == 0 {
+                100
+            } else {
+                bytes_sent.saturating_mul(100) / total_bytes
+            };
+            self.toasts.update_persistent(
+                active.progress_toast_id,
+                format!(
+                    "Uploading {}: {percent}% ({bytes_sent}/{total_bytes} bytes). Commands → Cancel Upload",
+                    active.name
+                ),
+            );
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    pub(super) fn cancel_file_upload(&mut self) {
+        let Some(active) = self.active_file_upload.as_mut() else {
+            self.toasts.warning("No live-domain upload is active");
+            return;
+        };
+        if active.cancel_requested {
+            self.toasts
+                .info("Live-domain upload cancellation is already pending");
+            return;
+        }
+        active.cancel_requested = true;
+        active.cancellation.store(true, Ordering::Release);
+        self.toasts.update_persistent(
+            active.progress_toast_id,
+            match active.total_bytes {
+                Some(total) => format!(
+                    "Cancelling upload of {} after {}/{} bytes…",
+                    active.name, active.bytes_sent, total
+                ),
+                None => format!("Cancelling preparation of {}…", active.name),
+            },
+        );
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn file_drop_input_blocked(&self) -> bool {
+        self.guardrail.is_active()
+            || self.info_overlay.is_active()
+            || self.diff_review.is_active()
+            || self.context_picker.is_active()
+            || self.domain_picker.is_active()
+            || self.command_palette.is_active()
+            || self.shortcuts_panel.is_active()
+            || self.settings_panel.is_active()
+            || self.commands_panel.is_open()
+            || self.session_panel.is_open()
+            || self.session_dropdown_open
+            || self.search.is_active()
+            || self.copy_mode.is_active()
+            || self.tab_rename.is_some()
+            || self.harvest.as_ref().is_some_and(|harvest| {
+                harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
+            })
+    }
+
+    pub(super) fn apply_guardrail_action(
+        &mut self,
+        action: crate::terminal::guardrails::GuardrailAction,
+    ) {
+        use crate::terminal::guardrails::GuardrailAction;
+        match action {
+            GuardrailAction::Confirm { request_id } => {
+                let Some(writes) = self.guardrail.confirm(request_id) else {
+                    return;
+                };
+                let result = self
+                    .tabs
+                    .as_mut()
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "originating terminal no longer exists",
+                        )
+                    })
+                    .and_then(|tabs| {
+                        // Validate the entire captured route before sending any
+                        // member. A vanished pane must not produce a partial
+                        // broadcast or fall back to the current focus.
+                        if writes
+                            .iter()
+                            .any(|write| tabs.terminal_for_origin(write.origin).is_none())
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                "one or more originating terminals no longer exist",
+                            ));
+                        }
+                        if writes
+                            .iter()
+                            .any(|write| tabs.origin_read_only(write.origin) != Some(false))
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                "one or more originating panes are read-only",
+                            ));
+                        }
+                        for write in writes {
+                            tabs.write_user_to_origin(write.origin, &write.data)?;
+                        }
+                        Ok(())
+                    });
+                if let Err(error) = result {
+                    log::error!("Guarded command was not sent: {error}");
+                    self.toasts
+                        .error(format!("Guarded command was not sent: {error}"));
+                }
+            }
+            GuardrailAction::Cancel { request_id } => {
+                self.guardrail.dismiss(request_id);
+            }
+            GuardrailAction::None => {}
+        }
+    }
+
     /// Handle a terminal event
-    pub(super) fn handle_terminal_event(&mut self, event: TerminalEvent) {
+    pub(super) fn handle_terminal_event(&mut self, routed: RoutedTerminalEvent) {
+        let RoutedTerminalEvent { origin, event } = routed;
         match event {
             TerminalEvent::Bell => {
-                self.bell.ring();
+                if let Some(error) = self.bell.ring() {
+                    self.toasts.warning(error);
+                }
             }
             TerminalEvent::Notification(req) => {
                 let title = req.title.as_deref().unwrap_or("Terminal");
-                self.notifications.notify(title, &req.body);
+                if let Some(error) = self.notifications.notify(title, &req.body) {
+                    self.toasts.warning(error);
+                }
             }
-            TerminalEvent::TitleChanged(_title) => {
-                // Title is handled via shell cwd detection
-            }
-            TerminalEvent::ClipboardRequest(_which) => {
-                // OSC 52 read: echo the clipboard contents back to the PTY
-                // as a base64-encoded OSC 52 reply so the requesting app
-                // doesn't time out. If the clipboard is unavailable we
-                // still emit an empty reply so the app fails fast.
-                let text = self
-                    .clipboard
+            TerminalEvent::TitleChanged(title) => {
+                let updated = self
+                    .tabs
                     .as_mut()
-                    .and_then(|c| c.get_text().ok())
-                    .unwrap_or_default();
-                let encoded = base64_encode_standard(text.as_bytes());
-                let reply = format!("\x1b]52;c;{}\x07", encoded);
-                self.write_to_pty(reply.as_bytes());
+                    .is_some_and(|tabs| tabs.set_title_for_origin(origin, title));
+                if updated {
+                    // Inactive-tab events leave the native title unchanged
+                    // because this always derives from the current active tab.
+                    self.sync_native_window_title();
+                } else {
+                    log::debug!("Ignored OSC title for stale origin {:?}", origin);
+                }
             }
-            TerminalEvent::ClipboardWrite(text) => {
-                if let Some(clipboard) = &mut self.clipboard {
-                    if let Err(e) = clipboard.set_text(&text) {
-                        log::error!("Failed to set clipboard: {}", e);
+            TerminalEvent::ClipboardRequest {
+                selection: which,
+                reply_uses_8bit_controls,
+            } => {
+                // OSC 52 read: echo the clipboard contents back to the PTY
+                // as a base64 reply. Denial, unavailability, and an oversized
+                // clipboard deliberately return an empty payload so clients do
+                // not hang and no clipboard content leaks.
+                let text = if self.config.security.osc52.allow_read {
+                    self.clipboard
+                        .as_mut()
+                        .and_then(|clipboard| clipboard_text(clipboard, which).ok())
+                        .filter(|text| text.len() <= self.config.security.osc52.max_bytes)
+                        .unwrap_or_default()
+                } else {
+                    log::debug!("Denied OSC 52 clipboard read from {:?}", origin);
+                    String::new()
+                };
+                let encoded = base64_encode_standard(text.as_bytes());
+                let canonical = format!("\x1b]52;{};{}\x1b\\", which.osc_code(), encoded);
+                if let Some(tabs) = &mut self.tabs {
+                    let reply = termeric_core::Terminal::frame_pty_reply_for_mode(
+                        canonical.as_bytes(),
+                        reply_uses_8bit_controls,
+                    );
+                    if let Err(error) = tabs.write_to_origin(origin, &reply) {
+                        log::warn!(
+                            "Could not return clipboard reply to {:?}: {}",
+                            origin,
+                            error
+                        );
+                    }
+                }
+            }
+            TerminalEvent::ClipboardWrite { selection, text } => {
+                if !self.config.security.osc52.allow_write {
+                    log::debug!("Denied OSC 52 {:?} write from {:?}", selection, origin);
+                } else if text.len() > self.config.security.osc52.max_bytes {
+                    log::warn!("Rejected oversized OSC 52 write from {:?}", origin);
+                } else if let Some(clipboard) = &mut self.clipboard
+                    && let Err(error) = set_clipboard_text(clipboard, selection, text)
+                {
+                    log::error!("Failed to set clipboard: {}", error);
+                }
+            }
+            TerminalEvent::DynamicColor(operation) => {
+                use termeric_core::DynamicColorOperation;
+                match operation {
+                    DynamicColorOperation::Query {
+                        target,
+                        reply_uses_8bit_controls,
+                    } => {
+                        let color = self.dynamic_color_for_origin(origin, target);
+                        if let Some(color) = color {
+                            let canonical = dynamic_color_reply(target, color);
+                            if let Some(tabs) = &mut self.tabs {
+                                let reply = termeric_core::Terminal::frame_pty_reply_for_mode(
+                                    canonical.as_bytes(),
+                                    reply_uses_8bit_controls,
+                                );
+                                if let Err(error) = tabs.write_to_origin(origin, &reply) {
+                                    log::warn!(
+                                        "Could not return dynamic-color reply to {:?}: {}",
+                                        origin,
+                                        error
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    operation => {
+                        if let Some(terminal) = self
+                            .tabs
+                            .as_mut()
+                            .and_then(|tabs| tabs.terminal_for_origin_mut(origin))
+                        {
+                            terminal.apply_dynamic_color(operation);
+                        }
                     }
                 }
             }
@@ -46,18 +676,169 @@ impl App {
                 // Cursor visibility is handled in render
             }
             TerminalEvent::PtyWrite(_) => {
-                // Handled in Tab::process_events (written back to tab PTY)
+                // Consumed by the originating tab/pane poller. Reaching App
+                // would be a routing invariant violation.
+                log::error!(
+                    "Terminal protocol reply escaped its PTY owner: {:?}",
+                    origin
+                );
             }
             TerminalEvent::Exit => {
-                // Individual tab exit is handled by Tab::process_events
+                // Individual process exit is handled by its owning poller.
             }
+        }
+    }
+
+    fn dynamic_color_for_origin(
+        &self,
+        origin: crate::tabs::TerminalEventOrigin,
+        target: termeric_core::DynamicColorTarget,
+    ) -> Option<termeric_core::Color> {
+        use termeric_core::DynamicColorTarget;
+        let terminal = self.tabs.as_ref()?.terminal_for_origin(origin)?;
+        let dynamic = terminal.dynamic_colors();
+        let theme_color = |color: crate::config::theme::Color| {
+            termeric_core::Color::rgb(color.r, color.g, color.b)
+        };
+        Some(match target {
+            DynamicColorTarget::Palette(index) => dynamic.palette(index).unwrap_or_else(|| {
+                if index < 16 {
+                    theme_color(self.theme.ansi_color(index))
+                } else {
+                    termeric_core::ansi::color_256(index)
+                }
+            }),
+            DynamicColorTarget::Foreground => dynamic
+                .foreground()
+                .unwrap_or_else(|| theme_color(self.theme.ui.foreground)),
+            DynamicColorTarget::Background => dynamic
+                .background()
+                .unwrap_or_else(|| theme_color(self.theme.ui.background)),
+            DynamicColorTarget::Cursor => dynamic
+                .cursor()
+                .unwrap_or_else(|| theme_color(self.theme.ui.cursor)),
+        })
+    }
+
+    pub(super) fn active_guarded_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
+        let tab = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .filter(|tab| matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }))?;
+        Some(if let Some(panes) = &tab.pane_manager {
+            crate::tabs::TerminalEventOrigin::Pane {
+                tab_id: tab.id,
+                pane_id: panes.focused_id(),
+            }
+        } else {
+            crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
+        })
+    }
+
+    pub(super) fn guard_plugin_writes(
+        &mut self,
+        input: &str,
+        writes: Vec<crate::terminal::guardrails::GuardedWrite>,
+    ) -> bool {
+        let Some(active_tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
+            return false;
+        };
+        if !matches!(active_tab.tab_type, crate::tabs::TabType::Plugin { .. })
+            || writes.is_empty()
+            || writes.iter().any(|write| match write.origin {
+                crate::tabs::TerminalEventOrigin::Tab { tab_id }
+                | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id != active_tab.id,
+            })
+        {
+            return false;
+        }
+        let Some(mut matched) = crate::terminal::guardrails::check_command(input) else {
+            return false;
+        };
+        if writes.len() > 1 {
+            matched.target = format!("Broadcast to {} panes", writes.len());
+        }
+        log::warn!(
+            "Guardrail triggered: {} — {}",
+            matched.command,
+            matched.reason
+        );
+        self.guardrail.show(matched, writes);
+        true
+    }
+
+    /// Track only enough editable-line state to guard a broadcast commit.
+    /// Alias expansion and completion deliberately remain disabled while
+    /// broadcasting, but destructive input must not bypass the safety check.
+    pub(super) fn track_broadcast_guardrail_input(&mut self, data: &[u8]) -> Option<String> {
+        if data == b"\r" || data == b"\n" {
+            return Some(std::mem::take(&mut self.input_line_buffer));
+        }
+        if data == b"\x7f" {
+            self.input_line_buffer.pop();
+        } else if data == b"\x15" {
+            self.input_line_buffer.clear();
+        } else if data == b"\x17" {
+            let trimmed = self.input_line_buffer.trim_end();
+            if let Some(position) = trimmed.rfind(' ') {
+                self.input_line_buffer.truncate(position + 1);
+            } else {
+                self.input_line_buffer.clear();
+            }
+        } else if (data.len() == 1 && data[0] < 0x20) || (data.len() >= 2 && data[0] == 0x1b) {
+            self.input_line_buffer.clear();
+        } else if let Ok(text) = std::str::from_utf8(data) {
+            if text.contains(['\r', '\n']) {
+                let mut committed = std::mem::take(&mut self.input_line_buffer);
+                committed.push_str(text);
+                return Some(committed);
+            }
+            self.input_line_buffer.push_str(text);
+        }
+        None
+    }
+
+    /// Preserve the editable suffix of a paste after it has passed the
+    /// destructive-command check. A later typed suffix must be checked with
+    /// the pasted prefix instead of being treated as a fresh command.
+    pub(super) fn track_guarded_paste_suffix(&mut self, text: &str) {
+        let suffix_start = text.char_indices().rev().find_map(|(index, character)| {
+            matches!(character, '\r' | '\n').then_some(index + character.len_utf8())
+        });
+        let suffix = suffix_start.map_or(text, |index| &text[index..]);
+        if suffix.chars().any(char::is_control) {
+            // Cursor-editing controls make the shell's resulting line
+            // unknowable, so do not retain a falsely authoritative prefix.
+            self.input_line_buffer.clear();
+        } else if suffix_start.is_some() {
+            self.input_line_buffer.clear();
+            self.input_line_buffer.push_str(suffix);
+        } else {
+            self.input_line_buffer.push_str(suffix);
         }
     }
 
     /// Write input to the active tab's PTY, with custom command alias expansion
     pub(super) fn write_to_pty(&mut self, data: &[u8]) {
+        if matches!(self.broadcast, BroadcastState::Armed { .. }) {
+            self.toasts
+                .warning("Input was not sent while broadcast is armed");
+            return;
+        }
+        if self.focused_pane_read_only() {
+            self.clear_terminal_input_tracking();
+            return;
+        }
         // Reset cursor blink so cursor is fully visible when typing
         self.reset_cursor_blink();
+
+        // Broadcast deliberately bypasses alias expansion and completion, but
+        // its own route still tracks enough line state for plugin guardrails.
+        if self.write_broadcast_bytes(data) {
+            self.git_completions_visible = false;
+            return;
+        }
 
         // Track the input line buffer for alias expansion + git completion
         if data == b"\r" {
@@ -95,24 +876,13 @@ impl App {
             }
 
             // Enter pressed — guardrail check for plugin tabs
-            let is_plugin_tab = self
-                .tabs
-                .as_ref()
-                .and_then(|tabs| {
-                    tabs.active_tab()
-                        .map(|t| matches!(t.tab_type, crate::tabs::TabType::Plugin { .. }))
-                })
-                .unwrap_or(false);
-
-            if is_plugin_tab {
+            if let Some(origin) = self.active_guarded_origin() {
                 let input = self.input_line_buffer.trim().to_string();
-                if let Some(matched) = crate::terminal::guardrails::check_command(&input) {
-                    log::warn!(
-                        "Guardrail triggered: {} — {}",
-                        matched.command,
-                        matched.reason
-                    );
-                    self.guardrail.show(matched, data.to_vec());
+                let writes = vec![crate::terminal::guardrails::GuardedWrite::new(
+                    origin,
+                    data.to_vec(),
+                )];
+                if self.guard_plugin_writes(&input, writes) {
                     self.input_line_buffer.clear();
                     return;
                 }
@@ -145,7 +915,9 @@ impl App {
                 // then send the real command + Enter
                 if let Some(tabs) = &mut self.tabs {
                     if let Some(tab) = tabs.active_tab_mut() {
-                        tab.terminal.grid_mut().set_scroll_offset(0);
+                        if let Some(terminal) = tab.focused_terminal_mut() {
+                            terminal.grid_mut().set_scroll_offset(0);
+                        }
                         let _ = tab.write(b"\x15"); // Ctrl+U: clear line
                         let cmd_with_enter = format!("{}\r", expanded);
                         let _ = tab.write(cmd_with_enter.as_bytes());
@@ -198,24 +970,45 @@ impl App {
             self.git_completion_index = None;
         }
 
-        // Route keyboard input to the active tab — through pane manager if split,
-        // otherwise directly to the tab's PTY
+        // Tab owns the focused terminal/PTTY route in both single and pane mode.
         if let Some(tabs) = &mut self.tabs {
             if let Some(tab) = tabs.active_tab_mut() {
-                if let Some(ref mut pm) = tab.pane_manager {
-                    if let Some(pane) = pm.focused_pane_mut() {
-                        pane.terminal.grid_mut().set_scroll_offset(0);
-                        if let Err(e) = pane.write(data) {
-                            log::error!("Failed to write to pane PTY: {}", e);
-                        }
-                    }
-                } else {
-                    tab.terminal.grid_mut().set_scroll_offset(0);
-                    if let Err(e) = tab.write(data) {
-                        log::error!("Failed to write to PTY: {}", e);
-                    }
+                if let Some(terminal) = tab.focused_terminal_mut() {
+                    terminal.grid_mut().set_scroll_offset(0);
+                }
+                if let Err(error) = tab.write(data) {
+                    log::error!("Failed to write to focused PTY: {}", error);
                 }
             }
+        }
+    }
+
+    /// Clear state derived from a user's editable terminal line. This must run
+    /// whenever a route rejects user input before the bytes reach the PTY so a
+    /// later unlock cannot revive aliases, completions, or guardrail context
+    /// that the shell never received.
+    pub(super) fn clear_terminal_input_tracking(&mut self) {
+        self.input_line_buffer.clear();
+        self.git_completions_visible = false;
+        self.git_completions.clear();
+        self.git_completion_index = None;
+    }
+
+    /// Write terminal-protocol bytes without treating them as editable shell
+    /// input. Mouse/focus/paste framing must not mutate alias or completion state.
+    pub(super) fn write_terminal_protocol_input(&mut self, data: &[u8]) -> bool {
+        let result = self
+            .tabs
+            .as_mut()
+            .and_then(TabManager::active_tab_mut)
+            .map(|tab| tab.write(data));
+        match result {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                log::error!("Failed to write terminal protocol input: {}", error);
+                false
+            }
+            None => false,
         }
     }
 
@@ -235,5 +1028,240 @@ impl App {
         } else {
             self.toasts.warning("Clipboard not available");
         }
+    }
+}
+
+fn quote_local_drop_path(path: &std::path::Path) -> std::result::Result<String, String> {
+    if !path.is_absolute() {
+        return Err("the compositor supplied a non-absolute path".into());
+    }
+    let text = path
+        .to_str()
+        .ok_or_else(|| "non-UTF-8 paths require manual shell entry".to_string())?;
+    if text.len() > MAX_DROPPED_PATH_BYTES {
+        return Err(format!(
+            "path exceeds the {MAX_DROPPED_PATH_BYTES}-byte insertion limit"
+        ));
+    }
+    if text.chars().any(unsafe_drop_path_character) {
+        return Err(
+            "path contains control, line-separator, or bidirectional formatting text".into(),
+        );
+    }
+    quote_posix_path_text(text).map_err(|error| format!("{error:#}"))
+}
+
+fn quote_posix_path_text(text: &str) -> anyhow::Result<String> {
+    if !std::path::Path::new(text).is_absolute()
+        || text.len() > MAX_DROPPED_PATH_BYTES + crate::domain::protocol::MAX_UPLOAD_NAME_BYTES + 1
+        || text.chars().any(unsafe_drop_path_character)
+    {
+        anyhow::bail!("destination path is not safe absolute UTF-8 text");
+    }
+    Ok(format!("'{}' ", text.replace('\'', "'\\''")))
+}
+
+fn validate_upload_source(
+    path: &std::path::Path,
+) -> std::result::Result<ValidatedUploadSource, String> {
+    if !path.is_absolute() {
+        return Err("the compositor supplied a non-absolute upload source".into());
+    }
+    let text = path
+        .to_str()
+        .ok_or_else(|| "upload sources require a UTF-8 path and file name".to_string())?;
+    if text.len() > MAX_DROPPED_PATH_BYTES || text.chars().any(unsafe_drop_path_character) {
+        return Err("upload source path is too long or contains unsafe display text".into());
+    }
+    let name = path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| "upload source requires a UTF-8 file name".to_string())?
+        .to_string();
+    crate::domain::protocol::validate_upload_name(&name).map_err(|error| format!("{error:#}"))?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("could not inspect upload source: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("symbolic-link upload sources are not supported".into());
+    }
+    let source_kind = if metadata.is_file() {
+        if metadata.len() > crate::domain::protocol::MAX_FILE_UPLOAD_BYTES {
+            return Err(format!(
+                "file exceeds the {} MiB upload limit",
+                crate::domain::protocol::MAX_FILE_UPLOAD_BYTES / (1024 * 1024)
+            ));
+        }
+        FileUploadSourceKind::File {
+            bytes: metadata.len(),
+        }
+    } else if metadata.is_dir() {
+        FileUploadSourceKind::Directory
+    } else {
+        return Err("upload source must be one regular file or real directory".into());
+    };
+    #[cfg(unix)]
+    let source_identity = {
+        use std::os::unix::fs::MetadataExt;
+        Some((metadata.dev(), metadata.ino()))
+    };
+    #[cfg(not(unix))]
+    let source_identity = None;
+    Ok(ValidatedUploadSource {
+        name,
+        source_kind,
+        identity: source_identity,
+    })
+}
+
+fn unsafe_drop_path_character(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
+}
+
+fn dynamic_color_reply(
+    target: termeric_core::DynamicColorTarget,
+    color: termeric_core::Color,
+) -> String {
+    use termeric_core::DynamicColorTarget;
+    let specification = format!(
+        "rgb:{:04x}/{:04x}/{:04x}",
+        u16::from(color.r) * 257,
+        u16::from(color.g) * 257,
+        u16::from(color.b) * 257
+    );
+    match target {
+        DynamicColorTarget::Palette(index) => format!("\x1b]4;{index};{specification}\x1b\\"),
+        DynamicColorTarget::Foreground => format!("\x1b]10;{specification}\x1b\\"),
+        DynamicColorTarget::Background => format!("\x1b]11;{specification}\x1b\\"),
+        DynamicColorTarget::Cursor => format!("\x1b]12;{specification}\x1b\\"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn clipboard_text(
+    clipboard: &mut arboard::Clipboard,
+    selection: termeric_core::ClipboardRequest,
+) -> Result<String, arboard::Error> {
+    use arboard::{GetExtLinux, LinuxClipboardKind};
+    let kind = match selection {
+        termeric_core::ClipboardRequest::Primary => LinuxClipboardKind::Primary,
+        termeric_core::ClipboardRequest::Clipboard => LinuxClipboardKind::Clipboard,
+    };
+    clipboard.get().clipboard(kind).text()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn clipboard_text(
+    clipboard: &mut arboard::Clipboard,
+    _selection: termeric_core::ClipboardRequest,
+) -> Result<String, arboard::Error> {
+    clipboard.get_text()
+}
+
+#[cfg(target_os = "linux")]
+fn set_clipboard_text(
+    clipboard: &mut arboard::Clipboard,
+    selection: termeric_core::ClipboardRequest,
+    text: String,
+) -> Result<(), arboard::Error> {
+    use arboard::{LinuxClipboardKind, SetExtLinux};
+    let kind = match selection {
+        termeric_core::ClipboardRequest::Primary => LinuxClipboardKind::Primary,
+        termeric_core::ClipboardRequest::Clipboard => LinuxClipboardKind::Clipboard,
+    };
+    clipboard.set().clipboard(kind).text(text)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_clipboard_text(
+    clipboard: &mut arboard::Clipboard,
+    _selection: termeric_core::ClipboardRequest,
+    text: String,
+) -> Result<(), arboard::Error> {
+    clipboard.set_text(text)
+}
+
+#[cfg(test)]
+mod desktop_io_tests {
+    use super::*;
+
+    #[test]
+    fn dropped_paths_are_posix_quoted_without_adding_enter() {
+        assert_eq!(
+            quote_local_drop_path(std::path::Path::new("/tmp/a b'c")).unwrap(),
+            "'/tmp/a b'\\''c' "
+        );
+    }
+
+    #[test]
+    fn dropped_paths_reject_ambiguous_or_unsafe_text() {
+        assert!(quote_local_drop_path(std::path::Path::new("relative/file")).is_err());
+        assert!(quote_local_drop_path(std::path::Path::new("/tmp/line\nbreak")).is_err());
+        assert!(quote_local_drop_path(std::path::Path::new("/tmp/escape\u{1b}")).is_err());
+        assert!(quote_local_drop_path(std::path::Path::new("/tmp/reverse\u{202e}txt")).is_err());
+        assert!(
+            quote_local_drop_path(std::path::Path::new(&format!(
+                "/{}",
+                "x".repeat(MAX_DROPPED_PATH_BYTES)
+            )))
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropped_paths_reject_non_utf8_names() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 0xff]));
+        assert!(quote_local_drop_path(&path).is_err());
+    }
+
+    #[test]
+    fn dynamic_color_queries_use_xterm_16_bit_rgb_and_st() {
+        let color = termeric_core::Color::rgb(255, 128, 0);
+        assert_eq!(
+            dynamic_color_reply(termeric_core::DynamicColorTarget::Palette(3), color),
+            "\x1b]4;3;rgb:ffff/8080/0000\x1b\\"
+        );
+        assert_eq!(
+            dynamic_color_reply(termeric_core::DynamicColorTarget::Cursor, color),
+            "\x1b]12;rgb:ffff/8080/0000\x1b\\"
+        );
+    }
+
+    #[test]
+    fn app_mediated_osc_replies_use_the_origin_terminal_c1_mode() {
+        let mut terminal = termeric_core::Terminal::new(8, 4);
+        let color = dynamic_color_reply(
+            termeric_core::DynamicColorTarget::Background,
+            termeric_core::Color::rgb(0x20, 0x18, 0x14),
+        );
+        assert_eq!(
+            terminal.frame_pty_reply(color.as_bytes()),
+            b"\x1b]11;rgb:2020/1818/1414\x1b\\"
+        );
+
+        terminal.process(b"\x1b G");
+        let captured_mode = terminal.uses_8bit_controls();
+        terminal.process(b"\x1b F");
+        assert!(!terminal.uses_8bit_controls());
+        assert_eq!(
+            termeric_core::Terminal::frame_pty_reply_for_mode(color.as_bytes(), captured_mode),
+            b"\x9d11;rgb:2020/1818/1414\x9c"
+        );
+        assert_eq!(
+            termeric_core::Terminal::frame_pty_reply_for_mode(b"\x1b]52;c;\x1b\\", captured_mode,),
+            b"\x9d52;c;\x9c"
+        );
     }
 }

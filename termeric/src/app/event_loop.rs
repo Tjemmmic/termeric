@@ -6,32 +6,93 @@ use std::sync::Arc;
 use std::time::Instant;
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
+    dpi::{LogicalSize, PhysicalPosition, PhysicalSize},
     event::WindowEvent,
-    event_loop::ActiveEventLoop,
+    event_loop::{ActiveEventLoop, ControlFlow},
     window::{Window, WindowId},
 };
 
-use crate::input::key_to_bytes_with_modifiers;
 use crate::input::keybindings::KeyChord;
 use crate::ui::settings::SettingsKey;
 
-use super::App;
+use super::redraw_scheduler::RedrawReason;
+use super::{App, AppEvent, clear_pty_wake_pending, clear_transcript_wake_pending};
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
 
         // Create window
+        let quick_monitor = self
+            .launch
+            .quick_access
+            .then(|| {
+                event_loop
+                    .primary_monitor()
+                    .or_else(|| event_loop.available_monitors().next())
+            })
+            .flatten();
+        let quick_geometry = quick_monitor.as_ref().map(|monitor| {
+            quick_access_geometry(monitor.position(), monitor.size(), self.launch.pixel_size)
+        });
         let mut window_attrs = Window::default_attributes()
-            .with_title("Termeric")
+            .with_title(if self.launch.quick_access {
+                "Termeric Quick Access"
+            } else {
+                "Termeric"
+            })
+            .with_visible(false)
             .with_inner_size(LogicalSize::new(
                 self.config.window.width,
                 self.config.window.height,
             ))
-            .with_decorations(self.config.window.decorations);
+            .with_decorations(self.config.window.decorations)
+            .with_window_level(
+                self.config
+                    .window
+                    .level
+                    .native_for_window(self.launch.quick_access),
+            );
+        if self.launch.quick_access {
+            window_attrs = window_attrs.with_decorations(false);
+        }
+        if let Some((position, size)) = quick_geometry {
+            window_attrs = window_attrs.with_position(position).with_inner_size(size);
+        } else if let Some((width, height)) = self.launch.pixel_size {
+            window_attrs = window_attrs.with_inner_size(PhysicalSize::new(width, height));
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::startup_notify::{
+                EventLoopExtStartupNotify, WindowAttributesExtStartupNotify,
+            };
+            let app_id = self
+                .launch
+                .app_id
+                .as_deref()
+                .unwrap_or(if self.launch.quick_access {
+                    "termeric-quick-access"
+                } else {
+                    "termeric"
+                });
+            window_attrs = winit::platform::x11::WindowAttributesExtX11::with_name(
+                window_attrs,
+                app_id,
+                app_id,
+            );
+            window_attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(
+                window_attrs,
+                app_id,
+                app_id,
+            );
+            if let Some(token) = event_loop.read_token_from_env() {
+                window_attrs = window_attrs.with_activation_token(token);
+                winit::platform::startup_notify::reset_activation_token_env();
+            }
+        }
 
         // Load and set window icon if available
         if let Some(icon) = Self::load_icon() {
@@ -42,27 +103,64 @@ impl ApplicationHandler for App {
             Ok(window) => {
                 log::info!("Window created");
                 let window = Arc::new(window);
+                // Winit leaves IME disabled by default. This also enables
+                // native dead-key composition on platforms such as macOS.
+                window.set_ime_allowed(true);
+                self.accessibility_adapter = Some(accesskit_winit::Adapter::with_event_loop_proxy(
+                    event_loop,
+                    &window,
+                    super::EVENT_LOOP_PROXY
+                        .get()
+                        .cloned()
+                        .expect("event-loop proxy is installed before resume"),
+                ));
 
                 // Initialize renderer
                 if let Err(e) = self.init_renderer(window.clone()) {
-                    log::error!("Failed to initialize renderer: {}", e);
-                    event_loop.exit();
+                    let error = format!("Failed to initialize renderer: {e:#}");
+                    log::error!("{error}");
+                    self.startup_error = Some(error);
+                    self.should_exit = true;
+                    if !self.managed_window {
+                        event_loop.exit();
+                    }
                     return;
                 }
 
                 // Initialize tabs with first tab
                 if let Err(e) = self.init_tabs() {
-                    log::error!("Failed to initialize tabs: {}", e);
-                    event_loop.exit();
+                    let error = format!("Failed to initialize tabs: {e:#}");
+                    log::error!("{error}");
+                    self.startup_error = Some(error);
+                    self.should_exit = true;
+                    if !self.managed_window {
+                        event_loop.exit();
+                    }
                     return;
                 }
 
+                window.set_visible(true);
+                if self.launch.quick_access {
+                    window.focus_window();
+                }
+
                 // Initial render
-                self.render();
+                self.redraw_scheduler.request(RedrawReason::Startup);
+                let reasons = self.redraw_scheduler.begin_frame();
+                log::trace!("Rendering frame: reasons={reasons}");
+                let _ = self.render();
+                self.redraw_scheduler.finish_frame();
+                self.native_frame_stats
+                    .record(self.redraw_scheduler.rendered_frames());
             }
             Err(e) => {
-                log::error!("Failed to create window: {}", e);
-                event_loop.exit();
+                let error = format!("Failed to create window: {e:#}");
+                log::error!("{error}");
+                self.startup_error = Some(error);
+                self.should_exit = true;
+                if !self.managed_window {
+                    event_loop.exit();
+                }
             }
         }
     }
@@ -73,16 +171,48 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        if let (Some(adapter), Some(window)) = (&mut self.accessibility_adapter, &self.window) {
+            adapter.process_event(window, &event);
+        }
+        let reason = match &event {
+            WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                Some(RedrawReason::Resize)
+            }
+            WindowEvent::KeyboardInput { .. }
+            | WindowEvent::ModifiersChanged(_)
+            | WindowEvent::Ime(_) => Some(RedrawReason::KeyboardInput),
+            WindowEvent::CursorMoved { .. }
+            | WindowEvent::CursorLeft { .. }
+            | WindowEvent::CursorEntered { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::HoveredFile(_)
+            | WindowEvent::HoveredFileCancelled
+            | WindowEvent::DroppedFile(_) => Some(RedrawReason::PointerInput),
+            WindowEvent::Focused(_) => Some(RedrawReason::Focus),
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            self.redraw_scheduler.request(reason);
+        }
+
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Close requested");
                 self.should_exit = true;
-                event_loop.exit();
+                if !self.managed_window {
+                    event_loop.exit();
+                }
             }
 
             WindowEvent::Resized(size) => {
+                let recovering_surface = self.surface_lost;
                 self.handle_resize(size.width, size.height);
                 self.surface_lost = false;
+                self.surface_lost_at = None;
+                if recovering_surface {
+                    self.redraw_scheduler.request(RedrawReason::SurfaceRecovery);
+                }
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -107,26 +237,60 @@ impl ApplicationHandler for App {
                 self.modifiers = modifiers.state();
             }
 
+            WindowEvent::Ime(event) => {
+                self.handle_ime_event(event);
+            }
+
+            WindowEvent::HoveredFile(path) => {
+                self.file_drop_hovered = true;
+                let allowed = self.dropped_path_allowed(&path);
+                if let Some(window) = &self.window {
+                    window.set_cursor(if allowed {
+                        winit::window::CursorIcon::Copy
+                    } else {
+                        winit::window::CursorIcon::NotAllowed
+                    });
+                }
+            }
+
+            WindowEvent::HoveredFileCancelled => {
+                self.file_drop_hovered = false;
+                if let Some(window) = &self.window {
+                    window.set_cursor(winit::window::CursorIcon::Default);
+                }
+            }
+
+            WindowEvent::DroppedFile(path) => {
+                self.file_drop_hovered = false;
+                if let Some(window) = &self.window {
+                    window.set_cursor(winit::window::CursorIcon::Default);
+                }
+                self.handle_dropped_path(&path);
+            }
+
             WindowEvent::KeyboardInput { event, .. } => {
+                if matches!(
+                    event.logical_key,
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::AltGraph)
+                ) {
+                    self.alt_graph_active = event.state == winit::event::ElementState::Pressed;
+                }
+
                 // Handle guardrail confirmation (highest priority)
                 if self.guardrail.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
-                            Key::Named(NamedKey::Enter) => {
-                                // Confirm — send the pending data
-                                let data = self.guardrail.confirm();
-                                if let Some(tabs) = &mut self.tabs {
-                                    if let Some(tab) = tabs.active_tab_mut() {
-                                        let _ = tab.write(&data);
-                                    }
-                                }
+                        let request_id = self.guardrail.request_id();
+                        let action = match &event.logical_key {
+                            Key::Named(NamedKey::Enter) if self.modifiers.control_key() => {
+                                crate::terminal::guardrails::GuardrailAction::Confirm { request_id }
                             }
-                            Key::Named(NamedKey::Escape) => {
-                                self.guardrail.dismiss();
+                            Key::Named(NamedKey::Enter | NamedKey::Escape) => {
+                                crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
                             }
-                            _ => {}
-                        }
+                            _ => crate::terminal::guardrails::GuardrailAction::None,
+                        };
+                        self.apply_guardrail_action(action);
                         if let Some(window) = &self.window {
                             window.request_redraw();
                         }
@@ -134,50 +298,77 @@ impl ApplicationHandler for App {
                     return;
                 }
 
-                // Info overlay input: Enter/Escape dismiss, 'c' copies text, 1-9 selects profile
+                // Information overlays own all input until their close
+                // animation completes. Actions are request-scoped so input
+                // during exit cannot target a replacement notice.
                 if self.info_overlay.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
+                        use crate::ui::info_overlay::InfoOverlayAction;
                         use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
+                        let request_id = self.info_overlay.request_id();
+                        let action = match &event.logical_key {
                             Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
-                                self.info_overlay.dismiss();
-                                self.pending_profile_selection = None;
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
+                                InfoOverlayAction::Dismiss { request_id }
                             }
-                            Key::Character(c) if c.as_str() == "c" => {
-                                // Copy overlay text to clipboard
-                                let text = self.info_overlay.lines.join("\n");
-                                self.copy_to_clipboard(text, "Copied notice to clipboard");
+                            Key::Named(NamedKey::ArrowUp) => InfoOverlayAction::ScrollLines {
+                                request_id,
+                                delta: -1,
+                            },
+                            Key::Named(NamedKey::ArrowDown) => InfoOverlayAction::ScrollLines {
+                                request_id,
+                                delta: 1,
+                            },
+                            Key::Named(NamedKey::PageUp) => InfoOverlayAction::ScrollLines {
+                                request_id,
+                                delta: -(self.info_overlay.viewport_rows() as isize),
+                            },
+                            Key::Named(NamedKey::PageDown) => InfoOverlayAction::ScrollLines {
+                                request_id,
+                                delta: self.info_overlay.viewport_rows() as isize,
+                            },
+                            Key::Named(NamedKey::ArrowLeft) => InfoOverlayAction::ScrollColumns {
+                                request_id,
+                                delta: -4,
+                            },
+                            Key::Named(NamedKey::ArrowRight) => InfoOverlayAction::ScrollColumns {
+                                request_id,
+                                delta: 4,
+                            },
+                            Key::Named(NamedKey::Home) if self.modifiers.control_key() => {
+                                InfoOverlayAction::ScrollToTop { request_id }
                             }
-                            Key::Character(c) => {
-                                // Number key 1-9 for profile selection
-                                if let Some(digit) =
-                                    c.as_str().chars().next().and_then(|ch| ch.to_digit(10))
-                                {
-                                    if (1..=9).contains(&digit) {
-                                        let idx = (digit - 1) as usize;
-                                        if let Some((ref plugin_id, ref profiles)) =
-                                            self.pending_profile_selection
-                                        {
-                                            if idx < profiles.len() {
-                                                let profile_name = profiles[idx].clone();
-                                                let plugin_id = plugin_id.clone();
-                                                self.info_overlay.dismiss();
-                                                self.pending_profile_selection = None;
-                                                self.execute_plugin_actions(vec![
-                                                    crate::plugin::PluginAction::ApplyProfile {
-                                                        plugin_id,
-                                                        profile_name,
-                                                    },
-                                                ]);
-                                            }
-                                        }
+                            Key::Named(NamedKey::End) if self.modifiers.control_key() => {
+                                InfoOverlayAction::ScrollToBottom { request_id }
+                            }
+                            Key::Named(NamedKey::Home) => {
+                                InfoOverlayAction::ScrollToLeft { request_id }
+                            }
+                            Key::Named(NamedKey::End) => {
+                                InfoOverlayAction::ScrollToRight { request_id }
+                            }
+                            Key::Character(character)
+                                if character.as_str().eq_ignore_ascii_case("c") =>
+                            {
+                                InfoOverlayAction::Copy { request_id }
+                            }
+                            Key::Character(character) => character
+                                .as_str()
+                                .chars()
+                                .next()
+                                .and_then(|shortcut| {
+                                    self.info_overlay.choice_for_shortcut(request_id, shortcut)
+                                })
+                                .map_or(InfoOverlayAction::None, |choice| {
+                                    InfoOverlayAction::Choose {
+                                        request_id,
+                                        choice_id: choice.id.clone(),
                                     }
-                                }
-                            }
-                            _ => {}
+                                }),
+                            _ => InfoOverlayAction::None,
+                        };
+                        self.apply_info_overlay_action(action);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
                         }
                     }
                     return;
@@ -186,48 +377,67 @@ impl ApplicationHandler for App {
                 // Handle diff review overlay input
                 if self.diff_review.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
+                        use crate::ui::diff_review::DiffReviewAction;
                         use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                // Mark diffs as reviewed before dismissing
-                                if let (Some(tab_idx), Some(tabs)) =
-                                    (self.diff_review.diff_tab_index, &mut self.tabs)
-                                {
-                                    if tabs.iter().enumerate().any(|(i, _)| i == tab_idx) {
-                                        // We can't mutate through iter(), use the index directly
-                                    }
-                                    // Mark via active tab's diff detector
-                                    if let Some(tab) = tabs.active_tab_mut() {
-                                        tab.diff_detector.mark_all_reviewed();
-                                    }
-                                }
-                                self.diff_review.dismiss();
+                        let request_id = self.diff_review.request_id();
+                        let action = match &event.logical_key {
+                            Key::Named(NamedKey::Enter | NamedKey::Escape) => {
+                                DiffReviewAction::Dismiss { request_id }
                             }
-                            Key::Named(NamedKey::ArrowUp) => {
-                                self.diff_review.scroll_up(3);
-                            }
-                            Key::Character(k) if k == "k" => {
-                                self.diff_review.scroll_up(3);
-                            }
-                            Key::Named(NamedKey::ArrowDown) => {
-                                self.diff_review.scroll_down(3);
-                            }
-                            Key::Character(k) if k == "j" => {
-                                self.diff_review.scroll_down(3);
-                            }
-                            Key::Character(c) if c == "c" => {
-                                // Copy raw diff to clipboard
-                                if let Some(raw) = self.diff_review.raw_text() {
-                                    self.copy_to_clipboard(
-                                        raw.to_string(),
-                                        "Copied diff to clipboard",
-                                    );
-                                } else {
-                                    self.toasts.warning("No diff is available to copy");
+                            Key::Named(NamedKey::ArrowUp) => DiffReviewAction::ScrollRows {
+                                request_id,
+                                delta: -1,
+                            },
+                            Key::Named(NamedKey::ArrowDown) => DiffReviewAction::ScrollRows {
+                                request_id,
+                                delta: 1,
+                            },
+                            Key::Character(key) if key.as_str().eq_ignore_ascii_case("k") => {
+                                DiffReviewAction::ScrollRows {
+                                    request_id,
+                                    delta: -3,
                                 }
                             }
-                            _ => {}
-                        }
+                            Key::Character(key) if key.as_str().eq_ignore_ascii_case("j") => {
+                                DiffReviewAction::ScrollRows {
+                                    request_id,
+                                    delta: 3,
+                                }
+                            }
+                            Key::Named(NamedKey::PageUp) => DiffReviewAction::ScrollRows {
+                                request_id,
+                                delta: -(self.diff_review.viewport_rows() as isize),
+                            },
+                            Key::Named(NamedKey::PageDown) => DiffReviewAction::ScrollRows {
+                                request_id,
+                                delta: self.diff_review.viewport_rows() as isize,
+                            },
+                            Key::Named(NamedKey::ArrowLeft) => DiffReviewAction::ScrollColumns {
+                                request_id,
+                                delta: -4,
+                            },
+                            Key::Named(NamedKey::ArrowRight) => DiffReviewAction::ScrollColumns {
+                                request_id,
+                                delta: 4,
+                            },
+                            Key::Named(NamedKey::Home) if self.modifiers.control_key() => {
+                                DiffReviewAction::ScrollToTop { request_id }
+                            }
+                            Key::Named(NamedKey::End) if self.modifiers.control_key() => {
+                                DiffReviewAction::ScrollToBottom { request_id }
+                            }
+                            Key::Named(NamedKey::Home) => {
+                                DiffReviewAction::ScrollToLeft { request_id }
+                            }
+                            Key::Named(NamedKey::End) => {
+                                DiffReviewAction::ScrollToRight { request_id }
+                            }
+                            Key::Character(key) if key.as_str().eq_ignore_ascii_case("c") => {
+                                DiffReviewAction::Copy { request_id }
+                            }
+                            _ => DiffReviewAction::None,
+                        };
+                        self.apply_diff_review_action(action);
                         if let Some(window) = &self.window {
                             window.request_redraw();
                         }
@@ -238,23 +448,129 @@ impl ApplicationHandler for App {
                 // Handle context picker input
                 if self.context_picker.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
+                        use crate::ui::context_picker::{ContextPickerAction, ContextPickerPhase};
+                        use winit::keyboard::{Key, NamedKey};
+                        let request_id = self.context_picker.request_id();
+                        let action = match (self.context_picker.phase(), &event.logical_key) {
+                            (_, Key::Named(NamedKey::Escape)) => {
+                                ContextPickerAction::Cancel { request_id }
+                            }
+                            (_, Key::Named(NamedKey::Enter)) => {
+                                ContextPickerAction::Primary { request_id }
+                            }
+                            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowUp)) => {
+                                ContextPickerAction::Move {
+                                    request_id,
+                                    delta: -1,
+                                }
+                            }
+                            (ContextPickerPhase::Sources, Key::Named(NamedKey::ArrowDown)) => {
+                                ContextPickerAction::Move {
+                                    request_id,
+                                    delta: 1,
+                                }
+                            }
+                            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageUp)) => {
+                                ContextPickerAction::Move {
+                                    request_id,
+                                    delta: -(self.context_picker.viewport_rows() as isize),
+                                }
+                            }
+                            (ContextPickerPhase::Sources, Key::Named(NamedKey::PageDown)) => {
+                                ContextPickerAction::Move {
+                                    request_id,
+                                    delta: self.context_picker.viewport_rows() as isize,
+                                }
+                            }
+                            (ContextPickerPhase::Sources, Key::Named(NamedKey::Space)) => self
+                                .context_picker
+                                .selected_source()
+                                .map_or(ContextPickerAction::None, |source| {
+                                    ContextPickerAction::Toggle { request_id, source }
+                                }),
+                            (ContextPickerPhase::Sources, Key::Character(key))
+                                if key.as_str().eq_ignore_ascii_case("e") =>
+                            {
+                                ContextPickerAction::EditFiles { request_id }
+                            }
+                            (ContextPickerPhase::FilePaths, Key::Named(NamedKey::Backspace)) => {
+                                ContextPickerAction::BackspaceFileInput { request_id }
+                            }
+                            (ContextPickerPhase::FilePaths, Key::Character(text)) => text
+                                .chars()
+                                .next()
+                                .map_or(ContextPickerAction::None, |character| {
+                                    ContextPickerAction::AppendFileInput {
+                                        request_id,
+                                        character,
+                                    }
+                                }),
+                            _ => ContextPickerAction::None,
+                        };
+                        self.apply_context_picker_action(action);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
+                // Harvest menus own keyboard input while logically open.
+                if let Some(request_id) = self
+                    .harvest
+                    .as_ref()
+                    .and_then(|harvest| harvest.sprout_menu.as_ref().map(|menu| menu.request_id))
+                {
+                    if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};
                         match &event.logical_key {
                             Key::Named(NamedKey::Escape) => {
-                                self.context_picker.dismiss();
+                                self.dismiss_sprout_request(request_id);
                             }
                             Key::Named(NamedKey::ArrowUp) => {
-                                self.context_picker.move_up();
+                                if let Some(menu) = self
+                                    .harvest
+                                    .as_mut()
+                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                                {
+                                    menu.select_up();
+                                }
                             }
                             Key::Named(NamedKey::ArrowDown) => {
-                                self.context_picker.move_down();
+                                if let Some(menu) = self
+                                    .harvest
+                                    .as_mut()
+                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                                {
+                                    menu.select_down();
+                                }
                             }
-                            Key::Named(NamedKey::Space) => {
-                                self.context_picker.toggle_selected();
+                            Key::Named(NamedKey::Home) => {
+                                if let Some(menu) = self
+                                    .harvest
+                                    .as_mut()
+                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                                {
+                                    menu.select_first();
+                                }
+                            }
+                            Key::Named(NamedKey::End) => {
+                                if let Some(menu) = self
+                                    .harvest
+                                    .as_mut()
+                                    .and_then(|harvest| harvest.sprout_menu.as_mut())
+                                {
+                                    menu.select_last();
+                                }
                             }
                             Key::Named(NamedKey::Enter) => {
-                                if self.context_picker.has_selection() {
-                                    self.inject_context();
+                                let action = self
+                                    .harvest
+                                    .as_ref()
+                                    .and_then(|harvest| harvest.sprout_menu.as_ref())
+                                    .and_then(|menu| menu.selected_action().copied());
+                                if let Some(action) = action {
+                                    self.execute_sprout_request(request_id, action);
                                 }
                             }
                             _ => {}
@@ -265,48 +581,125 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-
-                // Handle harvest sprout menu input
-                if let Some(ref mut harvest) = self.harvest {
-                    if harvest.sprout_menu.is_some() {
-                        if event.state == winit::event::ElementState::Pressed {
-                            use winit::keyboard::{Key, NamedKey};
-                            match &event.logical_key {
-                                Key::Named(NamedKey::Escape) => {
-                                    harvest.hide_sprout_menu();
+                if self
+                    .harvest
+                    .as_ref()
+                    .is_some_and(|harvest| harvest.cellar.is_expanded())
+                {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        let activate = match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                if let Some(harvest) = &mut self.harvest {
+                                    harvest.cellar.close();
                                 }
-                                Key::Named(NamedKey::ArrowUp) => {
-                                    if let Some(ref mut menu) = harvest.sprout_menu {
-                                        menu.select_up();
-                                    }
-                                }
-                                Key::Named(NamedKey::ArrowDown) => {
-                                    if let Some(ref mut menu) = harvest.sprout_menu {
-                                        menu.select_down();
-                                    }
-                                }
-                                Key::Named(NamedKey::Enter) => {
-                                    let action = harvest
-                                        .sprout_menu
-                                        .as_ref()
-                                        .and_then(|m| m.selected_action().cloned());
-                                    let target = harvest
-                                        .sprout_menu
-                                        .as_ref()
-                                        .and_then(|m| m.command.clone());
-                                    harvest.hide_sprout_menu();
-                                    if let Some(action) = action {
-                                        self.execute_sprout_action(action, target);
-                                    }
-                                }
-                                _ => {}
+                                None
                             }
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
+                            Key::Named(NamedKey::ArrowUp) => {
+                                if let Some(harvest) = &mut self.harvest {
+                                    harvest.cellar.select_up();
+                                }
+                                None
                             }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                if let Some(harvest) = &mut self.harvest {
+                                    harvest.cellar.select_down();
+                                }
+                                None
+                            }
+                            Key::Named(NamedKey::PageUp) => {
+                                if let Some(harvest) = &mut self.harvest {
+                                    harvest.cellar.select_page(-1);
+                                }
+                                None
+                            }
+                            Key::Named(NamedKey::PageDown) => {
+                                if let Some(harvest) = &mut self.harvest {
+                                    harvest.cellar.select_page(1);
+                                }
+                                None
+                            }
+                            Key::Named(NamedKey::Home) => {
+                                if let Some(harvest) = &mut self.harvest {
+                                    harvest.cellar.select_first();
+                                }
+                                None
+                            }
+                            Key::Named(NamedKey::End) => {
+                                if let Some(harvest) = &mut self.harvest {
+                                    harvest.cellar.select_last();
+                                }
+                                None
+                            }
+                            Key::Named(NamedKey::Enter) => self
+                                .harvest
+                                .as_ref()
+                                .and_then(|harvest| harvest.cellar.selected_id()),
+                            _ => None,
+                        };
+                        if let Some(id) = activate {
+                            self.apply_cellar_action(crate::harvest::CellarAction::Activate(id));
                         }
-                        return;
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
                     }
+                    return;
+                }
+
+                // The live-domain picker reuses palette interaction and
+                // geometry but owns a separate staged discovery state.
+                if self.domain_picker.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        let command = match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.domain_picker.back_or_close();
+                                None
+                            }
+                            Key::Named(NamedKey::ArrowUp) => {
+                                self.domain_picker.select_prev();
+                                None
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                self.domain_picker.select_next();
+                                None
+                            }
+                            Key::Named(NamedKey::Enter) => self.domain_picker.activate(),
+                            Key::Named(NamedKey::Backspace) => {
+                                self.domain_picker.handle_backspace();
+                                None
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.domain_picker.handle_char(' ');
+                                None
+                            }
+                            Key::Character(c)
+                                if self.modifiers.control_key()
+                                    && self.modifiers.shift_key()
+                                    && (c.as_str() == "p" || c.as_str() == "P") =>
+                            {
+                                self.domain_picker.close();
+                                None
+                            }
+                            Key::Character(c)
+                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
+                            {
+                                for character in c.chars() {
+                                    self.domain_picker.handle_char(character);
+                                }
+                                None
+                            }
+                            _ => None,
+                        };
+                        if let Some(command) = command {
+                            self.handle_domain_picker_command(command);
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
                 }
 
                 // Handle command palette input first (highest priority when open)
@@ -355,7 +748,6 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-
                 // Handle shortcuts panel input (centered modal)
                 if self.shortcuts_panel.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
@@ -479,6 +871,52 @@ impl ApplicationHandler for App {
                     return;
                 }
 
+                // The workspace manager is a modal side panel. Rename input
+                // and dismissal are handled here, and no keystroke may leak
+                // through to the focused PTY while it is open.
+                if self.session_panel.is_open() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use crate::session::panel::SessionPanelKey;
+                        use winit::keyboard::{Key, NamedKey};
+                        match &event.logical_key {
+                            Key::Named(NamedKey::Backspace) if self.session_panel.is_renaming() => {
+                                self.session_panel.rename_backspace();
+                            }
+                            Key::Named(NamedKey::Space) if self.session_panel.is_renaming() => {
+                                self.session_panel.rename_char(' ');
+                            }
+                            Key::Character(text)
+                                if self.session_panel.is_renaming()
+                                    && !self.modifiers.control_key()
+                                    && !self.modifiers.alt_key() =>
+                            {
+                                for character in text.chars() {
+                                    self.session_panel.rename_char(character);
+                                }
+                            }
+                            key => {
+                                let panel_key = match key {
+                                    Key::Named(NamedKey::Escape) => Some(SessionPanelKey::Escape),
+                                    Key::Named(NamedKey::ArrowUp) => Some(SessionPanelKey::Up),
+                                    Key::Named(NamedKey::ArrowDown) => Some(SessionPanelKey::Down),
+                                    Key::Named(NamedKey::Enter) => Some(SessionPanelKey::Enter),
+                                    Key::Named(NamedKey::Delete) => Some(SessionPanelKey::Delete),
+                                    Key::Named(NamedKey::F2) => Some(SessionPanelKey::Rename),
+                                    _ => None,
+                                };
+                                if let Some(key) = panel_key {
+                                    let action = self.session_panel.handle_key(key);
+                                    self.apply_session_panel_action(action);
+                                }
+                            }
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 // Handle commands panel inline form input
                 if self.commands_panel.is_open() && self.commands_panel.is_editing() {
                     if event.state == winit::event::ElementState::Pressed {
@@ -491,12 +929,9 @@ impl ApplicationHandler for App {
                                 self.commands_panel.next_field();
                             }
                             Key::Named(NamedKey::Enter) => {
-                                if let Some(cmd) = self.commands_panel.try_submit() {
-                                    self.config.commands.push(cmd);
-                                    if let Ok(msg) = self.save_config() {
-                                        log::info!("{}", msg);
-                                    }
-                                }
+                                self.apply_commands_panel_action(
+                                    crate::ui::commands::panel::CommandsPanelAction::Submit,
+                                );
                             }
                             Key::Named(NamedKey::Backspace) => {
                                 self.commands_panel.form_backspace();
@@ -532,8 +967,26 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                if self.handle_tab_rename_input(&event) {
+                    return;
+                }
+
                 // Handle search mode input
                 if self.handle_search_mode_input(&event) {
+                    return;
+                }
+
+                if self.handle_copy_mode_input(&event) {
+                    return;
+                }
+
+                if self.cancel_broadcast_on_escape(&event) {
+                    return;
+                }
+
+                // F6 enters the tab-bar focus ring. While it is active, all
+                // navigation and activation keys stay in application chrome.
+                if self.handle_chrome_keyboard(&event) {
                     return;
                 }
 
@@ -541,6 +994,10 @@ impl ApplicationHandler for App {
                 if self.git_completions_visible
                     && event.state == winit::event::ElementState::Pressed
                 {
+                    if self.focused_pane_read_only() {
+                        self.clear_terminal_input_tracking();
+                        return;
+                    }
                     use winit::keyboard::Key;
                     match event.logical_key.as_ref() {
                         Key::Named(winit::keyboard::NamedKey::Tab) => {
@@ -602,6 +1059,13 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // Arming is a safe application mode: only pane navigation,
+                // target selection, confirmation, and cancellation are
+                // accepted. No other key may leak into a PTY.
+                if self.handle_broadcast_arming_key(&event) {
+                    return;
+                }
+
                 // Check unified shortcut registry (replaces hardcoded check_keybinding)
                 if event.state == winit::event::ElementState::Pressed {
                     if let Some(bindable) = self
@@ -628,13 +1092,72 @@ impl ApplicationHandler for App {
                 }
 
                 // Convert key event to terminal input
-                if let Some(data) = key_to_bytes_with_modifiers(&event, self.modifiers) {
+                if self.write_broadcast_key(&event) {
+                    return;
+                }
+                let modifiers = self.modifiers;
+                let alt_graph_active = self.alt_graph_active;
+                let data = self.active_terminal().and_then(|terminal| {
+                    crate::input::key_to_bytes_for_terminal(
+                        &event,
+                        modifiers,
+                        alt_graph_active,
+                        terminal,
+                    )
+                });
+                if let Some(data) = data {
+                    if event.state == winit::event::ElementState::Pressed {
+                        self.native_presentation_latency.begin();
+                    }
                     self.write_to_pty(&data);
                 }
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                // Dismiss info overlay only when clicking the "Continue" button
+                if state == winit::event::ElementState::Pressed && self.copy_mode.is_active() {
+                    self.leave_copy_mode(true);
+                }
+                // A modal may open during an application-owned drag. Complete
+                // that protocol lifecycle before modal click interception so
+                // the child application cannot retain a stuck button.
+                if state == winit::event::ElementState::Released
+                    && self.terminal_mouse_button.is_some()
+                    && let Some(pos) = self.last_cursor_pos
+                {
+                    self.handle_mouse_input(button, state, pos);
+                    if self.terminal_mouse_button.is_none() {
+                        return;
+                    }
+                }
+                if self.guardrail.is_active() {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                    {
+                        let request_id = self.guardrail.request_id();
+                        let action = if let (Some(pos), Some(renderer)) =
+                            (self.last_cursor_pos, &self.renderer)
+                        {
+                            let (width, height) = renderer.window_size();
+                            let layout = crate::terminal::guardrails::GuardrailLayout::calculate(
+                                width as f32,
+                                height as f32,
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                                self.guardrail.animation(),
+                            );
+                            layout.hit_test(pos.0 as f32, pos.1 as f32, request_id)
+                        } else {
+                            crate::terminal::guardrails::GuardrailAction::Cancel { request_id }
+                        };
+                        self.apply_guardrail_action(action);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                // Information overlay pointer actions use the same request and
+                // geometry as keyboard, rendering, and accessibility.
                 if self.info_overlay.is_active() {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
@@ -649,29 +1172,89 @@ impl ApplicationHandler for App {
                                 renderer.cell_width(),
                                 renderer.cell_height(),
                                 self.info_overlay.animation(),
-                                &self.info_overlay.title,
-                                &self.info_overlay.lines,
+                                self.info_overlay.title(),
+                                self.info_overlay.lines().len(),
+                                self.info_overlay.max_line_chars(),
                             );
 
                             let (mx, my) = (pos.0 as f32, pos.1 as f32);
-
-                            // Hit-test Copy button
-                            if layout.copy_button_contains(mx, my) {
-                                let text = self.info_overlay.lines.join("\n");
-                                self.copy_to_clipboard(text, "Copied notice to clipboard");
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
+                            let request_id = self.info_overlay.request_id();
+                            let action = if layout.copy_button.contains(mx, my) {
+                                crate::ui::info_overlay::InfoOverlayAction::Copy { request_id }
+                            } else if layout.continue_button.contains(mx, my) {
+                                crate::ui::info_overlay::InfoOverlayAction::Dismiss { request_id }
+                            } else if let Some(line) = layout.content_row_at(
+                                mx,
+                                my,
+                                self.info_overlay.scroll_offset(),
+                                self.info_overlay.lines().len(),
+                            ) {
+                                self.info_overlay.choice_at_line(request_id, line).map_or(
+                                    crate::ui::info_overlay::InfoOverlayAction::None,
+                                    |choice| crate::ui::info_overlay::InfoOverlayAction::Choose {
+                                        request_id,
+                                        choice_id: choice.id.clone(),
+                                    },
+                                )
+                            } else {
+                                crate::ui::info_overlay::InfoOverlayAction::None
+                            };
+                            self.apply_info_overlay_action(action);
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
                             }
-
-                            // Hit-test Continue button
-                            if layout.continue_button_contains(mx, my) {
-                                self.info_overlay.dismiss();
-                                self.pending_profile_selection = None;
-                                if let Some(window) = &self.window {
-                                    window.request_redraw();
-                                }
-                            }
+                        }
+                    }
+                    return;
+                }
+                if self.diff_review.is_active() {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                        && let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
+                    {
+                        let (width, height) = renderer.window_size();
+                        let layout = crate::ui::diff_review::DiffReviewLayout::calculate(
+                            width as f32,
+                            height as f32,
+                            renderer.cell_width(),
+                            renderer.cell_height(),
+                            self.diff_review.animation(),
+                            self.diff_review.filename(),
+                            self.diff_review.rows().len(),
+                            self.diff_review.max_line_chars(),
+                        );
+                        let action = layout.hit_test(
+                            pos.0 as f32,
+                            pos.1 as f32,
+                            self.diff_review.request_id(),
+                        );
+                        self.apply_diff_review_action(action);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                if self.context_picker.is_active() {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                        && let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
+                    {
+                        let (width, height) = renderer.window_size();
+                        let snapshot = self.context_picker.snapshot();
+                        let layout = crate::ui::context_picker::ContextPickerLayout::calculate(
+                            width as f32,
+                            height as f32,
+                            renderer.cell_width(),
+                            renderer.cell_height(),
+                            snapshot.animation,
+                            snapshot.phase,
+                            snapshot.sources.len(),
+                        );
+                        let action = layout.hit_test(pos.0 as f32, pos.1 as f32, &snapshot);
+                        self.apply_context_picker_action(action);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
                         }
                     }
                     return;
@@ -689,30 +1272,84 @@ impl ApplicationHandler for App {
                         let hit = self.last_cursor_pos.and_then(|pos| {
                             let renderer = self.renderer.as_ref()?;
                             let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
+                            let (window_width, window_height) = renderer.window_size();
                             let info = super::sprout_menu_render_info(
                                 menu,
                                 renderer.padding(),
                                 renderer.cell_width(),
                                 renderer.cell_height(),
+                                renderer.tab_bar_width(),
                                 renderer.tab_bar_height() + renderer.chrome_bar_height(),
+                                window_width as f32,
+                                window_height as f32,
                             );
-                            crate::renderer::sprout_menu_hit_test(
-                                &info,
-                                pos.0 as f32,
-                                pos.1 as f32,
-                                renderer.cell_width(),
-                                renderer.cell_height(),
-                            )
+                            crate::renderer::sprout_menu_hit_test(&info, pos.0 as f32, pos.1 as f32)
                         });
                         let selected = hit.and_then(|index| {
                             let menu = self.harvest.as_ref()?.sprout_menu.as_ref()?;
-                            Some((menu.actions.get(index).copied()?, menu.command.clone()))
+                            let action = menu.actions.get(index).copied()?;
+                            menu.action_enabled(action)
+                                .then_some((menu.request_id, action))
                         });
-                        if let Some(harvest) = &mut self.harvest {
-                            harvest.hide_sprout_menu();
+                        if let Some((request_id, action)) = selected {
+                            self.execute_sprout_request(request_id, action);
+                        } else if hit.is_none()
+                            && let Some(request_id) = self.harvest.as_ref().and_then(|harvest| {
+                                harvest.sprout_menu.as_ref().map(|menu| menu.request_id)
+                            })
+                        {
+                            self.dismiss_sprout_request(request_id);
                         }
-                        if let Some((action, target)) = selected {
-                            self.execute_sprout_action(action, target);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                if self
+                    .harvest
+                    .as_ref()
+                    .is_some_and(|harvest| harvest.cellar.is_expanded())
+                {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                        && let Some(pos) = self.last_cursor_pos
+                        && let Some(layout) = self.harvest_cellar_layout()
+                    {
+                        let action = layout.hit_test(pos.0 as f32, pos.1 as f32, true);
+                        self.apply_cellar_action(action);
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                if self.domain_picker.is_active() {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                    {
+                        let command = if let (Some(pos), Some(renderer)) =
+                            (self.last_cursor_pos, &self.renderer)
+                        {
+                            use crate::ui::command_palette::PaletteLayout;
+                            let (sw, sh) = renderer.window_size();
+                            let info = self.domain_picker.build_info();
+                            let layout = PaletteLayout::calculate(
+                                sw as f32,
+                                sh as f32,
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                                info.animation,
+                                info.entries.len(),
+                            );
+                            self.domain_picker
+                                .handle_click(pos.0 as f32, pos.1 as f32, &layout)
+                        } else {
+                            self.domain_picker.close();
+                            None
+                        };
+                        if let Some(command) = command {
+                            self.handle_domain_picker_command(command);
                         }
                         if let Some(window) = &self.window {
                             window.request_redraw();
@@ -778,6 +1415,14 @@ impl ApplicationHandler for App {
                             let (mx, my) = (pos.0 as f32, pos.1 as f32);
                             if !layout.contains(mx, my) {
                                 self.shortcuts_panel.close();
+                            } else {
+                                let action = self.shortcuts_panel.handle_click(
+                                    mx,
+                                    my,
+                                    &layout,
+                                    &self.shortcut_registry,
+                                );
+                                self.apply_shortcuts_action(action);
                             }
                         } else {
                             self.shortcuts_panel.close();
@@ -807,6 +1452,104 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
+                if self.info_overlay.is_active() {
+                    let (mut horizontal, mut vertical) = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
+                        }
+                    };
+                    if self.modifiers.shift_key() && horizontal == 0.0 {
+                        horizontal = vertical;
+                        vertical = 0.0;
+                    }
+                    let request_id = self.info_overlay.request_id();
+                    let action = if horizontal.abs() > vertical.abs() {
+                        crate::ui::info_overlay::InfoOverlayAction::ScrollColumns {
+                            request_id,
+                            delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0))
+                                as isize,
+                        }
+                    } else {
+                        crate::ui::info_overlay::InfoOverlayAction::ScrollLines {
+                            request_id,
+                            delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
+                        }
+                    };
+                    self.apply_info_overlay_action(action);
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if self.diff_review.is_active() {
+                    let (mut horizontal, mut vertical) = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(x, y) => (x, y),
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                            ((pos.x / 20.0) as f32, (pos.y / 20.0) as f32)
+                        }
+                    };
+                    if self.modifiers.shift_key() && horizontal == 0.0 {
+                        horizontal = vertical;
+                        vertical = 0.0;
+                    }
+                    let request_id = self.diff_review.request_id();
+                    let action = if horizontal.abs() > vertical.abs() {
+                        crate::ui::diff_review::DiffReviewAction::ScrollColumns {
+                            request_id,
+                            delta: -(horizontal.signum() * horizontal.abs().ceil().max(1.0))
+                                as isize,
+                        }
+                    } else {
+                        crate::ui::diff_review::DiffReviewAction::ScrollRows {
+                            request_id,
+                            delta: -(vertical.signum() * vertical.abs().ceil().max(1.0)) as isize,
+                        }
+                    };
+                    self.apply_diff_review_action(action);
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if self.context_picker.is_active() {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    let delta = if lines > 0.0 {
+                        -(lines.ceil() as isize)
+                    } else if lines < 0.0 {
+                        (-lines).ceil() as isize
+                    } else {
+                        0
+                    };
+                    self.apply_context_picker_action(
+                        crate::ui::context_picker::ContextPickerAction::Scroll {
+                            request_id: self.context_picker.request_id(),
+                            delta,
+                        },
+                    );
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                if self.session_panel.is_open() {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if lines > 0.0 {
+                        self.session_panel.scroll_up(lines.ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.session_panel.scroll_down((-lines).ceil() as usize);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 // Scroll settings panel when active
                 if self.settings_panel.is_active() {
                     let lines = match delta {
@@ -845,6 +1588,21 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                if self.domain_picker.is_active() {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if lines > 0.0 {
+                        self.domain_picker.scroll_up(lines.ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.domain_picker.scroll_down((-lines).ceil() as usize);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 // Scroll palette list when palette is active
                 if self.command_palette.is_active() {
                     let lines = match delta {
@@ -861,59 +1619,408 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
+                // Root Cellar owns the wheel while open; positive deltas move
+                // toward older commands, matching terminal scroll direction.
+                if self
+                    .harvest
+                    .as_ref()
+                    .is_some_and(|harvest| harvest.cellar.is_expanded())
+                {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if let Some(harvest) = &mut self.harvest {
+                        if lines > 0.0 {
+                            harvest.cellar.scroll_by(-(lines.ceil() as isize));
+                        } else if lines < 0.0 {
+                            harvest.cellar.scroll_by((-lines).ceil() as isize);
+                        }
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                // Every remaining modal/context surface owns the wheel while
+                // visible, even when it has no scroll action of its own.
+                if self.commands_panel.is_open()
+                    || self.session_panel.is_open()
+                    || self.session_dropdown_open
+                    || self.info_overlay.is_active()
+                    || self.diff_review.is_active()
+                    || self.context_picker.is_active()
+                    || self.domain_picker.is_active()
+                    || self.guardrail.is_active()
+                    || self
+                        .harvest
+                        .as_ref()
+                        .is_some_and(|harvest| harvest.sprout_menu.is_some())
+                {
+                    return;
+                }
                 let scroll_speed = self.config.scrollback.scroll_speed;
-                let y_delta = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64 * scroll_speed,
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 10.0,
+                let (x_delta, y_delta) = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                        (x as f64 * scroll_speed, y as f64 * scroll_speed)
+                    }
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x / 10.0, pos.y / 10.0),
                 };
-                self.handle_scroll(y_delta);
+                if x_delta.abs() > y_delta.abs() {
+                    self.handle_horizontal_scroll(x_delta);
+                } else {
+                    self.handle_scroll(y_delta);
+                }
             }
 
             WindowEvent::Focused(focused) => {
-                if self.window_focused != focused {
-                    self.window_focused = focused;
-                    self.focus_change_time = Instant::now();
-                    log::debug!("Window focus changed: {}", focused);
+                if !focused {
+                    self.ime.clear_preedit();
+                }
+                self.handle_window_focus_change(focused);
+                self.redraw_scheduler.request(RedrawReason::Focus);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+
+            WindowEvent::Occluded(occluded) => {
+                self.window_occluded = occluded;
+                if !occluded {
+                    self.redraw_scheduler.request(RedrawReason::WindowEvent);
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
                 }
             }
 
             WindowEvent::RedrawRequested => {
                 // Process any pending PTY events
-                self.process_pty_events();
+                if self.process_pty_events() {
+                    self.redraw_scheduler.request(RedrawReason::TerminalOutput);
+                }
 
                 if self.should_exit {
-                    event_loop.exit();
+                    if !self.managed_window {
+                        event_loop.exit();
+                    }
+                    return;
+                }
+                if self.window_occluded {
                     return;
                 }
 
-                // Render
-                self.render();
+                let reasons = self.redraw_scheduler.begin_frame();
+                log::trace!("Rendering frame: reasons={reasons}");
+                let presented = self.render();
+                self.redraw_scheduler.finish_frame();
+                if presented {
+                    self.native_presentation_latency
+                        .finish_after_terminal_present(&reasons);
+                }
+                self.native_frame_stats
+                    .record(self.redraw_scheduler.rendered_frames());
             }
 
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+        match event {
+            AppEvent::SystemAccessibilityChanged(preferences) => {
+                self.redraw_scheduler.request(RedrawReason::Accessibility);
+                self.set_system_accessibility_preferences(preferences);
+            }
+            AppEvent::SystemAccessibilityUnavailable(error) => {
+                log::debug!("Desktop accessibility preferences are unavailable: {error}");
+            }
+            AppEvent::ControlRequest {
+                request,
+                respond_to,
+            } => {
+                let result = match request {
+                    crate::control::protocol::Request::Inventory => {
+                        let mut budget = super::ControlInventoryBudget::default();
+                        Ok(crate::control::protocol::Response::Inventory(
+                            crate::control::protocol::ProcessInventory {
+                                process_id: std::process::id(),
+                                windows: vec![self.control_inventory(1, &mut budget)],
+                                truncated: false,
+                            },
+                        ))
+                    }
+                    crate::control::protocol::Request::ReadText {
+                        window_id,
+                        tab_id,
+                        pane_id,
+                        history_lines,
+                        max_bytes,
+                    } => {
+                        if window_id != 1 {
+                            Err(format!("GUI window {window_id} does not exist"))
+                        } else {
+                            self.read_control_text(tab_id, pane_id, history_lines, max_bytes)
+                                .map(|(screen, history_lines, text, truncated)| {
+                                    crate::control::protocol::Response::Text {
+                                        process_id: std::process::id(),
+                                        window_id,
+                                        tab_id,
+                                        pane_id,
+                                        screen,
+                                        history_lines,
+                                        text,
+                                        truncated,
+                                    }
+                                })
+                        }
+                    }
+                    crate::control::protocol::Request::CreateWindow { .. }
+                    | crate::control::protocol::Request::CreateTab { .. }
+                    | crate::control::protocol::Request::SplitPane { .. }
+                    | crate::control::protocol::Request::FocusWindow { .. }
+                    | crate::control::protocol::Request::SetQuickAccessVisibility { .. }
+                    | crate::control::protocol::Request::SelectTab { .. }
+                    | crate::control::protocol::Request::FocusPane { .. }
+                    | crate::control::protocol::Request::CloseWindow { .. }
+                    | crate::control::protocol::Request::CloseTab { .. }
+                    | crate::control::protocol::Request::ClosePane { .. }
+                    | crate::control::protocol::Request::MoveTab { .. }
+                    | crate::control::protocol::Request::MovePane { .. }
+                    | crate::control::protocol::Request::ResizeWindow { .. }
+                    | crate::control::protocol::Request::ResizeDivider { .. }
+                    | crate::control::protocol::Request::SendText { .. } => {
+                        Err("GUI mutations require the process-level application controller".into())
+                    }
+                };
+                let _ = respond_to.send(result);
+            }
+            AppEvent::Pty => {
+                clear_pty_wake_pending();
+                if self.process_pty_events() {
+                    self.redraw_scheduler.request(RedrawReason::TerminalOutput);
+                }
+            }
+            AppEvent::Git => {
+                // The immutable result is drained in `about_to_wait`, where
+                // cwd selection and redraw scheduling stay centralized.
+            }
+            AppEvent::Transcript => {
+                clear_transcript_wake_pending();
+                if self.process_pty_events() {
+                    self.redraw_scheduler.request(RedrawReason::WindowEvent);
+                }
+            }
+            AppEvent::AccessKit(event) => {
+                self.redraw_scheduler.request(RedrawReason::Accessibility);
+                self.handle_accesskit_event(event);
+            }
+            AppEvent::RendererDeviceLost {
+                window_id,
+                generation,
+                failure,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::SurfaceRecovery);
+                    self.handle_renderer_device_lost(generation, failure);
+                }
+            }
+            AppEvent::BackgroundImageLoaded {
+                window_id,
+                generation,
+                path,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_background_image_loaded(generation, path, result);
+                }
+            }
+            AppEvent::LiveDomainControlCompleted {
+                window_id,
+                control,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_live_domain_control_completed(control, result);
+                }
+            }
+            AppEvent::LiveDomainTopology { window_id, result } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_live_domain_topology(result);
+                }
+            }
+            AppEvent::DomainPickerLoaded {
+                window_id,
+                generation,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_domain_picker_loaded(generation, result);
+                }
+            }
+            AppEvent::DomainPickerPrepared {
+                window_id,
+                generation,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_domain_picker_prepared(generation, result);
+                }
+            }
+            AppEvent::ContextGathered {
+                window_id,
+                request_id,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_context_gathered(request_id, result);
+                }
+            }
+            AppEvent::FileUploadCompleted {
+                window_id,
+                request_id,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_file_upload_completed(request_id, result);
+                }
+            }
+            AppEvent::FileUploadProgress {
+                window_id,
+                request_id,
+                bytes_sent,
+                total_bytes,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_file_upload_progress(request_id, bytes_sent, total_bytes);
+                }
+            }
+            AppEvent::StructuredPluginCompleted(completion) => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == completion.window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_structured_plugin_completed(completion);
+                }
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.should_exit {
+            if !self.managed_window {
+                event_loop.exit();
+            }
             return;
         }
+        self.poll_idle_sources(Instant::now());
         // Process PTY events before waiting
-        self.process_pty_events();
+        if self.process_pty_events() {
+            self.redraw_scheduler.request(RedrawReason::TerminalOutput);
+        }
+        if self.should_exit {
+            if !self.managed_window {
+                event_loop.exit();
+            }
+            return;
+        }
 
-        // Request redraw if we have new content
-        if !self.surface_lost
+        // Native redraw requests are coalesced here. PTY reader threads wake
+        // this loop through a user event, so no polling deadline is required.
+        if self.redraw_scheduler.has_pending()
+            && !self.surface_lost
+            && !self.window_occluded
             && let Some(window) = &self.window
         {
             window.request_redraw();
         }
+
+        if let Some(deadline) = self.next_idle_deadline(Instant::now()) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
+}
+
+fn quick_access_geometry(
+    monitor_position: PhysicalPosition<i32>,
+    monitor_size: PhysicalSize<u32>,
+    requested: Option<(u32, u32)>,
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    let default_width = (u64::from(monitor_size.width) * 4 / 5) as u32;
+    let default_height = (u64::from(monitor_size.height) * 9 / 20) as u32;
+    let (requested_width, requested_height) = requested.unwrap_or((default_width, default_height));
+    let width = requested_width.clamp(1, monitor_size.width.max(1));
+    let height = requested_height.clamp(1, monitor_size.height.max(1));
+    let horizontal_margin = monitor_size.width.saturating_sub(width) / 2;
+    let x = i64::from(monitor_position.x) + i64::from(horizontal_margin);
+    (
+        PhysicalPosition::new(
+            x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+            monitor_position.y,
+        ),
+        PhysicalSize::new(width, height),
+    )
 }
 
 impl Drop for App {
     fn drop(&mut self) {
-        // Save session before cleanup
-        self.save_current_session();
+        self.live_domain_topology_alive
+            .store(false, std::sync::atomic::Ordering::Release);
+        if let Some(active) = &self.active_file_upload {
+            active
+                .cancellation
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        // Save the complete workspace before PTYs and renderer are dropped.
+        self.auto_save_workspace();
 
         // Drop order is critical: renderer holds a wgpu Surface that references
         // the window, so we must drop resources in the correct order:
@@ -922,6 +2029,35 @@ impl Drop for App {
         // 3. Window last (implicit, after this Drop returns)
         self.tabs.take();
         self.renderer.take();
+        self.accessibility_adapter.take();
+        log::debug!(
+            "Redraw scheduler: {}",
+            self.redraw_scheduler.diagnostic_summary()
+        );
         log::debug!("App resources cleaned up");
+    }
+}
+
+#[cfg(test)]
+mod quick_access_tests {
+    use super::*;
+
+    #[test]
+    fn geometry_is_top_centered_monitor_relative_and_clamped() {
+        let (position, size) = quick_access_geometry(
+            PhysicalPosition::new(-1_920, 24),
+            PhysicalSize::new(1_920, 1_080),
+            None,
+        );
+        assert_eq!(position, PhysicalPosition::new(-1_728, 24));
+        assert_eq!(size, PhysicalSize::new(1_536, 486));
+
+        let (position, size) = quick_access_geometry(
+            PhysicalPosition::new(-1_920, 24),
+            PhysicalSize::new(1_920, 1_080),
+            Some((4_000, 2_000)),
+        );
+        assert_eq!(position, PhysicalPosition::new(-1_920, 24));
+        assert_eq!(size, PhysicalSize::new(1_920, 1_080));
     }
 }

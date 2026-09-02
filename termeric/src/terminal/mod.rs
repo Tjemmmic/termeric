@@ -6,7 +6,10 @@
 //! - Diff detection in terminal output
 
 pub mod container;
+pub mod copy_mode;
 pub mod diff_detector;
+pub(crate) mod events;
+pub(crate) mod geometry;
 pub mod guardrails;
 pub mod search;
 pub mod shell_integration;

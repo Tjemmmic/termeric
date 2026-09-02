@@ -2,12 +2,13 @@
 
 use anyhow::Result;
 use bytemuck::{Pod, Zeroable};
-use wgpu::util::DeviceExt;
 use wgpu::*;
+
+use super::buffer::{BufferStats, GrowableBuffer};
 
 /// Vertex for rectangle rendering (with rounded-corner metadata)
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct RectVertex {
     pub position: [f32; 2],
     pub color: [f32; 4],
@@ -15,6 +16,12 @@ pub struct RectVertex {
     pub rect_half_size: [f32; 2],
     pub corner_radius: f32,
     pub _pad: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct RectBatch {
+    pub vertices: Vec<RectVertex>,
+    pub indices: Vec<u32>,
 }
 
 impl RectVertex {
@@ -71,8 +78,8 @@ pub struct RectPipeline {
     pipeline: RenderPipeline,
     uniform_buffer: Buffer,
     bind_group: BindGroup,
-    vertex_buffer: Option<Buffer>,
-    index_buffer: Option<Buffer>,
+    vertex_buffer: GrowableBuffer,
+    index_buffer: GrowableBuffer,
     // Built vertices and indices
     vertices: Vec<RectVertex>,
     indices: Vec<u32>,
@@ -169,8 +176,8 @@ impl RectPipeline {
             pipeline,
             uniform_buffer,
             bind_group,
-            vertex_buffer: None,
-            index_buffer: None,
+            vertex_buffer: GrowableBuffer::new("Rect Vertex Buffer", BufferUsages::VERTEX),
+            index_buffer: GrowableBuffer::new("Rect Index Buffer", BufferUsages::INDEX),
             vertices: Vec::new(),
             indices: Vec::new(),
             layer_boundaries: Vec::new(),
@@ -193,6 +200,39 @@ impl RectPipeline {
         self.vertices.clear();
         self.indices.clear();
         self.layer_boundaries.clear();
+    }
+
+    pub(super) fn checkpoint(&self) -> (usize, usize) {
+        (self.vertices.len(), self.indices.len())
+    }
+
+    /// Remove and return geometry added since `checkpoint`, normalizing its
+    /// indices so the batch can live in an independent GPU buffer.
+    pub(super) fn take_since(&mut self, checkpoint: (usize, usize)) -> RectBatch {
+        let (vertex_start, index_start) = checkpoint;
+        let vertices = self.vertices.split_off(vertex_start);
+        let mut indices = self.indices.split_off(index_start);
+        for index in &mut indices {
+            *index -= vertex_start as u32;
+        }
+        RectBatch { vertices, indices }
+    }
+
+    pub(super) fn draw_external<'a>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        vertex_buffer: &'a Buffer,
+        index_buffer: &'a Buffer,
+        index_count: u32,
+    ) {
+        if index_count == 0 {
+            return;
+        }
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
+        render_pass.draw_indexed(0..index_count, 0, 0..1);
     }
 
     /// Mark a layer boundary at the current index position.
@@ -303,7 +343,7 @@ impl RectPipeline {
     }
 
     /// Upload vertex data to GPU
-    pub fn upload(&mut self, device: &Device, _queue: &Queue) {
+    pub fn upload(&mut self, device: &Device, queue: &Queue) {
         if self.vertices.is_empty() {
             return;
         }
@@ -311,21 +351,12 @@ impl RectPipeline {
         let vertex_data = bytemuck::cast_slice(&self.vertices);
         let index_data = bytemuck::cast_slice(&self.indices);
 
-        self.vertex_buffer = Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rect Vertex Buffer"),
-                contents: vertex_data,
-                usage: BufferUsages::VERTEX,
-            }),
-        );
+        self.vertex_buffer.upload(device, queue, vertex_data);
+        self.index_buffer.upload(device, queue, index_data);
+    }
 
-        self.index_buffer = Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Rect Index Buffer"),
-                contents: index_data,
-                usage: BufferUsages::INDEX,
-            }),
-        );
+    pub(super) fn buffer_stats(&self) -> (BufferStats, BufferStats) {
+        (self.vertex_buffer.stats(), self.index_buffer.stats())
     }
 
     /// Draw only the rectangles belonging to a specific layer.
@@ -335,10 +366,10 @@ impl RectPipeline {
             return;
         }
 
-        let Some(vertex_buffer) = &self.vertex_buffer else {
+        let Some(vertex_buffer) = self.vertex_buffer.buffer() else {
             return;
         };
-        let Some(index_buffer) = &self.index_buffer else {
+        let Some(index_buffer) = self.index_buffer.buffer() else {
             return;
         };
 

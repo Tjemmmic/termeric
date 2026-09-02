@@ -1,0 +1,232 @@
+# Terminal conformance program
+
+Termeric separates parser/core claims from application and renderer claims.
+The files below are evidence for the terminal core only; they do not prove that
+mouse input, panes, clipboard integration, glyph rendering, or desktop behavior
+works end to end.
+
+## Evidence inventory
+
+| Evidence | Purpose |
+|---|---|
+| [`vt_support.toml`](../termeric-core/tests/fixtures/vt_support.toml) | Machine-readable sequence/status declaration with a fixture, named test, or tracking issue for every claim. |
+| [`conformance_cases.toml`](../termeric-core/tests/fixtures/conformance_cases.toml) | Small, reviewable byte fixtures with expected grid, cursor, mode, event, and hyperlink state. |
+| [`parser_test_seeds.toml`](../termeric-core/tests/fixtures/parser_test_seeds.toml) | Fuzz seeds mirroring every test in `ansi/processor.rs`; a test fails when that list becomes stale. |
+| [`external_traces.toml`](../termeric-core/tests/fixtures/external_traces.toml) | Raw Vim 9.2, less 704, and tmux 3.7c PTY output captured with `TERM=xterm-256color`. |
+| [`terminal_bytes.rs`](../fuzz/fuzz_targets/terminal_bytes.rs) | Coverage-guided parser/grid/resize target with dimension, input, and scrollback caps. |
+| [`domain_protocol.rs`](../fuzz/fuzz_targets/domain_protocol.rs) | Coverage-guided length/JSON/client/server frame decoding and serialization round trips with reviewed protocol seeds. |
+| [`graphics_protocols.rs`](../fuzz/fuzz_targets/graphics_protocols.rs) | Coverage-guided fragmented Sixel/iTerm2/Kitty framing and decoding with cache, placement, and ownership invariants. |
+
+The Vim and less traces include exact 80×24 screen snapshots from tmux 3.7c's
+independent screen model. Normal CI requires Termeric to reproduce those
+snapshots byte for byte. The tmux client trace is replayed for state and resource
+invariants, but is not compared with tmux itself as a reference. The tool
+versions, commands, terminal name, dimensions, and capture date are stored with
+the traces. Known product-level gaps remain in the
+[feature-support matrix](feature-support.md); these fixtures must not be cited as
+proof of rendered or interactive compatibility.
+
+## Deterministic lane
+
+Run the complete normal-CI corpus with:
+
+```bash
+cargo test -p termeric-core --test terminal_conformance --locked
+```
+
+The suite checks fixture results, every byte split, manifest provenance, real
+program traces, cursor and vertical/horizontal scroll-region bounds, visible and
+retained-history row widths, paired wide-cell flags, line and byte scrollback
+caps, and deterministic arbitrary-byte/resize interleavings. Non-unsupported
+manifest rows must link to an actual test function or fixture; naming an
+untested implementation helper is rejected.
+
+## Coverage-guided lane
+
+The reviewed text fixtures are converted to binary seeds in a temporary
+directory before fuzzing. Each seed starts with the target's three-byte
+columns/rows/chunk-size envelope; the complete raw terminal payload follows
+that envelope unchanged. A normal-CI unit test checks this encoding against
+every fixture, parser-test seed, and external trace so the harness cannot
+silently consume protocol bytes as metadata:
+
+```bash
+seed_dir="$(mktemp -d /tmp/termeric-fuzz-seeds.XXXXXX)"
+python3 scripts/materialize_fuzz_corpus.py "$seed_dir"
+cargo fuzz run terminal_bytes "$seed_dir" -- \
+  -dict=fuzz/terminal.dict -max_len=65536 -timeout=5 -max_total_time=180
+cargo fuzz run domain_protocol fuzz/corpus/domain_protocol -- \
+  -max_len=1048576 -timeout=5 -max_total_time=60
+cargo fuzz run graphics_protocols fuzz/corpus/graphics_protocols -- \
+  -max_len=1048576 -timeout=5 -max_total_time=180
+```
+
+The terminal target covers arbitrary C0/ESC/CSI/OSC/DCS/APC bytes, graphics payloads,
+fragmented and invalid UTF-8, resize interleavings, grid edits, scrollback, and
+wide-cell invariants across both visible and retained rows. It defensively
+truncates inputs at 64 KiB, caps dimensions at 160×80, caps primary scrollback
+at 512 rows and 64 KiB of estimated owned history memory, and requires the
+alternate screen to remain viewport-only before draining generated events. A
+deterministic high-entropy styled/Unicode reflow case uses a 4 KiB budget and
+proves that the byte ceiling actually evicts rows.
+CI runs a
+30-second smoke on pushes and pull requests and a three-minute run weekly or by
+manual dispatch. On failure, CI invokes `cargo fuzz tmin` and uploads the raw
+and minimized replay streams from `fuzz/artifacts/terminal_bytes/`. The domain
+target separately caps raw payloads at the protocol frame ceiling and requires
+all successfully decoded client/server frames to survive equal reserialization.
+The graphics target builds fragmented DCS/OSC/APC frames from up to 1 MiB of
+fuzzer input, includes reviewed Sixel/iTerm2/Kitty seeds, and asserts the shared
+64 MiB/256-image cache ceiling, normalized positive placement extents, and
+image ownership after every accepted command.
+
+The deterministic DCS lane additionally checks fragmented DECRQSS queries for
+current SGR, vertical and horizontal margins, application cursor style, DECSCA
+character protection, DECSACE attribute-change extent, and legacy
+DECSLPP/DECSCPP/DECSNLS geometry. The geometry lane requires xterm-compatible
+7-bit and 8-bit replies while proving the corresponding mutations and
+unsupported status-line settings remain inert or negative. It also covers
+exact invalid replies and CAN/SUB/ESC cancellation recovery without payload
+leakage.
+The C1 lane replays raw IND/NEL/SS2/CSI/OSC/DCS/ST forms across every split,
+proves valid UTF-8 continuation bytes are not reinterpreted as controls, and
+checks S7C1T/S8C1T framing for CSI, DCS, APC, clipboard, and dynamic-color
+responses. The two app-mediated query events snapshot their reply mode before
+later input is parsed. DECSTR preserves that preference and RIS restores the
+7-bit default. A separate fragmented fixture folds GR bytes across ESC, CSI,
+DCS, OSC protocol fields, APC, and two-byte ST while proving UTF-8 titles and
+hyperlink URIs remain intact.
+The XTGETTCAP fixture fragments a multi-name request at every possible byte
+boundary. It proves one bounded response for native identity, color count,
+direct-color depth, and special keys; first-unknown termination; exact hex
+encoding; and S8C1T DCS framing. Processor tests also cover negative malformed
+requests, termcap aliases, the 64-name ceiling, and the Fish extensions.
+The adjacent XTWINOPS fixture fragments text-area pixel, character-cell pixel,
+and row/column queries at every boundary and verifies exact S8C1T replies.
+Malformed variants, outer-window/screen/title queries, and window mutations
+produce no misleading reply or app event.
+The xterm keyboard fixtures fragment resource-zero modifyKeyboard/formatKeyboard,
+the mutually exclusive legacy/VT220 keyboard-type modes 1060/1061,
+their shared DEC private-mode save/restore lifecycle and configured startup/RIS type,
+bounded DECUDK definition/lifecycle and VT220 Shift-key dispatch,
+modifyOtherKeys, modifyCursorKeys, modifyFunctionKeys, modifyKeypadKeys,
+reserved modifyStringKeys state, modifyModifierKeys, and modifySpecialKeys set,
+query, invalid, S8C1T, disable,
+and resource/all reset
+forms plus their separate XTFMTKEYS set/query/reset paths. Cross-layer tests
+require exact resource-zero 16-bit round trips and permission masks, historical
+function/editing-key translations, cursor/function/keypad/modifier/special modes 0-4, xterm cursor/edit, F1-F35, and
+18 portable plus 11 Num Lock-off keypad, 13 portable modifier/lock, and 72 canonical special-key codes plus raw-XKB boundaries, disabled function-key remapping,
+level-1/2/3 modifyOtherKeys CSI-27 and CSI-u encoding, legacy and AltGr
+fallbacks, focused-pane ownership, Kitty precedence, and live-domain state
+replication.
+The OSC 7 fixture fragments 7-bit and raw-C1 working-directory reports,
+preserves semicolons and percent-decoded Unicode, rejects a non-file replacement,
+and proves no protocol bytes leak into screen text. Cross-layer tests separately
+verify local-authority filesystem use, remote-authority isolation, shell prompt
+emission, focus-aware titles, and pane cwd inheritance.
+The DECSCL lane accepts levels 1-5, verifies its non-destructive DECSTR-style
+reset, level-1 and optional-parameter C1 rules, atomic rejection, RIS defaults,
+and DECRQSS status under both reply widths. The stored level deliberately does
+not disable otherwise implemented controls, so strict VT-generation feature
+gating remains outside the claim.
+The CSI query lane checks fragmented DECRQM requests and exact DECRPM set,
+reset, and unrecognized replies for the documented standard/private modes.
+Plural or subparameter requests are rejected instead of being flattened into a
+misleading answer.
+The classic editing lane covers ECH/REP, relative cursor aliases, and the full
+documented horizontal-tab lifecycle. Wide-cell repair, bounded remembered
+graphemes, current-rendition repetition, custom-stop resize preservation, and
+RIS defaults are checked below the parser as grid invariants.
+The horizontal-margin lane covers DECLRMM/DECSLRM negotiation and CSI s
+disambiguation, DECRQM/DECRQSS reports, DECOM addressing, asymmetric cursor and
+tab clamping, Unicode-wide wrapping, rectangular IND/NEL/RI/SU/SD/IL/DL and
+ICH/DCH behavior, BCE, independent cells outside the rectangle, atomic repair
+of boundary-straddling wide graphemes, reflow flags, resize,
+DECSTR/RIS, and fully enclosed image-placement scrolling. Erase functions are
+deliberately page-wide. Behavior is reconciled with the
+[VT420 programmer reference](https://vt100.net/mirror/mds-199909/cd3/term/vt420rm2.pdf),
+[xterm control-sequence contract](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html),
+and [Microsoft Terminal's independently tested implementation](https://github.com/microsoft/terminal/pull/15084).
+The selective-erasure lane covers DECSCA plus DECSED/DECSEL modes 0/1/2,
+per-cell visual/protection attribute retention, protected Unicode wide pairs, malformed request
+rejection, DECSC/DECRC, compact-history/reflow persistence, ANSI replay, and
+live-domain attachment without protection-state leakage.
+The VT400 rectangular-area lane covers fragmented DECCRA, DECFRA, DECERA, and
+DECSERA parsing; defaulted, clipped, reversed, and malformed coordinates;
+DECOM-relative bounds; overlap and destination clipping; sole-page
+normalization; current SGR/DECSCA and BCE policy; cursor preservation; atomic
+wide-grapheme repair; and cell-exact crop/copy/erase behavior for normalized
+static-image placements. Behavior is reconciled with the
+[VT420 programmer reference](https://vt100.net/mirror/mds-199909/cd3/term/vt420rm2.pdf),
+[xterm control-sequence contract](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html),
+and [Microsoft Terminal's independent implementation](https://github.com/microsoft/terminal/blob/main/src/terminal/adapter/adaptDispatch.cpp).
+The adjacent attribute-area lane covers fragmented DECSACE, DECCARA, and
+DECRARA; stream versus exact-rectangle geometry; DECOM endpoints; explicit
+space materialization; ordered set/reset and parity cancellation; the DEC
+rendition subset plus xterm hidden text; unrelated-attribute preservation;
+cursor/wide-cell stability; DECRQSS reporting; and DECSTR/RIS lifecycle.
+The checksum lane adds fragmented DECRQCRA parsing, uppercase DECCKSR DCS
+responses, defaulted/clipped and DECOM-relative rectangles, sole-page
+normalization, invalid-rectangle zero replies, drawn/blank-cell behavior,
+original DEC Special Graphics and UK G-set bytes, and the base VT420 legacy
+rendition weights. It also proves the report is disabled by default because
+one-cell requests can be used to scrape screen contents. VT525 color weights
+and XTCHECKSUM extensions remain outside the claim.
+The presentation-state lane captures a byte-exact DECCIR and DECTABSR, performs
+RIS, restores both through fragmented DECRSPS, and requires the same reports
+afterward. It covers bounded cursor/page coordinates, the DEC rendition and
+protection subset, delayed wrap, DECOM, G0-G3/GL/GR/SS2/SS3 state, custom tabs,
+strict request shapes, and all-or-nothing malformed restore rejection. The
+stored GR register is state compatibility only: non-ASCII UTF-8 scalars are not
+decoded as ISO-2022 GR bytes, and 96-character sets, multiple pages, and 8-bit
+C1 framing remain outside the claim.
+The saved-cursor lane verifies fragmented DECSC/DECRC, CSI s/u, and
+DECSET/DECRST 1048/1049 across primary and alternate screens. It distinguishes
+the delayed-wrap flag from live DECAWM and requires repeatable restoration plus
+defined home/default behavior before the first save.
+The reset lane separately verifies fragmented DECSTR as a non-destructive soft
+reset. It requires the documented session defaults (using Termeric/xterm's
+enabled startup autowrap), disabled DECLRMM, full-page vertical/horizontal
+margins, home/default active saved cursor, unchanged active
+cursor position/content/scrollback/custom tabs, preserved unrelated modes, and
+strict rejection of malformed parameterized forms. RIS remains the distinct
+screen-clearing, tab-restoring full reset.
+
+libFuzzer artifacts are already raw replayable byte streams. Reproduce and then
+minimize one with:
+
+```bash
+cargo fuzz run terminal_bytes fuzz/artifacts/terminal_bytes/CRASH_FILE
+cargo fuzz tmin terminal_bytes fuzz/artifacts/terminal_bytes/CRASH_FILE
+cargo fuzz run graphics_protocols fuzz/artifacts/graphics_protocols/CRASH_FILE
+```
+
+Promote the minimized bytes into a readable TOML fixture before fixing the bug,
+then retain that fixture as the regression test. Corpus files and crash data may
+contain terminal output or secrets; inspect them before sharing.
+
+## Capturing references and vttest
+
+External traces must be captured in a disposable 80×24 PTY with a pinned
+program version and `TERM=xterm-256color`. For screen-producing programs, also
+capture the active pane using a pinned independent model such as
+`tmux capture-pane -p`. Store raw bytes as base64, the exact reference snapshot,
+the command, versions, dimensions, date, and a tracking issue for any intentional
+deviation. Never silently regenerate a golden snapshot from Termeric itself.
+
+`vttest` remains a useful manual diagnostic rather than a blanket compatibility
+claim. Record its exact version and selected menu case, retain the raw PTY bytes
+when redistribution permits, and translate every discovered discrepancy into a
+small deterministic fixture and tracking issue. Passing one vttest menu does not
+justify upgrading unrelated rows in the support manifest.
+
+## Adding or changing support
+
+1. Add the smallest replayable case and expected core state.
+2. Update the sequence manifest status, evidence, boundary note, and issue.
+3. Add real-program or independent-reference evidence when bespoke fixtures
+   could encode Termeric's own interpretation.
+4. Verify all chunk boundaries and resource invariants.
+5. Update the product support matrix only when the complete named layer is
+   actually covered.

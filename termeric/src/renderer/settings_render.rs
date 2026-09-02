@@ -316,6 +316,26 @@ impl Renderer {
                             );
                         }
                     }
+                    crate::ui::settings::SettingKind::Action { .. } => {
+                        let val_start = layout.value_text_x();
+                        let action_color = if is_selected {
+                            adjust_alpha(self.ui.palette_accent, anim)
+                        } else {
+                            adjust_alpha(self.ui.palette_text, 0.8 * anim)
+                        };
+                        for (ci, c) in entry.value.chars().enumerate() {
+                            let cx = val_start + ci as f32 * cell_width;
+                            if cx + cell_width > max_value_x {
+                                break;
+                            }
+                            self.text_pipeline.push_char(c, cx, text_cy, action_color);
+                        }
+                        let arrow_x = layout.numeric_increment_x(entry.value.chars().count());
+                        if arrow_x + cell_width <= max_value_x {
+                            self.text_pipeline
+                                .push_char('>', arrow_x, text_cy, action_color);
+                        }
+                    }
                     crate::ui::settings::SettingKind::ReadOnly => {
                         let val_start = layout.value_text_x();
                         let dim_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
@@ -445,9 +465,13 @@ impl Renderer {
         }
 
         let max_option_len = options_text.iter().map(|s| s.len()).max().unwrap_or(10);
-        let Some(rect) =
-            layout.dropdown_rect(abs_idx, info.scroll_offset, option_count, max_option_len)
-        else {
+        let Some(rect) = layout.dropdown_rect(
+            abs_idx,
+            info.scroll_offset,
+            option_count,
+            max_option_len,
+            info.dropdown_highlight,
+        ) else {
             return;
         };
 
@@ -491,8 +515,14 @@ impl Renderer {
         );
 
         // Render options
-        for (oidx, opt_text) in options_text.iter().enumerate().take(rect.visible_options) {
-            let oy = rect.y + 4.0 + oidx as f32 * rect.option_height;
+        for (visible_index, (oidx, opt_text)) in options_text
+            .iter()
+            .enumerate()
+            .skip(rect.first_option)
+            .take(rect.visible_options)
+            .enumerate()
+        {
+            let oy = rect.y + 4.0 + visible_index as f32 * rect.option_height;
             let is_highlighted = oidx == info.dropdown_highlight;
 
             if is_highlighted {
@@ -548,30 +578,6 @@ impl Renderer {
         }
     }
 
-    /// Draw a wavy/curly underline (approximated with small segments)
-    pub(super) fn draw_wavy_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
-        let wave_period: f32 = 6.0;
-        let wave_amplitude: f32 = 2.0;
-        let segment_width: f32 = 1.5;
-        let thickness: f32 = 1.5;
-
-        let mut current_x = x;
-        let mut phase: f32 = 0.0;
-
-        while current_x < x + width {
-            let offset_y = (phase * std::f32::consts::TAU).sin() * wave_amplitude;
-            self.rect_pipeline.push_rect(
-                current_x,
-                y + offset_y - wave_amplitude,
-                segment_width.min(x + width - current_x),
-                thickness,
-                color,
-            );
-            current_x += segment_width;
-            phase += segment_width / wave_period;
-        }
-    }
-
     /// Draw a dotted underline
     pub(super) fn draw_dotted_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
         let dot_size: f32 = 1.5;
@@ -584,25 +590,6 @@ impl Renderer {
                 current_x,
                 y,
                 dot_size.min(x + width - current_x),
-                1.0,
-                color,
-            );
-            current_x += step;
-        }
-    }
-
-    /// Draw a dashed underline
-    pub(super) fn draw_dashed_underline(&mut self, x: f32, y: f32, width: f32, color: [f32; 4]) {
-        let dash_length: f32 = 4.0;
-        let gap: f32 = 2.0;
-        let step = dash_length + gap;
-
-        let mut current_x = x;
-        while current_x < x + width {
-            self.rect_pipeline.push_rect(
-                current_x,
-                y,
-                dash_length.min(x + width - current_x),
                 1.0,
                 color,
             );

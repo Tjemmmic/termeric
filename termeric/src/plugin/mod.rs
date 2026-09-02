@@ -19,6 +19,8 @@ pub mod codex;
 pub mod codex_profiles;
 pub mod hooks;
 pub mod manager;
+pub mod runtime;
+pub mod structured;
 
 // Re-export core types for convenience
 pub use hooks::{Hook, PluginAction, PluginContext};

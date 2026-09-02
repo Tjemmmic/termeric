@@ -36,6 +36,31 @@ impl PluginManager {
         if self.plugins.iter().any(|p| p.id() == id) {
             anyhow::bail!("Plugin with id '{}' is already registered", id);
         }
+        let commands = plugin.commands();
+        if commands.len() > 64 {
+            anyhow::bail!("Plugin {id:?} contributes more than 64 commands");
+        }
+        let mut command_ids = std::collections::BTreeSet::new();
+        let existing: std::collections::BTreeSet<_> = self
+            .plugins
+            .iter()
+            .flat_map(|loaded| loaded.commands())
+            .map(|command| command.id)
+            .collect();
+        for command in commands {
+            if !command.id.starts_with(&format!("{id}.")) {
+                anyhow::bail!(
+                    "Plugin {id:?} command {:?} is outside its namespace",
+                    command.id
+                );
+            }
+            if !command_ids.insert(command.id.clone()) || existing.contains(&command.id) {
+                anyhow::bail!(
+                    "Plugin command {:?} conflicts with an existing command",
+                    command.id
+                );
+            }
+        }
 
         plugin.on_load(ctx)?;
         log::info!(
@@ -52,6 +77,7 @@ impl PluginManager {
     ///
     /// Calls `on_unload` on the plugin before removing it.
     /// Returns true if a plugin was found and removed.
+    #[allow(dead_code)]
     pub fn deregister(&mut self, plugin_id: &str) -> bool {
         if let Some(pos) = self.plugins.iter().position(|p| p.id() == plugin_id) {
             self.plugins[pos].on_unload();
@@ -75,10 +101,18 @@ impl PluginManager {
             Hook::TabSwitched { from, to } => {
                 log::trace!("Dispatching TabSwitched(from={}, to={})", from, to)
             }
-            Hook::CommandExecuted { command, exit_code } => {
+            Hook::CommandExecuted {
+                region_id,
+                tab_id,
+                pane_id,
+                exit_code,
+                ..
+            } => {
                 log::trace!(
-                    "Dispatching CommandExecuted(cmd={:?}, exit={:?})",
-                    command,
+                    "Dispatching CommandExecuted(region={}, tab={}, pane={:?}, exit={:?})",
+                    region_id,
+                    tab_id,
+                    pane_id,
                     exit_code
                 );
             }
@@ -87,33 +121,57 @@ impl PluginManager {
         let mut actions = Vec::new();
 
         for plugin in &mut self.plugins {
-            match plugin.on_hook(hook, ctx) {
-                HookResponse::Ignored => {}
-                HookResponse::Handled => {
-                    log::debug!("Hook {:?} handled by plugin '{}'", hook, plugin.id());
-                }
-                HookResponse::Action(action) => {
-                    log::debug!(
-                        "Hook {:?} produced action {:?} from plugin '{}'",
-                        hook,
-                        action,
-                        plugin.id()
-                    );
-                    actions.push(action);
-                }
-                HookResponse::Actions(batch) => {
-                    log::debug!(
-                        "Hook {:?} produced {} actions from plugin '{}'",
-                        hook,
-                        batch.len(),
-                        plugin.id()
-                    );
-                    actions.extend(batch);
-                }
-            }
+            actions.extend(Self::dispatch_plugin(plugin.as_mut(), hook, ctx));
         }
 
         actions
+    }
+
+    /// Dispatch a hook to one exact plugin ID.
+    pub fn dispatch_to(
+        &mut self,
+        plugin_id: &str,
+        hook: &Hook,
+        ctx: &PluginContext,
+    ) -> Vec<PluginAction> {
+        self.plugins
+            .iter_mut()
+            .find(|plugin| plugin.id() == plugin_id)
+            .map_or_else(Vec::new, |plugin| {
+                Self::dispatch_plugin(plugin.as_mut(), hook, ctx)
+            })
+    }
+
+    fn dispatch_plugin(
+        plugin: &mut dyn Plugin,
+        hook: &Hook,
+        ctx: &PluginContext,
+    ) -> Vec<PluginAction> {
+        match plugin.on_hook(hook, ctx) {
+            HookResponse::Ignored => Vec::new(),
+            HookResponse::Handled => {
+                log::debug!("Hook {} handled by plugin '{}'", hook.name(), plugin.id());
+                Vec::new()
+            }
+            HookResponse::Action(action) => {
+                log::debug!(
+                    "Hook {} produced action {} from plugin '{}'",
+                    hook.name(),
+                    action.name(),
+                    plugin.id()
+                );
+                vec![action]
+            }
+            HookResponse::Actions(actions) => {
+                log::debug!(
+                    "Hook {} produced {} actions from plugin '{}'",
+                    hook.name(),
+                    actions.len(),
+                    plugin.id()
+                );
+                actions
+            }
+        }
     }
 
     /// Get all commands from all registered plugins.
@@ -128,13 +186,15 @@ impl PluginManager {
 
     /// Execute a plugin command by ID.
     ///
-    /// Dispatches a `CommandInvoked` hook and returns the first action
-    /// produced, if any.
+    /// Dispatches a `CommandInvoked` hook only to the command namespace owner.
     pub fn execute_command(&mut self, command_id: &str, ctx: &PluginContext) -> Vec<PluginAction> {
+        let Some((plugin_id, _)) = command_id.split_once('.') else {
+            return Vec::new();
+        };
         let hook = Hook::CommandInvoked {
             command_id: command_id.to_string(),
         };
-        self.dispatch(&hook, ctx)
+        self.dispatch_to(plugin_id, &hook, ctx)
     }
 
     /// Unload all plugins (calls `on_unload` on each).
@@ -149,6 +209,11 @@ impl PluginManager {
     /// Get the number of registered plugins.
     pub fn count(&self) -> usize {
         self.plugins.len()
+    }
+
+    /// Whether a plugin ID is currently registered.
+    pub fn contains(&self, plugin_id: &str) -> bool {
+        self.plugins.iter().any(|plugin| plugin.id() == plugin_id)
     }
 }
 
@@ -227,6 +292,7 @@ mod tests {
                         cwd: None,
                         title: Some("Test Tab".to_string()),
                         plugin_id: None,
+                        profile: None,
                         env: std::collections::HashMap::new(),
                     })
                 }
@@ -250,6 +316,57 @@ mod tests {
                 alt: false,
                 shift: true,
                 command_id: "action.open".to_string(),
+            }]
+        }
+    }
+
+    #[derive(Debug)]
+    struct InvalidCommandPlugin {
+        commands: Vec<PluginCommand>,
+    }
+
+    impl Plugin for InvalidCommandPlugin {
+        fn id(&self) -> &str {
+            "invalid"
+        }
+
+        fn name(&self) -> &str {
+            "Invalid Commands"
+        }
+
+        fn commands(&self) -> Vec<PluginCommand> {
+            self.commands.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    struct EavesdroppingPlugin;
+
+    impl Plugin for EavesdroppingPlugin {
+        fn id(&self) -> &str {
+            "eavesdrop"
+        }
+
+        fn name(&self) -> &str {
+            "Eavesdropping Plugin"
+        }
+
+        fn on_hook(&mut self, hook: &Hook, _ctx: &PluginContext) -> HookResponse {
+            if matches!(hook, Hook::CommandInvoked { .. }) {
+                HookResponse::Action(PluginAction::ShowMessage {
+                    message: "wrong owner received command".into(),
+                })
+            } else {
+                HookResponse::Ignored
+            }
+        }
+
+        fn commands(&self) -> Vec<PluginCommand> {
+            vec![PluginCommand {
+                id: "eavesdrop.test".into(),
+                name: "Eavesdrop".into(),
+                description: String::new(),
+                category: None,
             }]
         }
     }
@@ -282,6 +399,38 @@ mod tests {
         let result = mgr.register(Box::new(TrackingPlugin::new()), &ctx);
         assert!(result.is_err());
         assert_eq!(mgr.count(), 1);
+    }
+
+    #[test]
+    fn conflicting_and_out_of_namespace_commands_are_rejected_before_load() {
+        let command = |id: &str| PluginCommand {
+            id: id.into(),
+            name: "Conflict".into(),
+            description: String::new(),
+            category: None,
+        };
+        let mut manager = PluginManager::new();
+        assert!(
+            manager
+                .register(
+                    Box::new(InvalidCommandPlugin {
+                        commands: vec![command("other.command")],
+                    }),
+                    &test_ctx(),
+                )
+                .is_err()
+        );
+        assert!(
+            manager
+                .register(
+                    Box::new(InvalidCommandPlugin {
+                        commands: vec![command("invalid.same"), command("invalid.same")],
+                    }),
+                    &test_ctx(),
+                )
+                .is_err()
+        );
+        assert_eq!(manager.count(), 0);
     }
 
     #[test]
@@ -341,9 +490,15 @@ mod tests {
         let ctx = test_ctx();
 
         mgr.register(Box::new(ActionPlugin), &ctx).unwrap();
+        mgr.register(Box::new(EavesdroppingPlugin), &ctx).unwrap();
 
         let actions = mgr.execute_command("action.open", &ctx);
-        assert!(!actions.is_empty());
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], PluginAction::OpenTab { .. }));
+
+        let actions = mgr.execute_command("eavesdrop.test", &ctx);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], PluginAction::ShowMessage { .. }));
 
         let actions = mgr.execute_command("nonexistent", &ctx);
         assert!(actions.is_empty());

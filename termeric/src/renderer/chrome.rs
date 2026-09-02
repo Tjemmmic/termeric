@@ -6,7 +6,8 @@ impl Renderer {
     pub(super) fn build_chrome_bar(
         &mut self,
         info: &crate::ui::claude_chrome::ChromeBarInfo,
-        window_width: f32,
+        content_left: f32,
+        content_width: f32,
         tab_bar_y_end: f32,
         bar_height: f32,
     ) {
@@ -23,7 +24,7 @@ impl Renderer {
             1.0,
         ];
         self.rect_pipeline
-            .push_rect(0.0, bar_y, window_width, bar_height, bg);
+            .push_rect(content_left, bar_y, content_width, bar_height, bg);
 
         // Thin separator line at bottom
         let sep = [
@@ -32,15 +33,20 @@ impl Renderer {
             self.ui.palette_border[2],
             0.3,
         ];
-        self.rect_pipeline
-            .push_rect(0.0, bar_y + bar_height - 1.0, window_width, 1.0, sep);
+        self.rect_pipeline.push_rect(
+            content_left,
+            bar_y + bar_height - 1.0,
+            content_width,
+            1.0,
+            sep,
+        );
 
         let text_y = bar_y + (bar_height - cell_height) / 2.0;
         let text_color = self.ui.palette_text;
         let dim_color = self.ui.palette_text_dim;
         let accent = self.ui.palette_accent;
 
-        let mut cx = cell_width; // left padding
+        let mut cx = content_left + cell_width; // left padding
 
         // ── Repo name ──
         if let Some(ref repo) = info.repo_name {
@@ -151,7 +157,7 @@ impl Renderer {
 
         // Recording dot (rightmost)
         if info.recording {
-            let dot_x = window_width - right_margin - char_scale;
+            let dot_x = content_left + content_width - right_margin - char_scale;
             let rec_color = [0.9, 0.15, 0.15, 1.0]; // red
             self.text_pipeline.push_char('●', dot_x, text_y, rec_color);
 
@@ -168,9 +174,9 @@ impl Renderer {
         let ctx_label = "[Context]";
         let ctx_width = ctx_label.chars().count() as f32 * char_scale;
         let ctx_x = if info.recording {
-            window_width - right_margin - char_scale * 8.0 - ctx_width
+            content_left + content_width - right_margin - char_scale * 8.0 - ctx_width
         } else {
-            window_width - right_margin - ctx_width
+            content_left + content_width - right_margin - ctx_width
         };
         for (i, c) in ctx_label.chars().enumerate() {
             if !c.is_whitespace() {

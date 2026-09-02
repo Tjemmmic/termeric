@@ -29,6 +29,8 @@ pub struct DiffHunk {
 /// A complete detected diff for one file
 #[derive(Debug, Clone)]
 pub struct DetectedDiff {
+    /// Detector-local stable identity used by review actions.
+    pub id: u64,
     /// The filename being diffed (from the +++ line)
     pub filename: String,
     /// All hunks in this diff
@@ -60,6 +62,7 @@ enum ScanState {
 #[derive(Debug)]
 pub struct DiffDetector {
     state: ScanState,
+    next_id: u64,
     /// Completed diffs ready for review
     pub detected: Vec<DetectedDiff>,
 }
@@ -68,6 +71,7 @@ impl DiffDetector {
     pub fn new() -> Self {
         Self {
             state: ScanState::Idle,
+            next_id: 1,
             detected: Vec::new(),
         }
     }
@@ -255,11 +259,13 @@ impl DiffDetector {
         self.detected.iter().filter(|d| !d.reviewed).count()
     }
 
-    /// Mark all diffs as reviewed
-    pub fn mark_all_reviewed(&mut self) {
-        for diff in &mut self.detected {
-            diff.reviewed = true;
-        }
+    /// Mark one exact detected diff as reviewed.
+    pub fn mark_reviewed(&mut self, id: u64) -> bool {
+        let Some(diff) = self.detected.iter_mut().find(|diff| diff.id == id) else {
+            return false;
+        };
+        diff.reviewed = true;
+        true
     }
 
     /// Get the most recent unreviewed diff
@@ -267,10 +273,18 @@ impl DiffDetector {
         self.detected.iter().rev().find(|d| !d.reviewed)
     }
 
+    /// Resolve one detector-local stable identity.
+    pub fn detected_by_id(&self, id: u64) -> Option<&DetectedDiff> {
+        self.detected.iter().find(|diff| diff.id == id)
+    }
+
     fn finalize_diff(&mut self, plus_line: &str, hunks: Vec<DiffHunk>, raw_lines: &[String]) {
         let filename = extract_filename(plus_line);
         let raw = raw_lines.join("\n");
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1).max(1);
         self.detected.push(DetectedDiff {
+            id,
             filename,
             hunks,
             raw,
@@ -458,8 +472,41 @@ mod tests {
         detector.flush();
 
         assert_eq!(detector.unreviewed_count(), 1);
-        detector.mark_all_reviewed();
+        let id = detector.detected[0].id;
+        assert!(detector.mark_reviewed(id));
         assert_eq!(detector.unreviewed_count(), 0);
+    }
+
+    #[test]
+    fn stable_ids_mark_only_the_exact_reviewed_diff() {
+        let mut detector = DiffDetector::new();
+        for filename in ["first.rs", "second.rs"] {
+            for line in [
+                format!("--- a/{filename}"),
+                format!("+++ b/{filename}"),
+                "@@ -1,1 +1,1 @@".into(),
+                "-old".into(),
+                "+new".into(),
+                "finished".into(),
+            ] {
+                detector.feed_line(&line);
+            }
+        }
+        assert_eq!(detector.detected.len(), 2);
+        let first_id = detector.detected[0].id;
+        let second_id = detector.detected[1].id;
+        assert_ne!(first_id, second_id);
+        assert!(
+            detector
+                .detected_by_id(second_id)
+                .unwrap()
+                .raw
+                .contains("+++ b/second.rs")
+        );
+        assert!(detector.mark_reviewed(first_id));
+        assert!(detector.detected[0].reviewed);
+        assert!(!detector.detected[1].reviewed);
+        assert!(!detector.mark_reviewed(u64::MAX));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! AI session chrome — status bar UI displayed below the tab bar for AI plugin tabs
 //!
-//! Shows: repo name · branch · host badge · [Context] button · transcript indicator
+//! Shows: repo name · branch · host badge · `[Context]` button · transcript indicator
 
 /// Host where the Claude Code session is running
 #[derive(Debug, Clone, PartialEq, Eq)]

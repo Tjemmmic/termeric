@@ -18,12 +18,16 @@ pub enum CommandsPanelAction {
     Run(usize),
     /// Delete the command at the given index
     Delete(usize),
-    /// User submitted the inline "add command" form
-    AddSubmit { name: String, command: String },
+    /// Start or reset the inline add-command form.
+    StartAdd,
+    /// Submit the inline add-command form.
+    Submit,
     /// User clicked the Name field
     ClickName,
     /// User clicked the Command field
     ClickCommand,
+    /// Cancel the inline form without closing the panel.
+    CancelEdit,
     /// Close the panel
     Close,
     /// No action
@@ -82,7 +86,188 @@ pub struct CommandsPanelInfo {
     pub form_cursor: usize,
 }
 
+/// Rectangle used by the commands panel's shared render, hit-test, and
+/// accessibility geometry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CommandsPanelRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl CommandsPanelRect {
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
+/// Inline form geometry within the commands panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CommandsFormLayout {
+    pub container: CommandsPanelRect,
+    pub name_input: CommandsPanelRect,
+    pub command_input: CommandsPanelRect,
+    pub save_button: CommandsPanelRect,
+    pub cancel_button: CommandsPanelRect,
+    pub hint_y: f32,
+}
+
+/// Single source of truth for custom-command panel geometry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CommandsPanelLayout {
+    pub panel: CommandsPanelRect,
+    pub padding: f32,
+    pub small_padding: f32,
+    pub header_height: f32,
+    pub close_button: CommandsPanelRect,
+    pub new_button: CommandsPanelRect,
+    pub form: Option<CommandsFormLayout>,
+    pub list_start_y: f32,
+    pub row_height: f32,
+    pub cell_width: f32,
+    pub cell_height: f32,
+}
+
+impl CommandsPanelLayout {
+    pub fn calculate(
+        window_width: f32,
+        window_height: f32,
+        cell_width: f32,
+        cell_height: f32,
+        animation: f32,
+        editing: bool,
+        command_count: usize,
+    ) -> Self {
+        let panel_width = (cell_width * 36.0).max(340.0).min(window_width * 0.45);
+        let panel_x = window_width - panel_width * animation;
+        let padding = cell_width * 1.8;
+        let small_padding = cell_width * 0.8;
+        let header_height = cell_height * 2.8;
+        let header_text_y = (header_height - cell_height) / 2.0;
+        let close_x = panel_x + panel_width - padding - cell_width;
+        let close_button = CommandsPanelRect {
+            x: close_x,
+            y: header_text_y,
+            width: cell_width,
+            height: cell_height * 1.5,
+        };
+        let new_button = CommandsPanelRect {
+            x: panel_x + padding,
+            y: header_height + cell_height * 0.8,
+            width: panel_width - padding * 2.0,
+            height: cell_height * 2.0,
+        };
+        let mut list_start_y = new_button.y + new_button.height + cell_height * 0.8;
+        let form = editing.then(|| {
+            let form_x = panel_x + padding;
+            let form_width = panel_width - padding * 2.0;
+            let field_height = cell_height * 1.8;
+            let label_width = cell_width * 10.0;
+            let form_height = field_height * 2.0 + cell_height * 3.2;
+            let field_y = list_start_y + small_padding;
+            let input_x = form_x + label_width;
+            let input_width = form_width - label_width - small_padding;
+            let command_y = field_y + field_height + small_padding;
+            let buttons_y = command_y + field_height + small_padding * 1.5;
+            let save_width = cell_width * 7.0;
+            let save_x = form_x + form_width - save_width;
+            let save_height = cell_height * 1.6;
+            let cancel_width = cell_width * 8.0;
+            let cancel_x = save_x - cancel_width - small_padding;
+            let layout = CommandsFormLayout {
+                container: CommandsPanelRect {
+                    x: form_x,
+                    y: list_start_y,
+                    width: form_width,
+                    height: form_height,
+                },
+                name_input: CommandsPanelRect {
+                    x: input_x,
+                    y: field_y,
+                    width: input_width,
+                    height: field_height,
+                },
+                command_input: CommandsPanelRect {
+                    x: input_x,
+                    y: command_y,
+                    width: input_width,
+                    height: field_height,
+                },
+                save_button: CommandsPanelRect {
+                    x: save_x,
+                    y: buttons_y,
+                    width: save_width,
+                    height: save_height,
+                },
+                cancel_button: CommandsPanelRect {
+                    x: cancel_x,
+                    y: buttons_y,
+                    width: cancel_width,
+                    height: save_height,
+                },
+                hint_y: buttons_y + save_height + small_padding,
+            };
+            list_start_y += form_height + cell_height * 0.5;
+            layout
+        });
+        if command_count > 0 {
+            list_start_y += cell_height * 1.5;
+        }
+        Self {
+            panel: CommandsPanelRect {
+                x: panel_x,
+                y: 0.0,
+                width: panel_width,
+                height: window_height,
+            },
+            padding,
+            small_padding,
+            header_height,
+            close_button,
+            new_button,
+            form,
+            list_start_y,
+            row_height: cell_height * 3.0,
+            cell_width,
+            cell_height,
+        }
+    }
+
+    pub fn command_row(self, index: usize) -> CommandsPanelRect {
+        CommandsPanelRect {
+            x: self.panel.x,
+            y: self.list_start_y + index as f32 * self.row_height,
+            width: self.panel.width,
+            height: self.row_height,
+        }
+    }
+
+    pub fn command_run(self, index: usize) -> CommandsPanelRect {
+        let row = self.command_row(index);
+        let delete = self.command_delete(index);
+        CommandsPanelRect {
+            width: (delete.x - row.x).max(0.0),
+            ..row
+        }
+    }
+
+    pub fn command_delete(self, index: usize) -> CommandsPanelRect {
+        let row = self.command_row(index);
+        let glyph_x = self.panel.x + self.panel.width - self.padding - self.cell_width * 1.5;
+        CommandsPanelRect {
+            x: glyph_x - self.cell_width * 0.5,
+            y: row.y,
+            width: self.cell_width * 2.0,
+            height: row.height,
+        }
+    }
+}
+
 impl CommandsPanel {
+    const MAX_FORM_NAME_BYTES: usize = 256;
+    const MAX_FORM_COMMAND_BYTES: usize = 16 * 1024;
+
     pub fn new() -> Self {
         Self {
             animation: PanelAnimation::with_duration(0.25),
@@ -138,6 +323,10 @@ impl CommandsPanel {
     /// Current animation progress (0.0 to 1.0)
     pub fn animation_progress(&self) -> f32 {
         self.animation.progress()
+    }
+
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.animation.set_reduced_motion(reduced_motion);
     }
 
     /// Update hover state from mouse position
@@ -201,7 +390,17 @@ impl CommandsPanel {
 
     /// Handle a character input in the form
     pub fn form_char(&mut self, c: char) {
-        if let Some(input) = self.active_input() {
+        let limit = match self.edit_mode {
+            EditMode::EditingName => Self::MAX_FORM_NAME_BYTES,
+            EditMode::EditingCommand => Self::MAX_FORM_COMMAND_BYTES,
+            EditMode::Browse => return,
+        };
+        if c == '\n' || c == '\r' || c == '\0' {
+            return;
+        }
+        if let Some(input) = self.active_input()
+            && input.text().len() + c.len_utf8() <= limit
+        {
             input.insert_char(c);
         }
     }
@@ -213,11 +412,37 @@ impl CommandsPanel {
         }
     }
 
+    /// Replace a form field from an assistive-technology value action. The
+    /// same single-line and size limits apply as to typed input.
+    pub fn accessibility_set_name(&mut self, value: &str) -> bool {
+        if value.len() > Self::MAX_FORM_NAME_BYTES || value.contains(['\0', '\n', '\r']) {
+            return false;
+        }
+        self.focus_name();
+        self.form_name.replace(value);
+        true
+    }
+
+    pub fn accessibility_set_command(&mut self, value: &str) -> bool {
+        if value.len() > Self::MAX_FORM_COMMAND_BYTES || value.contains(['\0', '\n', '\r']) {
+            return false;
+        }
+        self.focus_command();
+        self.form_command.replace(value);
+        true
+    }
+
     /// Try to submit the form — returns the new command if valid
     pub fn try_submit(&mut self) -> Option<CustomCommand> {
         let name = self.form_name.text().trim().to_string();
         let command = self.form_command.text().trim().to_string();
-        if name.is_empty() || command.is_empty() {
+        if name.is_empty()
+            || command.is_empty()
+            || name.len() > Self::MAX_FORM_NAME_BYTES
+            || command.len() > Self::MAX_FORM_COMMAND_BYTES
+            || name.contains(['\0', '\n', '\r'])
+            || command.contains(['\0', '\n', '\r'])
+        {
             return None;
         }
         self.cancel_edit();
@@ -245,5 +470,69 @@ impl CommandsPanel {
                 EditMode::Browse => 0,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_layout_keeps_form_and_row_actions_disjoint() {
+        let layout = CommandsPanelLayout::calculate(1000.0, 800.0, 10.0, 20.0, 1.0, true, 2);
+        let form = layout.form.unwrap();
+        assert!(layout.panel.contains(form.name_input.x, form.name_input.y));
+        assert!(
+            !form
+                .name_input
+                .contains(form.command_input.x, form.command_input.y)
+        );
+        assert!(!form.save_button.contains(
+            form.cancel_button.x + form.cancel_button.width / 2.0,
+            form.cancel_button.y + form.cancel_button.height / 2.0,
+        ));
+        let run = layout.command_run(0);
+        let delete = layout.command_delete(0);
+        assert!(run.x + run.width <= delete.x);
+        assert_eq!(
+            layout.command_row(1).y,
+            layout.command_row(0).y + layout.row_height
+        );
+    }
+
+    #[test]
+    fn form_values_are_utf8_aware_single_line_and_bounded() {
+        let mut panel = CommandsPanel::new();
+        panel.start_add();
+        assert!(panel.accessibility_set_name("Deploy 🫚"));
+        assert_eq!(panel.form_name.text(), "Deploy 🫚");
+        assert!(!panel.accessibility_set_name("bad\nname"));
+        assert_eq!(panel.form_name.text(), "Deploy 🫚");
+
+        panel.focus_command();
+        for _ in 0..CommandsPanel::MAX_FORM_COMMAND_BYTES + 10 {
+            panel.form_char('x');
+        }
+        assert_eq!(
+            panel.form_command.text().len(),
+            CommandsPanel::MAX_FORM_COMMAND_BYTES
+        );
+        assert!(
+            !panel
+                .accessibility_set_command(&"x".repeat(CommandsPanel::MAX_FORM_COMMAND_BYTES + 1))
+        );
+    }
+
+    #[test]
+    fn explicit_cancel_preserves_the_panel_and_clears_the_form() {
+        let mut panel = CommandsPanel::new();
+        panel.toggle();
+        panel.start_add();
+        panel.form_char('x');
+        panel.cancel_edit();
+        assert!(panel.is_open());
+        assert!(!panel.is_editing());
+        assert!(panel.form_name.text().is_empty());
+        assert!(panel.form_command.text().is_empty());
     }
 }

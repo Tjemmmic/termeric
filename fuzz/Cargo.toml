@@ -1,0 +1,39 @@
+[package]
+name = "termeric-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+termeric-core = { path = "../termeric-core" }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "terminal_bytes"
+path = "fuzz_targets/terminal_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "domain_protocol"
+path = "fuzz_targets/domain_protocol.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "graphics_protocols"
+path = "fuzz_targets/graphics_protocols.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

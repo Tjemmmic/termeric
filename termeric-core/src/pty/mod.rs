@@ -3,17 +3,41 @@
 //! This module provides cross-platform PTY creation and management
 //! using the portable-pty crate.
 
+mod capabilities;
 mod event;
 
+pub use capabilities::{COMPATIBILITY_TERM, TERMERIC_TERM};
 pub use event::PtyEvent;
+pub use portable_pty::PtySize;
 
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, native_pty_system};
 use std::io::{Read, Write};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
+
+/// PTY reader backpressure ceiling. A full queue blocks the reader thread and
+/// leaves additional output in the operating-system PTY buffer instead of
+/// allocating an unbounded process queue while the application is busy.
+pub const PTY_EVENT_QUEUE_CAPACITY: usize = 256;
+/// Bootstrap cell pixels used by constructors that do not yet have renderer
+/// metrics. Renderer-backed callers replace this with exact physical geometry.
+pub const DEFAULT_CELL_PIXEL_WIDTH: u16 = 8;
+pub const DEFAULT_CELL_PIXEL_HEIGHT: u16 = 16;
+
+/// Build a complete nonzero PTY size before definitive renderer metrics exist.
+pub fn default_pty_size(cols: u16, rows: u16) -> PtySize {
+    PtySize {
+        rows,
+        cols,
+        pixel_width: cols.saturating_mul(DEFAULT_CELL_PIXEL_WIDTH).max(1),
+        pixel_height: rows.saturating_mul(DEFAULT_CELL_PIXEL_HEIGHT).max(1),
+    }
+}
 
 /// A pseudo-terminal for communicating with a shell process
 pub struct Pty {
+    /// Exact TERM identity exported to this child.
+    term_name: &'static str,
     /// The master side of the PTY
     master: Box<dyn MasterPty + Send>,
     /// Reader for PTY output
@@ -62,14 +86,19 @@ impl Pty {
         args: &[String],
         env: &[(String, String)],
     ) -> Result<Self, PtyError> {
+        Self::new_with_env_and_size(default_pty_size(cols, rows), program, args, env)
+    }
+
+    /// Create a new PTY with complete cell and physical-pixel geometry.
+    pub fn new_with_env_and_size(
+        size: PtySize,
+        program: Option<&str>,
+        args: &[String],
+        env: &[(String, String)],
+    ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
 
-        let pair = pty_system.openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        let pair = pty_system.openpty(size)?;
 
         // Build the command for the shell
         let mut cmd = match program {
@@ -80,13 +109,33 @@ impl Pty {
             cmd.args(args);
         }
 
-        // Set terminal environment variables
-        cmd.env("TERM", "xterm-256color");
+        // Advertise the dedicated identity only when its compiled terminfo
+        // entry is discoverable. Compatibility mode is the safe fallback.
+        let terminal_environment = capabilities::terminal_environment();
+        cmd.env("TERM", terminal_environment.term);
         cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM_PROGRAM", "Termeric");
+        cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+        if let Some(terminfo) = terminal_environment.terminfo {
+            cmd.env("TERMINFO", terminfo);
+        }
+        if let Some(terminfo_dirs) = terminal_environment.terminfo_dirs {
+            cmd.env("TERMINFO_DIRS", terminfo_dirs);
+        }
 
         // Set additional environment variables (e.g., PWD for session restore)
         for (key, value) in env {
-            cmd.env(key, value);
+            if !matches!(
+                key.as_str(),
+                "TERM"
+                    | "COLORTERM"
+                    | "TERMINFO"
+                    | "TERMINFO_DIRS"
+                    | "TERM_PROGRAM"
+                    | "TERM_PROGRAM_VERSION"
+            ) {
+                cmd.env(key, value);
+            }
         }
 
         // If PWD is set, also set the working directory
@@ -108,6 +157,7 @@ impl Pty {
         let writer = pair.master.take_writer()?;
 
         Ok(Self {
+            term_name: terminal_environment.term,
             master: pair.master,
             reader,
             writer,
@@ -115,15 +165,22 @@ impl Pty {
         })
     }
 
+    /// Exact TERM identity exported to the child process.
+    pub fn term_name(&self) -> &'static str {
+        self.term_name
+    }
+
     /// Resize the PTY
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        self.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+    pub fn resize(&self, size: PtySize) -> Result<(), PtyError> {
+        if self.master.get_size()? != size {
+            self.master.resize(size)?;
+        }
         Ok(())
+    }
+
+    /// Read the kernel's current PTY geometry (`TIOCGWINSZ` on Unix).
+    pub fn size(&self) -> Result<PtySize, PtyError> {
+        Ok(self.master.get_size()?)
     }
 
     /// Read from the PTY
@@ -161,7 +218,7 @@ impl Pty {
         (
             PtyHandle {
                 master: self.master,
-                writer: self.writer,
+                writer: Some(self.writer),
                 child: self.child,
             },
             self.reader,
@@ -172,30 +229,45 @@ impl Pty {
 /// Handle to the PTY after the reader has been taken
 pub struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    writer: Option<Box<dyn Write + Send>>,
     child: Box<dyn Child + Send + Sync>,
 }
 
 impl PtyHandle {
     /// Resize the PTY
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        self.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+    pub fn resize(&self, size: PtySize) -> Result<(), PtyError> {
+        if self.master.get_size()? != size {
+            self.master.resize(size)?;
+        }
         Ok(())
+    }
+
+    /// Read the kernel's current PTY geometry (`TIOCGWINSZ` on Unix).
+    pub fn size(&self) -> Result<PtySize, PtyError> {
+        Ok(self.master.get_size()?)
     }
 
     /// Write to the PTY
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        self.writer.write(data)
+        self.writer
+            .as_mut()
+            .ok_or_else(detached_writer_error)?
+            .write(data)
     }
 
     /// Write all data to the PTY
     pub fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.writer.write_all(data)
+        self.writer
+            .as_mut()
+            .ok_or_else(detached_writer_error)?
+            .write_all(data)
+    }
+
+    /// Detach the PTY writer for an independently owned input worker. The
+    /// master/child control handle remains usable for resize and lifecycle
+    /// operations, but direct writes then fail explicitly.
+    pub fn take_writer(&mut self) -> Option<Box<dyn Write + Send>> {
+        self.writer.take()
     }
 
     /// Check if the child process is still running
@@ -209,13 +281,40 @@ impl PtyHandle {
     }
 }
 
+fn detached_writer_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::BrokenPipe,
+        "PTY writer is owned by another worker",
+    )
+}
+
+impl Drop for PtyHandle {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none()
+            && let Err(error) = self.child.kill()
+        {
+            log::warn!("Failed to terminate dropped PTY child: {error}");
+        }
+    }
+}
+
 /// Spawn a reader thread that sends PTY output via a channel.
 /// Returns the receiver channel. If the thread fails to spawn, the channel
 /// is still returned (but with `PtyEvent::Error` already queued) so callers
 /// can observe the failure through their normal event path instead of
 /// aborting the whole process.
-pub fn spawn_reader_thread(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<PtyEvent> {
-    let (tx, rx) = mpsc::channel();
+pub fn spawn_reader_thread(reader: Box<dyn Read + Send>) -> mpsc::Receiver<PtyEvent> {
+    spawn_reader_thread_with_waker(reader, None)
+}
+
+/// Spawn a PTY reader and notify an external event loop after each queued
+/// event. The callback runs only after the channel send succeeds, so waking
+/// always means there is work available to drain.
+pub fn spawn_reader_thread_with_waker(
+    mut reader: Box<dyn Read + Send>,
+    waker: Option<Arc<dyn Fn() + Send + Sync>>,
+) -> mpsc::Receiver<PtyEvent> {
+    let (tx, rx) = mpsc::sync_channel(PTY_EVENT_QUEUE_CAPACITY);
 
     let result = thread::Builder::new()
         .name("pty-reader".into())
@@ -227,6 +326,9 @@ pub fn spawn_reader_thread(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<P
                     Ok(0) => {
                         // EOF - PTY closed
                         let _ = tx.send(PtyEvent::Closed);
+                        if let Some(wake) = &waker {
+                            wake();
+                        }
                         break;
                     }
                     Ok(n) => {
@@ -234,9 +336,15 @@ pub fn spawn_reader_thread(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<P
                             // Receiver dropped
                             break;
                         }
+                        if let Some(wake) = &waker {
+                            wake();
+                        }
                     }
                     Err(e) => {
                         let _ = tx.send(PtyEvent::Error(e.to_string()));
+                        if let Some(wake) = &waker {
+                            wake();
+                        }
                         break;
                     }
                 }
@@ -272,6 +380,21 @@ impl From<anyhow::Error> for PtyError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    struct CountingByteReader {
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl Read for CountingByteReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            buffer[0] = b'x';
+            Ok(1)
+        }
+    }
 
     #[test]
     fn test_pty_creation() {
@@ -280,6 +403,174 @@ mod tests {
         // Just verify it doesn't panic; may fail without proper TTY
         if let Ok(mut pty) = result {
             assert!(pty.is_running());
+            assert_eq!(pty.size().unwrap(), default_pty_size(80, 24));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_identity_cannot_be_overridden_by_untrusted_extra_environment() {
+        let args = vec![
+            "-c".to_string(),
+            "printf 'TERM=%s COLORTERM=%s' \"$TERM\" \"$COLORTERM\"".to_string(),
+        ];
+        let extra = vec![
+            ("TERM".to_string(), "not-a-real-terminal".to_string()),
+            ("COLORTERM".to_string(), "false".to_string()),
+            ("TERMINFO".to_string(), "/untrusted/database".to_string()),
+        ];
+        let pty = Pty::new_with_env(80, 24, Some("/bin/sh"), &args, &extra).unwrap();
+        let term_name = pty.term_name();
+        let (_handle, reader) = pty.take_reader();
+        let rx = spawn_reader_thread(reader);
+        let mut output = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(std::time::Duration::from_millis(20)) {
+                Ok(PtyEvent::Output(bytes)) => output.extend(bytes),
+                Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let output = String::from_utf8_lossy(&output);
+        assert!(
+            output.contains(&format!("TERM={term_name} COLORTERM=truecolor")),
+            "{output:?}"
+        );
+        assert!(!output.contains("not-a-real-terminal"), "{output:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kernel_winsize_preserves_nonzero_pixels_at_spawn_and_resize() {
+        let initial = PtySize {
+            cols: 83,
+            rows: 27,
+            pixel_width: 913,
+            pixel_height: 513,
+        };
+        let args = vec!["-c".to_string(), "sleep 1".to_string()];
+        let pty = Pty::new_with_env_and_size(initial, Some("/bin/sh"), &args, &[])
+            .expect("PTY helper should spawn");
+        assert_eq!(pty.size().expect("TIOCGWINSZ at startup"), initial);
+
+        let resized = PtySize {
+            cols: 41,
+            rows: 19,
+            pixel_width: 451,
+            pixel_height: 361,
+        };
+        pty.resize(resized).expect("TIOCSWINSZ should succeed");
+        assert_eq!(pty.size().expect("TIOCGWINSZ after resize"), resized);
+        // The second call is an exact no-op and must not emit another SIGWINCH.
+        pty.resize(resized)
+            .expect("duplicate size should be accepted");
+        assert_eq!(pty.size().unwrap(), resized);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_winsize_probe_observes_startup_and_resize_pixels() {
+        let python = ["/usr/bin/python3", "/bin/python3"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file());
+        let Some(python) = python else {
+            return;
+        };
+        let probe = concat!(
+            "import fcntl,struct,sys,termios\n",
+            "def size(): return struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, b'\\0'*8))\n",
+            "print('startup=%r' % (size(),), flush=True)\n",
+            "sys.stdin.readline()\n",
+            "print('resized=%r' % (size(),), flush=True)\n",
+        );
+        let args = vec!["-c".to_string(), probe.to_string()];
+        let initial = PtySize {
+            cols: 83,
+            rows: 27,
+            pixel_width: 913,
+            pixel_height: 513,
+        };
+        let pty = Pty::new_with_env_and_size(initial, Some(python), &args, &[]).unwrap();
+        let (mut handle, reader) = pty.take_reader();
+        let rx = spawn_reader_thread(reader);
+        let mut output = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !output.contains("startup=(27, 83, 913, 513)") && std::time::Instant::now() < deadline
+        {
+            match rx.recv_timeout(std::time::Duration::from_millis(20)) {
+                Ok(PtyEvent::Output(bytes)) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(output.contains("startup=(27, 83, 913, 513)"), "{output:?}");
+
+        let resized = PtySize {
+            cols: 41,
+            rows: 19,
+            pixel_width: 451,
+            pixel_height: 361,
+        };
+        handle.resize(resized).unwrap();
+        handle.write_all(b"\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !output.contains("resized=(19, 41, 451, 361)") && std::time::Instant::now() < deadline
+        {
+            match rx.recv_timeout(std::time::Duration::from_millis(20)) {
+                Ok(PtyEvent::Output(bytes)) => output.push_str(&String::from_utf8_lossy(&bytes)),
+                Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(output.contains("resized=(19, 41, 451, 361)"), "{output:?}");
+    }
+
+    #[test]
+    fn reader_wakes_after_queueing_output_and_close() {
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            wake_tx.send(()).unwrap();
+        });
+        let rx =
+            spawn_reader_thread_with_waker(Box::new(Cursor::new(b"hello".to_vec())), Some(wake));
+
+        assert!(matches!(rx.recv().unwrap(), PtyEvent::Output(data) if data == b"hello"));
+        assert!(matches!(rx.recv().unwrap(), PtyEvent::Closed));
+        // The reader deliberately queues each event before waking. Receiving
+        // the event can therefore race ahead of its callback; wait for both
+        // callbacks instead of sampling an atomic at that intermediate point.
+        wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        wake_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            wake_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn reader_applies_backpressure_at_the_bounded_event_queue() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let rx = spawn_reader_thread(Box::new(CountingByteReader {
+            reads: Arc::clone(&reads),
+        }));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while reads.load(Ordering::SeqCst) < PTY_EVENT_QUEUE_CAPACITY + 1
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+
+        assert_eq!(reads.load(Ordering::SeqCst), PTY_EVENT_QUEUE_CAPACITY + 1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            PTY_EVENT_QUEUE_CAPACITY + 1,
+            "reader should block on the 257th send until the app drains output"
+        );
+        drop(rx);
     }
 }

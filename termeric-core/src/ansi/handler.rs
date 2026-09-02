@@ -1,37 +1,508 @@
 //! VTE escape sequence handler
 
 use super::color::{ansi_bright_color, ansi_color};
-use crate::event::{NotificationRequest, TerminalEvent};
+use crate::event::{
+    ClipboardRequest, DynamicColorOperation, DynamicColorTarget, NotificationRequest, TerminalEvent,
+};
 use crate::grid::{CellAttrs, Color, ColorSpec};
-use crate::term::{Terminal, TerminalMode};
+use crate::term::{ReportedWorkingDirectory, Terminal, TerminalMode};
+use base64::Engine as _;
 use vte::{Params, Perform};
+
+const MAX_OSC_TITLE_BYTES: usize = 4_096;
+const MAX_OSC_DIRECTORY_BYTES: usize = 4_096;
+pub const MAX_OSC52_DECODED_BYTES: usize = 1024 * 1024;
+const MAX_OSC52_ENCODED_BYTES: usize = MAX_OSC52_DECODED_BYTES.div_ceil(3) * 4;
+pub(super) const MAX_OSC_SEQUENCE_BYTES: usize = 16 * 1024 * 1024 + 64;
+const MAX_XTGETTCAP_REQUEST_BYTES: usize = 4_096;
+const MAX_XTGETTCAP_NAMES: usize = 64;
+const MAX_XTGETTCAP_NAME_BYTES: usize = 64;
+const MAX_XTGETTCAP_RESPONSE_BYTES: usize = 8_192;
+const PRIMARY_DEVICE_ATTRIBUTES: &[u8] = b"\x1b[?1;2;4;8c";
+const SECONDARY_DEVICE_ATTRIBUTES: &[u8] = b"\x1b[>0;1;0c";
+const XTVERSION: &[u8] = b"\x1bP>|Termeric(1)\x1b\\";
+
+fn parse_osc_title(params: &[&[u8]]) -> Option<String> {
+    let mut bytes = Vec::new();
+    for (index, param) in params.iter().enumerate() {
+        if index > 0 {
+            bytes.push(b';');
+        }
+        if bytes.len().saturating_add(param.len()) > MAX_OSC_TITLE_BYTES {
+            return None;
+        }
+        bytes.extend_from_slice(param);
+    }
+    let title = std::str::from_utf8(&bytes).ok()?;
+    Some(
+        title
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect(),
+    )
+}
+
+fn parse_osc_directory(params: &[&[u8]]) -> Option<ReportedWorkingDirectory> {
+    let mut bytes = Vec::new();
+    for (index, param) in params.iter().enumerate() {
+        let separator = usize::from(index > 0);
+        if bytes
+            .len()
+            .saturating_add(separator)
+            .saturating_add(param.len())
+            > MAX_OSC_DIRECTORY_BYTES
+        {
+            return None;
+        }
+        if index > 0 {
+            bytes.push(b';');
+        }
+        bytes.extend_from_slice(param);
+    }
+
+    let uri = std::str::from_utf8(&bytes).ok()?;
+    let prefix = uri.get(..7)?;
+    if !prefix.eq_ignore_ascii_case("file://") {
+        return None;
+    }
+    let location = &uri[7..];
+    let slash = location.find('/')?;
+    let host = &location[..slash];
+    if host
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || matches!(byte, b'@' | b'?' | b'#' | b'%'))
+    {
+        return None;
+    }
+
+    let encoded_path = &location.as_bytes()[slash..];
+    let mut decoded = Vec::with_capacity(encoded_path.len());
+    let mut index = 0;
+    while index < encoded_path.len() {
+        if encoded_path[index] == b'%' {
+            let high = ascii_hex_value(*encoded_path.get(index + 1)?)?;
+            let low = ascii_hex_value(*encoded_path.get(index + 2)?)?;
+            decoded.push(((high << 4) | low) as u8);
+            index += 3;
+        } else {
+            decoded.push(encoded_path[index]);
+            index += 1;
+        }
+    }
+    if decoded.len() > MAX_OSC_DIRECTORY_BYTES
+        || decoded
+            .iter()
+            .any(|byte| *byte == 0 || byte.is_ascii_control())
+    {
+        return None;
+    }
+    let path = String::from_utf8(decoded).ok()?;
+    if !path.starts_with('/') {
+        return None;
+    }
+
+    Some(ReportedWorkingDirectory::new(
+        uri.to_string(),
+        (!host.is_empty()).then(|| host.to_string()),
+        path,
+    ))
+}
+
+fn ascii_hex_value(byte: u8) -> Option<u32> {
+    match byte {
+        b'0'..=b'9' => Some(u32::from(byte - b'0')),
+        b'a'..=b'f' => Some(u32::from(byte - b'a' + 10)),
+        b'A'..=b'F' => Some(u32::from(byte - b'A' + 10)),
+        _ => None,
+    }
+}
+
+fn parse_clipboard_selection(value: &[u8]) -> Option<ClipboardRequest> {
+    if value.is_empty() || value.contains(&b'c') || value.contains(&b's') {
+        Some(ClipboardRequest::Clipboard)
+    } else if value.contains(&b'p') {
+        Some(ClipboardRequest::Primary)
+    } else {
+        None
+    }
+}
+
+fn parse_osc52(params: &[&[u8]], reply_uses_8bit_controls: bool) -> Option<TerminalEvent> {
+    let selection = parse_clipboard_selection(params.get(1).copied().unwrap_or_default())?;
+    let data = *params.get(2)?;
+    if data == b"?" {
+        return Some(TerminalEvent::ClipboardRequest {
+            selection,
+            reply_uses_8bit_controls,
+        });
+    }
+    if data.len() > MAX_OSC52_ENCODED_BYTES {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(data))
+        .ok()?;
+    if decoded.len() > MAX_OSC52_DECODED_BYTES {
+        return None;
+    }
+    let text = String::from_utf8(decoded).ok()?;
+    Some(TerminalEvent::ClipboardWrite { selection, text })
+}
+
+fn parse_palette_index(value: &[u8]) -> Option<u8> {
+    std::str::from_utf8(value).ok()?.parse().ok()
+}
+
+fn dynamic_default_target(command: u32) -> Option<DynamicColorTarget> {
+    match command {
+        10 => Some(DynamicColorTarget::Foreground),
+        11 => Some(DynamicColorTarget::Background),
+        12 => Some(DynamicColorTarget::Cursor),
+        _ => None,
+    }
+}
+
+fn parse_xterm_color(value: &[u8]) -> Option<Color> {
+    let value = std::str::from_utf8(value).ok()?;
+    if let Some(rgb) = value.strip_prefix("rgb:") {
+        let mut components = rgb.split('/');
+        let red = normalize_hex_component(components.next()?)?;
+        let green = normalize_hex_component(components.next()?)?;
+        let blue = normalize_hex_component(components.next()?)?;
+        if components.next().is_some() {
+            return None;
+        }
+        return Some(Color::rgb(red, green, blue));
+    }
+    let hex = value.strip_prefix('#')?;
+    if !matches!(hex.len(), 3 | 6 | 9 | 12) {
+        return None;
+    }
+    let component_len = hex.len() / 3;
+    Some(Color::rgb(
+        normalize_hex_component(&hex[..component_len])?,
+        normalize_hex_component(&hex[component_len..component_len * 2])?,
+        normalize_hex_component(&hex[component_len * 2..])?,
+    ))
+}
+
+fn normalize_hex_component(component: &str) -> Option<u8> {
+    if !(1..=4).contains(&component.len()) {
+        return None;
+    }
+    let value = u32::from_str_radix(component, 16).ok()?;
+    let maximum = 16_u32.pow(component.len() as u32) - 1;
+    Some(((value * 255 + maximum / 2) / maximum) as u8)
+}
 
 /// Handler for VTE callbacks that updates terminal state
 pub struct Handler<'a> {
     terminal: &'a mut Terminal,
-    /// Accumulator for APC/DCS data
-    apc_data: Vec<u8>,
-    /// Whether we're in an APC sequence
-    in_apc: bool,
-    /// APC action character (for Kitty graphics, this is 'G')
-    apc_action: char,
 }
 
 impl<'a> Handler<'a> {
     pub fn new(terminal: &'a mut Terminal) -> Self {
-        Self {
-            terminal,
-            apc_data: Vec::new(),
-            in_apc: false,
-            apc_action: '\0',
+        Self { terminal }
+    }
+
+    pub(super) fn begin_graphics_apc(&mut self) {
+        self.terminal.begin_graphics_apc();
+    }
+
+    pub(super) fn push_graphics_apc_byte(&mut self, byte: u8) {
+        self.terminal.push_graphics_apc_byte(byte);
+    }
+
+    pub(super) fn finish_graphics_apc(&mut self) {
+        self.terminal.finish_graphics_apc();
+    }
+
+    pub(super) fn begin_graphics_relay_apc(&mut self) {
+        self.terminal.begin_graphics_relay_apc();
+    }
+
+    pub(super) fn push_graphics_relay_apc_byte(&mut self, byte: u8) {
+        self.terminal.push_graphics_relay_apc_byte(byte);
+    }
+
+    pub(super) fn finish_graphics_relay_apc(&mut self) {
+        self.terminal.finish_graphics_relay_apc();
+    }
+
+    pub(super) fn handle_parameterless_xterm_key_control(&mut self, final_byte: u8) {
+        match final_byte {
+            b'm' => {
+                self.terminal.reset_xterm_keyboard_modify();
+                self.terminal.reset_xterm_cursor_key_mode();
+                self.terminal.reset_xterm_function_key_mode();
+                self.terminal.reset_xterm_keypad_key_mode();
+                self.terminal.reset_xterm_string_key_mode();
+                self.terminal.reset_xterm_modifier_key_mode();
+                self.terminal.reset_xterm_special_key_mode();
+                self.terminal.set_xterm_modify_other_keys(0, 0);
+            }
+            b'f' => {
+                self.terminal.reset_xterm_keyboard_format();
+                self.terminal.reset_xterm_cursor_key_format();
+                self.terminal.reset_xterm_function_key_format();
+                self.terminal.reset_xterm_keypad_key_format();
+                self.terminal.reset_xterm_string_key_format();
+                self.terminal.reset_xterm_modifier_key_format();
+                self.terminal.reset_xterm_special_key_format();
+                self.terminal.set_xterm_other_key_format(0);
+            }
+            // Xterm assigns omitted Ps in the disable control to resource 2.
+            b'n' => self.terminal.set_xterm_function_key_mode(u16::MAX),
+            _ => unreachable!("only xterm m/f/n controls are intercepted"),
         }
     }
+
+    pub(super) fn cancel_graphics_apc(&mut self) {
+        self.terminal.cancel_graphics_apc();
+    }
+
+    pub(super) fn cancel_graphics_relay_apc(&mut self) {
+        self.terminal.cancel_graphics_relay_apc();
+    }
+
+    pub(super) fn handle_dcs(&mut self, payload: &[u8]) {
+        if let Some(state) = payload.strip_prefix(b"1$t") {
+            self.terminal.restore_presentation_state(1, state);
+            return;
+        }
+        if let Some(state) = payload.strip_prefix(b"2$t") {
+            self.terminal.restore_presentation_state(2, state);
+            return;
+        }
+        if let Some(request) = payload.strip_prefix(b"$q") {
+            let status = (request.len() <= 32)
+                .then(|| self.terminal.decrqss_status(request))
+                .flatten();
+            let mut response =
+                Vec::with_capacity(status.as_ref().map_or(8, |value| value.len() + 8));
+            response.extend_from_slice(b"\x1bP");
+            response.extend_from_slice(if status.is_some() { b"1$r" } else { b"0$r" });
+            if let Some(status) = status {
+                response.extend_from_slice(&status);
+            }
+            response.extend_from_slice(b"\x1b\\");
+            self.terminal.push_event(TerminalEvent::PtyWrite(response));
+            return;
+        }
+        if let Some((clear_existing, definitions)) = decudk_payload(payload) {
+            // DECUDK was introduced at VT220 conformance level. Xterm accepts
+            // the second lock parameter but reports/behaves as always
+            // unlocked, so only the first clear/preserve parameter is stateful.
+            if self.terminal.dec_conformance_level() >= 2 {
+                if clear_existing {
+                    self.terminal.clear_xterm_user_defined_keys();
+                }
+                for definition in definitions.split(|byte| *byte == b';') {
+                    let Some(slash) = definition.iter().position(|byte| *byte == b'/') else {
+                        continue;
+                    };
+                    let Ok(code) = std::str::from_utf8(&definition[..slash])
+                        .ok()
+                        .and_then(|value| value.parse::<u16>().ok())
+                        .ok_or(())
+                    else {
+                        continue;
+                    };
+                    let encoded = &definition[slash + 1..];
+                    if encoded.len() > crate::term::MAX_USER_DEFINED_KEY_BYTES * 2 {
+                        continue;
+                    }
+                    let Some(value) = decode_hex(encoded) else {
+                        continue;
+                    };
+                    self.terminal.define_xterm_user_defined_key(code, value);
+                }
+            }
+            return;
+        }
+        if let Some(q) = payload.iter().position(|byte| *byte == b'q')
+            && payload[..q]
+                .iter()
+                .all(|byte| byte.is_ascii_digit() || *byte == b';')
+        {
+            self.terminal.handle_sixel_command(payload);
+            return;
+        }
+        let Some(requests) = payload.strip_prefix(b"+q") else {
+            return;
+        };
+        let response = xtgettcap_response(requests, self.terminal.term_name().as_bytes());
+        self.terminal.push_event(TerminalEvent::PtyWrite(response));
+    }
+}
+
+/// Recognize the parameter/final portion of DECUDK and return xterm's
+/// clear-before-define policy plus its definition string.
+fn decudk_payload(payload: &[u8]) -> Option<(bool, &[u8])> {
+    let final_index = payload.iter().position(|byte| *byte == b'|')?;
+    let parameters = &payload[..final_index];
+    if !parameters
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || *byte == b';')
+    {
+        return None;
+    }
+    let first = parameters
+        .split(|byte| *byte == b';')
+        .next()
+        .unwrap_or_default();
+    let first = if first.is_empty() {
+        0
+    } else {
+        std::str::from_utf8(first).ok()?.parse::<u16>().ok()?
+    };
+    Some((first == 0, &payload[final_index + 1..]))
+}
+
+fn decode_hex(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    bytes
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = (pair[0] as char).to_digit(16)? as u8;
+            let low = (pair[1] as char).to_digit(16)? as u8;
+            Some((high << 4) | low)
+        })
+        .collect()
+}
+
+fn encode_hex(bytes: &[u8], output: &mut Vec<u8>) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize]);
+        output.push(HEX[(byte & 0x0f) as usize]);
+    }
+}
+
+fn terminal_os_name() -> &'static [u8] {
+    #[cfg(target_os = "linux")]
+    return b"Linux";
+    #[cfg(target_os = "macos")]
+    return b"Darwin";
+    #[cfg(target_os = "windows")]
+    return b"Windows";
+    #[allow(unreachable_code)]
+    b"Unknown"
+}
+
+/// Return only capabilities whose byte strings are part of Termeric's own
+/// version-controlled terminal contract. Keeping this table independent of
+/// the host terminfo database makes XTGETTCAP deterministic over SSH and in
+/// containers while avoiding claims for keys the input encoder cannot emit.
+fn xtgettcap_value<'a>(name: &[u8], term_name: &'a [u8]) -> Option<&'a [u8]> {
+    match name {
+        // Non-key capabilities explicitly admitted by xterm's XTGETTCAP
+        // contract, plus the two extensions used by Fish 4.
+        b"Co" | b"colors" => Some(b"256"),
+        b"TN" | b"name" => Some(term_name),
+        b"RGB" => Some(b"8"),
+        b"indn" => Some(b"\x1b[%p1%dS"),
+        b"query-os-name" => Some(terminal_os_name()),
+
+        // Unmodified and shifted special keys advertised by
+        // assets/terminfo/xterm-termeric.terminfo. Termcap aliases are
+        // accepted alongside terminfo names where xterm defines one.
+        b"kb" | b"kbs" => Some(b"\x7f"),
+        b"kB" | b"kcbt" => Some(b"\x1b[Z"),
+        b"kl" | b"kcub1" => Some(b"\x1bOD"),
+        b"kd" | b"kcud1" => Some(b"\x1bOB"),
+        b"kr" | b"kcuf1" => Some(b"\x1bOC"),
+        b"ku" | b"kcuu1" => Some(b"\x1bOA"),
+        b"#4" | b"kLFT" => Some(b"\x1b[1;2D"),
+        b"%i" | b"kRIT" => Some(b"\x1b[1;2C"),
+        b"kF" | b"kind" => Some(b"\x1b[1;2B"),
+        b"kR" | b"kri" => Some(b"\x1b[1;2A"),
+        b"kD" | b"kdch1" => Some(b"\x1b[3~"),
+        b"@7" | b"kend" => Some(b"\x1bOF"),
+        b"@8" | b"kent" => Some(b"\x1bOM"),
+        b"kI" | b"kich1" => Some(b"\x1b[2~"),
+        b"kh" | b"khome" => Some(b"\x1bOH"),
+        b"kN" | b"knp" => Some(b"\x1b[6~"),
+        b"kP" | b"kpp" => Some(b"\x1b[5~"),
+        b"kDC" => Some(b"\x1b[3;2~"),
+        b"kEND" => Some(b"\x1b[1;2F"),
+        b"kHOM" => Some(b"\x1b[1;2H"),
+        b"kIC" => Some(b"\x1b[2;2~"),
+        b"kNXT" => Some(b"\x1b[6;2~"),
+        b"kPRV" => Some(b"\x1b[5;2~"),
+
+        b"k1" | b"kf1" => Some(b"\x1bOP"),
+        b"k2" | b"kf2" => Some(b"\x1bOQ"),
+        b"k3" | b"kf3" => Some(b"\x1bOR"),
+        b"k4" | b"kf4" => Some(b"\x1bOS"),
+        b"k5" | b"kf5" => Some(b"\x1b[15~"),
+        b"k6" | b"kf6" => Some(b"\x1b[17~"),
+        b"k7" | b"kf7" => Some(b"\x1b[18~"),
+        b"k8" | b"kf8" => Some(b"\x1b[19~"),
+        b"k9" | b"kf9" => Some(b"\x1b[20~"),
+        b"k;" | b"kf10" => Some(b"\x1b[21~"),
+        b"F1" | b"kf11" => Some(b"\x1b[23~"),
+        b"F2" | b"kf12" => Some(b"\x1b[24~"),
+        _ => None,
+    }
+}
+
+fn xtgettcap_response(requests: &[u8], term_name: &[u8]) -> Vec<u8> {
+    let mut response = b"\x1bP1+r".to_vec();
+    let mut found = 0_usize;
+
+    if requests.len() <= MAX_XTGETTCAP_REQUEST_BYTES {
+        for request in requests
+            .split(|byte| *byte == b';')
+            .take(MAX_XTGETTCAP_NAMES)
+        {
+            if request.is_empty()
+                || request.len() > MAX_XTGETTCAP_NAME_BYTES * 2
+                || !request.iter().all(u8::is_ascii_hexdigit)
+            {
+                break;
+            }
+            let Some(name) = decode_hex(request) else {
+                break;
+            };
+            let Some(value) = xtgettcap_value(&name, term_name) else {
+                break;
+            };
+
+            let field_bytes = usize::from(found > 0)
+                .saturating_add(request.len())
+                .saturating_add(1)
+                .saturating_add(value.len().saturating_mul(2));
+            if response.len().saturating_add(field_bytes).saturating_add(2)
+                > MAX_XTGETTCAP_RESPONSE_BYTES
+            {
+                break;
+            }
+            if found > 0 {
+                response.push(b';');
+            }
+            response.extend_from_slice(request);
+            response.push(b'=');
+            encode_hex(value, &mut response);
+            found += 1;
+        }
+    }
+
+    if found == 0 {
+        response.truncate(2);
+        response.extend_from_slice(b"0+r");
+    }
+    response.extend_from_slice(b"\x1b\\");
+    response
 }
 
 impl Perform for Handler<'_> {
     /// Print a character to the terminal
     fn print(&mut self, c: char) {
-        self.terminal.write_char(c);
+        self.terminal.write_translated_character(c);
     }
 
     /// Execute a C0/C1 control character
@@ -61,11 +532,11 @@ impl Perform for Handler<'_> {
             }
             0x0E => {
                 // SO - shift out (select G1 charset)
-                log::trace!("Shift out");
+                self.terminal.invoke_gl(1);
             }
             0x0F => {
                 // SI - shift in (select G0 charset)
-                log::trace!("Shift in");
+                self.terminal.invoke_gl(0);
             }
             _ => {
                 log::trace!("Unknown C0 control: 0x{:02X}", byte);
@@ -78,10 +549,24 @@ impl Perform for Handler<'_> {
         &mut self,
         raw_params: &Params,
         intermediates: &[u8],
-        _ignore: bool,
+        ignore: bool,
         action: char,
     ) {
-        let params: Vec<u16> = raw_params.iter().flat_map(|p| p.iter().copied()).collect();
+        // VTE bounds the complete parameter/subparameter payload to 32 u16s.
+        // Keep the flattened compatibility view on the stack: CSI is common
+        // enough that allocating a Vec for every sequence dominates otherwise
+        // inexpensive terminal output.
+        let mut flattened_params = [0_u16; 32];
+        let mut flattened_len = 0;
+        for value in raw_params.iter().flatten().copied() {
+            let Some(slot) = flattened_params.get_mut(flattened_len) else {
+                return;
+            };
+            *slot = value;
+            flattened_len += 1;
+        }
+        let params = &flattened_params[..flattened_len];
+        let scalar_params = raw_params.iter().all(|param| param.len() <= 1);
 
         let private = intermediates.first() == Some(&b'?');
 
@@ -96,6 +581,30 @@ impl Perform for Handler<'_> {
         }
 
         match action {
+            // XTFMTKEYS for xterm's keyboard (0), cursor (1), function (2), keypad (3),
+            // other-key (4), reserved string-key (5), modifier-key (6), and special-key (7) format
+            // resources. Resources 1-7 use bounded 0/1 formats; xterm stores
+            // resource 0 opaquely and does not consult it while encoding.
+            'f' if !ignore && intermediates == [b'>'] && scalar_params => match params {
+                [0] => self.terminal.reset_xterm_keyboard_format(),
+                [0, format] => self.terminal.set_xterm_keyboard_format(*format),
+                [1] => self.terminal.reset_xterm_cursor_key_format(),
+                [1, format] => self.terminal.set_xterm_cursor_key_format(*format),
+                [2] => self.terminal.reset_xterm_function_key_format(),
+                [2, format] => self.terminal.set_xterm_function_key_format(*format),
+                [3] => self.terminal.reset_xterm_keypad_key_format(),
+                [3, format] => self.terminal.set_xterm_keypad_key_format(*format),
+                [4] => self.terminal.set_xterm_other_key_format(0),
+                [4, format] => self.terminal.set_xterm_other_key_format(*format),
+                [5] => self.terminal.reset_xterm_string_key_format(),
+                [5, format] => self.terminal.set_xterm_string_key_format(*format),
+                [6] => self.terminal.reset_xterm_modifier_key_format(),
+                [6, format] => self.terminal.set_xterm_modifier_key_format(*format),
+                [7] => self.terminal.reset_xterm_special_key_format(),
+                [7, format] => self.terminal.set_xterm_special_key_format(*format),
+                _ => {}
+            },
+
             // Cursor movement
             'A' => {
                 // CUU - Cursor Up
@@ -129,20 +638,11 @@ impl Perform for Handler<'_> {
                 self.terminal.cursor_up(n);
                 self.terminal.carriage_return();
             }
-            'G' => {
-                // CHA - Cursor Horizontal Absolute.
-                // Only the column is addressed; the row stays where it is.
-                // Re-routing through `set_cursor_position` would double-
-                // offset the row under ORIGIN mode (scroll_top would be
-                // added again to an already-absolute row), so set the
-                // grid cursor directly.
-                let col = param!(0, 1)
-                    .saturating_sub(1)
-                    .min(self.terminal.cols() as u16 - 1) as usize;
-                let row = self.terminal.grid().cursor().row;
-                self.terminal.grid_mut().set_cursor(row, col);
+            'G' | '`' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                // CHA/HPA - Cursor Horizontal Absolute.
+                self.terminal.set_cursor_column(param!(0, 1) as usize);
             }
-            'H' | 'f' => {
+            'H' | 'f' if intermediates.is_empty() && scalar_params && params.len() <= 2 => {
                 // CUP/HVP - Cursor Position
                 let row = param!(0, 1) as usize;
                 let col = param!(1, 1) as usize;
@@ -150,26 +650,141 @@ impl Perform for Handler<'_> {
             }
             'd' => {
                 // VPA - Vertical Position Absolute.
-                // The row parameter is addressed through the normal
-                // ORIGIN-mode path; the column stays where it is. Preserve
-                // column directly to avoid the off-by-one round-trip.
-                let row = param!(0, 1) as usize;
-                let col = self.terminal.grid().cursor().col;
-                // Go through set_cursor_position for the row (so ORIGIN
-                // mode is honored), but keep the column we just captured.
-                self.terminal.set_cursor_position(row, col + 1);
+                self.terminal.set_cursor_row(param!(0, 1) as usize);
+            }
+            'a' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                // HPR - Horizontal Position Relative.
+                self.terminal
+                    .horizontal_position_relative(param!(0, 1) as usize);
+            }
+            'e' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                // VPR - Vertical Position Relative.
+                self.terminal
+                    .vertical_position_relative(param!(0, 1) as usize);
+            }
+            'I' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                // CHT - Cursor Forward Tabulation.
+                self.terminal.cursor_forward_tabs(param!(0, 1) as usize);
+            }
+            'Z' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                // CBT - Cursor Backward Tabulation.
+                self.terminal.cursor_backward_tabs(param!(0, 1) as usize);
             }
 
             // Erasing
-            'J' => {
+            'J' if intermediates == [b'?'] && scalar_params && params.len() <= 1 => {
+                // DECSED - Selective Erase in Display.
+                self.terminal.selective_erase_in_display(param!(0, 0));
+            }
+            'J' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
                 // ED - Erase in Display
                 let mode = param!(0, 0);
                 self.terminal.erase_in_display(mode);
             }
-            'K' => {
+            'K' if intermediates == [b'?'] && scalar_params && params.len() <= 1 => {
+                // DECSEL - Selective Erase in Line.
+                self.terminal.selective_erase_in_line(param!(0, 0));
+            }
+            'K' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
                 // EL - Erase in Line
                 let mode = param!(0, 0);
                 self.terminal.erase_in_line(mode);
+            }
+            'X' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                // ECH - Erase Character.
+                self.terminal.erase_chars(param!(0, 1) as usize);
+            }
+            'v' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 8 => {
+                // DECCRA - Copy Rectangular Area.
+                self.terminal.copy_rectangular_area(
+                    param!(0, 1) as usize,
+                    param!(1, 1) as usize,
+                    param!(2, 0) as usize,
+                    param!(3, 0) as usize,
+                    param!(4, 1) as usize,
+                    param!(5, 1) as usize,
+                    param!(6, 1) as usize,
+                    param!(7, 1) as usize,
+                );
+            }
+            'x' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 5 => {
+                // DECFRA - Fill Rectangular Area.
+                self.terminal.fill_rectangular_area(
+                    params.first().copied().unwrap_or(0),
+                    param!(1, 1) as usize,
+                    param!(2, 1) as usize,
+                    param!(3, 0) as usize,
+                    param!(4, 0) as usize,
+                );
+            }
+            'z' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 4 => {
+                // DECERA - Erase Rectangular Area.
+                self.terminal.erase_rectangular_area(
+                    param!(0, 1) as usize,
+                    param!(1, 1) as usize,
+                    param!(2, 0) as usize,
+                    param!(3, 0) as usize,
+                );
+            }
+            '{' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 4 => {
+                // DECSERA - Selective Erase Rectangular Area.
+                self.terminal.selective_erase_rectangular_area(
+                    param!(0, 1) as usize,
+                    param!(1, 1) as usize,
+                    param!(2, 0) as usize,
+                    param!(3, 0) as usize,
+                );
+            }
+            'x' if !ignore && intermediates == [b'*'] && scalar_params && params.len() <= 1 => {
+                // DECSACE - Select Attribute Change Extent.
+                self.terminal
+                    .select_attribute_change_extent(params.first().copied().unwrap_or(0));
+            }
+            'r' if !ignore && intermediates == [b'$'] && scalar_params => {
+                // DECCARA - Change Attributes in Rectangular Area.
+                self.terminal.change_attributes_area(
+                    param!(0, 1) as usize,
+                    param!(1, 1) as usize,
+                    param!(2, 0) as usize,
+                    param!(3, 0) as usize,
+                    params.get(4..).unwrap_or_default(),
+                );
+            }
+            't' if !ignore && intermediates == [b'$'] && scalar_params => {
+                // DECRARA - Reverse Attributes in Rectangular Area.
+                self.terminal.reverse_attributes_area(
+                    param!(0, 1) as usize,
+                    param!(1, 1) as usize,
+                    param!(2, 0) as usize,
+                    param!(3, 0) as usize,
+                    params.get(4..).unwrap_or_default(),
+                );
+            }
+            't' if !ignore
+                && intermediates.is_empty()
+                && scalar_params
+                && params.len() == 1
+                && matches!(params[0], 14 | 16 | 18) =>
+            {
+                // Safe read-only XTWINOPS geometry reports. Other window,
+                // screen, title, and mutation operations are not claimed.
+                self.terminal.report_text_area_geometry(params[0]);
+            }
+            'y' if !ignore && intermediates == [b'*'] && scalar_params && params.len() <= 6 => {
+                // DECRQCRA - Request Checksum of Rectangular Area.
+                self.terminal.request_checksum_rectangular_area(
+                    params.first().copied().unwrap_or(0),
+                    params.get(1).copied().unwrap_or(0) as usize,
+                    param!(2, 1) as usize,
+                    param!(3, 1) as usize,
+                    param!(4, 0) as usize,
+                    param!(5, 0) as usize,
+                );
+            }
+            'w' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 1 => {
+                // DECRQPSR - Request Presentation State Report.
+                self.terminal
+                    .request_presentation_state(params.first().copied().unwrap_or(0));
             }
 
             // Scrolling
@@ -184,16 +799,118 @@ impl Perform for Handler<'_> {
                 self.terminal.scroll_down(n);
             }
 
+            // REP - Repeat the preceding graphic character.
+            'b' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                self.terminal.repeat_last_graphic(param!(0, 1) as usize);
+            }
+
+            // XTQFMTKEYS for xterm's keyboard/cursor/function/keypad/other/
+            // modifier/special-key resources. Keep this ahead of TBC because the private
+            // introducer selects a keyboard query rather than tab clearing.
+            'g' if !ignore
+                && intermediates == [b'?']
+                && scalar_params
+                && matches!(params, [0] | [1] | [2] | [3] | [4] | [5] | [6] | [7]) =>
+            {
+                match params[0] {
+                    0 => self.terminal.report_xterm_keyboard_format(),
+                    1 => self.terminal.report_xterm_cursor_key_format(),
+                    2 => self.terminal.report_xterm_function_key_format(),
+                    3 => self.terminal.report_xterm_keypad_key_format(),
+                    4 => self.terminal.report_xterm_other_key_format(),
+                    5 => self.terminal.report_xterm_string_key_format(),
+                    6 => self.terminal.report_xterm_modifier_key_format(),
+                    _ => self.terminal.report_xterm_special_key_format(),
+                }
+            }
+
+            // TBC - Clear the current or every horizontal tab stop.
+            'g' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
+                match params.first().copied().unwrap_or(0) {
+                    0 => self.terminal.clear_tab_stop(),
+                    3 => self.terminal.clear_tab_stops(),
+                    _ => {}
+                }
+            }
+
+            // DECST8C - Restore default stops at columns 9, 17, ...
+            'W' if intermediates == [b'?']
+                && scalar_params
+                && params.len() == 1
+                && params[0] == 5 =>
+            {
+                self.terminal.reset_tab_stops();
+            }
+
             // Modes
             'h' => {
                 // SM - Set Mode
-                self.handle_mode(&params, private, true);
+                self.handle_mode(params, private, true);
             }
             'l' => {
                 // RM - Reset Mode
-                self.handle_mode(&params, private, false);
+                self.handle_mode(params, private, false);
             }
 
+            // XTMODKEYS/XTQMODKEYS for xterm's keyboard (0), cursor (1), function (2),
+            // keypad (3), other-key (4), reserved string-key (5), modifier-key (6), and special-key
+            // (7) resources.
+            // Keep this ahead of SGR: the private introducers are protocol
+            // selectors, not rendition parameters.
+            'm' if !ignore && intermediates == [b'>'] => {
+                let parameters: Vec<_> = raw_params.iter().collect();
+                match parameters.as_slice() {
+                    [[0]] => self.terminal.reset_xterm_keyboard_modify(),
+                    [[0], [value]] => self.terminal.set_xterm_keyboard_modify(*value),
+                    [[1]] => self.terminal.reset_xterm_cursor_key_mode(),
+                    [[1], [mode]] => self.terminal.set_xterm_cursor_key_mode(*mode),
+                    [[2]] => self.terminal.reset_xterm_function_key_mode(),
+                    [[2], [mode]] => self.terminal.set_xterm_function_key_mode(*mode),
+                    [[3]] => self.terminal.reset_xterm_keypad_key_mode(),
+                    [[3], [mode]] => self.terminal.set_xterm_keypad_key_mode(*mode),
+                    [[5]] => self.terminal.reset_xterm_string_key_mode(),
+                    [[5], [mode]] => self.terminal.set_xterm_string_key_mode(*mode),
+                    [[6]] => self.terminal.reset_xterm_modifier_key_mode(),
+                    [[6], [mode]] => self.terminal.set_xterm_modifier_key_mode(*mode),
+                    [[7]] => self.terminal.reset_xterm_special_key_mode(),
+                    [[7], [mode]] => self.terminal.set_xterm_special_key_mode(*mode),
+                    // Omitted Pv restores xterm's default (disabled).
+                    [[4]] => self.terminal.set_xterm_modify_other_keys(0, 0),
+                    [[4], [level]] => {
+                        self.terminal.set_xterm_modify_other_keys(*level, 0);
+                    }
+                    // Xterm's documented `CSI > 4 : mask m` form updates
+                    // only the modifier mask of the current level.
+                    [[4, mask]] => {
+                        let level = self.terminal.xterm_modify_other_keys().level();
+                        self.terminal
+                            .set_xterm_modify_other_keys(u16::from(level), *mask);
+                    }
+                    // Xterm documents the mask as a subparameter. Accept the
+                    // value-attached form used by its current parser too, but
+                    // reject all wider shapes.
+                    [[4], [level, mask]] | [[4, mask], [level]] => {
+                        self.terminal.set_xterm_modify_other_keys(*level, *mask);
+                    }
+                    _ => {}
+                }
+            }
+            'm' if !ignore
+                && intermediates == [b'?']
+                && scalar_params
+                && matches!(params, [0] | [1] | [2] | [3] | [4] | [5] | [6] | [7]) =>
+            {
+                match params[0] {
+                    0 => self.terminal.report_xterm_keyboard_modify(),
+                    1 => self.terminal.report_xterm_cursor_key_mode(),
+                    2 => self.terminal.report_xterm_function_key_mode(),
+                    3 => self.terminal.report_xterm_keypad_key_mode(),
+                    4 => self.terminal.report_xterm_modify_other_keys(),
+                    5 => self.terminal.report_xterm_string_key_mode(),
+                    6 => self.terminal.report_xterm_modifier_key_mode(),
+                    _ => self.terminal.report_xterm_special_key_mode(),
+                }
+            }
             // SGR - Select Graphic Rendition
             'm' => {
                 // SGR has no private/intermediate prefix. Xterm keyboard
@@ -211,21 +928,147 @@ impl Perform for Handler<'_> {
                 }
             }
 
-            // Cursor save/restore
-            's' => {
-                // SCOSC - Save Cursor Position
-                self.terminal.save_cursor();
+            // Xterm DEC private-mode save. Keyboard types 1060/1061 share one
+            // saved value because they are mutually exclusive views of the
+            // same global terminal state.
+            's' if intermediates == [b'?'] && scalar_params => {
+                if params.iter().any(|mode| matches!(*mode, 1060 | 1061)) {
+                    self.terminal.save_xterm_keyboard_type();
+                }
+            }
+            // Cursor save/restore and Kitty progressive keyboard negotiation.
+            's' if intermediates.is_empty() && scalar_params => {
+                if self
+                    .terminal
+                    .mode()
+                    .contains(TerminalMode::LEFT_RIGHT_MARGIN)
+                {
+                    if params.len() <= 2 {
+                        let left = param!(0, 1) as usize;
+                        let right = param!(1, self.terminal.cols() as u16) as usize;
+                        self.terminal.set_left_right_margins(left, right);
+                    }
+                } else if params.len() <= 1 && params.first().copied().unwrap_or(0) == 0 {
+                    // SCOSC - Save Cursor Position. CSI s is only this alias
+                    // while DECLRMM is disabled.
+                    self.terminal.save_cursor();
+                }
             }
             'u' => {
-                // SCORC - Restore Cursor Position
-                self.terminal.restore_cursor();
+                if intermediates == [b'?']
+                    && scalar_params
+                    && params.len() <= 1
+                    && params.first().copied().unwrap_or(0) == 0
+                {
+                    let flags = self.terminal.kitty_keyboard_flags().bits();
+                    self.terminal.push_event(TerminalEvent::PtyWrite(
+                        format!("\x1b[?{flags}u").into_bytes(),
+                    ));
+                } else if intermediates == [b'='] && scalar_params && params.len() <= 2 {
+                    let flags = params.first().copied().unwrap_or(0);
+                    let mode = params
+                        .get(1)
+                        .copied()
+                        .filter(|value| *value != 0)
+                        .unwrap_or(1);
+                    self.terminal.set_kitty_keyboard_flags(flags, mode);
+                } else if intermediates == [b'>'] && scalar_params && params.len() <= 1 {
+                    self.terminal
+                        .push_kitty_keyboard_flags(params.first().copied().unwrap_or(0));
+                } else if intermediates == [b'<'] && scalar_params && params.len() <= 1 {
+                    self.terminal.pop_kitty_keyboard_flags(
+                        params
+                            .first()
+                            .copied()
+                            .filter(|value| *value != 0)
+                            .unwrap_or(1) as usize,
+                    );
+                } else if intermediates.is_empty() {
+                    // SCORC - Restore Cursor Position
+                    self.terminal.restore_cursor();
+                }
+            }
+
+            // XTVERSION. The static value is a terminal protocol revision, not
+            // the package semantic version or an xterm identity claim.
+            'q' if intermediates == [b'>']
+                && params.len() <= 1
+                && params.first().copied().unwrap_or(0) == 0 =>
+            {
+                self.terminal
+                    .push_event(TerminalEvent::PtyWrite(XTVERSION.to_vec()));
+            }
+            // DECSCUSR - application-selected cursor shape and blink policy.
+            'q' if intermediates == [b' '] && scalar_params && params.len() <= 1 => {
+                self.terminal
+                    .set_cursor_style(params.first().copied().unwrap_or(0));
+            }
+            // DECSCA - Select Character Protection Attribute.
+            'q' if intermediates == [b'"'] && scalar_params && params.len() <= 1 => {
+                self.terminal
+                    .set_character_protection(params.first().copied().unwrap_or(0));
+            }
+
+            // DECRQM - Request ANSI or DEC private mode. Only singular,
+            // scalar requests are valid; unknown modes receive status 0.
+            'p' if scalar_params
+                && params.len() <= 1
+                && matches!(intermediates, [b'$'] | [b'?', b'$']) =>
+            {
+                let private = intermediates == [b'?', b'$'];
+                let number = params.first().copied().unwrap_or(0);
+                let status = self.terminal.mode_status(private, number);
+                let prefix = if private { "?" } else { "" };
+                self.terminal.push_event(TerminalEvent::PtyWrite(
+                    format!("\x1b[{prefix}{number};{status}$y").into_bytes(),
+                ));
+            }
+            // DECSTR - Soft Terminal Reset. The sequence is parameterless;
+            // reject plural, nonzero, and subparameter forms rather than
+            // interpreting a malformed mode query as a reset.
+            'p' if intermediates == [b'!']
+                && scalar_params
+                && params.len() <= 1
+                && params.first().copied().unwrap_or(0) == 0 =>
+            {
+                self.terminal.soft_reset();
+            }
+            // DECSCL - Select Conformance Level. The first parameter selects
+            // DEC levels 1-5 as 61-65. The optional second parameter selects
+            // 8-bit (0/2/default) or 7-bit (1) reply controls.
+            'p' if intermediates == [b'"'] && scalar_params && (1..=2).contains(&params.len()) => {
+                self.terminal
+                    .select_conformance_level(params[0], params.get(1).copied());
+            }
+
+            // Xterm's disable form for keyboard, cursor, function, keypad, other-key,
+            // reserved string-key, modifier-key, and special-key resources.
+            'n' if !ignore
+                && intermediates == [b'>']
+                && scalar_params
+                && matches!(params, [0] | [1] | [2] | [3] | [4] | [5] | [6] | [7]) =>
+            {
+                match params[0] {
+                    0 => self.terminal.set_xterm_keyboard_modify(u16::MAX),
+                    1 => self.terminal.set_xterm_cursor_key_mode(u16::MAX),
+                    2 => self.terminal.set_xterm_function_key_mode(u16::MAX),
+                    3 => self.terminal.set_xterm_keypad_key_mode(u16::MAX),
+                    4 => {
+                        // Xterm stores -1, but modifyOtherKeys levels 0 and -1
+                        // are behaviorally equivalent and resource 4's bounded
+                        // public state uses 0 through 3.
+                        self.terminal.set_xterm_modify_other_keys(0, 0);
+                    }
+                    5 => self.terminal.set_xterm_string_key_mode(u16::MAX),
+                    6 => self.terminal.set_xterm_modifier_key_mode(u16::MAX),
+                    _ => self.terminal.set_xterm_special_key_mode(u16::MAX),
+                }
             }
 
             // Device status report
             'n' => {
                 if private {
-                    // DECRQM - Request Mode
-                    log::trace!("Request mode: {:?}", params);
+                    log::trace!("Unhandled private device status report: {:?}", params);
                 } else {
                     match param!(0, 0) {
                         5 => {
@@ -255,8 +1098,16 @@ impl Perform for Handler<'_> {
 
             // Primary/Secondary device attributes
             'c' => {
-                log::trace!("Device attributes requested");
-                // Would respond with device identification
+                let request = params.len() <= 1 && params.first().copied().unwrap_or(0) == 0;
+                let response = match intermediates {
+                    [] if request => Some(PRIMARY_DEVICE_ATTRIBUTES),
+                    [b'>'] if request => Some(SECONDARY_DEVICE_ATTRIBUTES),
+                    _ => None,
+                };
+                if let Some(response) = response {
+                    self.terminal
+                        .push_event(crate::event::TerminalEvent::PtyWrite(response.to_vec()));
+                }
             }
 
             // Insert/Delete
@@ -281,8 +1132,17 @@ impl Perform for Handler<'_> {
                 self.terminal.delete_lines(n);
             }
 
+            // Xterm DEC private-mode restore for the shared keyboard-type slot.
+            'r' if intermediates == [b'?'] && scalar_params => {
+                for mode in params {
+                    if matches!(*mode, 1060 | 1061) {
+                        self.terminal.restore_xterm_keyboard_type();
+                    }
+                }
+            }
+
             // Scroll region
-            'r' => {
+            'r' if intermediates.is_empty() && scalar_params && params.len() <= 2 => {
                 // DECSTBM - Set Top and Bottom Margins
                 let top = param!(0, 1) as usize;
                 let bottom = param!(1, self.terminal.rows() as u16) as usize;
@@ -318,6 +1178,19 @@ impl Perform for Handler<'_> {
                 self.terminal.restore_cursor();
             }
 
+            // DECID - obsolete VT100 alias for primary device attributes.
+            (b'Z', []) => {
+                self.terminal
+                    .push_event(crate::event::TerminalEvent::PtyWrite(
+                        PRIMARY_DEVICE_ATTRIBUTES.to_vec(),
+                    ));
+            }
+
+            // S7C1T/S8C1T select only the representation of terminal-generated
+            // C1 replies. Input acceptance is independent of this preference.
+            (b'F', [b' ']) => self.terminal.set_8bit_controls(false),
+            (b'G', [b' ']) => self.terminal.set_8bit_controls(true),
+
             // IND - Index (move down, possibly scroll)
             (b'D', []) => {
                 self.terminal.linefeed();
@@ -351,12 +1224,29 @@ impl Perform for Handler<'_> {
                     .set_mode(TerminalMode::KEYPAD_APPLICATION, false);
             }
 
-            // Character set designation
-            (b'B', [b'(']) => {
-                log::trace!("Set G0 to US ASCII");
+            // VT220 single and locking shifts. SS2/SS3 affect exactly the next
+            // graphic character; LS2/LS3 persist until another GL invocation.
+            (b'N', []) => self.terminal.single_shift(2),
+            (b'O', []) => self.terminal.single_shift(3),
+            (b'n', []) => self.terminal.invoke_gl(2),
+            (b'o', []) => self.terminal.invoke_gl(3),
+            (b'~', []) => self.terminal.invoke_gr(1),
+            (b'}', []) => self.terminal.invoke_gr(2),
+            (b'|', []) => self.terminal.invoke_gr(3),
+
+            // Resident 94-character-set designations. Unsupported optional ROM
+            // and later national sets leave the register unchanged.
+            (designator @ (b'A' | b'B' | b'0'), [b'(']) => {
+                self.terminal.designate_character_set(0, designator);
             }
-            (b'0', [b'(']) => {
-                log::trace!("Set G0 to DEC Special Graphics");
+            (designator @ (b'A' | b'B' | b'0'), [b')']) => {
+                self.terminal.designate_character_set(1, designator);
+            }
+            (designator @ (b'A' | b'B' | b'0'), [b'*']) => {
+                self.terminal.designate_character_set(2, designator);
+            }
+            (designator @ (b'A' | b'B' | b'0'), [b'+']) => {
+                self.terminal.designate_character_set(3, designator);
             }
 
             _ => {
@@ -376,18 +1266,18 @@ impl Perform for Handler<'_> {
             return;
         }
 
-        let command = std::str::from_utf8(params[0])
+        let Some(command) = std::str::from_utf8(params[0])
             .ok()
             .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
+        else {
+            return;
+        };
 
         match command {
             // Set window title
             0 | 2 => {
-                if params.len() > 1
-                    && let Ok(title) = std::str::from_utf8(params[1])
-                {
-                    log::debug!("Set window title: {}", title);
+                if let Some(title) = parse_osc_title(&params[1..]) {
+                    self.terminal.push_event(TerminalEvent::TitleChanged(title));
                 }
             }
 
@@ -402,7 +1292,78 @@ impl Perform for Handler<'_> {
 
             // Set color palette
             4 => {
-                log::trace!("Set color palette: {:?}", params);
+                for pair in params[1..].chunks_exact(2) {
+                    let Some(index) = parse_palette_index(pair[0]) else {
+                        continue;
+                    };
+                    if pair[1] == b"?" {
+                        self.terminal.push_event(TerminalEvent::DynamicColor(
+                            DynamicColorOperation::Query {
+                                target: DynamicColorTarget::Palette(index),
+                                reply_uses_8bit_controls: self.terminal.uses_8bit_controls(),
+                            },
+                        ));
+                    } else if let Some(color) = parse_xterm_color(pair[1]) {
+                        self.terminal.push_event(TerminalEvent::DynamicColor(
+                            DynamicColorOperation::Set {
+                                target: DynamicColorTarget::Palette(index),
+                                color,
+                            },
+                        ));
+                    }
+                }
+            }
+
+            // Shell-reported current working directory. Keep the URI and its
+            // decoded path terminal-local; the application separately decides
+            // whether the authority is safe to use as a local filesystem path.
+            7 => {
+                if let Some(directory) = parse_osc_directory(&params[1..]) {
+                    self.terminal.set_reported_working_directory(directory);
+                }
+            }
+
+            10..=12 => {
+                let target = dynamic_default_target(command).expect("matched dynamic color OSC");
+                if let Some(value) = params.get(1) {
+                    let operation = if *value == b"?" {
+                        Some(DynamicColorOperation::Query {
+                            target,
+                            reply_uses_8bit_controls: self.terminal.uses_8bit_controls(),
+                        })
+                    } else {
+                        parse_xterm_color(value)
+                            .map(|color| DynamicColorOperation::Set { target, color })
+                    };
+                    if let Some(operation) = operation {
+                        self.terminal
+                            .push_event(TerminalEvent::DynamicColor(operation));
+                    }
+                }
+            }
+
+            104 => {
+                if params.len() == 1 {
+                    self.terminal.push_event(TerminalEvent::DynamicColor(
+                        DynamicColorOperation::ResetPalette,
+                    ));
+                } else {
+                    for value in &params[1..] {
+                        if let Some(index) = parse_palette_index(value) {
+                            self.terminal.push_event(TerminalEvent::DynamicColor(
+                                DynamicColorOperation::Reset(DynamicColorTarget::Palette(index)),
+                            ));
+                        }
+                    }
+                }
+            }
+
+            110..=112 => {
+                if let Some(target) = dynamic_default_target(command - 100) {
+                    self.terminal.push_event(TerminalEvent::DynamicColor(
+                        DynamicColorOperation::Reset(target),
+                    ));
+                }
             }
 
             // Hyperlink (OSC 8)
@@ -422,9 +1383,9 @@ impl Perform for Handler<'_> {
             // selection: c = clipboard, p = primary, etc.
             // data: base64 encoded content, or ? to query
             52 => {
-                log::trace!("Clipboard operation: {:?}", params);
-                // OSC 52 clipboard handling is done at the app level,
-                // since it requires platform clipboard access
+                if let Some(event) = parse_osc52(params, self.terminal.uses_8bit_controls()) {
+                    self.terminal.push_event(event);
+                }
             }
 
             // Desktop notification (OSC 9) - iTerm2 style
@@ -448,6 +1409,15 @@ impl Perform for Handler<'_> {
                 // params[0] is "133", the rest are the actual parameters
                 if params.len() > 1 {
                     self.terminal.handle_osc_133(&params[1..]);
+                }
+            }
+
+            // Safe original iTerm2 inline-image subset. File downloads,
+            // multipart transfers, animation, and non-PNG formats are rejected
+            // by the protocol adapter without producing filesystem effects.
+            1337 => {
+                if params.len() > 1 {
+                    self.terminal.handle_iterm2_image(&params[1..]);
                 }
             }
 
@@ -480,48 +1450,6 @@ impl Perform for Handler<'_> {
             }
         }
     }
-
-    fn hook(&mut self, _params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
-        // DCS/APC hook - start of device control string or application program command
-        // For Kitty graphics: APC (ESC _) followed by 'G'
-        // VTE uses intermediates to identify the sequence type
-        // APC starts with ESC _ which VTE represents with intermediates containing '_'
-        if action == 'G' {
-            // Kitty graphics command
-            self.in_apc = true;
-            self.apc_action = 'G';
-            self.apc_data.clear();
-            log::trace!("Starting Kitty graphics APC sequence");
-        } else {
-            log::trace!(
-                "DCS hook: intermediates={:?}, action='{}'",
-                intermediates,
-                action
-            );
-        }
-    }
-
-    fn put(&mut self, byte: u8) {
-        // DCS/APC data
-        if self.in_apc {
-            self.apc_data.push(byte);
-        }
-    }
-
-    fn unhook(&mut self) {
-        // DCS/APC unhook - end of device control string or application program command
-        if self.in_apc {
-            log::trace!(
-                "Kitty graphics APC sequence received, {} bytes",
-                self.apc_data.len()
-            );
-            // Process the accumulated data
-            let data = std::mem::take(&mut self.apc_data);
-            self.terminal.handle_graphics_command(&data);
-            self.in_apc = false;
-            self.apc_action = '\0';
-        }
-    }
 }
 
 impl Handler<'_> {
@@ -533,16 +1461,28 @@ impl Handler<'_> {
             return;
         }
 
-        let groups: Vec<Vec<u16>> = params.iter().map(|group| group.to_vec()).collect();
+        // VTE stores at most 32 parameters and subparameters. Borrow its
+        // groups into fixed stack storage so every SGR does not allocate an
+        // outer Vec plus one Vec per semicolon group.
+        let mut groups = [&[][..]; 32];
+        let mut group_count = 0;
+        for group in params {
+            let Some(slot) = groups.get_mut(group_count) else {
+                return;
+            };
+            *slot = group;
+            group_count += 1;
+        }
+        let groups = &groups[..group_count];
         let mut group_index = 0;
 
         // Process each semicolon-separated parameter group. Extended colors
         // consume following groups in the common `38;2;r;g;b` / `48;5;n`
         // forms, while colon forms stay within one group.
         while group_index < groups.len() {
-            let subparams = &groups[group_index];
+            let subparams = groups[group_index];
             // Each subparams is a colon-separated group (e.g., [4, 3] for "4:3")
-            let values = subparams.as_slice();
+            let values = subparams;
 
             if values.is_empty() {
                 group_index += 1;
@@ -572,6 +1512,7 @@ impl Handler<'_> {
                 }
 
                 5 => self.add_attr(CellAttrs::BLINK),
+                6 => self.add_attr(CellAttrs::RAPID_BLINK),
                 7 => self.add_attr(CellAttrs::INVERSE),
                 8 => self.add_attr(CellAttrs::HIDDEN),
                 9 => self.add_attr(CellAttrs::STRIKE),
@@ -586,7 +1527,7 @@ impl Handler<'_> {
                     // Reset all underline styles
                     self.remove_attr(CellAttrs::ALL_UNDERLINES);
                 }
-                25 => self.remove_attr(CellAttrs::BLINK),
+                25 => self.remove_attr(CellAttrs::BLINK | CellAttrs::RAPID_BLINK),
                 27 => self.remove_attr(CellAttrs::INVERSE),
                 28 => self.remove_attr(CellAttrs::HIDDEN),
                 29 => self.remove_attr(CellAttrs::STRIKE),
@@ -603,7 +1544,7 @@ impl Handler<'_> {
                         self.parse_extended_color_spec_from_subparams(&values[1..])
                             .map(|color| (color, 0))
                     } else {
-                        self.parse_semicolon_extended_color(&groups, group_index)
+                        self.parse_semicolon_extended_color(groups, group_index)
                     };
                     if let Some(((color, spec), consumed)) = parsed {
                         self.terminal.set_fg(color, spec);
@@ -628,7 +1569,7 @@ impl Handler<'_> {
                         self.parse_extended_color_spec_from_subparams(&values[1..])
                             .map(|color| (color, 0))
                     } else {
-                        self.parse_semicolon_extended_color(&groups, group_index)
+                        self.parse_semicolon_extended_color(groups, group_index)
                     };
                     if let Some(((color, spec), consumed)) = parsed {
                         self.terminal.set_bg(color, spec);
@@ -647,10 +1588,10 @@ impl Handler<'_> {
                         self.parse_extended_color_spec_from_subparams(&values[1..])
                             .map(|color| (color, 0))
                     } else {
-                        self.parse_semicolon_extended_color(&groups, group_index)
+                        self.parse_semicolon_extended_color(groups, group_index)
                     };
-                    if let Some(((color, _), consumed)) = parsed {
-                        self.terminal.set_underline_color(color);
+                    if let Some(((color, spec), consumed)) = parsed {
+                        self.terminal.set_underline_color_spec(color, spec);
                         group_index += consumed;
                     }
                 }
@@ -682,7 +1623,7 @@ impl Handler<'_> {
     /// Returns the color and number of additional groups consumed.
     fn parse_semicolon_extended_color(
         &self,
-        groups: &[Vec<u16>],
+        groups: &[&[u16]],
         start: usize,
     ) -> Option<((Color, ColorSpec), usize)> {
         let mode = *groups.get(start + 1)?.first()?;
@@ -772,18 +1713,25 @@ impl Handler<'_> {
                         // DECAWM - Autowrap
                         self.terminal.set_mode(TerminalMode::AUTOWRAP, enable);
                     }
+                    69 => {
+                        // DECLRMM - Enable or disable DECSLRM interpretation.
+                        self.terminal.set_left_right_margin_mode(enable);
+                    }
                     12 => {
                         // ATT610 - Cursor blinking
-                        self.terminal
-                            .set_mode(TerminalMode::CURSOR_BLINKING, enable);
+                        self.terminal.set_cursor_blinking(enable);
                     }
                     25 => {
                         // DECTCEM - Cursor visible
                         self.terminal.set_cursor_visible(enable);
                     }
-                    1000 => {
-                        // X10 mouse tracking
+                    9 => {
+                        // X10 mouse tracking (press only)
                         self.terminal.set_mode(TerminalMode::MOUSE_X10, enable);
+                    }
+                    1000 => {
+                        // VT200 normal mouse tracking (press and release)
+                        self.terminal.set_mode(TerminalMode::MOUSE_TRACKING, enable);
                     }
                     1002 => {
                         // Button event mouse tracking
@@ -806,6 +1754,23 @@ impl Handler<'_> {
                     1006 => {
                         // SGR mouse encoding
                         self.terminal.set_mode(TerminalMode::MOUSE_SGR, enable);
+                    }
+                    1007 => {
+                        // Alternate scroll mode
+                        self.terminal
+                            .set_mode(TerminalMode::ALTERNATE_SCROLL, enable);
+                    }
+                    1060 => {
+                        // Xterm oldXtermFKeys/legacy keyboard type.
+                        self.terminal.set_xterm_keyboard_type(
+                            crate::term::XtermKeyboardType::Legacy,
+                            enable,
+                        );
+                    }
+                    1061 => {
+                        // Xterm Sun/PC-to-VT220 keyboard type.
+                        self.terminal
+                            .set_xterm_keyboard_type(crate::term::XtermKeyboardType::Vt220, enable);
                     }
                     47 | 1047 => {
                         // Alternate screen buffer without cursor save/restore.
@@ -918,5 +1883,201 @@ impl Handler<'_> {
 
         log::trace!("OSC 8: Set hyperlink url={} id={:?}", uri_str, link_id);
         self.terminal.set_hyperlink(uri_str.to_string(), link_id);
+    }
+}
+
+#[cfg(test)]
+mod osc_tests {
+    use super::*;
+
+    fn events(bytes: &[u8]) -> Vec<TerminalEvent> {
+        let mut terminal = Terminal::new(20, 4);
+        terminal.process(bytes);
+        terminal.drain_events()
+    }
+
+    #[test]
+    fn device_attributes_are_byte_exact_and_reject_non_requests() {
+        assert_eq!(
+            events(b"\x1b[c\x1b[0c\x1bZ\x1b[>c\x1b[>0c"),
+            vec![
+                TerminalEvent::PtyWrite(PRIMARY_DEVICE_ATTRIBUTES.to_vec()),
+                TerminalEvent::PtyWrite(PRIMARY_DEVICE_ATTRIBUTES.to_vec()),
+                TerminalEvent::PtyWrite(PRIMARY_DEVICE_ATTRIBUTES.to_vec()),
+                TerminalEvent::PtyWrite(SECONDARY_DEVICE_ATTRIBUTES.to_vec()),
+                TerminalEvent::PtyWrite(SECONDARY_DEVICE_ATTRIBUTES.to_vec()),
+            ]
+        );
+        assert!(events(b"\x1b[1c\x1b[>1c\x1b[?0c").is_empty());
+    }
+
+    #[test]
+    fn title_accepts_bel_and_st_preserves_semicolons_and_rejects_bad_input() {
+        assert_eq!(
+            events(b"\x1b]0;build;tests\x07"),
+            vec![TerminalEvent::TitleChanged("build;tests".into())]
+        );
+        assert_eq!(
+            events(b"\x1b]2;editor\x1b\\"),
+            vec![TerminalEvent::TitleChanged("editor".into())]
+        );
+        assert_eq!(
+            events(b"\x1b]2;\x07"),
+            vec![TerminalEvent::TitleChanged(String::new())]
+        );
+        assert_eq!(events(b"\x1b]2;bad\xff\x07"), Vec::new());
+        assert_eq!(events(b"\x1b]not-a-command;title\x07"), Vec::new());
+
+        let mut oversized = b"\x1b]2;".to_vec();
+        oversized.extend(std::iter::repeat_n(b'x', MAX_OSC_TITLE_BYTES + 1));
+        oversized.push(7);
+        let oversized_events = events(&oversized);
+        assert!(
+            oversized_events.is_empty(),
+            "oversized title emitted {oversized_events:?}"
+        );
+    }
+
+    #[test]
+    fn osc7_retains_only_bounded_valid_file_directory_reports() {
+        let mut terminal = Terminal::new(20, 4);
+        terminal.process(b"\x1b]7;file://localhost/work/a%20b;semi/%E7%95%8C\x07");
+        let directory = terminal.reported_working_directory().unwrap();
+        assert_eq!(
+            directory.uri(),
+            "file://localhost/work/a%20b;semi/%E7%95%8C"
+        );
+        assert_eq!(directory.host(), Some("localhost"));
+        assert_eq!(directory.path(), "/work/a b;semi/界");
+
+        for invalid in [
+            b"\x1b]7;https://localhost/replaced\x07".as_slice(),
+            b"\x1b]7;file://user@localhost/replaced\x07",
+            b"\x1b]7;file://localhost/invalid%2\x07",
+            b"\x1b]7;file://localhost/control%0Apath\x07",
+            b"\x1b]7;file://localhost/%FF\x07",
+            b"\x1b]7;relative/path\x07",
+        ] {
+            terminal.process(invalid);
+            assert_eq!(
+                terminal.reported_working_directory().unwrap().path(),
+                "/work/a b;semi/界"
+            );
+        }
+
+        let mut oversized = b"\x1b]7;file:///".to_vec();
+        oversized.extend(std::iter::repeat_n(b'x', MAX_OSC_DIRECTORY_BYTES));
+        oversized.push(7);
+        terminal.process(&oversized);
+        assert_eq!(
+            terminal.reported_working_directory().unwrap().path(),
+            "/work/a b;semi/界"
+        );
+
+        terminal.process(b"\x1bc");
+        assert_eq!(
+            terminal.reported_working_directory().unwrap().path(),
+            "/work/a b;semi/界",
+            "RIS must not discard shell/application directory metadata"
+        );
+
+        let mut local = Terminal::new(20, 4);
+        local.process(b"\x1b]7;file:///tmp/raw path#query?literal\x1b\\");
+        let directory = local.reported_working_directory().unwrap();
+        assert_eq!(directory.host(), None);
+        assert_eq!(directory.path(), "/tmp/raw path#query?literal");
+    }
+
+    #[test]
+    fn osc52_parses_queries_writes_empty_fields_and_rejects_malformed_payloads() {
+        assert_eq!(
+            events(b"\x1b]52;;?\x07"),
+            vec![TerminalEvent::ClipboardRequest {
+                selection: ClipboardRequest::Clipboard,
+                reply_uses_8bit_controls: false,
+            }]
+        );
+        assert_eq!(
+            events(b"\x1b]52;p;SGVsbG8=\x1b\\"),
+            vec![TerminalEvent::ClipboardWrite {
+                selection: ClipboardRequest::Primary,
+                text: "Hello".into(),
+            }]
+        );
+        assert_eq!(
+            events(b"\x1b]52;c;SGVsbG8\x07"),
+            vec![TerminalEvent::ClipboardWrite {
+                selection: ClipboardRequest::Clipboard,
+                text: "Hello".into(),
+            }]
+        );
+        assert!(events(b"\x1b]52;c;%%%\x07").is_empty());
+        assert!(events(b"\x1b]52;c;/w==\x07").is_empty());
+        assert!(events(b"\x1b]52;x;SGVsbG8=\x07").is_empty());
+
+        let mut oversized = b"\x1b]52;c;".to_vec();
+        oversized.extend(std::iter::repeat_n(b'A', MAX_OSC52_ENCODED_BYTES + 1));
+        oversized.push(7);
+        assert!(events(&oversized).is_empty());
+    }
+
+    #[test]
+    fn dynamic_colors_parse_set_query_and_reset_families() {
+        assert_eq!(
+            events(
+                concat!(
+                    "\x1b]4;1;rgb:f/0/8;2;?\x07",
+                    "\x1b]10;#123456\x1b\\",
+                    "\x1b]11;?\x07",
+                    "\x1b]104;1;2\x07",
+                    "\x1b]112\x1b\\"
+                )
+                .as_bytes()
+            ),
+            vec![
+                TerminalEvent::DynamicColor(DynamicColorOperation::Set {
+                    target: DynamicColorTarget::Palette(1),
+                    color: Color::rgb(255, 0, 136),
+                }),
+                TerminalEvent::DynamicColor(DynamicColorOperation::Query {
+                    target: DynamicColorTarget::Palette(2),
+                    reply_uses_8bit_controls: false,
+                }),
+                TerminalEvent::DynamicColor(DynamicColorOperation::Set {
+                    target: DynamicColorTarget::Foreground,
+                    color: Color::rgb(18, 52, 86),
+                }),
+                TerminalEvent::DynamicColor(DynamicColorOperation::Query {
+                    target: DynamicColorTarget::Background,
+                    reply_uses_8bit_controls: false,
+                }),
+                TerminalEvent::DynamicColor(DynamicColorOperation::Reset(
+                    DynamicColorTarget::Palette(1),
+                )),
+                TerminalEvent::DynamicColor(DynamicColorOperation::Reset(
+                    DynamicColorTarget::Palette(2),
+                )),
+                TerminalEvent::DynamicColor(DynamicColorOperation::Reset(
+                    DynamicColorTarget::Cursor,
+                )),
+            ]
+        );
+        assert_eq!(
+            events(b"\x1b]104\x07"),
+            vec![TerminalEvent::DynamicColor(
+                DynamicColorOperation::ResetPalette
+            )]
+        );
+    }
+
+    #[test]
+    fn xterm_color_components_normalize_one_to_four_hex_digits() {
+        assert_eq!(parse_xterm_color(b"#f08"), Some(Color::rgb(255, 0, 136)));
+        assert_eq!(
+            parse_xterm_color(b"rgb:ffff/8000/0000"),
+            Some(Color::rgb(255, 128, 0))
+        );
+        assert_eq!(parse_xterm_color(b"rgb:12/34"), None);
+        assert_eq!(parse_xterm_color(b"not-a-color"), None);
     }
 }

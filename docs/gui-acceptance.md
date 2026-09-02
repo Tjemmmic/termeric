@@ -1,0 +1,256 @@
+# Native GUI and full-screen acceptance
+
+Termeric has a deterministic Linux black-box harness for the boundary that
+unit tests cannot cover: native window events, PTY input/output, desktop
+clipboard ownership, window resizing, full-screen applications, and an actual
+WGPU presentation surface. It always runs with disposable XDG configuration,
+data, cache, home directories, shell fixtures, private tmux runtimes/sockets,
+and documents.
+Vim disables viminfo and user configuration, less disables user options,
+preprocessors, and history, and tmux uses an empty configuration explicitly.
+
+## What runs
+
+The X11 lane starts Xvfb and a minimal window manager, then drives the real
+Termeric binary with `xdotool`. Its workspace scenario asserts:
+
+- non-zero character and pixel PTY geometry at startup and after two resizes;
+- typed input through the native keyboard event path;
+- Unicode fixture output through an installed native color-emoji font (the
+  deterministic dual-atlas/shader assertion runs in the headless GPU lane);
+- F6/Tab/arrow/Enter/Escape keyboard reachability for tab-bar controls;
+- search input plus a mouse hit on a search control;
+- keyboard-only copy-mode search, selection, clipboard yank, and proof that
+  modal navigation bytes never reach the PTY;
+- a keyboard quick-select hint opening an OSC 8 link through the desktop spy;
+- a mouse selection copied through the X11 clipboard;
+- an OSC 52 clipboard write/read round trip with an exact reply in the
+  originating PTY transcript;
+- an OSC 8 link opened through an isolated `xdg-open` spy;
+- BEL visual feedback plus an isolated `paplay` audio invocation;
+- an OSC 777 desktop notification through an isolated `notify-send` spy;
+- SGR mouse reports and one framed bracketed-paste write;
+- tab creation and direct drag reorder, pane split/focus/close routing, nested
+  layout interaction, and settings mouse hit-testing;
+- complete workspace save, manager rename, tab/pane relaunch, and focused input;
+- same-process second-window creation/focus/input/close with the first window
+  remaining live;
+- a Kitty image receiving a successful reply through the native PTY route,
+  paired with the GPU image-geometry smoke;
+- real `img2sixel` and `timg -pi` clients emitting Sixel and iTerm2 PNG output
+  through the PTY into the shared, pane-clipped GPU image path;
+- a daemon-owned Kitty image created before closing the first live-domain
+  window, followed by protocol-v9 decoded-state restoration and a review-only
+  native capture in a newly attached window before later PTY output;
+- injected `SurfaceError::Lost` and `SurfaceError::Outdated` states, each
+  followed by real resize recovery;
+- an injected unexpected device loss, whole-renderer recreation, and continued
+  PTY/pane interaction without restarting a shell;
+- an ICCCM window-manager close and clean process exit.
+
+Separate scenarios start installed Vim, less, and tmux. Vim must persist typed
+text, report a zero exit status, and leave Termeric responsive to a native close;
+less must navigate and exit successfully, and tmux must expose typed text through
+an independent `capture-pane` query before exiting. Each client runs through a
+bounded util-linux `script` PTY recorder, and the harness requires an
+alternate-screen entry followed by its matching exit in the recorded output.
+This proves the alternate-screen, application-input, return-to-terminal, and
+shutdown paths rather than inferring them from a screenshot or merely replaying
+captured output. The raw per-client `*-screen.bin` files remain in the scenario
+artifact directory for inspection.
+
+The CLI scenario launches the real binary with a Unicode cwd, two tabs, a
+split, arbitrary fixture argv after `--`, explicit 820x540 physical geometry,
+and a custom X11 class/application ID. It verifies all three PTYs start in the
+chosen directory and reads native window geometry and identity back from X11.
+
+The command spies prevent the automated scenario from opening a real browser,
+playing sound, or contacting a notification service. The captured
+`desktop-events.tsv` file records exact requested arguments.
+
+The Wayland lane starts a private headless Weston compositor with its kiosk
+shell. It requires window creation, renderer initialization, a PTY fixture and
+first terminal render, then verifies orderly application cleanup when the last
+PTY exits. Desktop-policy behavior is intentionally not inferred from this
+private compositor.
+
+A separate headless Sway interaction scenario uses its virtual-keyboard
+protocol and `wl-clipboard` clients to prove native keyboard delivery, a
+compositor clipboard copied from keyboard-only copy mode, exact bracketed paste,
+split-pane creation/focus/closure, PID-scoped input routing, surviving-pane
+input, and native close. The scenario also injects one lost and one outdated
+surface, changes and restores the private output size after each, injects one
+unexpected device loss, and requires all three recoveries before continuing
+those PTY checks. It records the
+real PTY transcript and application/compositor logs. This proves the
+private-compositor technical path, not the
+permissions or presentation policy of a user's desktop.
+The schema-3 `results.json` binds every run to the tested binary's SHA-256
+digest, UTC time, compositor launcher, scenario outcomes, and exact lost-
+surface, outdated-surface, and device-loss injection flags.
+
+## Fullscreen promotion row
+
+The native harness now creates two same-process windows and drives F11 into one
+of them under an EWMH-capable Openbox X11 session and a headless Sway Wayland
+session. It requires the target window/PTY to grow on entry, return to its exact
+character and pixel geometry on exit, and leave its sibling window/PTY
+unchanged. Request diagnostics and two-window close behavior are retained with
+the transcript. The capability remains Partial until this newly added scenario
+has a green CI artifact; source presence alone is not acceptance evidence.
+
+## Visual evidence
+
+Native-window captures are retained as diagnostic artifacts. GPU-presented
+surfaces are not portably readable through X11 root-window capture, so CI does
+not call a blank root capture a visual pass. Instead, the GPU lane renders a
+focused snapshot through Termeric's real font shaping, paged atlas, upload,
+text shader, blending, and readback paths using the bundled deterministic test
+font. CI uploads the PNG and compares the checked-in, reviewable signature in
+[`renderer.json`](../termeric/tests/gui/baselines/renderer.json). The signature
+tracks visible-pixel area, bounds, mean color, and row/column ink profiles with
+documented tolerances in `scripts/check_gui_visual.py`.
+
+Copy-mode overlays additionally have a deterministic golden geometry test for
+scrollback-to-visual-row placement. This keeps hint labels and the outlined
+keyboard cursor aligned with the same coordinates used by selection and search;
+the X11 lane uploads review-only `copy-mode-selection` and `quick-select-hints`
+captures as end-to-end presentation evidence without treating compositor pixels
+as a portable golden.
+
+To intentionally update that signature after reviewing the before/after PNG:
+
+```bash
+TERMERIC_GPU_SMOKE=1 \
+TERMERIC_GUI_VISUAL_OUTPUT="$PWD/target/gui-acceptance/renderer.png" \
+WGPU_BACKEND=vulkan \
+cargo test -p termeric linux_headless_gpu_render_smoke_when_requested -- --nocapture
+
+python3 scripts/check_gui_visual.py \
+  target/gui-acceptance/renderer.png --update
+```
+
+An update must accompany an explanation of the intended visual change. The
+normal CI command omits `--update` and rejects changes beyond the perceptual
+budgets.
+
+## Local reproduction
+
+Build first:
+
+```bash
+cargo build -p termeric --locked
+```
+
+On Debian/Ubuntu, install `xvfb`, `xauth`, `xdotool`, `xclip`, `imagemagick`,
+`python3-pil`, `fonts-dejavu-core`, `fonts-noto-color-emoji`, `vim`, `less`, `tmux`, `libsixel-bin`,
+`timg`, `util-linux` (for `script`), `openbox`, `weston`, `sway`, `wtype`,
+Mesa's Vulkan drivers, and the normal Termeric build dependencies.
+
+Run every X11 scenario:
+
+```bash
+WGPU_BACKEND=gl EGL_PLATFORM=x11 \
+xvfb-run -a -s "-screen 0 1280x800x24" \
+python3 scripts/gui_acceptance.py \
+  --backend x11 \
+  --start-window-manager \
+  --force-surface-loss \
+  --force-surface-outdated \
+  --force-device-loss \
+  --skip-visual-checks \
+  --binary target/debug/termeric \
+  --artifacts target/gui-acceptance/x11
+```
+
+Use repeated `--scenario workspace`, `--scenario fullscreen`, `--scenario cli`, `--scenario vim`,
+`--scenario less`, or `--scenario tmux` to reproduce only a failed case. The output directory keeps
+the exact config, PTY JSONL, application and window-manager logs, screenshots,
+fixture files, desktop-spy calls, and a machine-readable result.
+
+Prerequisite checks are scenario-local. Only `workspace` runs the independent
+`img2sixel`/`timg` clients and X11 clipboard round trips; only scenarios that
+capture a native window require ImageMagick, Spectacle, or FFmpeg. Fullscreen,
+CLI, Wayland, and full-screen application fixtures explicitly skip unrelated
+graphics emission, so an isolated reproduction cannot be blocked by tools that
+the selected scenario never executes.
+
+Run Wayland launch/render/close:
+
+```bash
+WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \
+  --backend wayland \
+  --start-weston \
+  --binary target/debug/termeric \
+  --artifacts target/gui-acceptance/wayland
+```
+
+Run Wayland fullscreen/resize/sibling isolation separately under Sway, whose
+virtual-keyboard protocol support lets the harness inject F11 without relying
+on host input devices:
+
+```bash
+WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \
+  --backend wayland \
+  --start-sway \
+  --scenario fullscreen \
+  --binary target/debug/termeric \
+  --artifacts target/gui-acceptance/wayland-fullscreen
+```
+
+Run Wayland keyboard, pane, and clipboard routing under the same private Sway
+backend:
+
+```bash
+WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \
+  --backend wayland \
+  --start-sway \
+  --scenario interaction \
+  --force-surface-loss \
+  --force-surface-outdated \
+  --force-device-loss \
+  --binary target/debug/termeric \
+  --artifacts target/gui-acceptance/wayland-interaction
+```
+
+Missing applications are failures, never silent skips. A developer running a
+partial local command may record the exact tool as unavailable, but the CI
+lane installs and requires the complete declared tool set.
+
+## What remains manual
+
+Only policy- or perception-dependent checks remain manual: real-compositor
+clipboard/primary-selection permissions, external URL and notification policy,
+audible output on a real device, fractional scale behavior, font/fallback
+quality across installed system fonts, vendor-specific presentation, and
+authenticated external-provider workflows. Whole-window golden screenshots
+are deliberately avoided because compositor decorations and rasterization are
+not a stable product contract.
+
+## Pending automated promotion coverage
+
+Vertical-tab promotion additionally requires an automated native scenario with
+`tab_bar_position = "left"`: create enough tabs to overflow the rail, verify
+that the active tab remains visible, exercise previous/next/new/close and drag
+reordering with mouse and F6 keyboard navigation, then switch back to `top`.
+During that pass, verify that terminal columns shrink and recover, split-pane
+dividers and scrollbars remain aligned, and search, IME preedit, inline images,
+mouse reporting, and the accessibility tab-list bounds stay inside the shifted
+content viewport. These functional checks must cover private X11 and Wayland
+compositors before promotion; subjective alignment and real-compositor quality
+remain manual. They do not exercise any authenticated provider workflow.
+
+Background-image functional promotion likewise requires automated static PNG
+and JPEG cases with each fit and opacity extreme under top and left tabs.
+Resize, open search and plugin chrome, split panes, replace the source file,
+inject a malformed replacement, and force renderer recovery; the image must
+remain below terminal/application content, failed reload must preserve the last
+good texture, and memory must remain within the documented per-window bounds.
+The visual/contrast judgment remains a manual pass on one X11 and one Wayland
+compositor without invoking any provider integration.
+
+Real X11/Wayland candidate results belong in the schema-versioned,
+artifact-hashed [native Linux acceptance record](native-linux-acceptance.md).
+That record fails closed on missing environments, incomplete checks, inconsistent
+dispositions, and changed evidence; an unavailable prerequisite remains visibly
+different from a pass.

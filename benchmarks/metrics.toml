@@ -1,0 +1,376 @@
+schema_version = 1
+
+# Every release-benchmark producer invocation must emit exactly one row for
+# every metric assigned to it. Unavailable renderer/display measurements retain
+# an empty row whose workload starts with `skipped:`; absence is never a skip.
+
+[[metric]]
+name = "core.parser.plain_4mib"
+unit = "ms"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "core.parser.escape_heavy"
+unit = "ms"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "core.scrollback.10k_time"
+unit = "ms"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.10k_rss_delta"
+unit = "KiB"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.10k_estimated_bytes"
+unit = "bytes"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "core.scrollback.100k_time"
+unit = "ms"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.100k_rss_delta"
+unit = "KiB"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.100k_estimated_bytes"
+unit = "bytes"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.100k_grapheme_bytes"
+unit = "bytes"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.100k_style_bytes"
+unit = "bytes"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.100k_hyperlink_bytes"
+unit = "bytes"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.100k_allocated_bytes"
+unit = "bytes"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.scrollback.100k_allocation_count"
+unit = "allocations"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.representation.plain_bytes_per_line"
+unit = "bytes/line"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.representation.styled_bytes_per_line"
+unit = "bytes/line"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.representation.unicode_bytes_per_line"
+unit = "bytes/line"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.representation.hyperlink_bytes_per_line"
+unit = "bytes/line"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.representation.sparse_bytes_per_line"
+unit = "bytes/line"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "core.reflow.10k_50_resizes"
+unit = "ms"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.reflow.10k_50_resizes_allocated_bytes"
+unit = "bytes"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "memory.reflow.10k_50_resizes_allocation_count"
+unit = "allocations"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "core.images.store_64_rgba"
+unit = "ms"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "latency.pty_cat_roundtrip"
+unit = "ms"
+producer = "core"
+samples = 5
+
+[[metric]]
+name = "latency.headless_controller_startup"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.search.10k"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.search.100k"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.search_dispatch.10k"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.search_dispatch.100k"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.search_extension_dispatch.10k"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.search_extension_dispatch.100k"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.search.10k_dense"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "memory.search_results.10k_dense_estimated_bytes"
+unit = "bytes"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.pane_layout.8"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "interaction.pane_layout.64"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "latency.transcript_enqueue_under_slow_disk"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "transcript.slow_disk_dropped_entries"
+unit = "entries"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "latency.tabs.create_8"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "renderer.frame_build_upload_submit"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.glyph_cache_warm"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.glyph_cache_hit_rate"
+unit = "percent"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "latency.synthetic_key_to_gpu_submit"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.steady_frame_buffer_allocations"
+unit = "allocations"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.static"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.one_row_update"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.scroll"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.search_heavy"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.unicode"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.multi_pane"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.one_row_rebuilds"
+unit = "rows"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.row_cache.steady_allocations"
+unit = "allocations"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.ligature.code_run_build"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.ligature.shaping_cache_hit_rate"
+unit = "percent"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "idle.application_cpu"
+unit = "percent_of_one_core"
+producer = "display"
+samples = 5
+allow_skipped = true
+
+[[metric]]
+name = "idle.application_rendered_frames"
+unit = "frames"
+producer = "display"
+samples = 5
+allow_skipped = true
+
+[[metric]]
+name = "memory.application_idle_rss"
+unit = "KiB"
+producer = "display"
+samples = 5
+allow_skipped = true
+
+[[metric]]
+name = "latency.displayed_key_event_to_present"
+unit = "ms"
+producer = "display"
+samples = 5
+allow_skipped = true
+context_required = true

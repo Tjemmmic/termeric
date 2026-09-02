@@ -22,6 +22,8 @@ termeric-core = { version = "0.1.0", path = "../termeric-core" }
 # Windowing
 winit = "0.30"
 raw-window-handle = "0.6"
+accesskit = "0.24.1"
+accesskit_winit = "0.33.2"
 
 # GPU rendering
 wgpu = "24"
@@ -30,6 +32,7 @@ bytemuck = { version = "1.21", features = ["derive"] }
 
 # Text rendering (0.18+ for FontFeatures support)
 cosmic-text = "0.18"
+unicode-segmentation = "1.12"
 
 # Image loading for window icon
 image = "0.25"
@@ -51,6 +54,7 @@ git2 = "0.19"
 
 # Regular expressions for search
 regex = "1"
+sha2 = "0.10"
 
 # Logging
 log.workspace = true
@@ -63,11 +67,15 @@ thiserror.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS-specific dependencies if needed
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-specific dependencies if needed
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Linux-specific dependencies if needed
+# XDG Desktop Portal accessibility preference monitoring.
+zbus = "5.19"
 
 [dev-dependencies]
 # Testing dependencies
@@ -81,10 +89,12 @@ extended-description = """\
 Termeric is a modern, GPU-accelerated terminal emulator built with Rust.
 It features a warm, turmeric-inspired color theme and smooth rendering."""
 depends = "$auto"
+recommends = "mesa-vulkan-drivers"
 section = "utils"
 priority = "optional"
 assets = [
     ["target/release/termeric", "usr/bin/", "755"],
     ["../assets/termeric.desktop", "usr/share/applications/", "644"],
     ["../assets/icons/termeric.png", "usr/share/icons/hicolor/1024x1024/apps/", "644"],
+    ["../assets/terminfo/x/xterm-termeric", "usr/share/terminfo/x/", "644"],
 ]

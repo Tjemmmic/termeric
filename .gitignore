@@ -1,6 +1,10 @@
 # Rust / Cargo
 /target/
+/fuzz/target/
+/fuzz/artifacts/
 **/*.rs.bk
+__pycache__/
+*.py[cod]
 # This workspace ships an application, so Cargo.lock is tracked. Library
 # consumers still resolve their own dependency graph from Cargo.toml.
 

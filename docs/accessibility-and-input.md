@@ -1,0 +1,315 @@
+# Modern text input and accessibility
+
+Termeric enables Winit's platform input-method path on every native window.
+`Ime::Preedit` is local UI state: it is drawn beside the focused pane cursor and
+is never sent to a PTY. Only `Ime::Commit` is routed, once, to the current text
+owner (terminal, search, settings filter, command palette, workspace rename, or
+command form). Changing pane focus, losing window focus, or disabling the IME
+cancels stale preedit. Candidate geometry is reported in physical pixels from
+the same vertical-tab rail, padding, chrome/search offsets, pane rectangle,
+cursor row/column, and
+scaled cell dimensions used to render the terminal. Long preedit runs are
+clipped only at grapheme boundaries to the space remaining in the focused pane
+and never paint across a pane divider.
+
+Native color fonts use the separate bounded RGBA glyph atlas described in
+[Glyph atlas lifetime](glyph-atlas.md). Extended grapheme width remains the
+terminal's Unicode width policy; color selection does not change cell width.
+
+## Visual accessibility preferences
+
+Settings > Accessibility and the persisted `[accessibility]` table expose two
+independent three-state policies:
+
+```toml
+[accessibility]
+reduce_motion = "system" # system, on, or off
+high_contrast = "system" # system, on, or off
+```
+
+`reduce_motion = "on"` makes application-owned panels, dialogs, tab
+open/close, hover, cursor-position easing, focus dimming, copy flash, toast,
+and Harvest chrome snap directly to their semantic state. It also removes the
+continuous pulse/fade from Harvest growth indicators. It deliberately does
+not suppress terminal-application animation, text blink, the configured
+terminal cursor blink, or the visual bell: those are terminal content or
+explicit status signals rather than decorative Termeric transitions.
+
+`high_contrast = "on"` derives opaque application-chrome surfaces and chooses
+their text colors to meet a 4.5:1 contrast floor across every built-in theme.
+It covers tabs, Settings, search, palettes/dialogs, keycaps, borders, and modal
+scrims. It does not rewrite the terminal foreground, background, ANSI palette,
+truecolor output, inline media, or colors changed by an application through
+terminal protocols.
+
+`"off"` is an explicit override. `"system"`, the default, follows a supported
+desktop signal and otherwise resolves to off. Legacy `true` and `false` config
+values remain valid and are interpreted as explicit `"on"` and `"off"`
+overrides, respectively. Saving Settings writes the canonical string form.
+
+Both preferences apply immediately through Settings, config reload, startup,
+later theme changes, and live native preference updates where supported:
+
+| Platform | Native preference source | Current behavior |
+| --- | --- | --- |
+| Linux | XDG Desktop Portal `org.freedesktop.appearance` `reduced-motion` and `contrast` | Read and monitored on one background D-Bus thread. Unsupported portals or individual keys fall back independently without blocking startup. |
+| macOS | NSWorkspace / accessibility display preferences | Not implemented; `"system"` resolves to off. |
+| Windows | UI Settings / high-contrast notifications | Not implemented; `"system"` resolves to off. |
+
+The Linux mapping follows the official
+[XDG Desktop Portal Settings specification](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Settings.html).
+Native visual and assistive-technology acceptance remains separate from these
+hermetic policy and routing tests.
+
+## Keyboard-only chrome
+
+Press `F6` to enter the tab bar. `Shift+F6` enters from the opposite end. While
+the focus ring is active:
+
+- `Tab` / `Shift+Tab` or arrow keys move through each tab, each close button,
+  overflow navigation button, New Tab, Commands, Workspaces, and Settings;
+- `Home` and `End` move to the first and last control;
+- `Enter` or `Space` activates the focused control;
+- `Escape` returns focus to the terminal.
+
+The focus outline uses the exact rendered bounds shared by tab rendering and
+hit testing, including the animated bounds when reduced motion is off. It is
+theme-derived, two physical pixels wide, and does not rely
+on color alone: its persistent outline shape is distinct from hover and active
+tab fills.
+
+When 80-pixel minimum tab widths no longer fit, the bar renders only a bounded
+contiguous range between previous/next controls. The active tab is always in
+that range; keyboard focus temporarily anchors the same range so its outline
+never lands offscreen. Hidden tabs remain represented to assistive technology,
+and activating one reveals it. The overflow controls have named AccessKit
+buttons and share their exact bounds with pointer hit-testing.
+
+## Screen-reader model
+
+AccessKit is initialized before a window becomes visible and bridges to AT-SPI
+on Linux, NSAccessibility on macOS, and UI Automation on Windows. The tree
+contains the application window, selected tab, named tab-close and global
+controls, every active-tab pane, and only the currently visible terminal rows.
+The focused pane publishes cursor or selection positions against text-run
+nodes. Updates are incremental after the initial full tree, and terminal
+content is a polite live region.
+
+When the command palette is open, it becomes the only child of the application
+window in the semantic tree. AccessKit exposes a modal dialog containing the
+bounded UTF-8 search input, its cursor, the visible result list, the selected result as
+the input's active descendant, category/destructive descriptions, and keyboard
+shortcuts. Result node identities are allocated from stable command IDs rather
+than transient filtered rows, and mappings are retired when commands leave the
+bounded registry. A screen-reader click executes only the command that was
+announced and only while it remains visibly exposed; stale actions
+cannot fall through to terminal or tab controls behind the modal. Semantic row
+bounds come from the same `PaletteLayout` used by rendering and mouse hit tests.
+
+The staged live-domain picker reuses that exact palette geometry but owns a
+separate isolated modal tree and stable action namespace. Saved-host identities
+come from configured profile names; live-domain identities come from validated
+domain IDs rather than result ordering. Duplicate domain IDs are collapsed, and
+every semantic action must still be both visible and actionable in the current
+stage before it can start discovery or preparation. Loading, empty, preparing,
+and error entries are polite status nodes rather than executable options.
+Loading/preparation makes the filter read-only, and both palette workflows size
+keyboard selection and scrolling to the rows the current window can render.
+Headless routing tests stop before client construction and never open a local
+socket or SSH process.
+
+The settings panel follows the same modal isolation rule. Its semantic tree
+contains a UTF-8-aware filter input, section headings, numeric spin buttons
+with bounded increment/decrement actions, expandable combo boxes and their
+currently rendered options, and read-only labels. Stable identities use the
+setting's section and label rather than its filtered row number; dropdown
+options are resolved by their announced value so a stale request cannot choose
+a different item after a dynamic option list changes. Selection, scrolling,
+row bounds, and dropdown bounds come from `SettingsModalLayout`, which is also
+used by rendering and pointer hit tests. Every mutation returns the same
+`SettingsAction` used by keyboard and mouse input and is applied by the normal
+configuration-validation path. Requests for background controls are swallowed
+while the modal is active.
+
+The custom-command panel is likewise isolated as a modal dialog. It exposes
+named New and Close buttons, each command as separate Run and Delete actions,
+an empty-state announcement, and the inline editor's Name and Shell Command
+text inputs plus Save and Cancel buttons. Command identities use the complete
+name/command/alias tuple and duplicate occurrence rather than a transient row
+index. Before an action is applied, that identity must still resolve to the
+same current command; removed or changed entries cannot retarget a stale Run or
+Delete request. Form value replacement is UTF-8 aware, single-line, and
+bounded. Rendering, pointer hit testing, and AccessKit bounds all use the same
+`CommandsPanelLayout`, and pointer, keyboard, and accessibility actions share
+one application path. Automated accessibility tests use inert form strings and
+never submit or execute a custom command.
+
+The workspace manager and legacy-snapshot manager share a bounded modal model.
+Each visible entry is a named group with exact Load and Delete actions;
+workspaces additionally expose Rename. Stable actions resolve the saved entry's
+ID and manager mode again before use, so a stale request cannot load, rename,
+or delete a different entry. The rename form has a bounded UTF-8 text input and
+visible Save/Cancel controls. `SessionPanelLayout` owns the panel, header,
+rename, viewport, row, and action-button geometry across rendering, pointer hit
+testing, hover, and AccessKit. Long lists scroll, keyboard selection stays
+visible, and Up/Down, Enter, Delete, F2, and Escape provide complete keyboard
+operation. Accessibility tests inject in-memory entries and never load, rename,
+or delete a persisted workspace or snapshot.
+
+The keyboard-shortcut editor is a bounded modal tree with a UTF-8-aware filter,
+category headings, and one stable action button per visible binding. Action
+identity comes from `BindableAction`, never a filtered row number. Activating a
+binding enters the existing timed recording path; a named custom action clears
+it, conflict reassignment is announced through a polite live status, and stale
+actions are rejected after filtering or scrolling hides their target. Pointer
+row activation, keyboard selection, rendering, and AccessKit bounds all use
+`ShortcutsPanelLayout`. Category headings count toward the viewport and
+scrollbar, preventing the previous selectable-row/rendered-row drift. Tests
+change only an in-memory registry and never persist user bindings.
+
+Application information, errors, and plugin notices share a request-scoped
+information dialog. Titles are capped at 256 characters; stored notice content
+is capped at 512 lines and 4,096 characters per line with visible omission
+markers. The card reserves a window-bounded viewport so Copy and Continue never
+move off-screen. Up/Down/Page keys and the wheel scroll lines, Left/Right and
+Shift+wheel scroll long lines, and Home/End variants move to horizontal or
+vertical boundaries. Rendering, pointer rows/buttons, viewport sizing, and
+AccessKit all use `InfoOverlayLayout`.
+
+The semantic tree contains only the modal dialog, heading, visible document
+slice, polite position status, explicit choices, Copy, and default Continue
+button. Offscreen text and choices are retired until scrolled into view. Every
+action includes the notice generation; dismissing revokes actions immediately
+while the closing animation continues, and a replaced profile picker cannot
+apply a hidden stale number, pointer, or screen-reader choice. Profile choices
+are named buttons with the same row bounds and number shortcuts shown on
+screen. Tests use inert strings and fake choice identities and do not invoke a
+plugin executable or provider.
+
+The destructive-command guardrail is an isolated assertive alert dialog for a
+critical match and a polite alert dialog for a warning. It exposes the bounded
+exact command, reason, target/user context, and separately named Cancel and Run
+anyway actions. Cancel receives initial semantic focus; `Enter` and `Escape`
+cancel, while keyboard confirmation deliberately requires `Ctrl+Enter`.
+Rendering, pointer hit testing, and AccessKit bounds share `GuardrailLayout`.
+Every action carries a monotonic request identity, dismissal discards the
+buffered bytes immediately even while the exit animation still owns input, and
+a stale action cannot confirm a later request.
+
+A guarded request captures the exact tab or pane destination—or the complete
+pane-broadcast destination/encoding set—at interception time. Confirmation
+validates that every captured destination still exists before delivering any
+member and never falls back to current focus. Typed commits, clipboard paste,
+and pane broadcast use this path. Hermetic tests use a fake plugin identity and
+an inert local process; they neither start an AI provider nor confirm the
+guarded payload. This remains a best-effort product warning for plugin tabs,
+not a shell parser or security boundary: the finite substring rules can produce
+false positives and false negatives and cannot prove what a CLI or downstream
+agent will execute.
+
+Scrollback and inactive-tab terminal buffers are intentionally not exposed.
+SGR hidden cells are replaced by blank semantic cells, so invisible/password-
+style content cannot leak through the accessibility tree. A selection that
+intersects the currently visible scrollback viewport is mapped into those
+visible semantic rows; offscreen selection endpoints are clipped to the
+viewport without exposing additional history. Terminal content is read-only to
+assistive technology; PTY input continues through the normal focused input
+route.
+
+Diff review is an isolated modal document with visible-row-only semantic text,
+polite row/column position status, two-axis keyboard, wheel, and semantic
+scrolling, and explicit Copy and Done controls. Rendering, pointer hit testing,
+viewport clamping, and AccessKit bounds share `DiffReviewLayout`. Review
+actions carry a monotonic request identity; closing revokes the request before
+the exit animation finishes, and a replaced dialog rejects retired nodes. Done
+marks only the detector-local diff identity on the original stable tab, never
+all diffs or whichever tab is currently focused. The review view is bounded to
+4,096 rows and 4,096 characters per row; its omission marker is visual only,
+and Copy resolves the complete raw diff from its exact source only when used.
+
+The context assembler is also an isolated request-scoped modal. Source rows are
+typed checkboxes with stable identities; the Specific Files row opens an
+AccessKit text input accepting comma-separated workspace-relative paths.
+Rendering, pointer hit testing, wheel viewport, and semantic bounds share
+`ContextPickerLayout`. Gathering runs off the UI thread with three-second
+command deadlines, bounded command output, 10,000-character source limits, a
+64,000-character aggregate limit, and at most 16 workspace-contained regular
+files. Escape cancels selection, file editing, or an in-flight request as
+appropriate. Late worker results are generation-checked, and successful
+insertion writes only to the exact stable tab or pane captured when the picker
+opened; a closed or replaced destination fails visibly without focus or
+plugin-name fallback.
+
+Terminal search is a non-modal AccessKit toolbar above the focused terminal.
+Its 4 KiB UTF-8 query is editable only while search owns keyboard input; result
+progress/counts are polite live status, regex failures are assertive, and case,
+regex, filter, previous, next, and close controls expose their current state.
+Rendering, pointer hit-testing, and semantic bounds all use `SearchBarLayout`.
+Insertion, IME commit, accessibility replacement, and Backspace share the same
+cursor-aware query model, including when the cursor is in the middle of a
+multi-byte query.
+
+Transient toasts are non-interactive status nodes with stable per-toast
+identities and a 512-character message ceiling. Information, success, and
+warning notices are polite; errors are assertive. `toast_layout` supplies both
+the painted card and AccessKit bounds, and toast nodes are appended to the root
+even when an isolated modal tree owns the rest of the application.
+
+Harvest's Root Cellar is an isolated modal dialog containing a bounded command
+history list, actual normalized command text, exit/health metadata, an explicit
+close button, and stable entry identities. It opens with the newest command
+selected; keyboard, pointer, wheel, and AccessKit scrolling share one viewport
+and selection model. Its status announces retained and evicted entry counts,
+and entries with 64-KiB-clipped output disclose that limit. Rendering, hit
+testing, and semantic bounds all use `CellarLayout`. Activating an exact entry
+closes the cellar and opens its sprout action menu.
+
+The sprout menu is an isolated AccessKit menu with stable identities scoped to
+the exact visible request. Focus and selection track one another, the shared
+`SproutMenuLayout` keeps rendering and hit targets inside the window, and stale
+or background actions are consumed without execution. Actions that require
+evicted live scrollback or a closed source terminal are disabled, omitted from
+keyboard navigation, visibly dimmed, and carry a semantic reason; retained
+primary rows temporarily hidden by an alternate-screen application carry a
+separate reason. Retained 64-KiB snapshots are labeled as truncated before
+Copy or Explain. The Explain item states
+that it sends the selected command/output to an unambiguous open AI plugin tab;
+automated accessibility tests inspect that contract but deliberately never
+invoke a provider-backed explanation.
+
+Automated semantics now cover every current application surface. Issue #32
+remains open until native Orca, VoiceOver, or Narrator acceptance demonstrates
+that the platform bridge, focus, announcements, editing, and updates are usable
+end to end.
+
+## Platform acceptance
+
+Record Linux results with the candidate-bound, artifact-hashed
+[native acceptance record](native-linux-acceptance.md). Its exact IBus, Fcitx 5,
+and Orca cases turn the following procedure into validated evidence while still
+keeping real input and screen-reader judgment manual.
+
+IME tests should use both single-terminal and split-pane layouts and confirm
+that preedit never appears in the PTY transcript before commit, then that CJK
+text and a dead-key composition arrive exactly once. Also move focus during a
+composition and verify it is cancelled rather than committed to another pane.
+
+- Linux: test IBus and Fcitx 5 under both X11 and Wayland; test Orca with the
+  desktop's AT-SPI bus enabled.
+- macOS: test the built-in Japanese or Pinyin input source and dead keys; test
+  VoiceOver navigation and activation.
+- Windows: test Microsoft Pinyin/Japanese IME and dead keys; test Narrator's
+  scan mode and UI Automation actions.
+
+For each screen reader, verify the window name, selected tab, focused pane,
+visible text, cursor, selection, live output, every named tab-bar control,
+command-palette search and activation, settings filtering and adjustment, and
+activation of tab/pane/control actions. No test should announce scrollback,
+inactive terminal buffers, background controls behind a modal, or SGR-hidden
+text.
+
+Color acceptance uses an installed native color font (Noto Color Emoji on
+Linux, Apple Color Emoji on macOS, Segoe UI Emoji on Windows), representative
+single-scalar and ZWJ emoji, screenshot review, and repeated atlas-pressure
+output. Bidirectional reordering remains outside this feature and is documented
+as unsupported.

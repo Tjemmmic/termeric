@@ -9,3 +9,8 @@ Categories=System;TerminalEmulator;
 Keywords=terminal;shell;command;developer;
 StartupNotify=true
 StartupWMClass=termeric
+Actions=NewWindow;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=termeric --new-window

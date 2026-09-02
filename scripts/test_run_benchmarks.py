@@ -1,0 +1,406 @@
+import unittest
+from pathlib import Path
+import tempfile
+
+from scripts.run_benchmarks import (
+    compare_reports,
+    comparison_diagnostics,
+    evaluate_budgets,
+    isolate_display_backend,
+    load_metric_contract,
+    merge_metrics,
+    percentile,
+    presentation_latency_samples,
+    rendered_frame_count,
+    skipped_display_metrics,
+    summarize,
+    validate_metric_batch,
+    validate_repeat_consistency,
+)
+
+
+def report(value: float) -> dict:
+    return {
+        "metrics": [
+            {
+                "name": "work",
+                "unit": "ms",
+                "samples": [value] * 5,
+                "statistics": summarize([value] * 5),
+            },
+            {
+                "name": "control",
+                "unit": "ms",
+                "samples": [10.0] * 5,
+                "statistics": summarize([10.0] * 5),
+            },
+        ]
+    }
+
+
+def comparable_report(value: float) -> dict:
+    result = report(value)
+    result.update(
+        {
+            "schema_version": 1,
+            "profile": "release",
+            "environment": {
+                "architecture": "x86_64",
+                "cpu_model": "fixture cpu",
+                "logical_cpus": 8,
+            },
+        }
+    )
+    return result
+
+
+class BenchmarkBudgetTests(unittest.TestCase):
+    def test_checked_in_metric_contract_is_valid_and_unique(self):
+        contract = load_metric_contract()
+        names = [entry["name"] for entry in contract["metric"]]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertGreaterEqual(len(names), 50)
+
+    def test_metric_contract_rejects_missing_unexpected_and_duplicate_rows(self):
+        contract = {
+            "metric": [
+                {
+                    "name": "expected_missing",
+                    "unit": "ms",
+                    "producer": "core",
+                    "samples": 2,
+                },
+                {
+                    "name": "expected_duplicate",
+                    "unit": "ms",
+                    "producer": "core",
+                    "samples": 2,
+                },
+            ]
+        }
+        errors = validate_metric_batch(
+            [
+                {"name": "expected_duplicate", "unit": "ms", "samples": [1.0, 2.0]},
+                {"name": "expected_duplicate", "unit": "ms", "samples": [1.0, 2.0]},
+                {"name": "unexpected", "unit": "ms", "samples": [1.0, 2.0]},
+            ],
+            contract,
+            "core",
+        )
+        self.assertTrue(any("missing metric expected_missing" in error for error in errors))
+        self.assertTrue(any("unexpected metric unexpected" in error for error in errors))
+        self.assertTrue(any("expected_duplicate was emitted 2 times" in error for error in errors))
+
+    def test_metric_contract_requires_exact_unit_sample_count_and_context(self):
+        contract = {
+            "metric": [
+                {
+                    "name": "work",
+                    "unit": "ms",
+                    "producer": "application",
+                    "samples": 2,
+                    "context_required": True,
+                }
+            ]
+        }
+        errors = validate_metric_batch(
+            [{"name": "work", "unit": "seconds", "samples": [1.0]}],
+            contract,
+            "application",
+        )
+        self.assertTrue(any("unit" in error for error in errors))
+        self.assertTrue(any("1 samples; expected 2" in error for error in errors))
+        self.assertTrue(any("missing required context" in error for error in errors))
+
+    def test_metric_contract_accepts_only_declared_explicit_skips(self):
+        contract = {
+            "metric": [
+                {
+                    "name": "optional",
+                    "unit": "ms",
+                    "producer": "display",
+                    "samples": 5,
+                    "allow_skipped": True,
+                }
+            ]
+        }
+        self.assertEqual(
+            validate_metric_batch(
+                [
+                    {
+                        "name": "optional",
+                        "unit": "ms",
+                        "samples": [],
+                        "workload": "skipped: fixture unavailable",
+                    }
+                ],
+                contract,
+                "display",
+            ),
+            [],
+        )
+        errors = validate_metric_batch(
+            [{"name": "optional", "unit": "ms", "samples": [], "workload": "forgotten"}],
+            contract,
+            "display",
+        )
+        self.assertTrue(any("without an allowed explicit skip" in error for error in errors))
+
+    def test_metric_contract_rejects_probe_availability_that_changes_between_repeats(self):
+        contract = {
+            "metric": [
+                {
+                    "name": "renderer.optional",
+                    "unit": "ms",
+                    "producer": "application",
+                    "samples": 1,
+                    "allow_skipped": True,
+                }
+            ]
+        }
+        errors = validate_repeat_consistency(
+            [
+                {"name": "renderer.optional", "samples": [1.0]},
+                {"name": "renderer.optional", "samples": [], "workload": "skipped: fixture"},
+            ],
+            contract,
+            2,
+        )
+        self.assertTrue(any("changed availability across repeats" in error for error in errors))
+
+    def test_repeat_consistency_rejects_adapter_and_workload_drift(self):
+        contract = {
+            "metric": [
+                {
+                    "name": "renderer.work",
+                    "unit": "ms",
+                    "producer": "application",
+                    "samples": 1,
+                    "context_required": True,
+                }
+            ]
+        }
+        errors = validate_repeat_consistency(
+            [
+                {
+                    "name": "renderer.work",
+                    "samples": [1.0],
+                    "context": "llvmpipe",
+                    "workload": "first fixture",
+                },
+                {
+                    "name": "renderer.work",
+                    "samples": [2.0],
+                    "context": "NVIDIA",
+                    "workload": "second fixture",
+                },
+            ],
+            contract,
+            2,
+        )
+        self.assertTrue(any("changed context across repeats" in error for error in errors))
+        self.assertTrue(any("changed workload across repeats" in error for error in errors))
+
+    def test_repeat_consistency_rejects_missing_required_repeat_record(self):
+        contract = {
+            "metric": [
+                {
+                    "name": "work",
+                    "unit": "ms",
+                    "producer": "core",
+                    "samples": 1,
+                }
+            ]
+        }
+        errors = validate_repeat_consistency(
+            [{"name": "work", "samples": [1.0], "workload": "fixture"}],
+            contract,
+            2,
+        )
+        self.assertTrue(any("has 1 repeat records; expected 2" in error for error in errors))
+
+    def test_metric_merge_rejects_context_or_workload_drift(self):
+        base = {
+            "name": "renderer.work",
+            "unit": "ms",
+            "samples": [1.0],
+            "workload": "fixture",
+            "context": "llvmpipe",
+        }
+        with self.assertRaisesRegex(ValueError, "context changed"):
+            merge_metrics([base, {**base, "context": "NVIDIA"}])
+        with self.assertRaisesRegex(ValueError, "workload changed"):
+            merge_metrics([base, {**base, "workload": "different fixture"}])
+
+    def test_skipped_display_contract_keeps_every_metric_in_the_artifact(self):
+        metrics = skipped_display_metrics("skipped: fixture")
+        self.assertEqual(
+            [metric["name"] for metric in metrics],
+            [
+                "idle.application_cpu",
+                "idle.application_rendered_frames",
+                "memory.application_idle_rss",
+                "latency.displayed_key_event_to_present",
+            ],
+        )
+        self.assertTrue(all(metric["samples"] == [] for metric in metrics))
+
+    def test_presentation_latency_samples_are_ordered_and_ignore_blank_lines(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "samples"
+            path.write_text("3.25\n\n1.5\n", encoding="utf-8")
+            self.assertEqual(presentation_latency_samples(path), [3.25, 1.5])
+
+    def test_rendered_frame_count_reads_one_complete_counter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "frames"
+            path.write_text("17\n", encoding="utf-8")
+            self.assertEqual(rendered_frame_count(path), 17)
+
+    def test_display_backend_isolation_removes_wayland_from_x11_probe(self):
+        environment = {
+            "DISPLAY": ":98",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "WAYLAND_SOCKET": "7",
+            "XDG_SESSION_TYPE": "x11",
+            "WINIT_UNIX_BACKEND": "wayland",
+        }
+        self.assertEqual(isolate_display_backend(environment), "x11")
+        self.assertEqual(environment["DISPLAY"], ":98")
+        self.assertEqual(environment["EGL_PLATFORM"], "x11")
+        self.assertEqual(environment["WAYLAND_DISPLAY"], "")
+        self.assertEqual(environment["WAYLAND_SOCKET"], "")
+        self.assertEqual(environment["WINIT_UNIX_BACKEND"], "x11")
+
+    def test_display_backend_isolation_removes_x11_from_wayland_probe(self):
+        environment = {
+            "DISPLAY": ":1",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "XDG_SESSION_TYPE": "wayland",
+            "WINIT_UNIX_BACKEND": "x11",
+        }
+        self.assertEqual(isolate_display_backend(environment), "wayland")
+        self.assertEqual(environment["WAYLAND_DISPLAY"], "wayland-0")
+        self.assertEqual(environment["EGL_PLATFORM"], "wayland")
+        self.assertEqual(environment["DISPLAY"], "")
+        self.assertEqual(environment["WINIT_UNIX_BACKEND"], "wayland")
+
+    def test_percentile_uses_observed_sample(self):
+        self.assertEqual(percentile([5.0, 1.0, 3.0, 2.0, 4.0], 0.95), 5.0)
+
+    def test_deliberate_twenty_one_percent_slowdown_fails_twenty_percent_budget(self):
+        budgets = {
+            "ratio_budget": [
+                {
+                    "name": "deliberate slowdown",
+                    "numerator": "work",
+                    "denominator": "control",
+                    "max_ratio": 1.2,
+                }
+            ]
+        }
+        self.assertFalse(evaluate_budgets(report(12.1), budgets)[0]["passed"])
+
+    def test_absolute_interaction_rail_catches_linear_but_unusable_search(self):
+        budgets = {
+            "metric_budget": [
+                {
+                    "name": "100k incremental search interaction rail",
+                    "metric": "work",
+                    "statistic": "p95",
+                    "max": 500.0,
+                }
+            ]
+        }
+        self.assertFalse(evaluate_budgets(report(11_800.0), budgets)[0]["passed"])
+
+    def test_allow_skipped_budget_does_not_treat_absent_metric_as_a_pass(self):
+        budgets = {
+            "metric_budget": [
+                {
+                    "name": "optional probe",
+                    "metric": "missing",
+                    "statistic": "p95",
+                    "max": 10.0,
+                    "allow_skipped": True,
+                }
+            ]
+        }
+        self.assertFalse(evaluate_budgets({"metrics": []}, budgets)[0]["passed"])
+
+    def test_allow_skipped_budget_accepts_present_explicit_skip_row(self):
+        skipped = {
+            "name": "optional",
+            "unit": "ms",
+            "samples": [],
+            "statistics": summarize([]),
+            "workload": "skipped: fixture unavailable",
+        }
+        budgets = {
+            "metric_budget": [
+                {
+                    "name": "optional probe",
+                    "metric": "optional",
+                    "statistic": "p95",
+                    "max": 10.0,
+                    "allow_skipped": True,
+                }
+            ]
+        }
+        self.assertTrue(evaluate_budgets({"metrics": [skipped]}, budgets)[0]["passed"])
+
+    def test_cross_commit_comparison_reports_direction_and_percent(self):
+        comparison = compare_reports(report(10.0), report(12.0))[0]
+        self.assertEqual(comparison["metric"], "work")
+        self.assertAlmostEqual(comparison["change_percent"], 20.0)
+
+    def test_baseline_comparison_rejects_a_different_machine(self):
+        baseline = comparable_report(10.0)
+        current = comparable_report(12.0)
+        current["environment"]["cpu_model"] = "different cpu"
+
+        diagnostics, comparable = comparison_diagnostics(baseline, current)
+
+        self.assertFalse(diagnostics["passed"])
+        self.assertEqual(comparable, set())
+        self.assertTrue(any("cpu_model" in error for error in diagnostics["errors"]))
+        self.assertEqual(compare_reports(baseline, current, comparable), [])
+
+    def test_baseline_comparison_skips_only_context_incompatible_metrics(self):
+        baseline = comparable_report(10.0)
+        current = comparable_report(12.0)
+        baseline["metrics"][0]["context"] = "llvmpipe"
+        current["metrics"][0]["context"] = "NVIDIA"
+
+        diagnostics, comparable = comparison_diagnostics(baseline, current)
+
+        self.assertTrue(diagnostics["passed"])
+        self.assertEqual(comparable, {"control"})
+        self.assertEqual(
+            diagnostics["skipped_metrics"],
+            [
+                {
+                    "metric": "work",
+                    "reason": "metric context is missing or changed",
+                    "baseline_context": "llvmpipe",
+                    "current_context": "NVIDIA",
+                }
+            ],
+        )
+        self.assertEqual(
+            [item["metric"] for item in compare_reports(baseline, current, comparable)],
+            ["control"],
+        )
+
+    def test_cross_commit_comparison_does_not_compare_different_units(self):
+        baseline = report(10.0)
+        current = report(12.0)
+        current["metrics"][0]["unit"] = "seconds"
+        self.assertEqual(
+            [item["metric"] for item in compare_reports(baseline, current)],
+            ["control"],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

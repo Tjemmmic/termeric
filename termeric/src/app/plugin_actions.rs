@@ -3,6 +3,669 @@
 use super::*;
 
 impl App {
+    pub(super) fn handle_structured_plugin_completed(
+        &mut self,
+        completion: crate::plugin::structured::StructuredHandlerCompletion,
+    ) {
+        if completion.plugin_generation != self.plugin_runtime_generation
+            || !self.plugin_manager.contains(&completion.plugin_id)
+        {
+            log::debug!(
+                "Discarding stale structured plugin response {} from {:?}",
+                completion.request_id,
+                completion.plugin_id
+            );
+            return;
+        }
+        let mut continuation = completion.continuation;
+        let mut workspace_operation = None;
+        let actions = match completion.result {
+            Ok(actions) => actions
+                .into_iter()
+                .filter_map(|action| {
+                    match action {
+                    crate::plugin::structured::StructuredResponseAction::ShowMessage {
+                        message,
+                    } => Some(crate::plugin::PluginAction::ShowMessage { message }),
+                    crate::plugin::structured::StructuredResponseAction::ShowNotice {
+                        title,
+                        lines,
+                    } => Some(crate::plugin::PluginAction::ShowNotice { title, lines }),
+                    crate::plugin::structured::StructuredResponseAction::QueryWorkspace {
+                        query_id,
+                    } => {
+                        workspace_operation = Some(
+                            crate::plugin::structured::StructuredResponseAction::QueryWorkspace {
+                                query_id,
+                            },
+                        );
+                        None
+                    }
+                    crate::plugin::structured::StructuredResponseAction::QueryTerminal {
+                        query_id,
+                        tab_id,
+                        pane_id,
+                        history_lines,
+                        max_bytes,
+                    } => {
+                        workspace_operation = Some(
+                            crate::plugin::structured::StructuredResponseAction::QueryTerminal {
+                                query_id,
+                                tab_id,
+                                pane_id,
+                                history_lines,
+                                max_bytes,
+                            },
+                        );
+                        None
+                    }
+                    action @ (crate::plugin::structured::StructuredResponseAction::SelectTab {
+                        ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::FocusPane {
+                        ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::MoveTab { .. }
+                    | crate::plugin::structured::StructuredResponseAction::ResizeDivider {
+                        ..
+                    }) => {
+                        workspace_operation = Some(action);
+                        None
+                    }
+                }
+                })
+                .collect(),
+            Err(error) => {
+                log::error!(
+                    "Structured plugin {:?} request {} failed: {}",
+                    completion.plugin_id,
+                    completion.request_id,
+                    error
+                );
+                self.toasts.error(format!(
+                    "Plugin {} event handler failed: {}",
+                    completion.plugin_id, error
+                ));
+                Vec::new()
+            }
+        };
+        if let Some(operation) = workspace_operation {
+            let operation_name = match &operation {
+                crate::plugin::structured::StructuredResponseAction::QueryWorkspace { .. } => {
+                    "query"
+                }
+                crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
+                    "terminal-query"
+                }
+                crate::plugin::structured::StructuredResponseAction::SelectTab { .. } => {
+                    "select-tab"
+                }
+                crate::plugin::structured::StructuredResponseAction::FocusPane { .. } => {
+                    "focus-pane"
+                }
+                crate::plugin::structured::StructuredResponseAction::MoveTab { .. } => "move-tab",
+                crate::plugin::structured::StructuredResponseAction::ResizeDivider { .. } => {
+                    "resize-divider"
+                }
+                _ => unreachable!("only workspace operations are retained"),
+            };
+            let result = self.continue_structured_workspace_operation(
+                &completion.plugin_id,
+                operation,
+                continuation.take(),
+            );
+            if let Err(error) = result {
+                log::error!(
+                    "Structured plugin {:?} workspace {} failed: {}",
+                    completion.plugin_id,
+                    operation_name,
+                    error
+                );
+                self.toasts.error(format!(
+                    "Plugin {} workspace {} failed: {}",
+                    completion.plugin_id, operation_name, error
+                ));
+            }
+        }
+        self.execute_plugin_actions(actions);
+    }
+
+    fn continue_structured_workspace_operation(
+        &mut self,
+        plugin_id: &str,
+        operation: crate::plugin::structured::StructuredResponseAction,
+        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
+    ) -> Result<(), String> {
+        let mut invocation = continuation.ok_or_else(|| {
+            "workspace operations require a live persistent handler continuation".to_string()
+        })?;
+        match operation {
+            crate::plugin::structured::StructuredResponseAction::QueryWorkspace { query_id } => {
+                invocation.event_json =
+                    self.structured_workspace_query_event(plugin_id, &query_id)?;
+                // A query result cannot query again, but may perform one
+                // separately granted workspace mutation.
+                invocation.allow_workspace_query = false;
+            }
+            crate::plugin::structured::StructuredResponseAction::QueryTerminal {
+                query_id,
+                tab_id,
+                pane_id,
+                history_lines,
+                max_bytes,
+            } => {
+                invocation.event_json = self.structured_terminal_query_event(
+                    plugin_id,
+                    &query_id,
+                    tab_id,
+                    pane_id,
+                    history_lines,
+                    max_bytes,
+                )?;
+                // Presented terminal content is the broadest disclosure in
+                // the public API. Its result cannot initiate another query or
+                // workspace mutation; a later external event may start a new
+                // independently bounded request.
+                invocation.allow_workspace_query = false;
+                invocation.allow_workspace_actions = false;
+                invocation.allow_workspace_topology = false;
+                invocation.allow_terminal_query = false;
+            }
+            action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
+            | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
+            | crate::plugin::structured::StructuredResponseAction::MoveTab { .. }
+            | crate::plugin::structured::StructuredResponseAction::ResizeDivider {
+                ..
+            }) => {
+                invocation.event_json =
+                    self.structured_workspace_action_event(plugin_id, action)?;
+                // A mutation result is terminal for host operations.
+                invocation.allow_workspace_query = false;
+                invocation.allow_workspace_actions = false;
+                invocation.allow_workspace_topology = false;
+                invocation.allow_terminal_query = false;
+            }
+            _ => return Err("structured response did not contain a workspace operation".into()),
+        }
+        self.submit_structured_handler(invocation).map(|_| ())
+    }
+
+    fn submit_structured_handler(
+        &mut self,
+        invocation: crate::plugin::structured::StructuredHandlerInvocation,
+    ) -> Result<u64, String> {
+        let window = self
+            .window
+            .as_ref()
+            .ok_or_else(|| "structured plugin handler requires a native window".to_string())?;
+        let proxy = super::EVENT_LOOP_PROXY
+            .get()
+            .cloned()
+            .ok_or_else(|| "structured plugin event loop is unavailable".to_string())?;
+        self.structured_plugin_worker.submit(
+            window.id(),
+            self.plugin_runtime_generation,
+            invocation,
+            proxy,
+        )
+    }
+
+    pub(super) fn structured_workspace_query_event(
+        &self,
+        plugin_id: &str,
+        query_id: &str,
+    ) -> Result<String, String> {
+        const MAX_QUERY_TABS: usize = 16;
+        const MAX_QUERY_PANES: usize = 32;
+        const MAX_QUERY_DIVIDERS: usize = MAX_QUERY_PANES - 1;
+        const MAX_QUERY_METADATA_BYTES: usize = 2 * 1024;
+        const MAX_QUERY_WORKSPACE_ID_BYTES: usize = 512;
+        const MAX_QUERY_CWD_BYTES: usize = 1024;
+
+        let ctx = self.build_plugin_context();
+        let mut cwd_budget = MAX_QUERY_CWD_BYTES;
+        let (cwd, cwd_truncated) = ctx.cwd.as_deref().map_or((None, false), |cwd| {
+            let (cwd, truncated) = super::control_metadata(cwd, &mut cwd_budget);
+            (Some(cwd), truncated)
+        });
+        let mut workspace_budget = MAX_QUERY_WORKSPACE_ID_BYTES;
+        let (workspace_id, workspace_truncated) =
+            self.current_workspace_id
+                .as_deref()
+                .map_or((None, false), |workspace| {
+                    let (workspace, truncated) =
+                        super::control_metadata(workspace, &mut workspace_budget);
+                    (Some(workspace), truncated)
+                });
+        let mut budget = super::ControlInventoryBudget {
+            tabs: MAX_QUERY_TABS,
+            panes: MAX_QUERY_PANES,
+            dividers: MAX_QUERY_DIVIDERS,
+            metadata_bytes: MAX_QUERY_METADATA_BYTES - MAX_QUERY_WORKSPACE_ID_BYTES,
+        };
+        // The plugin result is scoped to this exact App/window, so no synthetic
+        // or process-global window identifier enters the public contract.
+        let window = self.control_inventory(1, &mut budget);
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "plugin_id": plugin_id,
+            "event": {
+                "type": "workspace-query-result",
+                "query_id": query_id,
+                "snapshot_schema_version": 1,
+                "active_working_directory": cwd,
+                "active_working_directory_truncated": cwd_truncated,
+                "tab_count": ctx.tab_count,
+                "active_tab_index": ctx.active_tab,
+                "terminal": {
+                    "columns": ctx.terminal_size.0,
+                    "rows": ctx.terminal_size.1,
+                },
+                "window": {
+                    "focused": window.focused,
+                    "visible": window.visible,
+                    "quick_access": window.quick_access,
+                    "workspace_id": workspace_id,
+                    "pixel_width": window.pixel_width,
+                    "pixel_height": window.pixel_height,
+                    "tabs": window.tabs,
+                    "truncated": window.truncated || workspace_truncated,
+                },
+            },
+        });
+        let encoded = serde_json::to_string(&envelope)
+            .map_err(|error| format!("could not encode workspace query result: {error}"))?;
+        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
+            return Err(format!(
+                "workspace query result exceeds {} bytes",
+                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+            ));
+        }
+        Ok(encoded)
+    }
+
+    pub(super) fn structured_workspace_action_event(
+        &mut self,
+        plugin_id: &str,
+        action: crate::plugin::structured::StructuredResponseAction,
+    ) -> Result<String, String> {
+        const MAX_ACTION_ERROR_BYTES: usize = 1024;
+
+        let event = match action {
+            crate::plugin::structured::StructuredResponseAction::SelectTab {
+                action_id,
+                tab_id,
+            } => match self.select_plugin_tab(tab_id) {
+                Ok(changed) => serde_json::json!({
+                    "type": "workspace-action-result",
+                    "action_id": action_id,
+                    "action": "select-tab",
+                    "ok": true,
+                    "tab_id": tab_id,
+                    "changed": changed,
+                    "error": null,
+                }),
+                Err(error) => {
+                    let mut budget = MAX_ACTION_ERROR_BYTES;
+                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                    serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "select-tab",
+                        "ok": false,
+                        "tab_id": tab_id,
+                        "changed": null,
+                        "error": error,
+                        "error_truncated": error_truncated,
+                    })
+                }
+            },
+            crate::plugin::structured::StructuredResponseAction::FocusPane {
+                action_id,
+                tab_id,
+                pane_id,
+            } => match self.focus_plugin_pane(tab_id, pane_id) {
+                Ok((tab_changed, pane_changed)) => serde_json::json!({
+                    "type": "workspace-action-result",
+                    "action_id": action_id,
+                    "action": "focus-pane",
+                    "ok": true,
+                    "tab_id": tab_id,
+                    "pane_id": pane_id,
+                    "tab_changed": tab_changed,
+                    "pane_changed": pane_changed,
+                    "error": null,
+                }),
+                Err(error) => {
+                    let mut budget = MAX_ACTION_ERROR_BYTES;
+                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                    serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "focus-pane",
+                        "ok": false,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "tab_changed": null,
+                        "pane_changed": null,
+                        "error": error,
+                        "error_truncated": error_truncated,
+                    })
+                }
+            },
+            crate::plugin::structured::StructuredResponseAction::MoveTab {
+                action_id,
+                tab_id,
+                destination_index,
+            } => match self.move_control_tab_within_window(tab_id, destination_index) {
+                Ok(changed) => serde_json::json!({
+                    "type": "workspace-action-result",
+                    "action_id": action_id,
+                    "action": "move-tab",
+                    "ok": true,
+                    "tab_id": tab_id,
+                    "destination_index": destination_index,
+                    "changed": changed,
+                    "error": null,
+                }),
+                Err(error) => {
+                    let mut budget = MAX_ACTION_ERROR_BYTES;
+                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                    serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "move-tab",
+                        "ok": false,
+                        "tab_id": tab_id,
+                        "destination_index": destination_index,
+                        "changed": null,
+                        "error": error,
+                        "error_truncated": error_truncated,
+                    })
+                }
+            },
+            crate::plugin::structured::StructuredResponseAction::ResizeDivider {
+                action_id,
+                tab_id,
+                divider_id,
+                ratio_millis,
+            } => match self.resize_control_divider(tab_id, divider_id, ratio_millis) {
+                Ok((previous_ratio_millis, changed)) => serde_json::json!({
+                    "type": "workspace-action-result",
+                    "action_id": action_id,
+                    "action": "resize-divider",
+                    "ok": true,
+                    "tab_id": tab_id,
+                    "divider_id": divider_id,
+                    "previous_ratio_millis": previous_ratio_millis,
+                    "ratio_millis": ratio_millis,
+                    "changed": changed,
+                    "error": null,
+                }),
+                Err(error) => {
+                    let mut budget = MAX_ACTION_ERROR_BYTES;
+                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                    serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "resize-divider",
+                        "ok": false,
+                        "tab_id": tab_id,
+                        "divider_id": divider_id,
+                        "previous_ratio_millis": null,
+                        "ratio_millis": ratio_millis,
+                        "changed": null,
+                        "error": error,
+                        "error_truncated": error_truncated,
+                    })
+                }
+            },
+            _ => return Err("structured response did not contain a workspace action".into()),
+        };
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "plugin_id": plugin_id,
+            "event": event,
+        });
+        let encoded = serde_json::to_string(&envelope)
+            .map_err(|error| format!("could not encode workspace action result: {error}"))?;
+        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
+            return Err(format!(
+                "workspace action result exceeds {} bytes",
+                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+            ));
+        }
+        Ok(encoded)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn structured_terminal_query_event(
+        &self,
+        plugin_id: &str,
+        query_id: &str,
+        tab_id: u64,
+        pane_id: u32,
+        history_lines: u16,
+        max_bytes: u32,
+    ) -> Result<String, String> {
+        if history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
+            return Err(format!(
+                "terminal query history is limited to {} lines",
+                crate::control::protocol::MAX_TEXT_HISTORY_LINES
+            ));
+        }
+        if !(1..=crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES).contains(&max_bytes) {
+            return Err(format!(
+                "terminal query bytes must be between 1 and {}",
+                crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES
+            ));
+        }
+
+        let mut attempt_bytes = max_bytes;
+        loop {
+            let event = match self.read_control_text(tab_id, pane_id, history_lines, attempt_bytes)
+            {
+                Ok((screen, included_history, text, truncated)) => serde_json::json!({
+                    "type": "terminal-query-result",
+                    "query_id": query_id,
+                    "text_schema_version": 1,
+                    "ok": true,
+                    "tab_id": tab_id,
+                    "pane_id": pane_id,
+                    "screen": screen,
+                    "requested_history_lines": history_lines,
+                    "requested_max_bytes": max_bytes,
+                    "history_lines": included_history,
+                    "text_bytes": text.len(),
+                    "text": text,
+                    "truncated": truncated || attempt_bytes < max_bytes,
+                    "error": null,
+                }),
+                Err(error) => {
+                    let mut budget = 1024;
+                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                    serde_json::json!({
+                        "type": "terminal-query-result",
+                        "query_id": query_id,
+                        "text_schema_version": 1,
+                        "ok": false,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "screen": null,
+                        "requested_history_lines": history_lines,
+                        "requested_max_bytes": max_bytes,
+                        "history_lines": null,
+                        "text_bytes": 0,
+                        "text": null,
+                        "truncated": null,
+                        "error": error,
+                        "error_truncated": error_truncated,
+                    })
+                }
+            };
+            let envelope = serde_json::json!({
+                "schema_version": 1,
+                "plugin_id": plugin_id,
+                "event": event,
+            });
+            let encoded = serde_json::to_string(&envelope)
+                .map_err(|error| format!("could not encode terminal query result: {error}"))?;
+            let limit = crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES;
+            if encoded.len() <= limit {
+                return Ok(encoded);
+            }
+            if attempt_bytes == 1 {
+                return Err(format!("terminal query result exceeds {limit} bytes"));
+            }
+            let scaled = (usize::try_from(attempt_bytes).expect("u32 fits usize") * limit
+                / encoded.len())
+            .min(usize::try_from(attempt_bytes - 1).expect("u32 fits usize"))
+            .max(1);
+            attempt_bytes = u32::try_from(scaled).expect("scaled terminal query budget fits u32");
+        }
+    }
+
+    pub(super) fn apply_diff_review_action(
+        &mut self,
+        action: crate::ui::diff_review::DiffReviewAction,
+    ) {
+        use crate::ui::diff_review::DiffReviewAction;
+
+        match action {
+            DiffReviewAction::Copy { request_id } => {
+                let raw = self.diff_review.target(request_id).and_then(|target| {
+                    self.tabs
+                        .as_ref()?
+                        .iter()
+                        .find(|(_, tab)| tab.id == target.tab_id)
+                        .and_then(|(_, tab)| tab.diff_detector.detected_by_id(target.diff_id))
+                        .map(|diff| diff.raw.clone())
+                });
+                if let Some(raw) = raw {
+                    self.copy_to_clipboard(raw, "Copied diff to clipboard");
+                } else if self.diff_review.is_awaiting(request_id) {
+                    self.toasts
+                        .warning("The reviewed diff is no longer available");
+                }
+            }
+            DiffReviewAction::Dismiss { request_id } => {
+                let target = self.diff_review.target(request_id);
+                if self.diff_review.dismiss(request_id)
+                    && let (Some(target), Some(tabs)) = (target, &mut self.tabs)
+                    && let Some(tab) = tabs.tab_mut_by_id(target.tab_id)
+                {
+                    tab.diff_detector.mark_reviewed(target.diff_id);
+                }
+            }
+            DiffReviewAction::ScrollRows { request_id, delta } => {
+                self.diff_review.scroll_rows(request_id, delta);
+            }
+            DiffReviewAction::ScrollColumns { request_id, delta } => {
+                self.diff_review.scroll_columns(request_id, delta);
+            }
+            DiffReviewAction::ScrollToTop { request_id } => {
+                self.diff_review.scroll_to_top(request_id);
+            }
+            DiffReviewAction::ScrollToBottom { request_id } => {
+                self.diff_review.scroll_to_bottom(request_id);
+            }
+            DiffReviewAction::ScrollToLeft { request_id } => {
+                self.diff_review.scroll_to_left(request_id);
+            }
+            DiffReviewAction::ScrollToRight { request_id } => {
+                self.diff_review.scroll_to_right(request_id);
+            }
+            DiffReviewAction::None => {}
+        }
+    }
+
+    pub(super) fn apply_info_overlay_action(
+        &mut self,
+        action: crate::ui::info_overlay::InfoOverlayAction,
+    ) {
+        use crate::ui::info_overlay::InfoOverlayAction;
+        match action {
+            InfoOverlayAction::Copy { request_id } => {
+                if let Some(text) = self.info_overlay.copy_text(request_id) {
+                    self.copy_to_clipboard(text, "Copied notice to clipboard");
+                }
+            }
+            InfoOverlayAction::Dismiss { request_id } => {
+                if self.info_overlay.dismiss(request_id) {
+                    // A replacement notice may have superseded a profile
+                    // picker. Any older hidden action context is obsolete too.
+                    self.pending_profile_selection = None;
+                    self.pending_runtime_plugin_management = None;
+                    self.pending_file_upload = None;
+                }
+            }
+            InfoOverlayAction::Choose {
+                request_id,
+                choice_id,
+            } => {
+                let choice_is_current = self.info_overlay.choice(request_id, &choice_id).is_some();
+                if !choice_is_current {
+                    return;
+                }
+                if self.handle_runtime_plugin_manager_choice(request_id, &choice_id) {
+                    return;
+                }
+                if self
+                    .pending_file_upload
+                    .as_ref()
+                    .is_some_and(|pending| pending.request_id == request_id)
+                    && matches!(
+                        choice_id.as_str(),
+                        "file-upload-confirm" | "file-upload-cancel"
+                    )
+                {
+                    self.info_overlay.dismiss(request_id);
+                    let upload = self.pending_file_upload.take();
+                    if choice_id == "file-upload-confirm" {
+                        if let Some(upload) = upload {
+                            self.start_file_upload(upload);
+                        }
+                    }
+                    return;
+                }
+                let selection = self
+                    .pending_profile_selection
+                    .as_ref()
+                    .filter(|pending| pending.request_id == request_id)
+                    .filter(|pending| pending.profiles.iter().any(|name| name == &choice_id))
+                    .map(|pending| (pending.plugin_id.clone(), choice_id));
+                let Some((plugin_id, profile_name)) = selection else {
+                    return;
+                };
+                self.info_overlay.dismiss(request_id);
+                self.pending_profile_selection = None;
+                self.execute_plugin_actions(vec![crate::plugin::PluginAction::ApplyProfile {
+                    plugin_id,
+                    profile_name,
+                }]);
+            }
+            InfoOverlayAction::ScrollLines { request_id, delta } => {
+                self.info_overlay.scroll_lines(request_id, delta);
+            }
+            InfoOverlayAction::ScrollColumns { request_id, delta } => {
+                self.info_overlay.scroll_columns(request_id, delta);
+            }
+            InfoOverlayAction::ScrollToTop { request_id } => {
+                self.info_overlay.scroll_to_top(request_id);
+            }
+            InfoOverlayAction::ScrollToBottom { request_id } => {
+                self.info_overlay.scroll_to_bottom(request_id);
+            }
+            InfoOverlayAction::ScrollToLeft { request_id } => {
+                self.info_overlay.scroll_to_left(request_id);
+            }
+            InfoOverlayAction::ScrollToRight { request_id } => {
+                self.info_overlay.scroll_to_right(request_id);
+            }
+            InfoOverlayAction::None => {}
+        }
+    }
+
     /// Build a PluginContext from current app state.
     pub(super) fn build_plugin_context(&self) -> PluginContext {
         let cwd = self
@@ -26,8 +689,8 @@ impl App {
     pub(super) fn dispatch_plugin_hook(&mut self, hook: crate::plugin::Hook) {
         let ctx = self.build_plugin_context();
         log::debug!(
-            "Plugin hook: {:?} (tabs={}, active={}, size={}x{})",
-            hook,
+            "Plugin hook: {} (tabs={}, active={}, size={}x{})",
+            hook.name(),
             ctx.tab_count,
             ctx.active_tab,
             ctx.terminal_size.0,
@@ -40,11 +703,12 @@ impl App {
     /// Execute a plugin command by ID.
     ///
     /// Commands that require direct App state access (review-diff, copy-diff, etc.)
-    /// are matched by suffix so they work for any AI plugin (claude-code, codex, etc.).
+    /// are matched only for the built-in AI plugin namespaces. Third-party
+    /// commands are routed to their exact owning plugin.
     pub(super) fn execute_plugin_command(&mut self, command_id: &str) {
-        // Extract the suffix after the first '.' for plugin-agnostic matching
-        if let Some(suffix) = command_id.split_once('.').map(|(_, s)| s) {
-            let plugin_id = command_id.split_once('.').map(|(p, _)| p).unwrap_or("");
+        if let Some((plugin_id, suffix)) = command_id.split_once('.')
+            && matches!(plugin_id, "claude-code" | "codex")
+        {
             match suffix {
                 "review-diff" => {
                     self.open_diff_review();
@@ -86,10 +750,10 @@ impl App {
     pub(super) fn open_diff_review(&mut self) {
         if let Some(tabs) = &self.tabs {
             // Find the first tab with unreviewed diffs
-            for (i, tab) in tabs.iter() {
+            for (_, tab) in tabs.iter() {
                 if tab.diff_detector.unreviewed_count() > 0 {
                     if let Some(diff) = tab.diff_detector.latest_unreviewed() {
-                        self.diff_review.show(diff.clone(), i);
+                        self.diff_review.show(diff, tab.id);
                         return;
                     }
                 }
@@ -117,55 +781,173 @@ impl App {
 
     /// Open the context picker modal targeting a specific plugin tab
     pub(super) fn open_context_picker_for(&mut self, plugin_id: &str) {
-        let plugin_is_open = self
-            .tabs
-            .as_ref()
-            .is_some_and(|tabs| tabs.find_plugin_tab_index(plugin_id).is_some());
-        if !plugin_is_open {
+        let Some((cwd, target)) = self.tabs.as_ref().and_then(|tabs| {
+            let (_, tab) = tabs.iter().find(|(_, tab)| {
+                !tab.closed
+                    && !tab.is_closing()
+                    && matches!(
+                        &tab.tab_type,
+                        crate::tabs::TabType::Plugin { plugin_id: id } if id == plugin_id
+                    )
+            })?;
+            let origin = if let Some(panes) = &tab.pane_manager {
+                crate::tabs::TerminalEventOrigin::Pane {
+                    tab_id: tab.id,
+                    pane_id: panes.focused_id(),
+                }
+            } else {
+                crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
+            };
+            let cwd = tab.working_directory().or_else(|| {
+                tabs.iter()
+                    .find(|(_, candidate)| !candidate.closed)
+                    .and_then(|(_, candidate)| candidate.working_directory())
+            });
+            Some((
+                cwd,
+                crate::ui::context_picker::ContextTarget {
+                    plugin_id: plugin_id.to_string(),
+                    origin,
+                },
+            ))
+        }) else {
             self.toasts
                 .warning(format!("Open {plugin_id} before inserting context"));
             return;
-        }
-        let cwd = if let Some(tabs) = &self.tabs {
-            tabs.plugin_tab_cwd(plugin_id).or_else(|| {
-                tabs.iter()
-                    .find(|(_, t)| !t.closed)
-                    .and_then(|(_, t)| t.working_directory())
-            })
-        } else {
-            None
         };
-        self.context_picker.target_plugin_id = Some(plugin_id.to_string());
-        self.context_picker.open(cwd);
+        self.context_picker.open(cwd, target);
     }
 
-    /// Gather context and inject it into the target plugin tab
-    pub(super) fn inject_context(&mut self) {
-        // Get terminal output from active shell tab (if selected)
+    pub(super) fn apply_context_picker_action(
+        &mut self,
+        action: crate::ui::context_picker::ContextPickerAction,
+    ) {
+        let start = matches!(
+            action,
+            crate::ui::context_picker::ContextPickerAction::Primary { request_id }
+                if self.context_picker.is_awaiting(request_id)
+                    && self.context_picker.phase()
+                        == crate::ui::context_picker::ContextPickerPhase::Sources
+        );
+        let request_id = self.context_picker.request_id();
+        self.context_picker.apply(action);
+        if start {
+            self.start_context_gather(request_id);
+        }
+    }
+
+    fn start_context_gather(&mut self, request_id: u64) {
         let terminal_output = if let Some(tabs) = &self.tabs {
-            // Get output from the first non-plugin tab
             tabs.iter()
-                .find(|(_, t)| matches!(t.tab_type, crate::tabs::TabType::Shell) && !t.closed)
-                .map(|(_, tab)| {
-                    let lines = tab.terminal.grid().export_scrollback_text();
+                .find(|(_, t)| {
+                    matches!(
+                        t.tab_type,
+                        crate::tabs::TabType::Shell | crate::tabs::TabType::Profile { .. }
+                    ) && !t.closed
+                })
+                .and_then(|(_, tab)| {
+                    let lines = tab.focused_terminal()?.grid().export_scrollback_text();
                     let start = lines.len().saturating_sub(50);
-                    lines[start..].join("\n")
+                    Some(lines[start..].join("\n"))
                 })
         } else {
             None
         };
-
-        let assembled = self.context_picker.gather(terminal_output);
-
-        // Inject into the target plugin tab's PTY
-        let Some(target) = self.context_picker.target_plugin_id.clone() else {
-            self.toasts.warning("No plugin selected for context");
-            self.context_picker.dismiss();
+        let Some(request) = self
+            .context_picker
+            .begin_gather(request_id, terminal_output)
+        else {
             return;
         };
-        self.inject_context_to_plugin(&target, &assembled);
+        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+            self.handle_context_gathered(
+                request_id,
+                Err("Context gathering requires a native window".into()),
+            );
+            return;
+        };
+        let Some(proxy) = super::EVENT_LOOP_PROXY.get().cloned() else {
+            self.handle_context_gathered(
+                request_id,
+                Err("Context gathering event channel is unavailable".into()),
+            );
+            return;
+        };
+        let spawn = std::thread::Builder::new()
+            .name("termeric-context-gather".into())
+            .spawn(move || {
+                let result = crate::ui::context_picker::gather_context(request);
+                let _ = proxy.send_event(super::AppEvent::ContextGathered {
+                    window_id,
+                    request_id,
+                    result,
+                });
+            });
+        if let Err(error) = spawn {
+            self.handle_context_gathered(
+                request_id,
+                Err(format!("Could not start context gathering: {error}")),
+            );
+        }
+    }
 
-        self.context_picker.dismiss();
+    pub(super) fn handle_context_gathered(
+        &mut self,
+        request_id: u64,
+        result: Result<String, String>,
+    ) {
+        use crate::ui::context_picker::ContextPickerCompletion;
+        match self.context_picker.complete(request_id, result) {
+            ContextPickerCompletion::Ignored => return,
+            ContextPickerCompletion::Failed => {}
+            ContextPickerCompletion::Ready { target, text } => {
+                self.inject_context_to_target(&target, &text);
+            }
+        }
+        self.redraw_scheduler
+            .request(super::redraw_scheduler::RedrawReason::WindowEvent);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn inject_context_to_target(
+        &mut self,
+        target: &crate::ui::context_picker::ContextTarget,
+        text: &str,
+    ) -> bool {
+        let destination_matches = self.tabs.as_ref().is_some_and(|tabs| {
+            let tab_id = match target.origin {
+                crate::tabs::TerminalEventOrigin::Tab { tab_id }
+                | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id,
+            };
+            tabs.iter().any(|(_, tab)| {
+                tab.id == tab_id
+                    && !tab.closed
+                    && !tab.is_closing()
+                    && matches!(
+                        &tab.tab_type,
+                        crate::tabs::TabType::Plugin { plugin_id }
+                            if plugin_id == &target.plugin_id
+                    )
+            })
+        });
+        let injected = format!("\n--- Context ---\n{text}\n--- End Context ---\n");
+        let written = destination_matches
+            && self.tabs.as_mut().is_some_and(|tabs| {
+                tabs.write_user_to_origin(target.origin, injected.as_bytes())
+                    .is_ok()
+            });
+        if written {
+            self.toasts
+                .success(format!("Context sent to {}", target.plugin_id));
+        } else {
+            self.toasts.warning(format!(
+                "The original {} context destination is no longer writable",
+                target.plugin_id
+            ));
+        }
+        written
     }
 
     /// Export the session transcript for a plugin tab to a Markdown file.
@@ -234,10 +1016,11 @@ impl App {
         }
 
         // Fallback: export raw scrollback text
-        let content = tabs.iter().find(|(i, _)| *i == idx).map(|(_, t)| {
-            let lines = t.terminal.grid().export_scrollback_text();
-            lines.join("\n")
-        });
+        let content = tabs
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .and_then(|(_, tab)| tab.focused_terminal())
+            .map(|terminal| terminal.grid().export_scrollback_text().join("\n"));
 
         if let Some(text) = content {
             if text.trim().is_empty() {
@@ -305,7 +1088,10 @@ impl App {
         }
 
         if let Some(tab) = tabs.active_tab_mut() {
-            let lines = tab.terminal.grid().export_scrollback_text();
+            let Some(terminal) = tab.focused_terminal_mut() else {
+                return;
+            };
+            let lines = terminal.grid().export_scrollback_text();
             let error_pos = lines.iter().rposition(|line| {
                 let lower = line.to_lowercase();
                 lower.contains("error")
@@ -315,7 +1101,7 @@ impl App {
             });
             if let Some(pos) = error_pos {
                 let offset = lines.len().saturating_sub(pos);
-                tab.terminal.grid_mut().set_scroll_offset(offset);
+                terminal.grid_mut().set_scroll_offset(offset);
                 log::info!("Jumped to error at line {} in '{}'", pos, plugin_id);
             } else {
                 log::info!("No errors found in '{}' tab output", plugin_id);
@@ -332,47 +1118,26 @@ impl App {
 
         for action in actions {
             match action {
+                PluginAction::InvokeStructuredHandler { invocation } => {
+                    let plugin_id = invocation.plugin_id.clone();
+                    if let Err(error) = self.submit_structured_handler(invocation) {
+                        log::debug!(
+                            "Skipping structured plugin handler {:?}: {}",
+                            plugin_id,
+                            error
+                        );
+                        self.toasts.error(error);
+                    }
+                }
                 PluginAction::OpenTab {
                     program,
                     args,
                     cwd,
                     title,
                     plugin_id,
+                    profile,
                     env,
                 } => {
-                    // Proactively check if the binary actually works before spawning a tab.
-                    // We try running it with --version; if the binary doesn't exist or
-                    // immediately fails, we show an in-app overlay instead of opening
-                    // a ghost tab that exits instantly.
-                    let binary_works = std::process::Command::new(&program)
-                        .arg("--version")
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false);
-
-                    if !binary_works {
-                        self.info_overlay.show(
-                            format!("Plugin: '{}' not available", program),
-                            vec![
-                                format!("The '{}' binary could not be found or", program),
-                                "is not working correctly.".into(),
-                                String::new(),
-                                "Please install it and ensure it is in your PATH,".into(),
-                                "then try again.".into(),
-                            ],
-                        );
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
-                        log::warn!(
-                            "Plugin binary '{}' not available, showing info overlay",
-                            program
-                        );
-                        continue;
-                    }
-
                     let tab_type = plugin_id.map(|id| TabType::Plugin { plugin_id: id });
                     if let Some(tabs) = &mut self.tabs {
                         match tabs.new_tab_with_command(
@@ -384,6 +1149,11 @@ impl App {
                             env,
                         ) {
                             Ok(id) => {
+                                if let Some(profile) = profile
+                                    && let Some(tab) = tabs.active_tab_mut()
+                                {
+                                    tab.set_plugin_profile(profile);
+                                }
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
                                 self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated {
                                     tab_id: id,
@@ -497,7 +1267,6 @@ impl App {
                                     // Start recording — create a new TranscriptRecorder
                                     if let Some(base) = crate::session::sessions_base_dir() {
                                         let transcript_dir = base.join("transcripts");
-                                        let _ = std::fs::create_dir_all(&transcript_dir);
                                         match crate::session::transcript::TranscriptRecorder::new(
                                             &transcript_dir,
                                             session.repo_name.as_deref(),
@@ -546,17 +1315,36 @@ impl App {
                                     }
                                 } else {
                                     // Stop recording — drop the recorder
-                                    if let Some(recorder) = tab.stop_transcript() {
+                                    if let Some(mut recorder) = tab.stop_transcript() {
                                         let path = recorder.path().display().to_string();
-                                        drop(recorder);
-                                        log::info!("Transcript recording stopped: {}", path);
-                                        self.info_overlay.show(
-                                            "Transcript Stopped".to_string(),
-                                            vec![
-                                                "Transcript saved to:".into(),
-                                                format!("  {}", path),
-                                            ],
-                                        );
+                                        match recorder.finish(std::time::Duration::from_millis(500))
+                                        {
+                                            Ok(()) => {
+                                                log::info!(
+                                                    "Transcript recording stopped: {}",
+                                                    path
+                                                );
+                                                self.info_overlay.show(
+                                                    "Transcript Stopped".to_string(),
+                                                    vec![
+                                                        "Transcript saved to:".into(),
+                                                        format!("  {}", path),
+                                                    ],
+                                                );
+                                            }
+                                            Err(error) => {
+                                                log::error!(
+                                                    "Transcript shutdown incomplete: {error}"
+                                                );
+                                                self.info_overlay.show(
+                                                    "Transcript Incomplete".to_string(),
+                                                    vec![
+                                                        format!("Could not durably flush: {error}"),
+                                                        format!("Partial path: {path}"),
+                                                    ],
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -596,9 +1384,17 @@ impl App {
                         );
                     } else {
                         let mut lines = vec!["Press a number key to select:".into(), String::new()];
+                        let mut choices = Vec::new();
                         for (i, name) in profiles.iter().enumerate() {
                             if i < 9 {
+                                let source_line = lines.len();
                                 lines.push(format!("  {}  {}", i + 1, name));
+                                choices.push(crate::ui::info_overlay::InfoOverlayChoice::new(
+                                    name,
+                                    name,
+                                    source_line,
+                                    char::from_digit((i + 1) as u32, 10),
+                                ));
                             }
                         }
                         // Also show current profile
@@ -615,9 +1411,16 @@ impl App {
                                 }
                             }
                         }
-                        self.info_overlay
-                            .show(format!("Select Profile — {}", plugin_id), lines);
-                        self.pending_profile_selection = Some((plugin_id, profiles));
+                        let request_id = self.info_overlay.show_choices(
+                            format!("Select Profile — {}", plugin_id),
+                            lines,
+                            choices,
+                        );
+                        self.pending_profile_selection = Some(PendingProfileSelection {
+                            request_id,
+                            plugin_id,
+                            profiles,
+                        });
                     }
                     if let Some(window) = &self.window {
                         window.request_redraw();
@@ -631,9 +1434,10 @@ impl App {
                         .tabs
                         .as_mut()
                         .and_then(|tabs| tabs.plugin_tab_mut(&plugin_id))
-                        .and_then(|tab| tab.ai_session.as_mut())
-                        .map(|session| {
-                            session.profile = profile_name.clone();
+                        .and_then(|tab| {
+                            tab.ai_session.as_ref()?;
+                            tab.set_plugin_profile(profile_name.clone());
+                            Some(())
                         })
                         .is_some();
                     if !applied {

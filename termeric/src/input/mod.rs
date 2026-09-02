@@ -6,8 +6,15 @@ mod actions;
 pub mod keybindings;
 mod keyboard;
 mod mouse;
+mod terminal_protocol;
 
 pub use actions::Action;
 pub use keybindings::ShortcutRegistry;
-pub use keyboard::key_to_bytes_with_modifiers;
+#[cfg(test)]
+pub(crate) use keyboard::encode_legacy_xterm_test;
+pub use keyboard::{encode_ime_text, key_to_bytes_for_terminal};
 pub use mouse::{MouseState, screen_to_grid};
+pub(crate) use terminal_protocol::{
+    MouseReportButton, MouseReportKind, WheelDirection, encode_focus_report, encode_mouse_report,
+    encode_paste, encode_wheel_as_cursor_key,
+};

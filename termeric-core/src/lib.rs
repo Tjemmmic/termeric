@@ -35,11 +35,22 @@ pub mod grid;
 pub mod pty;
 pub mod shell;
 pub mod term;
+pub mod unicode;
 
 // Re-export commonly used types
-pub use event::{NotificationRequest, TerminalEvent};
-pub use graphics::{GraphicsManager, ImageId, ImagePlacement, StoredImage};
-pub use grid::{Cell, CellAttrs, CellContent, CellFlags, Color, Cursor, Grid, Row};
+pub use event::{
+    ClipboardRequest, DynamicColorOperation, DynamicColorTarget, NotificationRequest, TerminalEvent,
+};
+pub use graphics::{
+    GraphicsManager, IMAGE_PLACEHOLDER, ImageId, ImagePlacement, PresentationImage, StoredImage,
+};
+pub use grid::{
+    Cell, CellAttrs, CellContent, CellFlags, CellRef, Color, ColorSpec, Cursor,
+    DEFAULT_SCROLLBACK_MEMORY_BYTES, Grid, GridMemoryUsage, Row, RowView,
+};
 pub use pty::Pty;
 pub use shell::{CommandRegion, PromptMark, ShellIntegration};
-pub use term::{Point, Selection, SelectionType, Terminal};
+pub use term::{
+    DynamicColors, Point, ReportedWorkingDirectory, Selection, SelectionType, Terminal,
+    TerminalMemoryUsage,
+};

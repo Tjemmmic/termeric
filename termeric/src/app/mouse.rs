@@ -17,6 +17,7 @@ impl App {
         let tab_bar_height = renderer.tab_bar_height();
         let chrome_bar_height = renderer.chrome_bar_height();
         let padding = renderer.padding();
+        let content_left = renderer.tab_bar_width();
         // Account for search bar height if visible
         let search_bar_height = if self.search.is_active() || self.search.has_results() {
             cell_height + 8.0 * 2.0 // Same calculation as renderer
@@ -24,30 +25,23 @@ impl App {
             0.0
         };
         let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
-        let scroll_offset = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| {
-                tabs.active_tab()
-                    .map(|tab| tab.terminal.grid().scroll_offset())
-            })
-            .and_then(|offset| i32::try_from(offset).ok())
-            .unwrap_or(0);
-        let grid_pos = screen_to_grid(
-            position.0,
-            position.1,
-            cell_width,
-            cell_height,
-            content_top, // Use content_top instead of just tab_bar_height
-            padding,
-            scroll_offset,
-        );
-
+        if state == ElementState::Pressed
+            && button != MouseButton::Left
+            && (self.settings_panel.is_active()
+                || self.commands_panel.is_open()
+                || self.session_panel.is_open()
+                || self.session_dropdown_open)
+        {
+            return;
+        }
         match state {
             ElementState::Pressed => {
                 if button == MouseButton::Left {
                     // Check if click is on the scrollbar
                     if self.is_click_on_scrollbar(position.0, position.1) {
+                        if self.focus_pane_at(position, content_top, padding) {
+                            self.refresh_focused_terminal_surfaces();
+                        }
                         self.scrollbar_dragging = true;
                         self.scroll_to_scrollbar_position(position.1);
                         if let Some(window) = &self.window {
@@ -60,62 +54,47 @@ impl App {
                     if let Some(tabs) = &self.tabs {
                         if let Some(tab) = tabs.active_tab() {
                             if let Some(ref pm) = tab.pane_manager {
-                                let local_x = position.0 as f32 - padding;
+                                let local_x = position.0 as f32 - content_left - padding;
                                 let local_y = position.1 as f32 - content_top;
-                                if pm.hit_test_divider(local_x, local_y).is_some() {
-                                    self.divider_dragging = true;
+                                if let Some(divider) = pm.divider_at(
+                                    local_x,
+                                    local_y,
+                                    crate::panes::PANE_DIVIDER_HIT_MARGIN,
+                                ) {
+                                    let pending_domain = tab
+                                        .live_domain_tab_route()
+                                        .map(|(domain, _)| domain)
+                                        .filter(|domain| {
+                                            self.pending_live_domain_controls
+                                                .iter()
+                                                .any(|pending| pending.domain_id() == *domain)
+                                        });
+                                    if pending_domain.is_some() {
+                                        self.toasts.info(
+                                            "Wait for the pending live-domain change before resizing",
+                                        );
+                                        return;
+                                    }
+                                    if tab.live_domain.is_some()
+                                        && !matches!(
+                                            divider.target,
+                                            crate::panes::DividerTarget::Domain(_)
+                                        )
+                                    {
+                                        self.toasts.error(
+                                            "Live-domain divider is missing its daemon identity",
+                                        );
+                                    } else {
+                                        self.divider_dragging = Some(DividerDrag {
+                                            tab_id: tab.id,
+                                            target: divider.target,
+                                            last_ratio_millis: divider.ratio_millis,
+                                        });
+                                    }
                                     if let Some(window) = &self.window {
                                         window.request_redraw();
                                     }
                                     return;
-                                }
-                            }
-                        }
-                    }
-
-                    // Ctrl+Click to open hyperlinks
-                    if self.modifiers.control_key() {
-                        // Check if there's a hyperlink at this position
-                        if let Some(tabs) = &self.tabs {
-                            if let Some(tab) = tabs.active_tab() {
-                                let grid = tab.terminal.grid();
-                                // grid_pos.row is already scroll-adjusted
-                                let row = grid_pos.row;
-                                let col = grid_pos.col;
-
-                                // For visible grid, row should be non-negative
-                                if row >= 0 {
-                                    if let Some(cell) = grid.cell(row as usize, col) {
-                                        if let Some(hyperlink_id) = cell.hyperlink_id {
-                                            if let Some(url) =
-                                                tab.terminal.get_hyperlink_url(hyperlink_id)
-                                            {
-                                                log::info!("Opening hyperlink: {}", url);
-                                                if let Err(e) =
-                                                    crate::terminal::url::UrlDetector::open_url(url)
-                                                {
-                                                    log::error!("Failed to open URL: {}", e);
-                                                }
-                                                return;
-                                            }
-                                        }
-                                    }
-
-                                    // Fallback: check auto-detected URLs via UrlCache
-                                    if row >= 0 {
-                                        if let Some(detected) =
-                                            self.url_cache.url_at(row as usize, col)
-                                        {
-                                            let url = &detected.url;
-                                            log::info!("Opening auto-detected URL: {}", url);
-                                            if let Err(e) =
-                                                crate::terminal::url::UrlDetector::open_url(url)
-                                            {
-                                                log::error!("Failed to open URL: {}", e);
-                                            }
-                                            return;
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -135,8 +114,13 @@ impl App {
                             if let Some(size) = window_size {
                                 let tab_infos =
                                     self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
-                                if renderer.tab_bar_hit_test(px, py, &tab_infos, size.width as f32)
-                                    == crate::renderer::TabBarClick::Gear
+                                if renderer.tab_bar_hit_test(
+                                    px,
+                                    py,
+                                    &tab_infos,
+                                    size.width as f32,
+                                    size.height as f32,
+                                ) == crate::renderer::TabBarClick::Gear
                                 {
                                     self.toggle_settings_surface();
                                     if let Some(window) = &self.window {
@@ -151,7 +135,6 @@ impl App {
                         if self.commands_panel.is_open() {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
-                                use crate::ui::commands::panel::CommandsPanelAction;
                                 let info = self.commands_panel.build_info(&self.config.commands);
                                 let action = renderer.commands_panel_hit_test(
                                     px,
@@ -162,95 +145,7 @@ impl App {
                                     info.animation,
                                     &info.edit_mode,
                                 );
-                                match action {
-                                    CommandsPanelAction::Run(idx) => {
-                                        if let Some(cmd) = self.config.commands.get(idx) {
-                                            let command = cmd.command.clone();
-                                            self.commands_panel.close();
-                                            self.run_custom_command(&command);
-                                        }
-                                    }
-                                    CommandsPanelAction::Delete(idx) => {
-                                        if idx < self.config.commands.len() {
-                                            let name = self.config.commands[idx].name.clone();
-                                            self.config.commands.remove(idx);
-                                            log::info!("Deleted custom command '{}'", name);
-                                            match self.save_config() {
-                                                Ok(msg) => {
-                                                    log::info!("{}", msg);
-                                                    self.toasts.success(format!(
-                                                        "Deleted command '{}'",
-                                                        name
-                                                    ));
-                                                }
-                                                Err(e) => {
-                                                    log::error!(
-                                                        "Deleted '{}' but save failed: {}",
-                                                        name,
-                                                        e
-                                                    );
-                                                    self.toasts
-                                                        .error(format!("Save failed: {}", e));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    CommandsPanelAction::AddSubmit { name, command } => {
-                                        if name == "SAVE" && command == "SAVE" {
-                                            // Save button clicked
-                                            if let Some(cmd) = self.commands_panel.try_submit() {
-                                                let cmd_name = cmd.name.clone();
-                                                self.config.commands.push(cmd);
-                                                match self.save_config() {
-                                                    Ok(msg) => {
-                                                        log::info!("{}", msg);
-                                                        self.toasts.success(format!(
-                                                            "Saved command '{}'",
-                                                            cmd_name
-                                                        ));
-                                                    }
-                                                    Err(e) => {
-                                                        log::error!(
-                                                            "Failed to save custom command: {}",
-                                                            e
-                                                        );
-                                                        self.toasts
-                                                            .error(format!("Save failed: {}", e));
-                                                    }
-                                                }
-                                            } else {
-                                                // Form was incomplete — give feedback.
-                                                self.toasts
-                                                    .warning("Both name and command are required");
-                                            }
-                                        } else if name.is_empty() && command.is_empty() {
-                                            // Click on "+ New Command" button => start editing
-                                            self.commands_panel.start_add();
-                                        } else {
-                                            // Actually add the command
-                                            self.config.commands.push(
-                                                crate::config::CustomCommand {
-                                                    name,
-                                                    command,
-                                                    alias: None,
-                                                },
-                                            );
-                                            if let Ok(msg) = self.save_config() {
-                                                log::info!("{}", msg);
-                                            }
-                                        }
-                                    }
-                                    CommandsPanelAction::ClickName => {
-                                        self.commands_panel.focus_name();
-                                    }
-                                    CommandsPanelAction::ClickCommand => {
-                                        self.commands_panel.focus_command();
-                                    }
-                                    CommandsPanelAction::Close => {
-                                        self.commands_panel.close();
-                                    }
-                                    CommandsPanelAction::None => {}
-                                }
+                                self.apply_commands_panel_action(action);
                                 if let Some(window) = &self.window {
                                     window.request_redraw();
                                 }
@@ -262,82 +157,19 @@ impl App {
                         if self.session_panel.is_open() {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
-                                use crate::session::panel::SessionPanelAction;
+                                let info = self.session_panel.build_info();
                                 let action = renderer.session_panel_hit_test(
                                     px,
                                     py,
                                     self.session_panel.sessions(),
+                                    info.workspaces,
+                                    info.rename_text.is_some(),
+                                    info.scroll_offset,
                                     size.width as f32,
                                     size.height as f32,
-                                    self.session_panel.build_info().animation,
+                                    info.animation,
                                 );
-                                match action {
-                                    SessionPanelAction::Load(name) => {
-                                        use crate::session::restore::restore_named_session;
-                                        match restore_named_session(&name) {
-                                            Ok(Some(session)) => {
-                                                if let Some(tabs) = &mut self.tabs {
-                                                    match tabs.new_tab_from_session(&session) {
-                                                        Ok(_) => {
-                                                            log::info!(
-                                                                "Loaded session '{}' from panel",
-                                                                name
-                                                            );
-                                                            self.toasts.success(format!(
-                                                                "Restored session '{}'",
-                                                                name
-                                                            ));
-                                                        }
-                                                        Err(e) => {
-                                                            log::error!(
-                                                                "Failed to restore session: {}",
-                                                                e
-                                                            );
-                                                            self.toasts.error(format!(
-                                                                "Restore failed: {e:#}"
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Ok(None) => {
-                                                log::warn!("Session '{}' not found", name);
-                                                self.toasts.warning(format!(
-                                                    "Session '{}' not found",
-                                                    name
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                log::error!("Failed to load session: {}", e);
-                                                self.toasts.error(format!("Load failed: {}", e));
-                                            }
-                                        }
-                                        self.session_panel.close();
-                                    }
-                                    SessionPanelAction::Delete(name) => {
-                                        match crate::session::delete_session(&name) {
-                                            Ok(()) => {
-                                                log::info!("Deleted session '{}'", name);
-                                                self.toasts
-                                                    .success(format!("Deleted session '{}'", name));
-                                            }
-                                            Err(e) => {
-                                                log::error!(
-                                                    "Failed to delete session '{}': {}",
-                                                    name,
-                                                    e
-                                                );
-                                                self.toasts.error(format!("Delete failed: {}", e));
-                                            }
-                                        }
-                                        // Refresh the list
-                                        self.session_panel.refresh_sessions();
-                                    }
-                                    SessionPanelAction::Close => {
-                                        self.session_panel.close();
-                                    }
-                                    SessionPanelAction::None => {}
-                                }
+                                self.apply_session_panel_action(action);
                                 if let Some(window) = &self.window {
                                     window.request_redraw();
                                 }
@@ -359,48 +191,13 @@ impl App {
                                 );
                                 match click {
                                     SessionDropdownClick::LoadSession(name) => {
-                                        use crate::session::restore::restore_named_session;
-                                        match restore_named_session(&name) {
-                                            Ok(Some(session)) => {
-                                                if let Some(tabs) = &mut self.tabs {
-                                                    match tabs.new_tab_from_session(&session) {
-                                                        Ok(_) => {
-                                                            log::info!("Loaded session '{}'", name);
-                                                            self.toasts.success(format!(
-                                                                "Restored session '{}'",
-                                                                name
-                                                            ));
-                                                        }
-                                                        Err(e) => {
-                                                            log::error!(
-                                                                "Failed to restore session: {}",
-                                                                e
-                                                            );
-                                                            self.toasts.error(format!(
-                                                                "Restore failed: {e:#}"
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            Ok(None) => {
-                                                log::warn!("Session '{}' not found", name);
-                                                self.toasts.warning(format!(
-                                                    "Session '{}' not found",
-                                                    name
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                log::error!("Failed to load session: {}", e);
-                                                self.toasts.error(format!("Load failed: {e:#}"));
-                                            }
-                                        }
+                                        self.restore_saved_session(&name);
                                         self.session_dropdown_open = false;
                                     }
 
                                     SessionDropdownClick::ManageSessions => {
                                         self.session_dropdown_open = false;
-                                        self.session_panel.open();
+                                        self.session_panel.open_sessions();
                                     }
                                     SessionDropdownClick::Dismiss => {
                                         self.session_dropdown_open = false;
@@ -438,7 +235,7 @@ impl App {
                             }
                         }
 
-                        if py < renderer.tab_bar_height() {
+                        if py < renderer.tab_bar_height() || px < renderer.tab_bar_width() {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
                                 use crate::renderer::TabBarClick;
@@ -449,45 +246,23 @@ impl App {
                                     py,
                                     &tab_infos,
                                     size.width as f32,
+                                    size.height as f32,
                                 );
                                 match click {
                                     TabBarClick::Gear => {
                                         self.toggle_settings_surface();
                                     }
                                     TabBarClick::NewTab => {
-                                        if let Some(tabs) = &mut self.tabs {
-                                            match tabs.new_tab() {
-                                                Ok(id) => {
-                                                    log::info!("Created new tab {} via mouse", id);
-                                                    self.maybe_show_splash(true);
-                                                    self.dispatch_plugin_hook(
-                                                        crate::plugin::Hook::TabCreated {
-                                                            tab_id: id,
-                                                        },
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    log::error!("Failed to create new tab: {}", e)
-                                                }
-                                            }
-                                        }
+                                        self.request_new_tab();
+                                    }
+                                    TabBarClick::PreviousTab => {
+                                        self.handle_action(crate::input::Action::PrevTab);
+                                    }
+                                    TabBarClick::NextTab => {
+                                        self.handle_action(crate::input::Action::NextTab);
                                     }
                                     TabBarClick::CloseTab(idx) => {
-                                        let tab_id = self.tabs.as_ref().and_then(|t| {
-                                            t.iter().find(|(i, _)| *i == idx).map(|(_, tab)| tab.id)
-                                        });
-                                        if let Some(tabs) = &mut self.tabs {
-                                            tabs.close_tab(idx);
-                                            if tabs.is_empty() {
-                                                log::info!("Last tab closed, exiting");
-                                                self.should_exit = true;
-                                            }
-                                        }
-                                        if let Some(id) = tab_id {
-                                            self.dispatch_plugin_hook(
-                                                crate::plugin::Hook::TabClosed { tab_id: id },
-                                            );
-                                        }
+                                        self.request_close_tab(idx);
                                     }
                                     TabBarClick::Tab(idx) => {
                                         let from = self
@@ -497,8 +272,61 @@ impl App {
                                             .unwrap_or(0);
                                         if let Some(tabs) = &mut self.tabs {
                                             tabs.switch_to(idx);
+                                            self.tab_dragging = tabs.active_tab().map(|tab| {
+                                                let live =
+                                                    tab.live_domain_tab_route().map(
+                                                        |(domain_id, remote_tab_id)| {
+                                                            let initial_index =
+                                                                tabs.iter()
+                                                                    .filter(|(_, candidate)| {
+                                                                        candidate
+                                                                            .live_domain_tab_route()
+                                                                            .is_some_and(
+                                                                                |(candidate, _)| {
+                                                                                    candidate
+                                                                                        == domain_id
+                                                                                },
+                                                                            )
+                                                                    })
+                                                                    .position(|(_, candidate)| {
+                                                                        candidate
+                                                                    .live_domain_tab_route()
+                                                                    .is_some_and(|(_, candidate)| {
+                                                                        candidate == remote_tab_id
+                                                                    })
+                                                                    })
+                                                                    .unwrap_or(0)
+                                                                    as u16;
+                                                            LiveDomainTabDrag {
+                                                                domain_id: domain_id.to_string(),
+                                                                remote_tab_id,
+                                                                initial_index,
+                                                            }
+                                                        },
+                                                    );
+                                                TabDrag {
+                                                    tab_id: tab.id,
+                                                    live,
+                                                }
+                                            });
+                                        }
+                                        let live_drag_blocked = self
+                                            .tab_dragging
+                                            .as_ref()
+                                            .and_then(|drag| drag.live.as_ref())
+                                            .is_some_and(|live| {
+                                                self.pending_live_domain_controls.iter().any(
+                                                    |pending| pending.domain_id() == live.domain_id,
+                                                )
+                                            });
+                                        if live_drag_blocked {
+                                            self.tab_dragging = None;
+                                            self.toasts.info(
+                                                "Wait for the pending live-domain change before reordering",
+                                            );
                                         }
                                         if from != idx {
+                                            self.refresh_focused_terminal_surfaces();
                                             self.dispatch_plugin_hook(
                                                 crate::plugin::Hook::TabSwitched { from, to: idx },
                                             );
@@ -527,46 +355,48 @@ impl App {
                     }
 
                     // Intercept clicks for search bar
-                    if self.search.is_active() || self.search.has_results() {
+                    if self.search.is_active()
+                        || self.search.has_results()
+                        || self.search.is_searching()
+                    {
                         if let Some(renderer) = &self.renderer {
                             let window_size = self.window.as_ref().map(|w| w.inner_size());
                             if let Some(size) = window_size {
                                 use crate::renderer::SearchBarClick;
+                                let info = self.search.build_info(self.search_cursor_pos);
                                 let click = renderer.search_bar_hit_test(
                                     position.0 as f32,
                                     position.1 as f32,
                                     size.width as f32,
-                                    self.search.match_count(),
-                                    self.search.current_match_index(),
-                                    self.search.query().is_empty(),
-                                    self.search.is_filter_mode(),
-                                    self.search.matching_line_count(),
+                                    &info,
                                 );
-                                let grid_ref = self.tabs.as_ref().and_then(|tabs| {
-                                    tabs.active_tab().map(|tab| tab.terminal.grid())
-                                });
-
                                 match click {
                                     SearchBarClick::ToggleCaseSensitive => {
-                                        if let Some(grid) = grid_ref {
-                                            self.search.toggle_case_sensitive(grid);
-                                        }
+                                        self.with_search_and_active_grid(|search, grid| {
+                                            search.toggle_case_sensitive(grid);
+                                        });
                                         if let Some(window) = &self.window {
                                             window.request_redraw();
                                         }
                                         return;
                                     }
                                     SearchBarClick::ToggleRegex => {
-                                        if let Some(grid) = grid_ref {
-                                            self.search.toggle_regex(grid);
-                                        }
+                                        self.with_search_and_active_grid(|search, grid| {
+                                            search.toggle_regex(grid);
+                                        });
                                         if let Some(window) = &self.window {
                                             window.request_redraw();
                                         }
                                         return;
                                     }
                                     SearchBarClick::ToggleFilter => {
-                                        self.search.toggle_filter();
+                                        if self.copy_mode.is_active() {
+                                            self.toasts.warning(
+                                                "Filter mode is unavailable inside copy mode; matches remain highlighted",
+                                            );
+                                        } else {
+                                            self.search.toggle_filter();
+                                        }
                                         if let Some(window) = &self.window {
                                             window.request_redraw();
                                         }
@@ -588,38 +418,80 @@ impl App {
                                         }
                                         return;
                                     }
+                                    SearchBarClick::Close => {
+                                        self.search.cancel();
+                                        self.search_cursor_pos = 0;
+                                        if let Some(window) = &self.window {
+                                            window.request_redraw();
+                                        }
+                                        return;
+                                    }
                                     SearchBarClick::None => {}
                                 }
                             }
                         }
                     }
                 }
-                // Focus pane under click in multi-pane mode
-                if let Some(tabs) = &mut self.tabs {
-                    if let Some(tab) = tabs.active_tab_mut() {
-                        if let Some(ref mut pm) = tab.pane_manager {
-                            if let Some(renderer) = &self.renderer {
-                                let px = position.0 as f32;
-                                let py = position.1 as f32;
-                                let content_top =
-                                    renderer.tab_bar_height() + renderer.chrome_bar_height();
-                                let padding = renderer.padding();
-                                let rel_x = px - padding;
-                                let rel_y = py - content_top;
-                                let layout = pm.calculate_layout();
-                                for (id, rect) in &layout {
-                                    if rel_x >= rect.x
-                                        && rel_x < rect.x + rect.width
-                                        && rel_y >= rect.y
-                                        && rel_y < rect.y + rect.height
-                                    {
-                                        pm.focus(*id);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                if button == MouseButton::Left
+                    && self.toggle_armed_broadcast_target_at(position, content_top, padding)
+                {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
                     }
+                    return;
+                }
+                if self.focus_pane_at(position, content_top, padding) {
+                    self.refresh_focused_terminal_surfaces();
+                }
+
+                let grid_pos = self.focused_grid_position(
+                    position,
+                    cell_width,
+                    cell_height,
+                    content_top,
+                    padding,
+                );
+
+                // Ctrl+Click opens links from the pane selected by this click.
+                if self.modifiers.control_key() {
+                    let col = grid_pos.col;
+                    let semantic_url = self.active_terminal().and_then(|terminal| {
+                        terminal
+                            .grid()
+                            .row_at_offset(grid_pos.row)
+                            .and_then(|row| row.get(col))
+                            .and_then(|cell| cell.hyperlink_id)
+                            .and_then(|id| terminal.get_hyperlink_url(id))
+                    });
+                    let scroll_offset = self
+                        .active_terminal()
+                        .and_then(|terminal| i32::try_from(terminal.grid().scroll_offset()).ok())
+                        .unwrap_or(0);
+                    let visual_row = grid_pos.row.saturating_add(scroll_offset);
+                    let detected_url = usize::try_from(visual_row).ok().and_then(|row| {
+                        self.url_cache
+                            .url_at(row, col)
+                            .map(|detected| detected.url.as_str())
+                    });
+                    let url = semantic_url.or(detected_url);
+                    if let Some(url) = url {
+                        log::info!("Opening hyperlink: {}", url);
+                        if let Err(error) = crate::terminal::url::UrlDetector::open_url(url) {
+                            log::error!("Failed to open URL: {}", error);
+                        }
+                        return;
+                    }
+                }
+
+                if self.try_report_mouse_press(
+                    button,
+                    position,
+                    cell_width,
+                    cell_height,
+                    content_top,
+                    padding,
+                ) {
+                    return;
                 }
 
                 if let Some(mut selection) =
@@ -650,12 +522,90 @@ impl App {
                     // selection. Written after the terminal borrow ends.
                     self.mouse_state.selection = Some(selection);
                 }
+
+                if button != MouseButton::Left {
+                    if self.focus_pane_at(position, content_top, padding) {
+                        self.refresh_focused_terminal_surfaces();
+                    }
+                    if self.try_report_mouse_press(
+                        button,
+                        position,
+                        cell_width,
+                        cell_height,
+                        content_top,
+                        padding,
+                    ) {
+                        return;
+                    }
+                }
             }
             ElementState::Released => {
+                if self.try_report_mouse_release(
+                    button,
+                    position,
+                    cell_width,
+                    cell_height,
+                    content_top,
+                    padding,
+                ) {
+                    return;
+                }
                 if button == MouseButton::Left {
                     self.mouse_pressed = false;
                     self.scrollbar_dragging = false;
-                    self.divider_dragging = false;
+                    let divider_drag = self.divider_dragging.take();
+                    let tab_drag = self.tab_dragging.take();
+                    if let Some(DividerDrag {
+                        tab_id,
+                        target: crate::panes::DividerTarget::Domain(remote_split_id),
+                        last_ratio_millis,
+                    }) = divider_drag
+                    {
+                        let domain_id = self.tabs.as_ref().and_then(|tabs| {
+                            tabs.iter().find_map(|(_, tab)| {
+                                (tab.id == tab_id)
+                                    .then(|| tab.live_domain_tab_route())
+                                    .flatten()
+                                    .map(|(domain, _)| domain.to_string())
+                            })
+                        });
+                        if let Some(domain_id) = domain_id {
+                            self.queue_live_domain_control(LiveDomainControl::ResizeSplit {
+                                domain_id,
+                                remote_split_id,
+                                ratio_millis: last_ratio_millis,
+                            });
+                        }
+                    }
+                    if let Some(TabDrag {
+                        tab_id,
+                        live:
+                            Some(LiveDomainTabDrag {
+                                domain_id,
+                                remote_tab_id,
+                                initial_index,
+                            }),
+                    }) = tab_drag
+                    {
+                        let index = self.tabs.as_ref().and_then(|tabs| {
+                            tabs.iter()
+                                .filter(|(_, tab)| {
+                                    tab.live_domain_tab_route()
+                                        .is_some_and(|(domain, _)| domain == domain_id)
+                                })
+                                .position(|(_, tab)| tab.id == tab_id)
+                                .and_then(|index| u16::try_from(index).ok())
+                        });
+                        if let Some(index) = index
+                            && index != initial_index
+                        {
+                            self.queue_live_domain_control(LiveDomainControl::MoveTab {
+                                domain_id,
+                                remote_tab_id,
+                                index,
+                            });
+                        }
+                    }
                 }
                 // Finalize selection on release
                 let _ = self.mouse_state.handle_release(button);
@@ -679,6 +629,7 @@ impl App {
         let tab_bar_height = renderer.tab_bar_height();
         let chrome_bar_height = renderer.chrome_bar_height();
         let padding = renderer.padding();
+        let content_left = renderer.tab_bar_width();
         // Account for search bar height if visible
         let search_bar_height = if self.search.is_active() || self.search.has_results() {
             cell_height + 8.0 * 2.0 // Same calculation as renderer
@@ -686,24 +637,8 @@ impl App {
             0.0
         };
         let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
-        let scroll_offset = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| {
-                tabs.active_tab()
-                    .map(|tab| tab.terminal.grid().scroll_offset())
-            })
-            .and_then(|offset| i32::try_from(offset).ok())
-            .unwrap_or(0);
-        let grid_pos = screen_to_grid(
-            position.0,
-            position.1,
-            cell_width,
-            cell_height,
-            content_top,
-            padding,
-            scroll_offset,
-        );
+        let grid_pos =
+            self.focused_grid_position(position, cell_width, cell_height, content_top, padding);
 
         // ── Tab bar hover detection for icon animations ──
         {
@@ -711,10 +646,16 @@ impl App {
             let py = position.1 as f32;
             let window_size = self.window.as_ref().map(|w| w.inner_size());
             let tab_infos = self.tabs.as_ref().map(|t| t.tab_info()).unwrap_or_default();
-            let new_hover = if py < tab_bar_height {
+            let new_hover = if py < tab_bar_height || px < renderer.tab_bar_width() {
                 if let Some(renderer) = &self.renderer {
                     if let Some(size) = window_size {
-                        let hit = renderer.tab_bar_hit_test(px, py, &tab_infos, size.width as f32);
+                        let hit = renderer.tab_bar_hit_test(
+                            px,
+                            py,
+                            &tab_infos,
+                            size.width as f32,
+                            size.height as f32,
+                        );
                         if hit != crate::renderer::TabBarClick::None {
                             Some(hit)
                         } else {
@@ -733,6 +674,20 @@ impl App {
                 self.tab_bar_hover = new_hover;
                 self.tab_bar_hover_progress = 0.0;
             }
+            if let Some(drag) = &self.tab_dragging
+                && let Some(crate::renderer::TabBarClick::Tab(target)) = new_hover
+                && let Some(tabs) = &mut self.tabs
+            {
+                let allowed = drag.live.as_ref().is_none_or(|live| {
+                    tabs.iter()
+                        .find(|(index, _)| *index == target)
+                        .and_then(|(_, tab)| tab.live_domain_tab_route())
+                        .is_some_and(|(domain, _)| domain == live.domain_id)
+                });
+                if allowed {
+                    let _ = tabs.move_active_to(target);
+                }
+            }
         }
 
         // Handle scrollbar dragging
@@ -745,20 +700,45 @@ impl App {
         }
 
         // Handle pane divider dragging
-        if self.divider_dragging {
-            if let Some(tabs) = &mut self.tabs {
-                if let Some(tab) = tabs.active_tab_mut() {
-                    if let Some(ref mut pm) = tab.pane_manager {
-                        let local_x = position.0 as f32 - padding;
-                        let local_y = position.1 as f32 - content_top;
-                        if pm.resize_divider_at(local_x, local_y, f32::MAX) {
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
-                        }
-                    }
+        if let Some(drag) = self.divider_dragging {
+            let local_x = position.0 as f32 - content_left - padding;
+            let local_y = position.1 as f32 - content_top;
+            let ratio = self
+                .tabs
+                .as_mut()
+                .and_then(|tabs| tabs.tab_mut_by_id(drag.tab_id))
+                .and_then(|tab| tab.pane_manager.as_mut())
+                .and_then(|panes| panes.resize_divider_target(drag.target, local_x, local_y));
+            if let Some(ratio_millis) = ratio {
+                if let Some(active_drag) = &mut self.divider_dragging {
+                    active_drag.last_ratio_millis = ratio_millis;
                 }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            } else {
+                self.divider_dragging = None;
             }
+            return;
+        }
+
+        if self.info_overlay.is_active()
+            || self.diff_review.is_active()
+            || self.context_picker.is_active()
+            || self.domain_picker.is_active()
+            || self.guardrail.is_active()
+            || self.command_palette.is_active()
+            || self.shortcuts_panel.is_active()
+            || self.harvest.as_ref().is_some_and(|harvest| {
+                harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
+            })
+        {
+            return;
+        }
+
+        // The native drag-and-drop cursor remains authoritative until Winit
+        // reports DroppedFile or HoveredFileCancelled.
+        if self.file_drop_hovered {
             return;
         }
 
@@ -766,7 +746,7 @@ impl App {
         if let Some(tabs) = &self.tabs {
             if let Some(tab) = tabs.active_tab() {
                 if let Some(ref pm) = tab.pane_manager {
-                    let local_x = position.0 as f32 - padding;
+                    let local_x = position.0 as f32 - content_left - padding;
                     let local_y = position.1 as f32 - content_top;
                     if let Some(is_vertical) = pm.hit_test_divider(local_x, local_y) {
                         if let Some(window) = &self.window {
@@ -902,27 +882,21 @@ impl App {
                 let (ui_cw, cell_height) = renderer.cell_size();
                 let window_size = self.window.as_ref().map(|w| w.inner_size());
                 if let Some(size) = window_size {
-                    let window_width = size.width as f32;
-                    let anim = self.session_panel.animation_progress();
-                    let panel_width = (ui_cw * 35.0).max(320.0).min(window_width * 0.45);
-                    let panel_x = window_width - panel_width * anim;
-                    let padding_y = cell_height * 0.5;
-                    let row_height = (cell_height * 3.5).max(52.0);
-                    let title_y = cell_height * 1.5;
-                    let sep_y = title_y + cell_height * 2.0;
-                    let list_start_y = sep_y + padding_y + 4.0;
-
-                    let hovered = if px >= panel_x {
-                        let sessions = self.session_panel.sessions();
-                        let mut found = None;
-                        for i in 0..sessions.len() {
-                            let item_y = list_start_y + i as f32 * row_height;
-                            if py >= item_y && py < item_y + row_height {
-                                found = Some(i);
-                                break;
-                            }
-                        }
-                        found
+                    let info = self.session_panel.build_info();
+                    let layout = crate::session::panel::SessionPanelLayout::calculate(
+                        size.width as f32,
+                        size.height as f32,
+                        ui_cw,
+                        cell_height,
+                        info.animation,
+                        info.rename_text.is_some(),
+                        info.workspaces,
+                        info.sessions.len(),
+                    );
+                    let hovered = if px >= layout.panel.x {
+                        layout
+                            .visible_row_at(py)
+                            .map(|row| info.scroll_offset + row)
                     } else {
                         None
                     };
@@ -979,6 +953,10 @@ impl App {
             return;
         }
 
+        if self.try_report_mouse_motion(position, cell_width, cell_height, content_top, padding) {
+            return;
+        }
+
         // Only update selection when mouse is pressed (dragging)
         if self.mouse_pressed {
             if let Some(selection) = self.mouse_state.handle_move(grid_pos) {
@@ -1004,6 +982,36 @@ impl App {
             return;
         }
 
+        if self.search.is_filter_mode() && self.search.has_results() {
+            let viewport_rows = self
+                .active_terminal()
+                .map(|terminal| terminal.grid().rows())
+                .unwrap_or(0);
+            self.search.scroll_filter(delta, viewport_rows);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
+        let direction = if delta > 0.0 {
+            crate::input::WheelDirection::Up
+        } else {
+            crate::input::WheelDirection::Down
+        };
+        if self.try_report_wheel(direction) {
+            return;
+        }
+
+        let mode = self.active_keyboard_mode();
+        if !self.modifiers.shift_key()
+            && self.pointer_is_over_focused_terminal()
+            && let Some(bytes) = crate::input::encode_wheel_as_cursor_key(mode, direction)
+        {
+            self.write_terminal_protocol_input(bytes);
+            return;
+        }
+
         if let Some(terminal) = self.active_terminal_mut() {
             let lines = delta.abs().max(1.0) as usize;
             let offset = terminal.grid().scroll_offset();
@@ -1022,8 +1030,417 @@ impl App {
         }
     }
 
+    /// Horizontal wheel events are reportable to terminal applications but do
+    /// not have a native scrollback action.
+    pub(super) fn handle_horizontal_scroll(&mut self, delta: f64) {
+        if delta.abs() < 0.001 {
+            return;
+        }
+        let direction = if delta > 0.0 {
+            crate::input::WheelDirection::Left
+        } else {
+            crate::input::WheelDirection::Right
+        };
+        self.try_report_wheel(direction);
+    }
+
+    fn try_report_mouse_press(
+        &mut self,
+        button: MouseButton,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> bool {
+        if self.modifiers.shift_key() {
+            return false;
+        }
+        let Some(button) = report_button(button) else {
+            return false;
+        };
+        let mode = self.active_keyboard_mode();
+        if !mode.has_mouse_mode() {
+            return false;
+        }
+        let Some((col, row)) =
+            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
+        else {
+            return false;
+        };
+        let Some(bytes) = crate::input::encode_mouse_report(
+            mode,
+            crate::input::MouseReportKind::Press(button),
+            col,
+            row,
+            self.modifiers,
+        ) else {
+            return false;
+        };
+        if !self.write_terminal_protocol_input(&bytes) {
+            return false;
+        }
+        self.terminal_mouse_button = Some(button);
+        self.mouse_pressed = false;
+        self.mouse_state.clear_selection();
+        if let Some(terminal) = self.active_terminal_mut() {
+            terminal.set_selection(None);
+        }
+        true
+    }
+
+    fn try_report_mouse_release(
+        &mut self,
+        button: MouseButton,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> bool {
+        let Some(button) = report_button(button) else {
+            return false;
+        };
+        if self.terminal_mouse_button != Some(button) {
+            return false;
+        }
+        self.terminal_mouse_button = None;
+        let mode = self.active_keyboard_mode();
+        let Some((col, row)) =
+            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
+        else {
+            return true;
+        };
+        if let Some(bytes) = crate::input::encode_mouse_report(
+            mode,
+            crate::input::MouseReportKind::Release(button),
+            col,
+            row,
+            self.modifiers,
+        ) {
+            self.write_terminal_protocol_input(&bytes);
+        }
+        true
+    }
+
+    fn try_report_mouse_motion(
+        &mut self,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> bool {
+        let mode = self.active_keyboard_mode();
+        if !mode.has_mouse_mode() {
+            self.terminal_mouse_button = None;
+            return false;
+        }
+        if self.modifiers.shift_key() && self.terminal_mouse_button.is_none() {
+            return false;
+        }
+        let Some((col, row)) =
+            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
+        else {
+            return true;
+        };
+        if let Some(bytes) = crate::input::encode_mouse_report(
+            mode,
+            crate::input::MouseReportKind::Motion(self.terminal_mouse_button),
+            col,
+            row,
+            self.modifiers,
+        ) {
+            self.write_terminal_protocol_input(&bytes);
+        }
+        true
+    }
+
+    fn try_report_wheel(&mut self, direction: crate::input::WheelDirection) -> bool {
+        if self.modifiers.shift_key() {
+            return false;
+        }
+        let mode = self.active_keyboard_mode();
+        if !mode.has_mouse_mode() {
+            return false;
+        }
+        let Some(position) = self.last_cursor_pos else {
+            return false;
+        };
+        let Some(renderer) = &self.renderer else {
+            return false;
+        };
+        let (cell_width, cell_height) = renderer.cell_size();
+        let search_bar_height = if self.search.is_active() || self.search.has_results() {
+            cell_height + 16.0
+        } else {
+            0.0
+        };
+        let content_top =
+            renderer.tab_bar_height() + renderer.chrome_bar_height() + search_bar_height;
+        let padding = renderer.padding();
+        let Some((col, row)) =
+            self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
+        else {
+            return false;
+        };
+        let Some(bytes) = crate::input::encode_mouse_report(
+            mode,
+            crate::input::MouseReportKind::Wheel(direction),
+            col,
+            row,
+            self.modifiers,
+        ) else {
+            return false;
+        };
+        self.write_terminal_protocol_input(&bytes)
+    }
+
+    fn pointer_is_over_focused_terminal(&self) -> bool {
+        let Some(position) = self.last_cursor_pos else {
+            return false;
+        };
+        let Some(renderer) = &self.renderer else {
+            return false;
+        };
+        let (cell_width, cell_height) = renderer.cell_size();
+        let search_bar_height = if self.search.is_active() || self.search.has_results() {
+            cell_height + 16.0
+        } else {
+            0.0
+        };
+        self.protocol_grid_position(
+            position,
+            cell_width,
+            cell_height,
+            renderer.tab_bar_height() + renderer.chrome_bar_height() + search_bar_height,
+            renderer.padding(),
+        )
+        .is_some()
+    }
+
+    /// Convert a physical cursor position to a visible, zero-based cell in
+    /// the focused terminal. Protocol coordinates never include scrollback.
+    fn protocol_grid_position(
+        &self,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> Option<(usize, usize)> {
+        if !position.0.is_finite()
+            || !position.1.is_finite()
+            || cell_width <= 0.0
+            || cell_height <= 0.0
+        {
+            return None;
+        }
+        let terminal = self.active_terminal()?;
+        let content_left = self
+            .renderer
+            .as_ref()
+            .map_or(0.0, crate::renderer::Renderer::tab_bar_width);
+        let (origin_x, origin_y, viewport_width, viewport_height) = if let Some(tab) =
+            self.tabs.as_ref().and_then(TabManager::active_tab)
+            && let Some(panes) = &tab.pane_manager
+            && let Some(rect) = panes.calculate_layout().get(&panes.focused_id())
+        {
+            (
+                content_left + padding + rect.x,
+                content_top + rect.y,
+                rect.width,
+                rect.height,
+            )
+        } else {
+            (
+                content_left + padding,
+                content_top + padding,
+                terminal.cols() as f32 * cell_width,
+                terminal.rows() as f32 * cell_height,
+            )
+        };
+        protocol_cell_from_viewport(
+            position,
+            (origin_x, origin_y),
+            (viewport_width, viewport_height),
+            (cell_width, cell_height),
+            (terminal.cols(), terminal.rows()),
+        )
+    }
+
+    /// Convert a screen position through the focused pane's viewport. Pane
+    /// rectangles are relative to `content_top`; unlike single-grid mode they
+    /// already include their own edge spacing.
+    fn focused_grid_position(
+        &self,
+        position: (f64, f64),
+        cell_width: f32,
+        cell_height: f32,
+        content_top: f32,
+        padding: f32,
+    ) -> termeric_core::Point {
+        if let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab)
+            && let Some(panes) = &tab.pane_manager
+            && let Some(pane) = panes.focused_pane()
+            && let Some(rect) = panes.calculate_layout().get(&pane.id)
+        {
+            return screen_to_pane_grid(
+                position,
+                cell_width,
+                cell_height,
+                self.renderer
+                    .as_ref()
+                    .map_or(0.0, crate::renderer::Renderer::tab_bar_width),
+                content_top,
+                padding,
+                *rect,
+                pane.terminal.grid().scroll_offset(),
+            );
+        }
+
+        let scroll_offset = self
+            .active_terminal()
+            .and_then(|terminal| i32::try_from(terminal.grid().scroll_offset()).ok())
+            .unwrap_or(0);
+        screen_to_grid(
+            position.0
+                - f64::from(
+                    self.renderer
+                        .as_ref()
+                        .map_or(0.0, crate::renderer::Renderer::tab_bar_width),
+                ),
+            position.1,
+            cell_width,
+            cell_height,
+            content_top,
+            padding,
+            scroll_offset,
+        )
+    }
+
+    /// Toggle the armed broadcast membership of the pane under a content click.
+    fn toggle_armed_broadcast_target_at(
+        &mut self,
+        position: (f64, f64),
+        content_top: f32,
+        padding: f32,
+    ) -> bool {
+        if !matches!(self.broadcast, BroadcastState::Armed { .. }) {
+            return false;
+        }
+        let content_left = self
+            .renderer
+            .as_ref()
+            .map_or(0.0, crate::renderer::Renderer::tab_bar_width);
+        let local_x = position.0 as f32 - content_left - padding;
+        let local_y = position.1 as f32 - content_top;
+        let target = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|panes| {
+                panes.calculate_layout().into_iter().find_map(|(id, rect)| {
+                    (local_x >= rect.x
+                        && local_x < rect.x + rect.width
+                        && local_y >= rect.y
+                        && local_y < rect.y + rect.height)
+                        .then_some(id)
+                })
+            });
+        target.is_some_and(|target| self.toggle_armed_broadcast_target(target))
+    }
+
+    /// Focus the pane under a content click. Returns whether focus moved.
+    fn focus_pane_at(&mut self, position: (f64, f64), content_top: f32, padding: f32) -> bool {
+        let content_left = self
+            .renderer
+            .as_ref()
+            .map_or(0.0, crate::renderer::Renderer::tab_bar_width);
+        let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
+            return false;
+        };
+        let Some(panes) = &mut tab.pane_manager else {
+            return false;
+        };
+        let local_x = position.0 as f32 - content_left - padding;
+        let local_y = position.1 as f32 - content_top;
+        let target = panes.calculate_layout().into_iter().find_map(|(id, rect)| {
+            (local_x >= rect.x
+                && local_x < rect.x + rect.width
+                && local_y >= rect.y
+                && local_y < rect.y + rect.height)
+                .then_some(id)
+        });
+        let Some(target) = target else { return false };
+        if target == panes.focused_id() {
+            return false;
+        }
+        panes.focus(target);
+        let route = tab
+            .live_domain_focus_route()
+            .map(|(domain, pane)| (domain.to_string(), pane));
+        if let (Some(authority), Some((domain, pane))) = (self.live_domain_authority.clone(), route)
+        {
+            crate::domain::request_focus_background(authority, domain, pane);
+        }
+        true
+    }
+
+    /// Rebind global surfaces that intentionally describe only the focused
+    /// pane. Per-pane selection remains stored with each terminal.
+    pub(super) fn refresh_focused_terminal_surfaces(&mut self) {
+        self.reconcile_broadcast_state();
+        let active_tab_id = self.tabs.as_ref().and_then(TabManager::active_tab_id);
+        if self
+            .tab_rename
+            .as_ref()
+            .is_some_and(|rename| Some(rename.tab_id) != active_tab_id)
+            && let Some(rename) = self.tab_rename.take()
+        {
+            if let Some(tab) = self.tabs.as_mut().and_then(|tabs| {
+                tabs.all_tabs_mut()
+                    .iter_mut()
+                    .find(|tab| tab.id == rename.tab_id)
+            }) {
+                tab.set_user_title(rename.original);
+            }
+            self.toasts.info("Tab rename cancelled after focus changed");
+        }
+        // A composition belongs to the pane that owned focus when it began.
+        // Cancel it instead of displaying or committing it in another pane.
+        self.ime.clear_preedit();
+        self.mouse_state.clear_selection();
+        self.with_search_and_active_grid(|search, grid| search.refresh(grid));
+        if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut)
+            && tab
+                .focused_terminal()
+                .and_then(termeric_core::Terminal::reported_working_directory)
+                .is_some()
+        {
+            tab.update_title();
+        }
+
+        if let Some(grid) = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(crate::tabs::Tab::focused_terminal)
+            .map(termeric_core::Terminal::grid)
+        {
+            self.url_cache = UrlCache::new(grid.rows());
+            update_visible_url_cache(&mut self.url_cache, grid, &self.url_detector);
+        }
+        self.git_watcher.invalidate();
+        self.reset_cursor_blink();
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     /// Check if a click position is within the scrollbar area
-    pub(super) fn is_click_on_scrollbar(&self, x: f64, _y: f64) -> bool {
+    pub(super) fn is_click_on_scrollbar(&self, x: f64, y: f64) -> bool {
         let Some(renderer) = &self.renderer else {
             return false;
         };
@@ -1033,13 +1450,40 @@ impl App {
         let scrollbar_hit_width = 16.0_f32;
         let scrollbar_x = window_width as f32 - scrollbar_hit_width;
 
+        let search_bar_height = if self.search.is_active() || self.search.has_results() {
+            renderer.cell_height() + 16.0
+        } else {
+            0.0
+        };
+        let content_top =
+            renderer.tab_bar_height() + renderer.chrome_bar_height() + search_bar_height;
+        let padding = renderer.padding();
+        let content_left = renderer.tab_bar_width();
+
+        if let Some(panes) = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| tab.pane_manager.as_ref())
+        {
+            return panes.iter_with_layout().any(|(pane, rect)| {
+                let pane_right = content_left + padding + rect.x + rect.width;
+                let pane_top = content_top + rect.y;
+                pane.terminal.grid().scrollback_len() > 0
+                    && (x as f32) >= pane_right - scrollbar_hit_width
+                    && (x as f32) < pane_right
+                    && (y as f32) >= pane_top
+                    && (y as f32) < pane_top + rect.height
+            });
+        }
+
         // Check if there's actually scrollback content
         let has_scrollback = self
             .tabs
             .as_ref()
             .and_then(|tabs| tabs.active_tab())
-            .map(|tab| tab.terminal.grid().scrollback_len() > 0)
-            .unwrap_or(false);
+            .and_then(crate::tabs::Tab::focused_terminal)
+            .is_some_and(|terminal| terminal.grid().scrollback_len() > 0);
 
         has_scrollback && x as f32 >= scrollbar_x
     }
@@ -1059,9 +1503,17 @@ impl App {
         } else {
             0.0
         };
-        let content_top = tab_bar_height + search_bar_height;
+        let content_top = tab_bar_height + renderer.chrome_bar_height() + search_bar_height;
         let scrollbar_top = content_top + padding;
         let scrollbar_bottom = window_height as f32 - padding;
+        let (scrollbar_top, scrollbar_bottom) = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| tab.pane_manager.as_ref())
+            .and_then(|panes| panes.calculate_layout().get(&panes.focused_id()).copied())
+            .map(|rect| (content_top + rect.y, content_top + rect.y + rect.height))
+            .unwrap_or((scrollbar_top, scrollbar_bottom));
         let scrollbar_height = scrollbar_bottom - scrollbar_top;
 
         if scrollbar_height <= 0.0 {
@@ -1074,12 +1526,120 @@ impl App {
         // Invert: top of scrollbar = max scroll, bottom = 0 scroll
         let scroll_fraction = 1.0 - fraction;
 
-        if let Some(tabs) = &mut self.tabs {
-            if let Some(tab) = tabs.active_tab_mut() {
-                let max_offset = tab.terminal.grid().scrollback_len();
-                let new_offset = (scroll_fraction * max_offset as f32) as usize;
-                tab.terminal.grid_mut().set_scroll_offset(new_offset);
-            }
+        if let Some(terminal) = self.active_terminal_mut() {
+            let max_offset = terminal.grid().scrollback_len();
+            let new_offset = (scroll_fraction * max_offset as f32) as usize;
+            terminal.grid_mut().set_scroll_offset(new_offset);
         }
+    }
+}
+
+fn report_button(button: MouseButton) -> Option<crate::input::MouseReportButton> {
+    match button {
+        MouseButton::Left => Some(crate::input::MouseReportButton::Left),
+        MouseButton::Middle => Some(crate::input::MouseReportButton::Middle),
+        MouseButton::Right => Some(crate::input::MouseReportButton::Right),
+        MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => None,
+    }
+}
+
+fn protocol_cell_from_viewport(
+    position: (f64, f64),
+    origin: (f32, f32),
+    viewport: (f32, f32),
+    cell_size: (f32, f32),
+    grid_size: (usize, usize),
+) -> Option<(usize, usize)> {
+    if !position.0.is_finite()
+        || !position.1.is_finite()
+        || cell_size.0 <= 0.0
+        || cell_size.1 <= 0.0
+    {
+        return None;
+    }
+    let local_x = position.0 as f32 - origin.0;
+    let local_y = position.1 as f32 - origin.1;
+    if local_x < 0.0 || local_y < 0.0 || local_x >= viewport.0 || local_y >= viewport.1 {
+        return None;
+    }
+    let col = (local_x / cell_size.0).floor() as usize;
+    let row = (local_y / cell_size.1).floor() as usize;
+    (col < grid_size.0 && row < grid_size.1).then_some((col, row))
+}
+
+fn screen_to_pane_grid(
+    position: (f64, f64),
+    cell_width: f32,
+    cell_height: f32,
+    content_left: f32,
+    content_top: f32,
+    padding: f32,
+    rect: crate::panes::PaneRect,
+    scroll_offset: usize,
+) -> termeric_core::Point {
+    let local_x = (position.0 as f32 - content_left - padding - rect.x).max(0.0);
+    let local_y = (position.1 as f32 - content_top - rect.y).max(0.0);
+    let col = (local_x / cell_width).floor() as usize;
+    let visual_row = (local_y / cell_height).floor() as i32;
+    let scroll_offset = i32::try_from(scroll_offset).unwrap_or(i32::MAX);
+    termeric_core::Point::new(visual_row - scroll_offset, col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{protocol_cell_from_viewport, screen_to_pane_grid};
+    use crate::panes::PaneRect;
+
+    #[test]
+    fn pane_grid_coordinates_include_pane_origin_and_scrollback() {
+        let point = screen_to_pane_grid(
+            (196.0, 174.0),
+            10.0,
+            20.0,
+            50.0,
+            50.0,
+            6.0,
+            PaneRect {
+                x: 100.0,
+                y: 60.0,
+                width: 200.0,
+                height: 160.0,
+            },
+            3,
+        );
+        assert_eq!(point, termeric_core::Point::new(0, 4));
+    }
+
+    #[test]
+    fn protocol_coordinates_are_visible_one_pane_local_cells() {
+        let cell = protocol_cell_from_viewport(
+            (146.0, 174.0),
+            (106.0, 110.0),
+            (200.0, 160.0),
+            (10.0, 20.0),
+            (20, 8),
+        );
+        assert_eq!(cell, Some((4, 3)));
+    }
+
+    #[test]
+    fn protocol_coordinates_reject_chrome_edges_and_oversized_values() {
+        let args = ((6.0, 56.0), (800.0, 480.0), (10.0, 20.0), (80, 24));
+        assert_eq!(
+            protocol_cell_from_viewport((5.99, 100.0), args.0, args.1, args.2, args.3),
+            None
+        );
+        assert_eq!(
+            protocol_cell_from_viewport((806.0, 100.0), args.0, args.1, args.2, args.3),
+            None
+        );
+        assert_eq!(
+            protocol_cell_from_viewport((20_000.0, 20_000.0), args.0, args.1, args.2, args.3),
+            None
+        );
+        assert_eq!(
+            protocol_cell_from_viewport((f64::NAN, 100.0), args.0, args.1, args.2, args.3),
+            None
+        );
     }
 }
