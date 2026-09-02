@@ -340,6 +340,7 @@ termeric-core/      Library crate — terminal emulation
 - [`docs/feature-support.md`](docs/feature-support.md) — authoritative capability status and release gates
 - [`docs/terminfo.md`](docs/terminfo.md) — terminal identity, installation, compatibility fallback, and remote use
 - [`docs/integration-acceptance.md`](docs/integration-acceptance.md) — AI, shell, Harvest, and native desktop acceptance boundaries
+- [`docs/operator-acceptance.md`](docs/operator-acceptance.md) — native tool installation, ordered release commands, and manual provider checklist
 - [`docs/install.md`](docs/install.md) — install, upgrade, uninstall, and troubleshooting
 - [`docs/release-acceptance.md`](docs/release-acceptance.md) — candidate-specific Linux evidence and open checks
 - [`docs/terminal-conformance.md`](docs/terminal-conformance.md) — VT support manifest, reference traces, and fuzzing
