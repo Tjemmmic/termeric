@@ -668,8 +668,9 @@ palette resolution. A two-pane inactive-tab fixture applies distinct operations
 by stable origin. Exact behavior and the remaining native clipboard row are in
 [`osc-integration.md`](osc-integration.md).
 
-The Kitty graphics lane covers APC framing across PTY chunks, strict controls
-and base64, raw/PNG/zlib decoding, bounded uploads, capability queries, quiet and
+The Kitty graphics lane covers APC framing across PTY chunks, strict controls,
+padded and raw-unpadded standard base64, current-Kitty 128-KiB chunks,
+raw/PNG/zlib decoding, bounded uploads, capability queries, quiet and
 typed replies, placement replacement/deletion, scrolling and screen lifecycle,
 renderer cache revisions, non-unique image-number allocation/responses,
 newest/fallback lookup, numbered chunking/display/deletion, explicit-ID
@@ -691,8 +692,10 @@ and bounded frame count and memory accounting. Unix tests exercise
 temporary-file `S`/`O` ranges and deletion; ordinary-file default denial and opted-in range reads
 without deletion; safe symlinks, protected/relative/non-regular paths, identity
 checks, and oversized sparse-file bounds without invoking an external client. POSIX
-fixtures cover private shared-memory range reads, early unlink, capability
-queries, public-object and malformed-name denial, and oversized-object cleanup.
+fixtures cover private shared-memory range reads, leading-slash and
+current-Kitty bare-name addressing, early unlink, capability queries,
+public-object and malformed-name denial, and oversized-object cleanup. Early
+parse and APC-overflow fixtures prove `q=2` never emits a reply into the PTY.
 Tab/domain fixtures prove an enabled local policy reaches existing and future
 ordinary tabs and panes but is forced off for domain-owned PTYs and every GUI
 relay replica, including after config reapplication.

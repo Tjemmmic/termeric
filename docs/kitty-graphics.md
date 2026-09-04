@@ -110,8 +110,11 @@ normalized renderer; see [their capability contract](inline-images.md).
 
 ## Resource and security boundaries
 
-- One APC command is capped at 8 KiB and each direct encoded chunk at the Kitty
-  protocol's 4096-byte limit.
+- The control section of one APC command is capped at 4 KiB. Direct encoded
+  data is capped at 128 KiB per APC for interoperability with Kitty's current
+  reference client, which emits 128-KiB chunks despite the published
+  protocol's 4096-byte recommendation. The complete APC cap is the sum of
+  those independent bounds plus the separator.
 - One in-flight chunked upload is retained per terminal and is capped before
   vector growth at 64 MiB. A static image upload and an animation-frame upload
   cannot be interleaved.
@@ -140,8 +143,10 @@ normalized renderer; see [their capability contract](inline-images.md).
   and removes the unchanged temporary file even when later image decoding
   fails. The bounded local-media reads are synchronous so a query reply remains
   ordered behind validation of the advertised medium.
-- A `t=s` payload must be one POSIX name: a leading slash, no later slash or
-  NUL, and at most 255 bytes. The opened object must belong to the terminal's
+- A `t=s` payload must be one POSIX name component, optionally prefixed by the
+  conventional leading slash, with no later slash or NUL and at most 255 bytes
+  after normalization. Kitty's current bare-name form is normalized before
+  `shm_open`. The opened object must belong to the terminal's
   effective user with no group/other permission bits; non-Apple Unix targets
   additionally require a regular-file descriptor type. A second descriptor
   must identify the same device/inode before the name is unlinked; the original
@@ -191,15 +196,19 @@ normalized renderer; see [their capability contract](inline-images.md).
 - GPU textures are removed when their terminal placements disappear and are
   re-uploaded on content revision.
 - Relay metadata is capped at 4 MiB independently of the existing decoded root
-  and animation limits. Each pixel load uses Kitty's 4096-byte encoded chunk
-  limit, each domain snapshot message stays below the 64 KiB stream boundary,
+  and animation limits. Relay pixel loads continue using 3-KiB chunks below
+  both the published recommendation and the 128-KiB compatibility ceiling;
+  each domain snapshot message stays below the 64 KiB stream boundary,
   and daemon capture clones reference-counted pixel handles rather than the
   full RGBA allocation. The one-shot internal APC is disabled for ordinary
   terminals and consumes its permission on either commit or rejection.
 
-Malformed control data, base64, dimensions, PNG, compression, and interrupted
-chunks must leave no partial image behind. Error text is length-limited and
-stripped of control characters before it is written to the PTY.
+Padded and raw-unpadded standard base64 are accepted. Malformed control data,
+base64, dimensions, PNG, compression, and interrupted chunks must leave no
+partial image behind. Error text is length-limited and stripped of control
+characters before it is written to the PTY. An explicit `q=2` suppresses even
+early parser and framing-limit errors, so replies cannot leak into the invoking
+shell after a quiet client exits.
 
 ## Evidence
 
@@ -208,7 +217,9 @@ continuations, default-denied ordinary files, opted-in range reads without
 deletion, safe symlink resolution, protected/relative/non-regular-path denial,
 replacement checks, and oversized persistent files; temporary-file range reads
 and deletion; shared-memory range reads and unlinking, query behavior,
-public-object and invalid-name rejection, oversized shared-memory cleanup;
+public-object and invalid-name rejection, current-Kitty bare-name
+normalization, oversized shared-memory cleanup; current-Kitty 128-KiB chunks
+and raw-unpadded temporary-file payloads, early-error `q=2` suppression;
 anonymous IDs, allocated image-number replies, repeated-number newest/fallback
 lookup, numbered chunking, ID replacement, number deletion, eviction-index
 cleanup, accepted advisory usage hints, format-specific compressed raw/PNG

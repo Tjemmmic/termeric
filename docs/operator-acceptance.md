@@ -261,6 +261,12 @@ img2sixel assets/icons/termeric.png
 timg -pi assets/icons/termeric.png
 ```
 
+For every `kitten icat` case, success means the image is visible, the prompt
+returns normally, and neither raw `ESC_G` text nor `E2BIG`/`EINVAL` graphics
+errors appear in the terminal or become shell input. The stream case exercises
+the reference client's 128-KiB APC chunks; stdin-backed file mode exercises
+raw-unpadded base64; memory mode exercises its bare POSIX shared-memory name.
+
 For Kitty ordinary-file transfer, first verify that the same existing-filename
 request is rejected with the default security policy. Then temporarily set
 `allow_kitty_file_transfers = true` under `[security]`, restart the candidate,

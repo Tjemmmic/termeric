@@ -768,6 +768,13 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Kitty graphics now interoperates with the current `kitten icat` wire format:
+  bounded 128-KiB direct chunks, raw-unpadded standard base64, and bare POSIX
+  shared-memory names are accepted while existing image and local-media limits
+  remain enforced. Malformed or oversized commands honor `q=2` before emitting
+  any reply, preventing protocol error APCs from leaking into the invoking
+  shell after a quiet client exits.
+
 - The displayed-process soak now requires exact Kitty success replies for its
   repeated image replacements. Those commands previously used reply-suppressed
   mode, so ordinary PTY progress could hide a completely broken graphics path.

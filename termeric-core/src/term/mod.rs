@@ -23,7 +23,8 @@ use crate::ansi::Processor;
 use crate::event::TerminalEvent;
 use crate::graphics::{
     GraphicsManager, GraphicsRelaySnapshot, GraphicsResponse, ImageId, ImagePlacement,
-    KittyCommand, MAX_GRAPHICS_RELAY_METADATA_BYTES, PresentationImage, StoredImage,
+    KittyCommand, MAX_GRAPHICS_RELAY_METADATA_BYTES, MAX_KITTY_APC_BYTES, PresentationImage,
+    StoredImage,
 };
 use crate::grid::{
     Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry,
@@ -38,8 +39,6 @@ const TAB_INTERVAL: usize = 8;
 /// REP remembers one normal grapheme but does not duplicate a pathological,
 /// attacker-sized combining sequence into a compact control sequence.
 const MAX_REPEAT_GRAPHEME_BYTES: usize = 1024;
-/// APC control bytes plus the protocol's maximum 4096-byte encoded data chunk.
-const MAX_KITTY_APC_BYTES: usize = 8 * 1024;
 const MAX_GRAPHICS_RELAY_APC_BYTES: usize = 64 * 1024;
 /// Safety valve for applications that enter synchronized output and never
 /// leave it. The protocol deliberately does not prescribe a timeout; one
@@ -3544,7 +3543,6 @@ impl Terminal {
             return;
         }
         if self.graphics_apc_data.len() >= MAX_KITTY_APC_BYTES {
-            self.graphics_apc_data.clear();
             self.graphics_apc_overflow = true;
         } else {
             self.graphics_apc_data.push(byte);
@@ -3558,6 +3556,11 @@ impl Terminal {
         self.graphics_apc_active = false;
         if self.graphics_apc_overflow {
             self.graphics_apc_overflow = false;
+            if KittyCommand::suppresses_response(&self.graphics_apc_data) {
+                self.graphics_apc_data.clear();
+                return;
+            }
+            self.graphics_apc_data.clear();
             let response = GraphicsResponse::too_large("graphics APC is too large");
             self.push_event(TerminalEvent::PtyWrite(
                 response.to_escape_sequence().into_bytes(),
@@ -3609,6 +3612,9 @@ impl Terminal {
             Err(error) => {
                 log::debug!("Rejected Kitty graphics command: {error}");
                 self.graphics.abort_pending();
+                if KittyCommand::suppresses_response(payload) {
+                    return;
+                }
                 let response = GraphicsResponse::parse_error(&error.to_string());
                 self.push_event(TerminalEvent::PtyWrite(
                     response.to_escape_sequence().into_bytes(),
@@ -6627,6 +6633,40 @@ mod tests {
             event,
             TerminalEvent::PtyWrite(bytes) if bytes.starts_with(b"\x1b_Gi=0;E2BIG:")
         )));
+        assert!(term.get_image(ImageId(3)).is_none());
+    }
+
+    #[test]
+    fn current_kitty_128_kib_chunks_cross_apc_framing_without_replies() {
+        let mut term = Terminal::new(120, 40);
+        let mut first = b"\x1b_Ga=T,q=2,f=32,s=256,v=192,m=1,U=1,c=103,r=52,i=77;".to_vec();
+        first.extend(std::iter::repeat_n(b'A', 128 * 1024));
+        first.extend_from_slice(b"\x1b\\");
+        term.process(&first);
+
+        let mut final_chunk = b"\x1b_Gq=2,m=0;".to_vec();
+        final_chunk.extend(std::iter::repeat_n(b'A', 128 * 1024));
+        final_chunk.extend_from_slice(b"\x1b\\");
+        term.process(&final_chunk);
+
+        assert_eq!(
+            term.get_image(ImageId(77)).unwrap().data.len(),
+            256 * 192 * 4
+        );
+        assert!(term.drain_events().is_empty());
+    }
+
+    #[test]
+    fn kitty_q2_suppresses_parse_and_overflow_errors() {
+        let mut term = Terminal::new(8, 4);
+        term.process(b"\x1b_Ga=T,q=2;%%%\x1b\\");
+
+        let mut oversized = b"\x1b_Ga=t,q=2,i=3;".to_vec();
+        oversized.extend(std::iter::repeat_n(b'A', MAX_KITTY_APC_BYTES + 1));
+        oversized.extend_from_slice(b"\x1b\\");
+        term.process(&oversized);
+
+        assert!(term.drain_events().is_empty());
         assert!(term.get_image(ImageId(3)).is_none());
     }
 

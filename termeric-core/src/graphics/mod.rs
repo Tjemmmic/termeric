@@ -10,7 +10,7 @@ pub use image::{ImageId, ImagePlacement, ImageStorage, PresentationImage, Stored
 pub(crate) use iterm2::Iterm2Command;
 pub use kitty::{
     KittyAction, KittyCommand, KittyCompression, KittyFormat, KittyFrame, KittyMedium,
-    KittyParseError, KittyPlacement, KittyTransmission,
+    KittyParseError, KittyPlacement, KittyTransmission, MAX_APC_BYTES as MAX_KITTY_APC_BYTES,
 };
 pub use placeholder::IMAGE_PLACEHOLDER;
 pub(crate) use sixel::SixelCommand;
@@ -3623,16 +3623,22 @@ fn read_and_unlink_shared_memory(
 ) -> Result<Vec<u8>, ProtocolError> {
     const MAX_SHARED_MEMORY_NAME_BYTES: usize = 255;
 
-    if name.len() < 2
-        || name.len() > MAX_SHARED_MEMORY_NAME_BYTES
-        || name[0] != b'/'
-        || name[1..].contains(&b'/')
+    let component = name.strip_prefix(b"/").unwrap_or(name);
+    if component.is_empty()
+        || component.len() + 1 > MAX_SHARED_MEMORY_NAME_BYTES
+        || component.contains(&b'/')
     {
         return Err(ProtocolError::invalid(
             "shared-memory name must be one bounded POSIX name",
         ));
     }
-    let name = std::ffi::CString::new(name)
+    // POSIX shm_open requires a leading slash. Kitty's reference client sends
+    // the portable object component without it, so normalize that one safe
+    // form after rejecting nested names.
+    let mut normalized_name = Vec::with_capacity(component.len() + 1);
+    normalized_name.push(b'/');
+    normalized_name.extend_from_slice(component);
+    let name = std::ffi::CString::new(normalized_name)
         .map_err(|_| ProtocolError::invalid("shared-memory name contains NUL"))?;
     // SAFETY: `name` is a live NUL-terminated C string, the flags do not
     // create an object, and the returned descriptor is checked before it is
@@ -4868,6 +4874,12 @@ mod tests {
             STANDARD.encode(self.name.as_bytes())
         }
 
+        fn encoded_bare_name(&self) -> String {
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+            STANDARD.encode(&self.name.as_bytes()[1..])
+        }
+
         fn is_linked(&self) -> bool {
             use std::os::unix::io::FromRawFd;
 
@@ -5162,6 +5174,25 @@ mod tests {
         let result = manager.handle_command(command(payload.as_bytes()), false);
         assert_eq!(result.response.unwrap().error_code, Some("EINVAL"));
         assert!(!unsupported.is_linked());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_kitty_bare_shared_memory_name_is_normalized_and_unlinked() {
+        let image = TestSharedMemory::new(&[1, 2, 3, 4]);
+        let payload = format!(
+            "a=T,t=s,f=32,s=1,v=1,S=4,i=67,c=1,r=1,C=1;{}",
+            image.encoded_bare_name()
+        );
+
+        let mut manager = GraphicsManager::new();
+        let result = manager.handle_command(command(payload.as_bytes()), false);
+        assert!(result.response.unwrap().ok);
+        assert!(!image.is_linked());
+        assert_eq!(
+            manager.get_image(ImageId(67)).unwrap().data.as_ref(),
+            [1, 2, 3, 4]
+        );
     }
 
     #[cfg(unix)]

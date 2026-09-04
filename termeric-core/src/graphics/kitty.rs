@@ -1,11 +1,19 @@
 //! Strict parser for the supported Kitty graphics protocol subset.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+};
 use std::collections::HashMap;
 use std::fmt;
 
-/// Kitty limits each directly transmitted, base64-encoded chunk to 4096 bytes.
-pub const MAX_ENCODED_CHUNK_BYTES: usize = 4096;
+/// Bound the control section independently from image data.
+pub const MAX_CONTROL_BYTES: usize = 4 * 1024;
+/// Kitty's reference client currently emits 128-KiB directly transmitted,
+/// base64-encoded chunks even though the published protocol recommends 4 KiB.
+pub const MAX_ENCODED_CHUNK_BYTES: usize = 128 * 1024;
+/// Maximum bytes following APC `G`, including control data and its separator.
+pub const MAX_APC_BYTES: usize = MAX_CONTROL_BYTES + 1 + MAX_ENCODED_CHUNK_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KittyParseError(pub String);
@@ -161,12 +169,29 @@ pub struct KittyPlacement {
 }
 
 impl KittyCommand {
+    /// Return whether a command explicitly requests that all replies be
+    /// suppressed. This deliberately needs only the bounded control prefix so
+    /// malformed and oversized commands can still honor `q=2`.
+    pub fn suppresses_response(payload: &[u8]) -> bool {
+        let control_end = payload
+            .iter()
+            .position(|byte| *byte == b';')
+            .unwrap_or(payload.len())
+            .min(MAX_CONTROL_BYTES);
+        payload[..control_end]
+            .split(|byte| *byte == b',')
+            .any(|field| field == b"q=2")
+    }
+
     /// Parse the bytes following APC `G`.
     pub fn parse(payload: &[u8]) -> Result<Self, KittyParseError> {
         let (control, encoded, has_data) = match payload.iter().position(|byte| *byte == b';') {
             Some(pos) => (&payload[..pos], &payload[pos + 1..], true),
             None => (payload, &[][..], false),
         };
+        if control.len() > MAX_CONTROL_BYTES {
+            return Err(KittyParseError("control data exceeds 4096 bytes".into()));
+        }
         let control = std::str::from_utf8(control)
             .map_err(|_| KittyParseError("control data is not UTF-8".into()))?;
         let params = parse_params(control)?;
@@ -230,9 +255,7 @@ impl KittyCommand {
         }
 
         if encoded.len() > MAX_ENCODED_CHUNK_BYTES {
-            return Err(KittyParseError(
-                "direct data chunk exceeds 4096 bytes".into(),
-            ));
+            return Err(KittyParseError("direct data chunk exceeds 128 KiB".into()));
         }
         if more_chunks && encoded.len() % 4 != 0 {
             return Err(KittyParseError(
@@ -242,6 +265,7 @@ impl KittyCommand {
         let data = if has_data {
             STANDARD
                 .decode(encoded)
+                .or_else(|_| STANDARD_NO_PAD.decode(encoded))
                 .map_err(|_| KittyParseError("invalid base64 data".into()))?
         } else {
             Vec::new()
@@ -414,6 +438,33 @@ mod tests {
                 .action,
             KittyAction::Transmit
         );
+    }
+
+    #[test]
+    fn accepts_current_kitty_chunk_size_and_unpadded_local_media_payloads() {
+        let mut direct = b"a=T,q=2,f=32,s=128,v=192,m=1;".to_vec();
+        direct.extend(std::iter::repeat_n(b'A', MAX_ENCODED_CHUNK_BYTES));
+        let command = KittyCommand::parse(&direct).unwrap();
+        assert_eq!(command.data.len(), 98_304);
+        assert!(command.more_chunks);
+
+        // Captured from kitten 0.48.2 temporary-file transfer. The reference
+        // client uses raw standard base64, so the final `=` is omitted.
+        let command = KittyCommand::parse(
+            b"a=T,q=2,f=100,t=t,U=1,S=1482060;L2Rldi9zaG0va2l0dHktdHR5LWdyYXBoaWNzLXByb3RvY29sLTE4MTc4ODc1MDc",
+        )
+        .unwrap();
+        assert_eq!(
+            command.data,
+            b"/dev/shm/kitty-tty-graphics-protocol-1817887507"
+        );
+    }
+
+    #[test]
+    fn response_suppression_survives_parse_errors_but_is_control_scoped() {
+        assert!(KittyCommand::suppresses_response(b"a=T,q=2;%%%"));
+        assert!(!KittyCommand::suppresses_response(b"a=T,q=1;q=2"));
+        assert!(!KittyCommand::suppresses_response(b"a=T;payload,q=2"));
     }
 
     #[test]
