@@ -6287,7 +6287,7 @@ mod tests {
         assert_eq!(first_cell.underline_color_spec, Some(ColorSpec::Indexed(7)));
 
         let presentations = term.presentation_images();
-        assert_eq!(presentations.len(), 4);
+        assert_eq!(presentations.len(), 2);
         let positions: Vec<_> = presentations
             .iter()
             .map(|presentation| {
@@ -6301,10 +6301,8 @@ mod tests {
         assert_eq!(
             positions,
             vec![
-                (0, 0, Some([0.0, 0.0, 0.5, 0.5])),
-                (1, 0, Some([0.5, 0.0, 1.0, 0.5])),
-                (0, 1, Some([0.0, 0.5, 0.5, 1.0])),
-                (1, 1, Some([0.5, 0.5, 1.0, 1.0])),
+                (0, 0, Some([0.0, 0.0, 1.0, 0.5])),
+                (0, 1, Some([0.0, 0.5, 1.0, 1.0])),
             ]
         );
 
@@ -6312,9 +6310,9 @@ mod tests {
         // protocol placements, so editing text removes only that tile.
         term.set_cursor_position(1, 1);
         term.process(b"X");
-        assert_eq!(term.presentation_images().len(), 3);
+        assert_eq!(term.presentation_images().len(), 2);
         term.handle_graphics_command(b"a=d,d=a");
-        assert_eq!(term.presentation_images().len(), 3);
+        assert_eq!(term.presentation_images().len(), 2);
         term.handle_graphics_command(b"a=d,d=i,i=42,p=7");
         assert!(term.presentation_images().is_empty());
         assert!(term.get_image(ImageId(42)).is_some());
@@ -6466,7 +6464,7 @@ mod tests {
         source.process(b"\x1b_Ga=p,i=42,p=9,P=42,Q=8,H=-1,V=1,c=2,r=2,C=1\x1b\\");
         source.drain_events();
         let expected = source.presentation_images();
-        assert_eq!(expected.len(), 6);
+        assert_eq!(expected.len(), 4);
 
         let snapshot = source.graphics_relay_snapshot(Instant::now());
         let mut replica = Terminal::new(6, 3);
@@ -6498,7 +6496,7 @@ mod tests {
         // Deleting the restored named parent still cascades to its relative
         // child, proving that stable internal placement UIDs survived.
         replica.handle_graphics_command(b"a=d,d=i,i=42,p=8");
-        assert_eq!(replica.presentation_images().len(), 4);
+        assert_eq!(replica.presentation_images().len(), 2);
     }
 
     #[test]
@@ -6653,6 +6651,32 @@ mod tests {
             term.get_image(ImageId(77)).unwrap().data.len(),
             256 * 192 * 4
         );
+        assert!(term.drain_events().is_empty());
+    }
+
+    #[test]
+    fn current_kitty_natural_placement_uses_image_pixels_and_moves_the_cursor() {
+        let mut term = Terminal::new(100, 38);
+        term.set_pixel_geometry(800, 760);
+        let pixels = vec![0x7f; 80 * 80 * 4];
+        let payload = format!(
+            "\x1b_Ga=T,q=2,f=32,s=80,v=80;{}\x1b\\",
+            STANDARD.encode(pixels)
+        );
+
+        term.process(payload.as_bytes());
+
+        let placement = term.graphics_placements().next().unwrap();
+        assert_eq!((placement.width, placement.height), (Some(10), Some(4)));
+        assert_eq!(
+            (placement.pixel_width, placement.pixel_height),
+            (Some(80), Some(80))
+        );
+        assert_eq!(
+            (term.grid().cursor().col, term.grid().cursor().row),
+            (10, 4)
+        );
+        assert_eq!(term.presentation_images().len(), 1);
         assert!(term.drain_events().is_empty());
     }
 

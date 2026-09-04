@@ -65,9 +65,11 @@ The end-to-end PTY, terminal, storage, and GPU path supports:
   image data is released;
 - source rectangles (`x/y/w/h`), cell pixel offsets (`X/Y`), destination cell
   rectangles (`c/r`), aspect-preserving sizing when one destination dimension
-  is omitted, and z-index ordering above or below terminal text;
-- `C=1` no-movement placement, or exact cursor movement when both `c` and `r`
-  are supplied;
+  is omitted, natural pixel sizing when both are omitted, and z-index ordering
+  above or below terminal text;
+- `C=1` no-movement placement, or cursor movement using the explicit or
+  pixel-derived cell footprint. Natural and single-axis placements retain
+  exact pixel extents while cell geometry remains authoritative for scrolling;
 - quiet replies (`q=1/2`) and typed `EINVAL`, `EPERM`, `ENOENT`, `ENOPARENT`,
   `ECYCLE`, `ETOODEEP`, `ENOTSUP`, `ENOSPC`, `E2BIG`, and `EIO` failures;
 - deletion by visible screen, image/placement ID, cursor or specified cell,
@@ -93,10 +95,11 @@ temporary file. Passing an existing filename in file mode instead selects
 ordinary-file (`t=f`) transfer and works only after the user enables
 `allow_kitty_file_transfers`; stream mode remains the secure, portable default.
 `kitten icat --transfer-mode=memory image.png` exercises the POSIX shared-memory
-route. Placement commands that omit either `c` or `r` must use `C=1`; without
-the renderer's cell pixel geometry the terminal core cannot derive an exact
-cursor destination, so Termeric rejects that combination instead of returning
-a false success.
+route. Current `kitten icat` stream commands commonly omit both `c` and `r`;
+Termeric displays those at their natural pixel size and derives the scrolling
+and cursor footprint from the live PTY cell-pixel geometry. If exactly one
+destination axis is supplied, the other is derived from the source aspect
+ratio.
 
 ## Deliberately unsupported
 
@@ -189,10 +192,12 @@ normalized renderer; see [their capability contract](inline-images.md).
   dangling reference. Relative chains are capped at 32 ancestors, above the
   protocol-required minimum of eight, so resolution cost is deterministic.
 - Unicode virtual-placement prototypes have a separate 1,024-entry terminal
-  cap. At most 1,024 visible placeholder tiles are materialized per frame,
-  independently of the ordinary-placement cap. Prototypes keep their image
-  data referenced but allocate no per-cell pixel copy; renderer presentations
-  clone only the stored image's reference-counted handle.
+  cap. Adjacent compatible placeholder cells are coalesced into horizontal
+  presentation spans before the independent 1,024-instance frame cap is
+  applied. A current-client full-width image therefore costs approximately one
+  renderer instance per visible row instead of one per cell. Prototypes keep
+  their image data referenced but allocate no per-cell pixel copy; renderer
+  presentations clone only the stored image's reference-counted handle.
 - GPU textures are removed when their terminal placements disappear and are
   re-uploaded on content revision.
 - Relay metadata is capped at 4 MiB independently of the existing decoded root
@@ -227,7 +232,10 @@ local-media sizes, malformed zlib cleanup, replacement, quiet/error replies,
 Unicode virtual-placement parsing and bounded replacement, exact indexed and
 true-color IDs, diacritic inheritance, high ID bytes, aspect-preserving
 per-cell crop geometry, prototype deletion/eviction, reflow, scrollback,
-synchronized-output and alternate-screen ownership; animation frame loading,
+synchronized-output and alternate-screen ownership, horizontal presentation
+coalescing, and a current-client-sized 103-by-52 placeholder grid; natural and
+single-axis destination sizing from cell pixels, including no-`c`/`r` quiet
+transmit-and-display cursor movement; animation frame loading,
 partial edits, base inheritance, transparent blending/replacement, chunk
 continuation, composition and overflow errors, root promotion/deletion,
 finite/loading playback, exact deadlines, frame revisions, synchronized-output

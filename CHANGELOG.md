@@ -774,6 +774,11 @@ Versioning once public beta tags begin.
   remain enforced. Malformed or oversized commands honor `q=2` before emitting
   any reply, preventing protocol error APCs from leaking into the invoking
   shell after a quiet client exits.
+- Kitty placements without explicit rows or columns now render at natural
+  pixel size and derive exact cell footprints from live PTY geometry; supplying
+  one axis derives the other from the source aspect ratio. Unicode-placeholder
+  cells are coalesced into horizontal renderer spans, preventing current
+  `kitten icat` images from being truncated by the bounded instance ceiling.
 
 - The displayed-process soak now requires exact Kitty success replies for its
   repeated image replacements. Those commands previously used reply-suppressed

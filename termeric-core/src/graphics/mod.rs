@@ -99,6 +99,8 @@ pub struct GraphicsManager {
     next_placement_uid: u64,
     animations: HashMap<ImageId, AnimatedImage>,
     animation_memory: usize,
+    cell_pixel_width: u32,
+    cell_pixel_height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -565,6 +567,8 @@ impl GraphicsManager {
             next_placement_uid: 1,
             animations: HashMap::new(),
             animation_memory: 0,
+            cell_pixel_width: 8,
+            cell_pixel_height: 16,
         }
     }
 
@@ -1520,12 +1524,6 @@ impl GraphicsManager {
             };
         }
 
-        if pending.action == KittyAction::TransmitAndDisplay
-            && let Err(error) = validate_cursor_policy(&pending.placement)
-        {
-            return pending_failure(pending, error);
-        }
-
         if pending.response_id != 0 {
             self.disassociate_image_number(pending.storage_id);
             self.remove_animation(pending.storage_id);
@@ -1603,9 +1601,6 @@ impl GraphicsManager {
                 ProtocolError::invalid("display requires an image ID or image number"),
             );
         };
-        if let Err(error) = validate_cursor_policy(&cmd.placement) {
-            return failure(&cmd, error);
-        }
         self.storage.touch(id);
         let movement = match self.add_placement(
             id,
@@ -1960,8 +1955,6 @@ impl GraphicsManager {
         self.placements.retain(|existing| existing.uid != uid);
         self.virtual_placements
             .retain(|existing| existing.uid != uid);
-        let movement = (relative.is_none() && !placement.do_not_move_cursor)
-            .then_some((placement.width.unwrap_or(1), placement.height.unwrap_or(1)));
         let (image_width, image_height) = self
             .storage
             .get(image_id)
@@ -1977,6 +1970,16 @@ impl GraphicsManager {
             .source_height
             .unwrap_or(image_height.saturating_sub(source_y))
             .min(image_height.saturating_sub(source_y));
+        let display = resolve_kitty_display_geometry(
+            placement.width,
+            placement.height,
+            source_width,
+            source_height,
+            self.cell_pixel_width,
+            self.cell_pixel_height,
+        );
+        let movement = (relative.is_none() && !placement.do_not_move_cursor)
+            .then_some((display.columns, display.rows));
         self.push_placement(ManagedImagePlacement {
             uid,
             relative,
@@ -1992,10 +1995,10 @@ impl GraphicsManager {
                 source_height: Some(source_height),
                 x_offset: placement.x_offset.unwrap_or(0),
                 y_offset: placement.y_offset.unwrap_or(0),
-                width: placement.width,
-                height: placement.height,
-                pixel_width: None,
-                pixel_height: None,
+                width: Some(display.columns),
+                height: Some(display.rows),
+                pixel_width: display.pixel_width,
+                pixel_height: display.pixel_height,
                 z_index: placement.z_index.unwrap_or(0),
             },
         });
@@ -2475,7 +2478,6 @@ impl GraphicsManager {
         let cell_width = cell_width.max(1);
         let cell_height = cell_height.max(1);
         let row_offset = i64::try_from(grid.scroll_offset()).unwrap_or(i64::MAX);
-        let mut placeholder_count = 0usize;
         if self
             .virtual_placements
             .iter()
@@ -2524,9 +2526,13 @@ impl GraphicsManager {
                             origin.1 = origin.1.min(screen_row);
                         })
                         .or_insert((i64::from(screen_col), screen_row));
-                    if placeholder_count < MAX_IMAGE_PLACEMENTS {
+                    if !merge_adjacent_placeholder_presentation(
+                        placeholder_presentations.last_mut(),
+                        &presentation,
+                        cell_width,
+                    ) && placeholder_presentations.len() < MAX_IMAGE_PLACEMENTS
+                    {
                         placeholder_presentations.push(presentation);
-                        placeholder_count += 1;
                     }
                 }
             }
@@ -3001,10 +3007,9 @@ impl GraphicsManager {
     pub(crate) fn set_cell_pixel_geometry(&mut self, cell_width: u32, cell_height: u32) {
         let cell_width = cell_width.max(1);
         let cell_height = cell_height.max(1);
+        self.cell_pixel_width = cell_width;
+        self.cell_pixel_height = cell_height;
         for placement in &mut self.placements {
-            if !self.protocol_images.contains(&placement.image_id) {
-                continue;
-            }
             if let Some(pixel_width) = placement.pixel_width {
                 placement.width = Some(pixel_width.div_ceil(cell_width).max(1));
             }
@@ -3079,6 +3084,69 @@ fn placement_intersects(placement: &ImagePlacement, col: u32, row: i64) -> bool 
             < placement
                 .row
                 .saturating_add(i64::from(placement.height.unwrap_or(1)))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KittyDisplayGeometry {
+    columns: u32,
+    rows: u32,
+    pixel_width: Option<u32>,
+    pixel_height: Option<u32>,
+}
+
+fn resolve_kitty_display_geometry(
+    columns: Option<u32>,
+    rows: Option<u32>,
+    source_width: u32,
+    source_height: u32,
+    cell_width: u32,
+    cell_height: u32,
+) -> KittyDisplayGeometry {
+    let cell_width = cell_width.max(1);
+    let cell_height = cell_height.max(1);
+    let source_width = source_width.max(1);
+    let source_height = source_height.max(1);
+    let scaled = |extent: u32, numerator: u32, denominator: u32| {
+        u64::from(extent)
+            .saturating_mul(u64::from(numerator))
+            .div_ceil(u64::from(denominator))
+            .min(u64::from(u32::MAX)) as u32
+    };
+
+    match (columns, rows) {
+        (Some(columns), Some(rows)) => KittyDisplayGeometry {
+            columns,
+            rows,
+            pixel_width: None,
+            pixel_height: None,
+        },
+        (Some(columns), None) => {
+            let pixel_width = columns.saturating_mul(cell_width).max(1);
+            let pixel_height = scaled(pixel_width, source_height, source_width).max(1);
+            KittyDisplayGeometry {
+                columns,
+                rows: pixel_height.div_ceil(cell_height).max(1),
+                pixel_width: Some(pixel_width),
+                pixel_height: Some(pixel_height),
+            }
+        }
+        (None, Some(rows)) => {
+            let pixel_height = rows.saturating_mul(cell_height).max(1);
+            let pixel_width = scaled(pixel_height, source_width, source_height).max(1);
+            KittyDisplayGeometry {
+                columns: pixel_width.div_ceil(cell_width).max(1),
+                rows,
+                pixel_width: Some(pixel_width),
+                pixel_height: Some(pixel_height),
+            }
+        }
+        (None, None) => KittyDisplayGeometry {
+            columns: source_width.div_ceil(cell_width).max(1),
+            rows: source_height.div_ceil(cell_height).max(1),
+            pixel_width: Some(source_width),
+            pixel_height: Some(source_height),
+        },
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3180,6 +3248,57 @@ fn placeholder_presentation(
         ]),
         source_uv: Some([u_min as f32, v_min as f32, u_max as f32, v_max as f32]),
     })
+}
+
+fn merge_adjacent_placeholder_presentation(
+    previous: Option<&mut PresentationImage>,
+    next: &PresentationImage,
+    cell_width: u32,
+) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    let (Some(previous_rect), Some(next_rect), Some(previous_uv), Some(next_uv)) = (
+        previous.pixel_rect,
+        next.pixel_rect,
+        previous.source_uv,
+        next.source_uv,
+    ) else {
+        return false;
+    };
+    let same_row = previous.placement.row == next.placement.row;
+    let same_image = previous.image.id == next.image.id
+        && previous.image.revision == next.image.revision
+        && previous.placement.placement_id == next.placement.placement_id;
+    let same_vertical_geometry = previous_rect[1] == next_rect[1]
+        && previous_rect[3] == next_rect[3]
+        && previous_uv[1] == next_uv[1]
+        && previous_uv[3] == next_uv[3];
+    let cell_width = cell_width as f32;
+    let previous_left = previous.placement.col as f32 * cell_width + previous_rect[0];
+    let previous_right = previous_left + previous_rect[2];
+    let next_left = next.placement.col as f32 * cell_width + next_rect[0];
+    let contiguous_pixels = (previous_right - next_left).abs() <= 0.01;
+    let contiguous_texture = (previous_uv[2] - next_uv[0]).abs() <= f32::EPSILON * 8.0;
+    if !same_row
+        || !same_image
+        || !same_vertical_geometry
+        || !contiguous_pixels
+        || !contiguous_texture
+    {
+        return false;
+    }
+
+    let next_right = next_left + next_rect[2];
+    previous.pixel_rect.as_mut().unwrap()[2] = next_right - previous_left;
+    previous.source_uv.as_mut().unwrap()[2] = next_uv[2];
+    previous.placement.width = Some(
+        next.placement
+            .col
+            .saturating_sub(previous.placement.col)
+            .saturating_add(1),
+    );
+    true
 }
 
 fn placement_rect(placement: &ImagePlacement) -> PlacementRect {
@@ -3334,20 +3453,6 @@ fn clip_placement_bottom(placement: &mut ImagePlacement, visible_rows: u32, tota
         placement.pixel_height = Some(
             ((u64::from(pixel_height) * u64::from(visible_rows)) / u64::from(total_rows)) as u32,
         );
-    }
-}
-
-fn validate_cursor_policy(placement: &KittyPlacement) -> Result<(), ProtocolError> {
-    if placement.virtual_placement
-        || placement.parent_image_id.is_some()
-        || placement.do_not_move_cursor
-        || placement.width.is_some() && placement.height.is_some()
-    {
-        Ok(())
-    } else {
-        Err(ProtocolError::unsupported(
-            "C=1 or both c and r are required for exact cursor movement",
-        ))
     }
 }
 
@@ -5528,18 +5633,42 @@ mod tests {
         }
 
         let presentations = manager.presentation_images(&grid, false, 1, 1);
-        assert_eq!(presentations.len(), 4);
+        assert_eq!(presentations.len(), 2);
         for (index, presentation) in presentations.iter().enumerate() {
             assert_eq!(presentation.placement.placement_id, Some(7));
             assert_eq!(presentation.placement.z_index, -1);
-            assert_eq!(presentation.pixel_rect, Some([0.0, 0.0, 1.0, 1.0]));
-            let col = (index % 2) as f32;
-            let row = (index / 2) as f32;
+            assert_eq!(presentation.pixel_rect, Some([0.0, 0.0, 2.0, 1.0]));
+            let row = index as f32;
             assert_eq!(
                 presentation.source_uv,
-                Some([col / 2.0, row / 2.0, (col + 1.0) / 2.0, (row + 1.0) / 2.0])
+                Some([0.0, row / 2.0, 1.0, (row + 1.0) / 2.0])
             );
         }
+
+        manager.handle_command(command(b"a=p,U=1,i=42,p=8,c=103,r=52"), false);
+        let mut current_client_grid = Grid::new(103, 52);
+        for row in 0..52 {
+            for col in 0..103 {
+                let cell = current_client_grid.cell_mut(row, col).unwrap();
+                cell.set_grapheme(if col == 0 {
+                    "\u{10eeee}\u{0305}\u{0305}"
+                } else {
+                    "\u{10eeee}"
+                });
+                cell.fg_spec = crate::grid::ColorSpec::Indexed(42);
+                cell.underline_color = Some(crate::grid::Color::rgb(1, 2, 3));
+                cell.underline_color_spec = Some(crate::grid::ColorSpec::Indexed(8));
+            }
+        }
+        let current_client = manager.presentation_images(&current_client_grid, false, 10, 20);
+        assert_eq!(current_client.len(), 52);
+        assert_eq!(current_client.first().unwrap().placement.row, 0);
+        assert_eq!(current_client.last().unwrap().placement.row, 51);
+        assert!(
+            current_client
+                .iter()
+                .all(|image| image.placement.width == Some(103))
+        );
 
         let prototype = VirtualImagePlacement {
             uid: PlacementUid(1),
@@ -5656,7 +5785,8 @@ mod tests {
             .into_iter()
             .find(|image| image.placement.image_id == ImageId(2))
             .unwrap();
-        assert_eq!(natural.placement.width, None);
+        assert_eq!(natural.placement.width, Some(1));
+        assert_eq!(natural.placement.pixel_width, Some(2));
         assert_eq!(natural.pixel_rect, Some([-1.0, 0.0, 2.0, 1.0]));
 
         let invalid = manager.handle_command(command(b"a=p,i=2,p=3,U=1,P=1,Q=1,c=1,r=1"), false);
@@ -5898,11 +6028,29 @@ mod tests {
     }
 
     #[test]
-    fn placement_never_acknowledges_an_inexact_cursor_policy() {
+    fn natural_and_single_axis_placements_derive_exact_pixel_and_cell_geometry() {
         let mut manager = GraphicsManager::new();
-        let result = manager.handle_command(command(b"a=T,f=32,s=1,v=1,i=5,c=1;AQIDBA=="), false);
-        assert_eq!(result.response.unwrap().error_code, Some("ENOTSUP"));
-        assert!(manager.get_image(ImageId(5)).is_none());
+        manager.set_cell_pixel_geometry(10, 20);
+        let pixels = vec![0; 20 * 40 * 4];
+        let result = manager.handle_command(raw_command("a=T,f=32,s=20,v=40,i=5", &pixels), false);
+        assert!(result.response.unwrap().ok);
+        assert_eq!(result.cursor_movement, Some((2, 2)));
+        let natural = manager.placements(false).next().unwrap();
+        assert_eq!((natural.width, natural.height), (Some(2), Some(2)));
+        assert_eq!(
+            (natural.pixel_width, natural.pixel_height),
+            (Some(20), Some(40))
+        );
+
+        let result = manager.handle_command(command(b"a=p,i=5,p=2,c=4"), false);
+        assert!(result.response.unwrap().ok);
+        assert_eq!(result.cursor_movement, Some((4, 4)));
+        let one_axis = manager.placements(false).last().unwrap();
+        assert_eq!((one_axis.width, one_axis.height), (Some(4), Some(4)));
+        assert_eq!(
+            (one_axis.pixel_width, one_axis.pixel_height),
+            (Some(40), Some(80))
+        );
     }
 
     #[test]
