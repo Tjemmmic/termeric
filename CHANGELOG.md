@@ -778,6 +778,12 @@ Versioning once public beta tags begin.
   owned short runtime paths that cannot exceed Unix socket limits. The complete
   interaction scenario and displayed-process soak also retry a bounded input
   request only when its exact observable effect is still absent.
+- Native renderer-failure acceptance now arms lost-surface, outdated-surface,
+  and device-loss hooks one at a time through inert one-shot trigger files.
+  Combined recovery runs can no longer collapse multiple faults into one
+  recovery before the harness observes them. Wayland fullscreen evidence also
+  accepts the compositor-valid case where only one PTY pixel axis expands,
+  while still rejecting shrinkage, sibling changes, or inexact restoration.
 - Kitty graphics now interoperates with the current `kitten icat` wire format:
   bounded 128-KiB direct chunks, raw-unpadded standard base64, and bare POSIX
   shared-memory names are accepted while existing image and local-media limits

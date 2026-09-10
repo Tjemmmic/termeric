@@ -62,6 +62,39 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             finally:
                 app.finish()
 
+    def test_app_process_sequences_requested_renderer_faults_with_trigger_files(self) -> None:
+        requested = {
+            legacy: "1"
+            for legacy, _ in gui_acceptance.RENDERER_INJECTION_ENV.values()
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            gui_acceptance.subprocess, "Popen", return_value=mock.Mock()
+        ):
+            app = gui_acceptance.AppProcess(
+                Path("/fixture/termeric"),
+                Path(directory) / "run",
+                "x11",
+                "/bin/sh",
+                [],
+                requested,
+            )
+            try:
+                for name, (legacy, trigger_variable) in (
+                    gui_acceptance.RENDERER_INJECTION_ENV.items()
+                ):
+                    self.assertNotIn(legacy, app.env)
+                    self.assertEqual(
+                        app.env[trigger_variable], str(app.renderer_triggers[name])
+                    )
+                    self.assertFalse(app.renderer_triggers[name].exists())
+
+                app.arm_renderer_injection("surface_loss")
+                self.assertTrue(app.renderer_triggers["surface_loss"].is_file())
+                self.assertFalse(app.renderer_triggers["surface_outdated"].exists())
+                self.assertFalse(app.renderer_triggers["device_loss"].exists())
+            finally:
+                app.finish()
+
     def test_private_compositor_runtime_is_short_and_cleanup_is_owned(self) -> None:
         runtime = gui_acceptance.private_runtime_directory("test")
         process = mock.Mock()
@@ -223,6 +256,21 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             "pixel_height": 384,
         }
         self.assertEqual(gui_acceptance.terminal_geometry(record), (24, 80, 640, 384))
+
+    def test_fullscreen_geometry_may_expand_only_one_axis_but_never_shrink(self) -> None:
+        initial = (24, 80, 640, 384)
+        self.assertTrue(
+            gui_acceptance.terminal_geometry_expanded((24, 120, 960, 384), initial)
+        )
+        self.assertTrue(
+            gui_acceptance.terminal_geometry_expanded((36, 80, 640, 576), initial)
+        )
+        self.assertFalse(
+            gui_acceptance.terminal_geometry_expanded((24, 80, 640, 384), initial)
+        )
+        self.assertFalse(
+            gui_acceptance.terminal_geometry_expanded((36, 70, 560, 576), initial)
+        )
 
     def test_latest_geometry_is_scoped_to_the_exact_fixture_pid(self) -> None:
         records = [

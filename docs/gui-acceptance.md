@@ -95,13 +95,19 @@ permissions or presentation policy of a user's desktop.
 The schema-3 `results.json` binds every run to the tested binary's SHA-256
 digest, UTC time, compositor launcher, scenario outcomes, and exact lost-
 surface, outdated-surface, and device-loss injection flags.
+When more than one fault is requested, the child receives three initially
+absent trigger paths instead of three immediately active faults. The harness
+creates each inert marker only after the preceding recovery is observed and
+nudges one compositor resize, so every log entry and recovery is independently
+attributable. Renderer recreation cannot replay an already consumed trigger.
 
 ## Fullscreen promotion row
 
 The native harness now creates two same-process windows and drives F11 into one
 of them under an EWMH-capable Openbox X11 session and a headless Sway Wayland
-session. It requires the target window/PTY to grow on entry, return to its exact
-character and pixel geometry on exit, and leave its sibling window/PTY
+session. It requires the target window/PTY to expand on at least one pixel axis
+without shrinking the other, return to its exact character and pixel geometry
+on exit, and leave its sibling window/PTY
 unchanged. Request diagnostics and two-window close behavior are retained with
 the transcript. The capability remains Partial until this newly added scenario
 has a green CI artifact; source presence alone is not acceptance evidence.

@@ -38,6 +38,20 @@ DEFAULT_BINARY = ROOT / "target" / "debug" / "termeric"
 WINDOW_SIZE = (960, 640)
 ALTERNATE_SCREEN_ENTRIES = (b"\x1b[?47h", b"\x1b[?1047h", b"\x1b[?1049h")
 ALTERNATE_SCREEN_EXITS = (b"\x1b[?47l", b"\x1b[?1047l", b"\x1b[?1049l")
+RENDERER_INJECTION_ENV = {
+    "surface_loss": (
+        "TERMERIC_GUI_FORCE_SURFACE_LOSS_ONCE",
+        "TERMERIC_GUI_SURFACE_LOSS_TRIGGER",
+    ),
+    "surface_outdated": (
+        "TERMERIC_GUI_FORCE_SURFACE_OUTDATED_ONCE",
+        "TERMERIC_GUI_SURFACE_OUTDATED_TRIGGER",
+    ),
+    "device_loss": (
+        "TERMERIC_GUI_FORCE_DEVICE_LOSS_ONCE",
+        "TERMERIC_GUI_DEVICE_LOSS_TRIGGER",
+    ),
+}
 
 
 class AcceptanceError(RuntimeError):
@@ -255,6 +269,17 @@ class AppProcess:
                 "PATH": f"{spy_bin}{os.pathsep}{self.env.get('PATH', '')}",
             }
         )
+        trigger_dir = run_dir / "renderer-triggers"
+        self.renderer_triggers: dict[str, Path] = {}
+        for name, (legacy_variable, trigger_variable) in RENDERER_INJECTION_ENV.items():
+            requested = self.env.pop(legacy_variable, None) == "1"
+            self.env.pop(trigger_variable, None)
+            if requested:
+                trigger_dir.mkdir(parents=True, exist_ok=True)
+                trigger = trigger_dir / name
+                trigger.unlink(missing_ok=True)
+                self.env[trigger_variable] = str(trigger)
+                self.renderer_triggers[name] = trigger
         if backend == "x11":
             self.env["WINIT_UNIX_BACKEND"] = "x11"
             self.env.setdefault("EGL_PLATFORM", "x11")
@@ -328,38 +353,37 @@ class AppProcess:
             if resize_to is not None:
                 self.xdo("windowsize", "--sync", self.window_id, *map(str, resize_to))
             self.activate()
-        if self.env.get("TERMERIC_GUI_FORCE_SURFACE_LOSS_ONCE") == "1":
+        recovery_size = WINDOW_SIZE if backend == "x11" else (1024, 768)
+        trigger_sizes = (
+            ((957, 637), (958, 638), (959, 639))
+            if backend == "x11"
+            else ((1000, 740), (1002, 742), (1004, 744))
+        )
+        if "surface_loss" in self.renderer_triggers:
+            recovery_count = self.log_count("surface-recovery")
+            self.arm_renderer_injection("surface_loss")
+            self.renderer_resize(backend, *trigger_sizes[0])
             wait_until(
                 "injected surface loss",
-                lambda: self.log_contains("GPU surface lost"),
+                lambda: self.log_contains("Injecting one surface-loss event"),
             )
-            if backend == "x11":
-                assert self.window_id is not None
-                self.xdo("windowsize", "--sync", self.window_id, "959", "639")
-                self.xdo("windowsize", "--sync", self.window_id, *map(str, WINDOW_SIZE))
-            elif self.env.get("SWAYSOCK"):
-                self.wayland_output_resize(1000, 740)
-                self.wayland_output_resize(1024, 768)
+            self.renderer_resize(backend, *recovery_size)
             wait_until(
                 f"{backend} surface-loss recovery",
-                lambda: self.log_contains("surface-recovery"),
+                lambda: self.log_count("surface-recovery") > recovery_count,
                 20,
             )
             if self.process.poll() is not None:
                 raise AcceptanceError(f"Termeric exited during {backend} surface recovery")
-        if self.env.get("TERMERIC_GUI_FORCE_SURFACE_OUTDATED_ONCE") == "1":
+        if "surface_outdated" in self.renderer_triggers:
+            recovery_count = self.log_count("surface-recovery")
+            self.arm_renderer_injection("surface_outdated")
+            self.renderer_resize(backend, *trigger_sizes[1])
             wait_until(
                 "injected outdated surface",
-                lambda: self.log_contains("GPU surface outdated"),
+                lambda: self.log_contains("Injecting one surface-outdated event"),
             )
-            recovery_count = self.log_count("surface-recovery")
-            if backend == "x11":
-                assert self.window_id is not None
-                self.xdo("windowsize", "--sync", self.window_id, "958", "638")
-                self.xdo("windowsize", "--sync", self.window_id, *map(str, WINDOW_SIZE))
-            elif self.env.get("SWAYSOCK"):
-                self.wayland_output_resize(1002, 742)
-                self.wayland_output_resize(1024, 768)
+            self.renderer_resize(backend, *recovery_size)
             wait_until(
                 f"{backend} outdated-surface recovery",
                 lambda: self.log_count("surface-recovery") > recovery_count,
@@ -369,19 +393,38 @@ class AppProcess:
                 raise AcceptanceError(
                     f"Termeric exited during {backend} outdated-surface recovery"
                 )
-        if self.env.get("TERMERIC_GUI_FORCE_DEVICE_LOSS_ONCE") == "1":
+        if "device_loss" in self.renderer_triggers:
+            recovery_count = self.log_count("Renderer recovery complete")
+            self.arm_renderer_injection("device_loss")
+            self.renderer_resize(backend, *trigger_sizes[2])
             wait_until(
                 "injected device loss",
                 lambda: self.log_contains("Injecting one device-loss event"),
             )
             wait_until(
                 f"{backend} device-loss renderer recreation",
-                lambda: self.log_contains("Renderer recovery complete"),
+                lambda: self.log_count("Renderer recovery complete") > recovery_count,
                 20,
             )
+            self.renderer_resize(backend, *recovery_size)
             if self.process.poll() is not None:
                 raise AcceptanceError(f"Termeric exited during {backend} device-loss recovery")
         time.sleep(0.25)
+
+    def arm_renderer_injection(self, name: str) -> None:
+        trigger = self.renderer_triggers.get(name)
+        if trigger is None:
+            raise AcceptanceError(f"renderer injection was not requested: {name}")
+        trigger.write_text("armed\n", encoding="utf-8")
+
+    def renderer_resize(self, backend: str, width: int, height: int) -> None:
+        if backend == "x11":
+            assert self.window_id is not None
+            self.xdo("windowsize", "--sync", self.window_id, str(width), str(height))
+        elif self.env.get("SWAYSOCK"):
+            run(sway_output_resize_command(width, height), env=self.env)
+        else:
+            raise AcceptanceError("renderer injection requires X11 or private Sway resize")
 
     def xdo(self, *arguments: str) -> str:
         return run(["xdotool", *arguments], env=self.env).stdout
@@ -633,6 +676,20 @@ def terminal_geometry(record: dict[str, object]) -> tuple[int, int, int, int]:
     return tuple(
         int(record[key]) for key in ("rows", "cols", "pixel_width", "pixel_height")
     )  # type: ignore[return-value]
+
+
+def terminal_geometry_expanded(
+    current: tuple[int, int, int, int], initial: tuple[int, int, int, int]
+) -> bool:
+    current_pixels = current[2:]
+    initial_pixels = initial[2:]
+    return all(
+        current_value >= initial_value
+        for current_value, initial_value in zip(current_pixels, initial_pixels)
+    ) and any(
+        current_value > initial_value
+        for current_value, initial_value in zip(current_pixels, initial_pixels)
+    )
 
 
 def latest_terminal_geometry(
@@ -1342,8 +1399,9 @@ def run_wayland_fullscreen_scenario(
                 int(record["pid"])
                 for record in events
                 if int(record.get("pid", -1)) in initial
-                and terminal_geometry(record)[2] > initial[int(record["pid"])][2]
-                and terminal_geometry(record)[3] > initial[int(record["pid"])][3]
+                and terminal_geometry_expanded(
+                    terminal_geometry(record), initial[int(record["pid"])]
+                )
             }
             if len(grown) == 1:
                 target_pid = next(iter(grown))
@@ -2110,6 +2168,12 @@ def main() -> int:
             raise AcceptanceError("choose only one Wayland compositor launcher")
         if args.start_window_manager:
             raise AcceptanceError("--start-window-manager requires --backend x11")
+        if (
+            args.force_surface_loss
+            or args.force_surface_outdated
+            or args.force_device_loss
+        ) and not args.start_sway:
+            raise AcceptanceError("Wayland renderer-failure injection requires --start-sway")
         sway_scenarios = sorted(set(scenarios) & {"interaction", "fullscreen"})
         if sway_scenarios and not args.start_sway:
             raise AcceptanceError(

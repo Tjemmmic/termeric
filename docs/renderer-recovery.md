@@ -86,8 +86,12 @@ interaction suite. The private-Sway Wayland interaction lane requires the same
 injections, changes and restores the compositor's headless output size after
 each surface error, waits for bounded surface and complete device recovery, and
 then proves keyboard, clipboard, pane routing, child cleanup, and native close
-against the surviving PTYs. Both native lanes await fresh green artifacts for
-the current working tree; real vendor-GPU acceptance remains separate.
+against the surviving PTYs. Acceptance-only fault paths are initially absent
+files; the harness creates them sequentially and the renderer consumes each at
+most once per process. This prevents a recovery resize from accidentally
+injecting the next requested failure. Both native lanes await clean committed
+artifacts for the current implementation; real vendor-GPU acceptance remains
+separate.
 
 On a real-GPU release host, set both `TERMERIC_GPU_SMOKE=1` and
 `TERMERIC_GPU_SMOKE_HARDWARE=1` to reject CPU adapters and run the identical
