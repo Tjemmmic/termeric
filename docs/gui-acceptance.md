@@ -46,7 +46,8 @@ Termeric binary with `xdotool`. Its workspace scenario asserts:
   paired with the GPU image-geometry smoke;
 - current `kitten icat` classic-stream and Unicode-placeholder-stream clients
   rendering a deterministic multi-row PNG at separate live cursor positions,
-  with exact image IDs, client versions, and accepted-protocol diagnostics;
+  with exact image IDs, client versions, accepted-protocol diagnostics, and a
+  dedicated post-client native capture;
 - real `img2sixel` and `timg -pi` clients emitting Sixel and iTerm2 PNG output
   through the PTY into the shared, pane-clipped GPU image path;
 - a daemon-owned Kitty image created before closing the first live-domain
@@ -127,6 +128,15 @@ font. CI uploads the PNG and compares the checked-in, reviewable signature in
 [`renderer.json`](../termeric/tests/gui/baselines/renderer.json). The signature
 tracks visible-pixel area, bounds, mean color, and row/column ink profiles with
 documented tolerances in `scripts/check_gui_visual.py`.
+
+The same opt-in GPU lane exercises the terminal image pipeline with a 52-row
+color fixture. One classic placement renders below text while 52 independent
+Unicode-placeholder slices render above it. Pixel readback requires both
+halves to match completely in the initial frame, after three rows scroll out
+through normal output, and after scrollback restores those rows. This is a
+deterministic regression gate for the observed row-at-a-time reveal failure;
+the separate native `graphics-clients.png` remains the compositor-level
+artifact for later review.
 
 Copy-mode overlays additionally have a deterministic golden geometry test for
 scrollback-to-visual-row placement. This keeps hint labels and the outlined

@@ -906,6 +906,7 @@ def run_workspace_scenario(
             },
             15,
         )
+        app.snapshot("graphics-clients", update, review_only=True)
         input_before_chrome = transcript_bytes(transcript)
         app.key("F6")
         app.key("Right")

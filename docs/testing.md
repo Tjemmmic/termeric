@@ -705,14 +705,18 @@ ordinary tabs and panes but is forced off for domain-owned PTYs and every GUI
 relay replica, including after config reapplication.
 Compressed-local fixtures distinguish raw input ceilings from PNG decompressed
 sizes, cover short local objects and malformed streams, and prove cleanup before
-decode. The opt-in headless GPU smoke submits cropped negative/positive-z
-textures. The native X11 workspace scenario now runs current `kitten icat`
+decode. The opt-in llvmpipe lane reads back a 52-row color fixture rendered as
+one negative-z classic image and 52 positive-z Unicode-placeholder slices.
+Every pixel must agree in the initial frame, after output scroll clips three
+rows, and after scrollback restores them, so draw submission alone cannot
+masquerade as a graphics pass. The native X11 workspace scenario runs current
 classic and Unicode-placeholder streams against one deterministic 64-by-64
 multi-row PNG at separate cursor locations, and requires both exact image IDs
-to reach successful terminal diagnostics. A current artifact and visual review,
-plus temporary-file, shared-memory, disabled/enabled ordinary-file, multi-pane,
-animation, and direct relative-placement acceptance remain manual Wayland/X11
-rows; see [`kitty-graphics.md`](kitty-graphics.md).
+to reach successful terminal diagnostics while retaining a dedicated graphics
+capture. A current artifact and visual review, plus temporary-file,
+shared-memory, disabled/enabled ordinary-file, multi-pane, animation, and direct
+relative-placement acceptance remain manual Wayland/X11 rows; see
+[`kitty-graphics.md`](kitty-graphics.md).
 
 The Sixel/iTerm2 lane adds independent encoder fixtures, DEC macro and raster
 pixel-aspect geometry, fragmented input, malformed and resource-exhaustion

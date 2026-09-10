@@ -8,6 +8,13 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- The headless GPU acceptance lane now reads back and checks every pixel of a
+  52-row Kitty classic placement against 52 independently queued Unicode-
+  placeholder slices. Initial presentation, output-scrolled clipping, and
+  scrollback restoration must all render completely in one frame, turning the
+  observed row-at-a-time reveal failure into a deterministic llvmpipe gate.
+  Native workspace runs also retain a dedicated post-client graphics capture.
+
 - Native X11 workspace acceptance now launches current `kitten icat` in both
   classic-stream and Unicode-placeholder-stream modes against a deterministic
   multi-row PNG at separate cursor positions. Exact IDs, versions, PTY geometry,

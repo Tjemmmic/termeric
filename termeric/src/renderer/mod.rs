@@ -2246,49 +2246,173 @@ pub(crate) struct HeadlessRendererBenchmark {
     pub ligature_cache_hit_percent: Vec<f64>,
 }
 
-/// Submit cropped placements on both sides of the terminal text z-plane.
 #[cfg(test)]
-pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
-    let format = TextureFormat::Rgba8UnormSrgb;
-    let mut pipeline = ImagePipeline::new(device, format)?;
-    pipeline.resize(queue, 16, 16);
-    let image = termeric_core::StoredImage {
+const HEADLESS_IMAGE_WIDTH: u32 = 64;
+#[cfg(test)]
+const HEADLESS_IMAGE_CELL_HEIGHT: u32 = 4;
+#[cfg(test)]
+const HEADLESS_IMAGE_ROWS: u32 = 52;
+#[cfg(test)]
+const HEADLESS_IMAGE_HEIGHT: u32 = HEADLESS_IMAGE_CELL_HEIGHT * HEADLESS_IMAGE_ROWS;
+
+#[cfg(test)]
+fn headless_image_row_color(row: u32) -> [u8; 4] {
+    [
+        32 + (row * 3 % 200) as u8,
+        48 + (row * 5 % 180) as u8,
+        64 + (row * 7 % 160) as u8,
+        255,
+    ]
+}
+
+#[cfg(test)]
+fn headless_image_fixture() -> termeric_core::StoredImage {
+    let source_width = HEADLESS_IMAGE_WIDTH / 2;
+    let mut data = Vec::with_capacity((source_width * HEADLESS_IMAGE_HEIGHT * 4) as usize);
+    for pixel_row in 0..HEADLESS_IMAGE_HEIGHT {
+        let color = headless_image_row_color(pixel_row / HEADLESS_IMAGE_CELL_HEIGHT);
+        for _ in 0..source_width {
+            data.extend_from_slice(&color);
+        }
+    }
+    termeric_core::StoredImage {
         id: termeric_core::ImageId(7),
-        width: 2,
-        height: 2,
-        data: vec![
-            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 128,
-        ]
-        .into(),
+        width: source_width,
+        height: HEADLESS_IMAGE_HEIGHT,
+        data: data.into(),
         revision: 1,
-    };
-    let key = (1, image.id);
-    pipeline.upload_image(device, queue, key, &image);
-    pipeline.push_image(key, 0.0, 0.0, 8.0, 8.0, 0.0, 0.0, 0.5, 0.5, 1.0, -1);
-    pipeline.push_image(key, 8.0, 8.0, 8.0, 8.0, 0.5, 0.5, 1.0, 1.0, 0.5, 1);
+    }
+}
+
+#[cfg(test)]
+fn headless_image_presentations(
+    image: &termeric_core::StoredImage,
+    row_origin: i64,
+) -> Vec<termeric_core::PresentationImage> {
+    let mut presentations = Vec::with_capacity(HEADLESS_IMAGE_ROWS as usize + 1);
+    presentations.push(termeric_core::PresentationImage {
+        placement: termeric_core::ImagePlacement {
+            image_id: image.id,
+            placement_id: Some(1),
+            col: 0,
+            row: row_origin,
+            alternate_screen: false,
+            source_x: 0,
+            source_y: 0,
+            source_width: Some(image.width),
+            source_height: Some(image.height),
+            x_offset: 0,
+            y_offset: 0,
+            width: Some(4),
+            height: Some(HEADLESS_IMAGE_ROWS),
+            pixel_width: Some(image.width),
+            pixel_height: Some(image.height),
+            z_index: -1,
+        },
+        image: image.clone(),
+        pixel_rect: None,
+        source_uv: None,
+    });
+    for row in 0..HEADLESS_IMAGE_ROWS {
+        presentations.push(termeric_core::PresentationImage {
+            placement: termeric_core::ImagePlacement {
+                image_id: image.id,
+                placement_id: Some(2),
+                col: 4,
+                row: row_origin + i64::from(row),
+                alternate_screen: false,
+                source_x: 0,
+                source_y: row * HEADLESS_IMAGE_CELL_HEIGHT,
+                source_width: Some(image.width),
+                source_height: Some(HEADLESS_IMAGE_CELL_HEIGHT),
+                x_offset: 0,
+                y_offset: 0,
+                width: Some(4),
+                height: Some(1),
+                pixel_width: Some(image.width),
+                pixel_height: Some(HEADLESS_IMAGE_CELL_HEIGHT),
+                z_index: 1,
+            },
+            image: image.clone(),
+            pixel_rect: Some([
+                0.0,
+                0.0,
+                image.width as f32,
+                HEADLESS_IMAGE_CELL_HEIGHT as f32,
+            ]),
+            source_uv: Some([
+                0.0,
+                row as f32 / HEADLESS_IMAGE_ROWS as f32,
+                1.0,
+                (row + 1) as f32 / HEADLESS_IMAGE_ROWS as f32,
+            ]),
+        });
+    }
+    presentations
+}
+
+#[cfg(test)]
+fn render_headless_image_state(
+    device: &Device,
+    queue: &Queue,
+    pipeline: &mut ImagePipeline,
+    key: (usize, termeric_core::ImageId),
+    presentations: &[termeric_core::PresentationImage],
+    scroll_offset: usize,
+) -> Result<Vec<u8>> {
+    pipeline.clear();
+    for presentation in presentations {
+        if let Some(geometry) = presentation_geometry(
+            presentation,
+            8.0,
+            HEADLESS_IMAGE_CELL_HEIGHT as f32,
+            scroll_offset,
+            Some((HEADLESS_IMAGE_WIDTH as f32, HEADLESS_IMAGE_HEIGHT as f32)),
+        ) {
+            pipeline.push_image(
+                key,
+                geometry.x,
+                geometry.y,
+                geometry.width,
+                geometry.height,
+                geometry.u_min,
+                geometry.v_min,
+                geometry.u_max,
+                geometry.v_max,
+                1.0,
+                presentation.placement.z_index,
+            );
+        }
+    }
     pipeline.upload(device, queue);
 
     let target = device.create_texture(&TextureDescriptor {
-        label: Some("Kitty graphics smoke target"),
+        label: Some("Kitty multi-row graphics smoke target"),
         size: Extent3d {
-            width: 16,
-            height: 16,
+            width: HEADLESS_IMAGE_WIDTH,
+            height: HEADLESS_IMAGE_HEIGHT,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format,
-        usage: TextureUsages::RENDER_ATTACHMENT,
+        format: TextureFormat::Rgba8UnormSrgb,
+        usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
         view_formats: &[],
+    });
+    let readback = device.create_buffer(&BufferDescriptor {
+        label: Some("Kitty multi-row graphics smoke readback"),
+        size: u64::from(HEADLESS_IMAGE_WIDTH * HEADLESS_IMAGE_HEIGHT * 4),
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        mapped_at_creation: false,
     });
     let view = target.create_view(&TextureViewDescriptor::default());
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-        label: Some("Kitty graphics smoke encoder"),
+        label: Some("Kitty multi-row graphics smoke encoder"),
     });
     {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-            label: Some("Kitty graphics smoke pass"),
+            label: Some("Kitty multi-row graphics smoke pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
@@ -2304,7 +2428,167 @@ pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Res
         pipeline.draw_below_text(&mut pass);
         pipeline.draw_above_text(&mut pass);
     }
-    queue.submit(std::iter::once(encoder.finish()));
+    encoder.copy_texture_to_buffer(
+        TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: Origin3d::ZERO,
+            aspect: TextureAspect::All,
+        },
+        TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(HEADLESS_IMAGE_WIDTH * 4),
+                rows_per_image: Some(HEADLESS_IMAGE_HEIGHT),
+            },
+        },
+        Extent3d {
+            width: HEADLESS_IMAGE_WIDTH,
+            height: HEADLESS_IMAGE_HEIGHT,
+            depth_or_array_layers: 1,
+        },
+    );
+    let submission = queue.submit([encoder.finish()]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    readback
+        .slice(..)
+        .map_async(MapMode::Read, move |result| sender.send(result).unwrap());
+    let _ = device.poll(Maintain::wait_for(submission));
+    receiver.recv()?.map_err(|error| anyhow::anyhow!(error))?;
+    let pixels = readback.slice(..).get_mapped_range().to_vec();
+    readback.unmap();
+    Ok(pixels)
+}
+
+#[cfg(test)]
+fn verify_headless_image_state(
+    pixels: &[u8],
+    source_row_offset: u32,
+    visible_rows: u32,
+    label: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        pixels.len() == (HEADLESS_IMAGE_WIDTH * HEADLESS_IMAGE_HEIGHT * 4) as usize,
+        "{label} graphics readback has the wrong size"
+    );
+    let half_width = HEADLESS_IMAGE_WIDTH / 2;
+    let visible_height = visible_rows * HEADLESS_IMAGE_CELL_HEIGHT;
+    for y in 0..HEADLESS_IMAGE_HEIGHT {
+        for x in 0..half_width {
+            let left_offset = ((y * HEADLESS_IMAGE_WIDTH + x) * 4) as usize;
+            let right_offset = ((y * HEADLESS_IMAGE_WIDTH + x + half_width) * 4) as usize;
+            let left = &pixels[left_offset..left_offset + 4];
+            let right = &pixels[right_offset..right_offset + 4];
+            if y < visible_height {
+                let expected =
+                    headless_image_row_color(source_row_offset + y / HEADLESS_IMAGE_CELL_HEIGHT);
+                for channel in 0..4 {
+                    anyhow::ensure!(
+                        left[channel].abs_diff(expected[channel]) <= 3,
+                        "{label} classic image row {} channel {channel} was {} instead of {}",
+                        y / HEADLESS_IMAGE_CELL_HEIGHT,
+                        left[channel],
+                        expected[channel]
+                    );
+                    anyhow::ensure!(
+                        right[channel].abs_diff(expected[channel]) <= 3,
+                        "{label} Unicode-placeholder row {} channel {channel} was {} instead of {}",
+                        y / HEADLESS_IMAGE_CELL_HEIGHT,
+                        right[channel],
+                        expected[channel]
+                    );
+                }
+            } else {
+                anyhow::ensure!(
+                    left[..3].iter().all(|channel| *channel == 0)
+                        && right[..3].iter().all(|channel| *channel == 0),
+                    "{label} painted outside the expected scrolled image footprint at row {y}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn expected_headless_image_state(source_row_offset: u32, visible_rows: u32) -> Vec<u8> {
+    let mut pixels = vec![0; (HEADLESS_IMAGE_WIDTH * HEADLESS_IMAGE_HEIGHT * 4) as usize];
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel[3] = 255;
+    }
+    let visible_height = visible_rows * HEADLESS_IMAGE_CELL_HEIGHT;
+    for y in 0..visible_height {
+        let color = headless_image_row_color(source_row_offset + y / HEADLESS_IMAGE_CELL_HEIGHT);
+        for x in 0..HEADLESS_IMAGE_WIDTH {
+            let offset = ((y * HEADLESS_IMAGE_WIDTH + x) * 4) as usize;
+            pixels[offset..offset + 4].copy_from_slice(&color);
+        }
+    }
+    pixels
+}
+
+#[cfg(test)]
+mod headless_image_readback_tests {
+    use super::*;
+
+    #[test]
+    fn verifier_rejects_a_row_at_a_time_placeholder_frame() {
+        let mut pixels = expected_headless_image_state(0, HEADLESS_IMAGE_ROWS);
+        let half_width = HEADLESS_IMAGE_WIDTH / 2;
+        for y in HEADLESS_IMAGE_CELL_HEIGHT..HEADLESS_IMAGE_HEIGHT {
+            for x in half_width..HEADLESS_IMAGE_WIDTH {
+                let offset = ((y * HEADLESS_IMAGE_WIDTH + x) * 4) as usize;
+                pixels[offset..offset + 3].fill(0);
+            }
+        }
+
+        let error =
+            verify_headless_image_state(&pixels, 0, HEADLESS_IMAGE_ROWS, "row-at-a-time fixture")
+                .unwrap_err();
+        assert!(error.to_string().contains("Unicode-placeholder row 1"));
+    }
+
+    #[test]
+    fn verifier_rejects_pixels_below_the_scrolled_footprint() {
+        let visible_rows = HEADLESS_IMAGE_ROWS - 3;
+        let mut pixels = expected_headless_image_state(3, visible_rows);
+        let first_hidden_y = visible_rows * HEADLESS_IMAGE_CELL_HEIGHT;
+        let offset = (first_hidden_y * HEADLESS_IMAGE_WIDTH * 4) as usize;
+        pixels[offset] = 1;
+
+        let error =
+            verify_headless_image_state(&pixels, 3, visible_rows, "scrolled fixture").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("painted outside the expected scrolled image footprint")
+        );
+    }
+}
+
+/// Read back complete multi-row classic and Unicode-placeholder images before
+/// and after terminal scrolling. Every pixel row must be present in the first
+/// frame; scrolling must clip it once and restoring scrollback must reveal the
+/// complete image again without incrementally discovering rows.
+#[cfg(test)]
+pub(crate) fn headless_image_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
+    let mut pipeline = ImagePipeline::new(device, TextureFormat::Rgba8UnormSrgb)?;
+    pipeline.resize(queue, HEADLESS_IMAGE_WIDTH, HEADLESS_IMAGE_HEIGHT);
+    let image = headless_image_fixture();
+    let key = (1, image.id);
+    pipeline.upload_image(device, queue, key, &image);
+
+    let initial = headless_image_presentations(&image, 0);
+    let pixels = render_headless_image_state(device, queue, &mut pipeline, key, &initial, 0)?;
+    verify_headless_image_state(&pixels, 0, HEADLESS_IMAGE_ROWS, "initial frame")?;
+
+    let scrolled = headless_image_presentations(&image, -3);
+    let pixels = render_headless_image_state(device, queue, &mut pipeline, key, &scrolled, 0)?;
+    verify_headless_image_state(&pixels, 3, HEADLESS_IMAGE_ROWS - 3, "output scroll")?;
+
+    let pixels = render_headless_image_state(device, queue, &mut pipeline, key, &scrolled, 3)?;
+    verify_headless_image_state(&pixels, 0, HEADLESS_IMAGE_ROWS, "scrollback restore")?;
     Ok(())
 }
 
