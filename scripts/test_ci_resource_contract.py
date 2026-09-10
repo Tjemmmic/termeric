@@ -58,6 +58,13 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("if: always()", block)
         self.assertIn("if-no-files-found: error", block)
 
+    def test_quality_lane_records_and_uploads_hermetic_provider_evidence(self) -> None:
+        block = job_block(self.workflow, "quality-and-package")
+        self.assertIn("scripts.test_run_fake_provider_acceptance", block)
+        self.assertIn("scripts/run_fake_provider_acceptance.py", block)
+        self.assertIn("target/integration-acceptance/record.json", block)
+        self.assertIn("name: hermetic-integration-acceptance", block)
+
 
 if __name__ == "__main__":
     unittest.main()

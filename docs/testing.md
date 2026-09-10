@@ -24,6 +24,10 @@ Reusable terminal-profile coverage is hermetic: `/bin/sh` fixtures verify exact
 environment/cwd/title delivery, CLI resolution before window creation, palette
 hot replacement, frozen pane launch configuration, and workspace identity.
 No provider-backed or authenticated AI command is executed by this lane.
+The separate `scripts/run_fake_provider_acceptance.py` runner resolves and
+executes only that exact fake-CLI test, strips the real-Codex opt-in variable,
+and emits a sealed partial integration record. CI uploads it with the tested
+binary digest; every non-fake integration row remains visibly unrecorded.
 
 The feature-support contract rejects undefined status vocabulary, README
 highlights without reviewed matrix mappings, missing/duplicate capability rows,

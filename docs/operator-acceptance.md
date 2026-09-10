@@ -139,6 +139,17 @@ cargo test -p termeric \
   fake_ai_clis_exercise_every_builtin_command_end_to_end -- --nocapture
 ```
 
+For a clean candidate, also produce the sealed partial record directly:
+
+```bash
+python3 scripts/run_fake_provider_acceptance.py \
+  --output target/integration-acceptance/record.json \
+  --operator "Release Operator"
+```
+
+This command executes only the exact fake-provider test and leaves every
+shell, desktop, Harvest, and authenticated-provider row unrecorded.
+
 Do not set `TERMERIC_REAL_CODEX_CONTRACT` in this lane. That separate opt-in
 probe launches the installed CLI for `--version` and `--help`; it still is not
 authenticated-provider acceptance.

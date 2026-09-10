@@ -74,6 +74,23 @@ Run it with:
 cargo test -p termeric fake_ai_clis_exercise_every_builtin_command_end_to_end -- --nocapture
 ```
 
+Generate the candidate-bound partial acceptance record and sealed artifacts
+with the narrower runner:
+
+```bash
+python3 scripts/run_fake_provider_acceptance.py \
+  --output target/integration-acceptance/record.json \
+  --operator "Local hermetic acceptance"
+```
+
+It resolves the exact compiled test executable from Cargo's JSON messages,
+removes `TERMERIC_REAL_CODEX_CONTRACT`, runs only the fully qualified fake-CLI
+test with libtest `--exact`, and records the test-binary and artifact digests.
+Only `fake.claude_code` and `fake.codex` become passes. Shell, Harvest, desktop,
+and authenticated-provider cases stay unrecorded until their own evidence is
+collected. CI uploads this partial record rather than treating the full
+workspace suite as evidence for every integration row.
+
 The separate installed-Codex argument/parser probe is operator opt-in and is
 skipped before launching the CLI unless
 `TERMERIC_REAL_CODEX_CONTRACT=1` is set. It invokes only
@@ -239,6 +256,7 @@ Run the pure validator regressions with:
 
 ```bash
 python3 -m unittest scripts.test_integration_acceptance_record
+python3 -m unittest scripts.test_run_fake_provider_acceptance
 ```
 
 No accepted schema-1 integration record exists for the current working tree.

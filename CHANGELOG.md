@@ -788,6 +788,11 @@ Versioning once public beta tags begin.
   and offer a fail-closed `--require-clean` candidate mode. Change and
   scheduled CI lanes require that mode, so a commit plus binary digest can no
   longer be mistaken for clean-candidate evidence when tracked files differ.
+- Hermetic AI-integration acceptance now has a candidate-bound runner that
+  resolves the exact compiled libtest binary, strips the installed-Codex opt-in,
+  executes only the fake Claude/Codex real-PTY workflow, and seals its logs and
+  machine result into the versioned integration record. CI uploads that partial
+  record while leaving shell, desktop, Harvest, and provider rows unrecorded.
 - Kitty graphics now interoperates with the current `kitten icat` wire format:
   bounded 128-KiB direct chunks, raw-unpadded standard base64, and bare POSIX
   shared-memory names are accepted while existing image and local-media limits

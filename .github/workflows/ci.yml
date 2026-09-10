@@ -48,7 +48,9 @@ jobs:
       - name: Prove native evidence-record contracts
         run: python3 -m unittest scripts.test_native_acceptance_record
       - name: Prove integration evidence-record contracts
-        run: python3 -m unittest scripts.test_integration_acceptance_record
+        run: |
+          python3 -m unittest scripts.test_integration_acceptance_record
+          python3 -m unittest scripts.test_run_fake_provider_acceptance
       - name: Prove Debian package-checker contracts
         run: python3 -m unittest scripts.test_check_debian_package
       - name: Compile and exercise the terminfo contract
@@ -62,6 +64,17 @@ jobs:
           -- --nocapture
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - name: Record hermetic fake-provider acceptance
+        run: >-
+          python3 scripts/run_fake_provider_acceptance.py
+          --output target/integration-acceptance/record.json
+          --operator "GitHub Actions (hermetic subset)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hermetic-integration-acceptance
+          path: target/integration-acceptance/
+          if-no-files-found: error
       - run: cargo build --workspace --locked
       - name: Verify crate packages
         run: |
