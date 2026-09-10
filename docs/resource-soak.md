@@ -210,6 +210,19 @@ renderer, GPU, or runtime error; all 14 gates passed. The artifact is local
 short-lane evidence rather than a ten-minute scheduled or release-candidate
 record.
 
+Clean commit `a53d097` passed the strengthened schema-2 600-second displayed-
+process contract in `target/native-gui-soak/issue-23-a53d097-schema2-10m`.
+The report itself records `worktree_dirty: false`, the complete commit, and
+tested binary SHA-256
+`9cfc391dd5fd4b321c002c3afeb38568f677012fd25081e20e9ecaaae86541b0`.
+Across 957 resource samples it peaked at 159,644 KiB RSS and measured only 524
+KiB first-to-last-quartile RSS growth, with zero thread or file-descriptor
+growth and two peak children. It completed 239 compositor resizes, 239 exact
+pane create/route/close actions, 614 accepted Kitty replacements, normal native
+close, and cleanup of all 121 observed fixture children. All 14 gates passed
+with no recognized runtime/GPU error. This is clean local release-duration
+evidence, not a scheduled-CI or real-desktop result.
+
 The core soak still does not create a window; the new native lane does
 so under a private software-rendered compositor. Neither measures vendor GPU
 memory, substitutes for a long real-desktop observation, validates macOS/

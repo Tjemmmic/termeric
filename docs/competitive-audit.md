@@ -100,8 +100,9 @@ These are release requirements, not optional competitive flourishes:
    remains later distribution evidence.
    This is the unfinished acceptance work in issues #17, #23, #26, #31, #32,
    #33, and #35.
-2. **Accumulate stability and comparative evidence.** Obtain green scheduled core and newly
-   configured displayed-Sway resource soaks, then run release-duration real-
+2. **Accumulate stability and comparative evidence.** Retain the clean local
+   ten-minute displayed-Sway result and obtain green scheduled core/displayed
+   resource-soak history, then run release-duration real-
    desktop/vendor-GPU observation, retain benchmark history by compatible
    machine/adapter context, record a same-host external-terminal comparison
    whose per-metric contract is green, and
