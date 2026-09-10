@@ -86,6 +86,7 @@ Run the 30-second change lane after building the application:
 cargo build -p termeric --locked
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 30 \
+  --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak
 ```
@@ -100,8 +101,9 @@ child cleanup. Resize and pane-churn counts have independent minimums; one
 workload cannot compensate for the other in the aggregate action count. These
 are broad regression rails, not expected steady-state consumption targets.
 
-The schema-1 native report records UTC time, candidate commit, tested binary
-SHA-256, backend/compositor/WGPU identity, every raw process sample, workload
+The schema-2 native report records UTC time, candidate commit, explicit
+worktree-dirty state, tested binary SHA-256, backend/compositor/WGPU identity,
+every raw process sample, workload
 counts including separate resize and pane-churn totals, the minimum required
 sample count, accepted graphics acknowledgements, explicit thresholds, and
 individual results. Application, Sway, and PTY
@@ -110,6 +112,12 @@ logs remain beside it. Run the pure regression detector with:
 ```bash
 python3 -m unittest scripts.test_run_native_gui_soak
 ```
+
+Pass `--require-clean` for candidate or CI evidence. The runner captures Git
+provenance before it creates artifacts and refuses to launch the compositor
+when that mode sees a dirty worktree. A report with a missing or true
+`environment.worktree_dirty` value is implementation evidence, not a
+clean-candidate record.
 
 Defaults are intentionally broad host-independent safety rails: 512 MiB peak
 RSS, 128 MiB first-to-last RSS growth, four threads of growth, eight file

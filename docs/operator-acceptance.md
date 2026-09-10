@@ -300,6 +300,7 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
 
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 30 \
+  --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak
 ```
@@ -314,6 +315,7 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
 
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 600 \
+  --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak-release
 ```

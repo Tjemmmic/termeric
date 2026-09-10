@@ -8,9 +8,11 @@ from scripts.run_native_gui_soak import (
     AcceptanceError,
     evaluate_native_checks,
     fixture_arguments,
+    git_provenance,
     kitty_image_ack_count,
     perform_until,
     progress_count,
+    require_clean_candidate,
     runtime_error_count,
 )
 
@@ -128,6 +130,28 @@ class NativeGuiSoakTests(unittest.TestCase):
             3,
         )
         self.assertEqual(runtime_error_count("ordinary warning\n"), 0)
+
+    def test_git_provenance_records_commit_and_dirty_state(self) -> None:
+        clean = mock.Mock(stdout="a" * 40 + "\n")
+        dirty = mock.Mock(stdout=" M scripts/run_native_gui_soak.py\n")
+        with mock.patch(
+            "scripts.run_native_gui_soak.subprocess.run",
+            side_effect=[clean, dirty],
+        ) as run:
+            self.assertEqual(
+                git_provenance(),
+                {"commit": "a" * 40, "worktree_dirty": True},
+            )
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(
+            run.call_args_list[1].args[0], ["git", "status", "--porcelain"]
+        )
+
+    def test_clean_candidate_mode_rejects_only_dirty_evidence(self) -> None:
+        require_clean_candidate({"worktree_dirty": False}, True)
+        require_clean_candidate({"worktree_dirty": True}, False)
+        with self.assertRaisesRegex(AcceptanceError, "dirty worktree"):
+            require_clean_candidate({"worktree_dirty": True}, True)
 
     def test_progress_and_fixture_contract(self) -> None:
         records = [

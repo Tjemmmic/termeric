@@ -199,6 +199,7 @@ jobs:
           env WGPU_BACKEND=gl
           python3 scripts/run_native_gui_soak.py
           --duration-seconds 30
+          --require-clean
           --binary target/debug/termeric
           --artifacts target/gui-acceptance/native-soak
       - uses: actions/upload-artifact@v4
@@ -264,6 +265,7 @@ jobs:
           env WGPU_BACKEND=gl
           python3 scripts/run_native_gui_soak.py
           --duration-seconds 600
+          --require-clean
           --binary target/debug/termeric
           --artifacts target/soak/native-gui
       - uses: actions/upload-artifact@v4

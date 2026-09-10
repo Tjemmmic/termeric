@@ -79,6 +79,33 @@ def runtime_error_count(log_text: str) -> int:
     )
 
 
+def git_provenance() -> dict[str, object]:
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        check=True,
+    ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+    )
+    return {"commit": commit, "worktree_dirty": dirty}
+
+
+def require_clean_candidate(provenance: dict[str, object], required: bool) -> None:
+    if required and provenance["worktree_dirty"] is not False:
+        raise AcceptanceError(
+            "refusing clean-candidate native soak from a dirty worktree"
+        )
+
+
 def perform_until(
     description: str,
     action: Callable[[], None],
@@ -207,6 +234,11 @@ def main() -> int:
     parser.add_argument("--max-thread-growth", type=float, default=8.0)
     parser.add_argument("--max-fd-growth", type=float, default=16.0)
     parser.add_argument("--max-children", type=int, default=8)
+    parser.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="refuse to start unless the Git worktree is clean",
+    )
     args = parser.parse_args()
     if os.name != "posix" or not Path("/proc/self/status").is_file():
         parser.error("native GUI soak requires Linux /proc")
@@ -218,6 +250,11 @@ def main() -> int:
     for tool in ("sway", "swaymsg", "tic", "wtype"):
         if not shutil.which(tool):
             parser.error(f"required native soak tool is unavailable: {tool}")
+    provenance = git_provenance()
+    try:
+        require_clean_candidate(provenance, args.require_clean)
+    except AcceptanceError as error:
+        parser.error(str(error))
 
     artifacts = args.artifacts.resolve()
     artifacts.mkdir(parents=True, exist_ok=True)
@@ -410,18 +447,12 @@ def main() -> int:
             }
         )
     report = {
-        "schema": 1,
+        "schema": 2,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "platform": platform.platform(),
             "python": sys.version.split()[0],
-            "commit": subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=ROOT,
-                text=True,
-                stdout=subprocess.PIPE,
-                check=True,
-            ).stdout.strip(),
+            **provenance,
             "backend": "wayland",
             "compositor": "sway-headless",
             "wgpu_backend": environment.get("WGPU_BACKEND"),

@@ -784,6 +784,10 @@ Versioning once public beta tags begin.
   recovery before the harness observes them. Wayland fullscreen evidence also
   accepts the compositor-valid case where only one PTY pixel axis expands,
   while still rejecting shrinkage, sibling changes, or inexact restoration.
+- Displayed Wayland soak reports now use schema 2, disclose worktree dirtiness,
+  and offer a fail-closed `--require-clean` candidate mode. Change and
+  scheduled CI lanes require that mode, so a commit plus binary digest can no
+  longer be mistaken for clean-candidate evidence when tracked files differ.
 - Kitty graphics now interoperates with the current `kitten icat` wire format:
   bounded 128-KiB direct chunks, raw-unpadded standard base64, and bare POSIX
   shared-memory names are accepted while existing image and local-media limits

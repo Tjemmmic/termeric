@@ -43,6 +43,7 @@ class CiResourceContractTests(unittest.TestCase):
         native = job_block(self.workflow, "linux-native-gui-acceptance")
         self.assertIn("scripts/run_native_gui_soak.py", native)
         self.assertIn("--duration-seconds 30", native)
+        self.assertIn("--require-clean", native)
         self.assertIn("if: always()", native)
         self.assertIn("if-no-files-found: error", native)
 
@@ -53,6 +54,7 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("scripts/run_soak.py --duration-seconds 600 --gpu-smoke", block)
         self.assertIn("scripts/run_native_gui_soak.py", block)
         self.assertIn("--duration-seconds 600", block)
+        self.assertIn("--require-clean", block)
         self.assertIn("if: always()", block)
         self.assertIn("if-no-files-found: error", block)
 
