@@ -122,6 +122,79 @@ def kitty_image_id(payload: bytes) -> int:
     raise RuntimeError("Kitty client output contains no explicit nonzero image ID")
 
 
+def kitty_media_target(payload: bytes, expected_medium: bytes) -> bytes:
+    """Extract one local-media target from current Kitten output."""
+    if expected_medium not in (b"t", b"s"):
+        raise ValueError(
+            "expected_medium must be temporary-file (t) or shared-memory (s)"
+        )
+    offset = 0
+    while True:
+        start = payload.find(b"\x1b_G", offset)
+        if start < 0:
+            break
+        separator = payload.find(b";", start + 3)
+        terminator = payload.find(b"\x1b\\", separator + 1)
+        if separator < 0 or terminator < 0:
+            break
+        controls = {}
+        for field in payload[start + 3 : separator].split(b","):
+            key, delimiter, value = field.partition(b"=")
+            if delimiter and key not in controls:
+                controls[key] = value
+        if controls.get(b"t") == expected_medium:
+            encoded = payload[separator + 1 : terminator]
+            if len(encoded) % 4 == 1:
+                raise RuntimeError("Kitty local-media target has invalid base64 data")
+            try:
+                target = base64.b64decode(
+                    encoded + b"=" * (-len(encoded) % 4), validate=True
+                )
+            except binascii.Error as error:
+                raise RuntimeError(
+                    "Kitty local-media target has invalid base64 data"
+                ) from error
+            if not target or b"\0" in target:
+                raise RuntimeError("Kitty local-media target is empty or contains NUL")
+            return target
+        offset = terminator + 2
+    medium = expected_medium.decode("ascii")
+    raise RuntimeError(f"Kitty client output contains no t={medium} media target")
+
+
+def media_target_path(target: bytes, medium: bytes) -> bytes:
+    """Map a validated current-Kitten target to its Linux filesystem object."""
+    if medium == b"t":
+        if not os.path.isabs(target) or b"tty-graphics-protocol" not in target:
+            raise RuntimeError("Kitty temporary-file target is not a safe client path")
+        return target
+    if medium == b"s":
+        name = target.removeprefix(b"/")
+        if not name or b"/" in name or len(name) > 255:
+            raise RuntimeError("Kitty shared-memory target is not one POSIX name")
+        return os.path.join(b"/dev/shm", name)
+    raise ValueError("medium must be temporary-file (t) or shared-memory (s)")
+
+
+def wait_for_media_cleanup(target: bytes, medium: bytes, timeout: float = 5) -> None:
+    """Require Termeric to consume and remove a client-owned local-media object."""
+    path = media_target_path(target, medium)
+    deadline = time.monotonic() + timeout
+    while os.path.lexists(path):
+        if time.monotonic() >= deadline:
+            name = os.path.basename(path).decode("utf-8", "replace")
+            raise RuntimeError(f"Kitty {medium.decode()} media target was not removed: {name}")
+        time.sleep(0.01)
+
+
+def require_media_target(target: bytes, medium: bytes) -> None:
+    """Require the client-owned object to exist before PTY delivery."""
+    path = media_target_path(target, medium)
+    if not os.path.lexists(path):
+        name = os.path.basename(path).decode("utf-8", "replace")
+        raise RuntimeError(f"Kitty {medium.decode()} media target is missing: {name}")
+
+
 def render_external_graphics_clients(
     transcript: str,
     terminal_geometry: tuple[int, int, int, int] | None = None,
@@ -139,12 +212,15 @@ def render_external_graphics_clients(
         "timg": command_version(["timg", "--version"]),
     }
 
-    for tool, version_key, protocol, cursor_row, command in (
+    with open(image, "rb") as fixture:
+        image_bytes = fixture.read()
+    clients = (
         (
             "kitten-stream",
             "kitten",
             "kitty",
             8,
+            2,
             [
                 "kitten",
                 "icat",
@@ -156,12 +232,14 @@ def render_external_graphics_clients(
                 "--image-id=1701",
                 image,
             ],
+            None,
         ),
         (
             "kitten-unicode-placeholder",
             "kitten",
             "kitty-unicode-placeholder",
             16,
+            2,
             [
                 "kitten",
                 "icat",
@@ -174,30 +252,99 @@ def render_external_graphics_clients(
                 "--image-id=1702",
                 image,
             ],
+            None,
+        ),
+        (
+            "kitten-file",
+            "kitten",
+            "kitty-temporary-file",
+            24,
+            2,
+            [
+                "kitten",
+                "icat",
+                "--stdin=yes",
+                "--transfer-mode=file",
+                f"--use-window-size={window_size}",
+                "--fit=none",
+                "--align=left",
+                "--image-id=1703",
+            ],
+            image_bytes,
+        ),
+        (
+            "kitten-memory",
+            "kitten",
+            "kitty-shared-memory",
+            24,
+            18,
+            [
+                "kitten",
+                "icat",
+                "--stdin=no",
+                "--transfer-mode=memory",
+                f"--use-window-size={window_size}",
+                "--fit=none",
+                "--align=left",
+                "--image-id=1704",
+                image,
+            ],
+            None,
         ),
         (
             "timg-kitty",
             "timg",
             "kitty",
-            24,
+            29,
+            2,
             ["timg", "-I", "-pk", "--compress=0", "-g2x1", image],
+            None,
         ),
-        ("img2sixel", "img2sixel", "sixel", 27, ["img2sixel", image]),
+        (
+            "img2sixel",
+            "img2sixel",
+            "sixel",
+            31,
+            2,
+            ["img2sixel", image],
+            None,
+        ),
         (
             "timg-iterm2",
             "timg",
             "iterm2",
-            32,
+            34,
+            18,
             ["timg", "-pi", "-g2x1", image],
+            None,
         ),
-    ):
-        result = subprocess.run(command, check=True, capture_output=True, timeout=15)
+    )
+    for tool, version_key, protocol, cursor_row, cursor_col, command, stdin_data in clients:
+        result = subprocess.run(
+            command,
+            input=stdin_data,
+            check=True,
+            capture_output=True,
+            timeout=15,
+        )
         if not result.stdout:
             raise RuntimeError(f"{tool} produced no terminal output")
-        emit(f"\x1b[{cursor_row};2H".encode() + result.stdout)
-        protocol_fields: dict[str, int] = {}
+        protocol_fields: dict[str, object] = {}
         if protocol.startswith("kitty"):
             protocol_fields["image_id"] = kitty_image_id(result.stdout)
+        target = None
+        medium = None
+        if protocol in ("kitty-temporary-file", "kitty-shared-memory"):
+            medium = b"t" if protocol == "kitty-temporary-file" else b"s"
+            target = kitty_media_target(result.stdout, medium)
+            require_media_target(target, medium)
+        emit(f"\x1b[{cursor_row};{cursor_col}H".encode() + result.stdout)
+        if target is not None and medium is not None:
+            wait_for_media_cleanup(target, medium)
+            protocol_fields["cleanup_observed"] = True
+            protocol_fields["cleanup_target"] = os.path.basename(target).decode(
+                "utf-8", "replace"
+            )[:256]
         write_record(
             transcript,
             "graphics_client",
@@ -206,7 +353,7 @@ def render_external_graphics_clients(
             protocol=protocol,
             output_bytes=len(result.stdout),
             cursor_row=cursor_row,
-            cursor_col=2,
+            cursor_col=cursor_col,
             fixture_width=64,
             fixture_height=64,
             terminal_rows=rows,

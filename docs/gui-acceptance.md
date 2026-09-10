@@ -48,6 +48,10 @@ Termeric binary with `xdotool`. Its workspace scenario asserts:
   rendering a deterministic multi-row PNG at separate live cursor positions,
   with exact image IDs, client versions, accepted-protocol diagnostics, and a
   dedicated post-client native capture;
+- current `kitten icat` stdin-backed temporary-file and POSIX shared-memory
+  transfers at separate live positions, with fixed image IDs, exact accepted-
+  protocol diagnostics, validated client target forms, and observed target
+  removal after PTY delivery;
 - independent `timg -pk` Kitty PNG output with its client-generated image ID
   extracted from the APC stream and bound to an exact acceptance diagnostic;
 - real `img2sixel` and `timg -pi` clients emitting Sixel and iTerm2 PNG output
@@ -139,6 +143,14 @@ through normal output, and after scrollback restores those rows. This is a
 deterministic regression gate for the observed row-at-a-time reveal failure;
 the separate native `graphics-clients.png` remains the compositor-level
 artifact for later review.
+
+The workspace client lane invokes seven external streams: four current
+`kitten` modes (classic stream, Unicode-placeholder stream, stdin-backed
+temporary file, and POSIX shared memory), independent `timg` Kitty and iTerm2
+backends, and `img2sixel`. The local-media records are written only after the
+temporary file or shared-memory name is no longer present. This makes cleanup
+and successful parsing machine-checkable, while the retained native capture
+remains review-only and can be judged later without blocking hermetic CI.
 
 Copy-mode overlays additionally have a deterministic golden geometry test for
 scrollback-to-visual-row placement. This keeps hint labels and the outlined

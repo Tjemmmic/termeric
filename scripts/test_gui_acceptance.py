@@ -192,6 +192,7 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             root = Path(directory)
             transcript = root / "transcript.jsonl"
             kitten_args = root / "kitten-args.txt"
+            kitten_stdin = root / "kitten-stdin.txt"
             timg_args = root / "timg-args.txt"
             fake_bin = root / "bin"
             fake_bin.mkdir()
@@ -203,6 +204,13 @@ if [ "$1" = "--version" ]; then
 fi
 printf '%s\\n' "$*" >> "$TERMERIC_KITTEN_ARGS"
 case " $* " in
+  *" --transfer-mode=file "*)
+    wc -c > "$TERMERIC_KITTEN_STDIN"
+    printf '\\033_Ga=T,q=2,f=100,t=t,s=64,v=64,S=1234,i=1703;L3RtcC9raXR0eS10dHktZ3JhcGhpY3MtcHJvdG9jb2wtZmFrZQ==\\033\\\\'
+    ;;
+  *" --transfer-mode=memory "*)
+    printf '\\033_Ga=T,q=2,f=100,t=s,s=64,v=64,S=1234,i=1704;aWNhdC1mYWtl\\033\\\\'
+    ;;
   *" --unicode-placeholder "*)
     printf '\\033_Ga=T,q=2,U=1,f=32,s=1,v=1,i=1702;AQIDBA==\\033\\\\'
     ;;
@@ -244,9 +252,14 @@ esac
                 {
                     "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
                     "TERMERIC_KITTEN_ARGS": str(kitten_args),
+                    "TERMERIC_KITTEN_STDIN": str(kitten_stdin),
                     "TERMERIC_TIMG_ARGS": str(timg_args),
                 },
-            ), mock.patch.object(terminal_fixture, "emit") as emit:
+            ), mock.patch.object(
+                terminal_fixture, "require_media_target"
+            ) as require_target, mock.patch.object(
+                terminal_fixture, "wait_for_media_cleanup"
+            ) as wait_for_cleanup, mock.patch.object(terminal_fixture, "emit") as emit:
                 terminal_fixture.render_external_graphics_clients(
                     str(transcript), (40, 100, 800, 800)
                 )
@@ -257,6 +270,8 @@ esac
                 {
                     "kitten-stream",
                     "kitten-unicode-placeholder",
+                    "kitten-file",
+                    "kitten-memory",
                     "timg-kitty",
                     "img2sixel",
                     "timg-iterm2",
@@ -270,20 +285,35 @@ esac
                     "timg fixture 1.0",
                 },
             )
-            self.assertEqual(emit.call_count, 5)
+            self.assertEqual(emit.call_count, 7)
             emitted = [call.args[0] for call in emit.call_args_list]
             self.assertTrue(any(b"i=1701" in payload for payload in emitted))
             self.assertTrue(any(b"U=1" in payload for payload in emitted))
+            self.assertTrue(
+                any(b"t=t" in payload and b"i=1703" in payload for payload in emitted)
+            )
+            self.assertTrue(
+                any(b"t=s" in payload and b"i=1704" in payload for payload in emitted)
+            )
             self.assertTrue(any(b"i=2701" in payload for payload in emitted))
             self.assertTrue(any(b"\x1bPq" in payload for payload in emitted))
             self.assertTrue(any(b"\x1b]1337;" in payload for payload in emitted))
             arguments = kitten_args.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(len(arguments), 2)
-            self.assertTrue(all("--transfer-mode=stream" in line for line in arguments))
+            self.assertEqual(len(arguments), 4)
+            self.assertEqual(
+                sum("--transfer-mode=stream" in line for line in arguments), 2
+            )
+            self.assertEqual(sum("--transfer-mode=file" in line for line in arguments), 1)
+            self.assertEqual(sum("--transfer-mode=memory" in line for line in arguments), 1)
             self.assertEqual(
                 sum("--unicode-placeholder" in line for line in arguments), 1
             )
-            self.assertTrue(all("--stdin=no" in line for line in arguments))
+            self.assertEqual(sum("--stdin=yes" in line for line in arguments), 1)
+            self.assertEqual(sum("--stdin=no" in line for line in arguments), 3)
+            file_arguments = next(
+                line for line in arguments if "--transfer-mode=file" in line
+            )
+            self.assertNotIn("graphics-client-", file_arguments)
             timg_arguments = timg_args.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(timg_arguments), 2)
             self.assertEqual(sum("-pk" in line for line in timg_arguments), 1)
@@ -295,11 +325,30 @@ esac
             self.assertEqual(
                 records_by_tool["kitten-unicode-placeholder"]["image_id"], 1702
             )
+            self.assertEqual(records_by_tool["kitten-file"]["image_id"], 1703)
+            self.assertEqual(records_by_tool["kitten-memory"]["image_id"], 1704)
+            self.assertTrue(records_by_tool["kitten-file"]["cleanup_observed"])
+            self.assertTrue(records_by_tool["kitten-memory"]["cleanup_observed"])
             self.assertEqual(records_by_tool["timg-kitty"]["image_id"], 2701)
+            self.assertEqual(
+                require_target.call_args_list,
+                [
+                    mock.call(b"/tmp/kitty-tty-graphics-protocol-fake", b"t"),
+                    mock.call(b"icat-fake", b"s"),
+                ],
+            )
+            self.assertEqual(
+                wait_for_cleanup.call_args_list,
+                [
+                    mock.call(b"/tmp/kitty-tty-graphics-protocol-fake", b"t"),
+                    mock.call(b"icat-fake", b"s"),
+                ],
+            )
             fixture = next(root.glob("graphics-client-*.png"))
             fixture_bytes = fixture.read_bytes()
             self.assertEqual(fixture_bytes[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", fixture_bytes[16:24]), (64, 64))
+            self.assertEqual(int(kitten_stdin.read_text()), len(fixture_bytes))
 
     def test_graphics_fixture_extracts_only_explicit_nonzero_kitty_image_ids(self) -> None:
         payload = (
@@ -318,6 +367,57 @@ esac
                 RuntimeError, "no explicit nonzero image ID"
             ):
                 terminal_fixture.kitty_image_id(invalid)
+
+    def test_graphics_fixture_validates_local_media_targets_and_cleanup_paths(self) -> None:
+        temporary = b"/dev/shm/kitty-tty-graphics-protocol-123"
+        shared = b"icat-ABC123"
+        payload = (
+            b"\x1b_Ga=T,t=t,i=1703;"
+            + base64.b64encode(temporary).rstrip(b"=")
+            + b"\x1b\\"
+            + b"\x1b_Ga=T,t=s,i=1704;"
+            + base64.b64encode(shared)
+            + b"\x1b\\"
+        )
+        self.assertEqual(terminal_fixture.kitty_media_target(payload, b"t"), temporary)
+        self.assertEqual(terminal_fixture.kitty_media_target(payload, b"s"), shared)
+        self.assertEqual(terminal_fixture.media_target_path(temporary, b"t"), temporary)
+        self.assertEqual(
+            terminal_fixture.media_target_path(b"/" + shared, b"s"),
+            b"/dev/shm/" + shared,
+        )
+
+        for invalid_payload in (
+            b"\x1b_Ga=T,t=t;iA===\x1b\\",
+            b"\x1b_Ga=T,t=t;%%%\x1b\\",
+            b"\x1b_Ga=T,t=t;\x1b\\",
+        ):
+            with self.subTest(invalid_payload=invalid_payload), self.assertRaises(
+                RuntimeError
+            ):
+                terminal_fixture.kitty_media_target(invalid_payload, b"t")
+        for invalid_target, medium in (
+            (b"relative-kitty-tty-graphics-protocol", b"t"),
+            (b"/tmp/unmarked", b"t"),
+            (b"one/two", b"s"),
+            (b"/", b"s"),
+        ):
+            with self.subTest(target=invalid_target), self.assertRaises(RuntimeError):
+                terminal_fixture.media_target_path(invalid_target, medium)
+
+    def test_graphics_fixture_requires_local_media_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.fsencode(Path(directory) / "tty-graphics-protocol-pending")
+            with self.assertRaisesRegex(RuntimeError, "is missing"):
+                terminal_fixture.require_media_target(target, b"t")
+
+            Path(os.fsdecode(target)).write_bytes(b"pending")
+            terminal_fixture.require_media_target(target, b"t")
+            with self.assertRaisesRegex(RuntimeError, "was not removed"):
+                terminal_fixture.wait_for_media_cleanup(target, b"t", timeout=0)
+
+            Path(os.fsdecode(target)).unlink()
+            terminal_fixture.wait_for_media_cleanup(target, b"t", timeout=0)
 
     def test_alternate_screen_capture_requires_entry_before_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

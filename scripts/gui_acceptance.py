@@ -897,6 +897,8 @@ def run_workspace_scenario(
             expected_protocols = {
                 "kitten-stream": "kitty",
                 "kitten-unicode-placeholder": "kitty-unicode-placeholder",
+                "kitten-file": "kitty-temporary-file",
+                "kitten-memory": "kitty-shared-memory",
                 "timg-kitty": "kitty",
                 "img2sixel": "sixel",
                 "timg-iterm2": "iterm2",
@@ -913,18 +915,28 @@ def run_workspace_scenario(
                 timg_image_id = int(timg_record["image_id"])
             except (KeyError, TypeError, ValueError):
                 return False
-            if timg_image_id <= 0 or timg_image_id in {17, 1701, 1702}:
+            if timg_image_id <= 0 or timg_image_id in {17, 1701, 1702, 1703, 1704}:
+                return False
+            records_by_tool = {
+                str(record.get("tool")): record for record in client_records
+            }
+            if any(
+                records_by_tool[tool].get("cleanup_observed") is not True
+                for tool in ("kitten-file", "kitten-memory")
+            ):
                 return False
             return (
                 app.log_contains("Accepted Kitty image: id=1701")
                 and app.log_contains("Accepted Kitty Unicode placeholder image: id=1702")
+                and app.log_contains("Accepted Kitty image: id=1703")
+                and app.log_contains("Accepted Kitty image: id=1704")
                 and app.log_contains(f"Accepted Kitty image: id={timg_image_id}")
                 and app.log_contains("Accepted Sixel image")
                 and app.log_contains("Accepted iTerm2 inline image")
             )
 
         wait_until(
-            "kitten, independent timg Kitty, img2sixel, and timg iTerm2 output accepted",
+            "kitten stream/local-media, independent timg Kitty, img2sixel, and timg iTerm2 output accepted",
             graphics_clients_accepted,
             15,
         )

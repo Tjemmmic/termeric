@@ -327,7 +327,9 @@ These cannot be truthfully inferred from synthetic input or source inspection:
   pixels, reflow, scrollback, overwrite, and alternate-screen cases),
   plus a direct `P/Q/H/V` probe covering ordinary and Unicode parents, signed
   offsets, parent movement, chains, and cascading deletion,
-  stdin-backed `--transfer-mode=file`, and `--transfer-mode=memory`; test an existing path
+  stdin-backed `--transfer-mode=file`, and `--transfer-mode=memory` (the native
+  harness invokes both and checks object cleanup, but visible judgment remains
+  operator-owned); test an existing path
   in file mode first with `allow_kitty_file_transfers = false` (expect denial),
   then with it set to `true` (expect a visible image and the source file to
   remain unchanged). Restore the default-disabled setting after the test.
