@@ -768,6 +768,15 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Native GUI and displayed-soak fixtures no longer generate an invalid font
+  configuration by repeating the primary family as its own fallback. Their
+  isolated shell fixture now launches reliably instead of silently giving way
+  to the default shell after configuration validation fails.
+- Private-Wayland acceptance now reconstructs fragmented PTY input per process,
+  activates each short-lived virtual keyboard before injecting tested input,
+  serves one-shot clipboard data without deadlocking the driver, and uses
+  owned short runtime paths that cannot exceed Unix socket limits. The complete
+  interaction scenario and 30-second displayed-process soak now run reliably.
 - Kitty graphics now interoperates with the current `kitten icat` wire format:
   bounded 128-KiB direct chunks, raw-unpadded standard base64, and bare POSIX
   shared-memory names are accepted while existing image and local-media limits

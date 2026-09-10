@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -27,11 +28,17 @@ FIXTURE_SPEC.loader.exec_module(terminal_fixture)
 
 
 class GuiAcceptanceRecordTests(unittest.TestCase):
-    def test_isolated_config_disables_provider_plugins(self) -> None:
+    def test_isolated_config_has_distinct_fonts_and_disables_provider_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.toml"
             gui_acceptance.write_config(config, "/bin/cat", [])
             document = config.read_text(encoding="utf-8")
+            parsed = tomllib.loads(document)
+            primary = parsed["font"]["family"].casefold()
+            fallbacks = [family.casefold() for family in parsed["font"]["fallback"]]
+            self.assertNotIn(primary, fallbacks)
+            self.assertEqual(len(fallbacks), len(set(fallbacks)))
+            self.assertEqual(fallbacks, ["noto color emoji"])
             self.assertIn("[plugins.claude_code]\nenabled = false", document)
             self.assertIn("[plugins.codex]\nenabled = false", document)
 
@@ -54,6 +61,20 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
                 self.assertEqual((run_dir / "tmux-runtime").stat().st_mode & 0o777, 0o700)
             finally:
                 app.finish()
+
+    def test_private_compositor_runtime_is_short_and_cleanup_is_owned(self) -> None:
+        runtime = gui_acceptance.private_runtime_directory("test")
+        process = mock.Mock()
+        process._termeric_runtime = runtime
+        try:
+            self.assertTrue(runtime.is_dir())
+            self.assertEqual(runtime.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(runtime.parent, Path(tempfile.gettempdir()))
+            gui_acceptance.cleanup_private_runtime(process)
+            self.assertFalse(runtime.exists())
+        finally:
+            if runtime.exists():
+                runtime.rmdir()
 
     def test_soak_graphics_frame_requests_an_observable_success_reply(self) -> None:
         with mock.patch.object(terminal_fixture, "emit") as emit:
@@ -269,6 +290,33 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             {5, 9},
         )
 
+    def test_input_token_matching_reassembles_each_pid_byte_stream(self) -> None:
+        records = [
+            {
+                "event": "input",
+                "pid": 41,
+                "base64": base64.b64encode(b"WAYLAND_").decode(),
+            },
+            {
+                "event": "input",
+                "pid": 73,
+                "base64": base64.b64encode(b"unrelated").decode(),
+            },
+            {
+                "event": "input",
+                "pid": 41,
+                "base64": base64.b64encode(b"INPUT_32").decode(),
+            },
+        ]
+        self.assertEqual(
+            gui_acceptance.pids_receiving_token(records, b"WAYLAND_INPUT_32"),
+            {41},
+        )
+        self.assertEqual(
+            gui_acceptance.pid_receiving_token(records, b"WAYLAND_INPUT_32"),
+            41,
+        )
+
     def test_wayland_launch_and_fullscreen_dependencies_are_separate(self) -> None:
         launch = gui_acceptance.required_tools(
             "wayland", ["launch"], start_weston=True, start_sway=False
@@ -371,6 +419,21 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
                 "shift",
                 "-m",
                 "ctrl",
+            ],
+        )
+
+    def test_wtype_command_waits_for_virtual_keyboard_registration(self) -> None:
+        self.assertEqual(
+            gui_acceptance.wtype_command("WAYLAND_INPUT_32"),
+            [
+                "wtype",
+                "-P",
+                "Shift_L",
+                "-p",
+                "Shift_L",
+                "-s",
+                "100",
+                "WAYLAND_INPUT_32",
             ],
         )
 

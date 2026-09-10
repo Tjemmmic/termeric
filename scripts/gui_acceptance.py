@@ -20,6 +20,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Callable
 
@@ -94,7 +95,7 @@ args = [{args}]
 
 [font]
 family = "DejaVu Sans Mono"
-fallback = ["DejaVu Sans Mono"]
+fallback = ["Noto Color Emoji"]
 size = 14.0
 line_height = 1.2
 ligatures = false
@@ -411,14 +412,14 @@ class AppProcess:
         }
 
     def wayland_key(self, *arguments: str) -> None:
-        run(["wtype", *arguments], env=self.env)
+        run(wtype_command(*arguments), env=self.env)
         time.sleep(0.12)
 
     def wayland_chord(self, modifiers: tuple[str, ...], key: str) -> None:
         self.wayland_key(*wtype_chord_arguments(modifiers, key))
 
     def wayland_type(self, text: str) -> None:
-        run(["wtype", text], env=self.env)
+        run(wtype_command(text), env=self.env)
         time.sleep(0.12)
 
     def wayland_output_resize(self, width: int, height: int) -> None:
@@ -642,24 +643,26 @@ def latest_terminal_geometry(
 
 
 def pid_receiving_token(records: list[dict[str, object]], token: bytes) -> int | None:
-    for record in records:
-        if record.get("event") != "input":
-            continue
-        payload = base64.b64decode(str(record.get("base64", "")))
-        if token in payload:
-            return int(record["pid"])
+    for pid, stream in input_streams(records).items():
+        if token in stream:
+            return pid
     return None
 
 
 def pids_receiving_token(records: list[dict[str, object]], token: bytes) -> set[int]:
-    recipients: set[int] = set()
+    return {pid for pid, stream in input_streams(records).items() if token in stream}
+
+
+def input_streams(records: list[dict[str, object]]) -> dict[int, bytearray]:
+    streams: dict[int, bytearray] = {}
     for record in records:
         if record.get("event") != "input":
             continue
-        payload = base64.b64decode(str(record.get("base64", "")))
-        if token in payload:
-            recipients.add(int(record["pid"]))
-    return recipients
+        pid = int(record["pid"])
+        streams.setdefault(pid, bytearray()).extend(
+            base64.b64decode(str(record.get("base64", "")))
+        )
+    return streams
 
 
 def wtype_chord_arguments(modifiers: tuple[str, ...], key: str) -> list[str]:
@@ -670,6 +673,23 @@ def wtype_chord_arguments(modifiers: tuple[str, ...], key: str) -> list[str]:
     for modifier in reversed(modifiers):
         arguments.extend(["-m", modifier])
     return arguments
+
+
+def wtype_command(*arguments: str) -> list[str]:
+    # A newly connected virtual keyboard can otherwise lose the beginning of its
+    # first input sequence while wlroots registers it with the seat. A Shift key
+    # cycle activates the keyboard without emitting PTY bytes; the following
+    # delay keeps the requested input intact even while rendering is saturated.
+    return [
+        "wtype",
+        "-P",
+        "Shift_L",
+        "-p",
+        "Shift_L",
+        "-s",
+        "100",
+        *arguments,
+    ]
 
 
 def sway_output_resize_command(width: int, height: int) -> list[str]:
@@ -1450,13 +1470,32 @@ def run_wayland_interaction_scenario(
                 for record in read_records(transcript)
             ),
         )
-        run(["wl-copy", "--paste-once", "WAYLAND_BRACKETED_32"], env=app.env)
-        app.wayland_chord(("ctrl", "shift"), "v")
-        wait_until(
-            "Wayland compositor clipboard bracketed paste",
-            lambda: b"\x1b[200~WAYLAND_BRACKETED_32\x1b[201~"
-            in transcript_bytes(transcript),
+        clipboard_owner = subprocess.Popen(
+            ["wl-copy", "--paste-once", "WAYLAND_BRACKETED_32"],
+            env=app.env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        try:
+            time.sleep(0.12)
+            app.wayland_chord(("ctrl", "shift"), "v")
+            wait_until(
+                "Wayland compositor clipboard bracketed paste",
+                lambda: b"\x1b[200~WAYLAND_BRACKETED_32\x1b[201~"
+                in transcript_bytes(transcript),
+            )
+            return_code = clipboard_owner.wait(timeout=3)
+            if return_code != 0:
+                assert clipboard_owner.stderr is not None
+                raise AcceptanceError(
+                    "Wayland clipboard source failed: "
+                    f"{clipboard_owner.stderr.read().strip()}"
+                )
+        finally:
+            if clipboard_owner.poll() is None:
+                clipboard_owner.terminate()
+                clipboard_owner.wait(timeout=3)
         bracketed = b"\x1b[200~WAYLAND_BRACKETED_32\x1b[201~"
         if transcript_bytes(transcript).count(bracketed) != 1:
             raise AcceptanceError("Wayland bracketed paste was not delivered exactly once")
@@ -1835,10 +1874,20 @@ def run_cli_launch_scenario(
         app.finish()
 
 
-def weston_environment(base_env: dict[str, str], run_dir: Path) -> tuple[dict[str, str], subprocess.Popen[str]]:
-    runtime = run_dir / "weston-runtime"
-    runtime.mkdir(parents=True, exist_ok=True)
+def private_runtime_directory(prefix: str) -> Path:
+    runtime = Path(tempfile.mkdtemp(prefix=f"termeric-{prefix}-"))
     runtime.chmod(0o700)
+    return runtime
+
+
+def cleanup_private_runtime(process: subprocess.Popen[str]) -> None:
+    runtime = getattr(process, "_termeric_runtime", None)
+    if runtime is not None:
+        shutil.rmtree(runtime, ignore_errors=True)
+
+
+def weston_environment(base_env: dict[str, str], run_dir: Path) -> tuple[dict[str, str], subprocess.Popen[str]]:
+    runtime = private_runtime_directory("weston")
     socket = "wayland-termeric-acceptance"
     env = dict(base_env)
     env.update({"XDG_RUNTIME_DIR": str(runtime), "WAYLAND_DISPLAY": socket})
@@ -1865,17 +1914,17 @@ def weston_environment(base_env: dict[str, str], run_dir: Path) -> tuple[dict[st
     )
     if process.poll() is not None:
         log.close()
+        shutil.rmtree(runtime, ignore_errors=True)
         raise AcceptanceError(f"Weston exited during startup; see {run_dir / 'weston.log'}")
     process._termeric_log = log  # type: ignore[attr-defined]
+    process._termeric_runtime = runtime  # type: ignore[attr-defined]
     return env, process
 
 
 def sway_environment(
     base_env: dict[str, str], run_dir: Path
 ) -> tuple[dict[str, str], subprocess.Popen[str]]:
-    runtime = run_dir / "sway-runtime"
-    runtime.mkdir(parents=True, exist_ok=True)
-    runtime.chmod(0o700)
+    runtime = private_runtime_directory("sway")
     env = dict(base_env)
     env.update(
         {
@@ -1918,10 +1967,12 @@ bindsym Mod1+F4 kill
     wait_until("Sway Wayland socket", sway_socket_ready, 10)
     if process.poll() is not None or not sockets or not ipc_sockets:
         log.close()
+        shutil.rmtree(runtime, ignore_errors=True)
         raise AcceptanceError(f"Sway exited during startup; see {run_dir / 'sway.log'}")
     env["WAYLAND_DISPLAY"] = sockets[0].name
     env["SWAYSOCK"] = str(ipc_sockets[0])
     process._termeric_log = log  # type: ignore[attr-defined]
+    process._termeric_runtime = runtime  # type: ignore[attr-defined]
     return env, process
 
 
@@ -2201,6 +2252,7 @@ def main() -> int:
             weston_log = getattr(weston, "_termeric_log", None)
             if weston_log is not None:
                 weston_log.close()
+            cleanup_private_runtime(weston)
         if sway is not None:
             sway.terminate()
             try:
@@ -2211,6 +2263,7 @@ def main() -> int:
             sway_log = getattr(sway, "_termeric_log", None)
             if sway_log is not None:
                 sway_log.close()
+            cleanup_private_runtime(sway)
         (artifacts / "results.json").write_text(
             json.dumps(
                 result_document(

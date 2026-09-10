@@ -5,9 +5,16 @@ unit tests cannot cover: native window events, PTY input/output, desktop
 clipboard ownership, window resizing, full-screen applications, and an actual
 WGPU presentation surface. It always runs with disposable XDG configuration,
 data, cache, home directories, shell fixtures, private tmux runtimes/sockets,
-and documents.
+and documents. Its isolated font profile uses DejaVu Sans Mono as the primary
+and the separately installed Noto Color Emoji as a distinct fallback, matching
+the same duplicate-family validation applied to user configuration.
 Vim disables viminfo and user configuration, less disables user options,
 preprocessors, and history, and tmux uses an empty configuration explicitly.
+Private Weston and Sway sessions use owned, mode-0700 runtime directories under
+the system temporary directory so Wayland, Sway IPC, and Termeric control
+sockets remain below Unix path-length limits even when the artifact directory
+is deeply nested. The harness removes those runtime directories after stopping
+the compositor.
 
 ## What runs
 
@@ -200,6 +207,13 @@ WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \
 
 Run Wayland keyboard, pane, and clipboard routing under the same private Sway
 backend:
+
+Each `wtype` invocation first cycles a non-text Shift key and waits briefly for
+wlroots to register the new virtual keyboard; this avoids dropping the leading
+tested key without adding bytes to the PTY. Input assertions reconstruct the
+ordered byte stream independently for each fixture PID, since a PTY may split
+one injected token across arbitrary reads. One-shot `wl-copy` sources stay
+alive concurrently until Termeric requests the paste, then must exit cleanly.
 
 ```bash
 WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \

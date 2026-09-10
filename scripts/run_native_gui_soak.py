@@ -23,6 +23,7 @@ from scripts.gui_acceptance import (
     AcceptanceError,
     AppProcess,
     assert_no_runtime_errors,
+    cleanup_private_runtime,
     file_sha256,
     pids_receiving_token,
     read_records,
@@ -169,6 +170,7 @@ def close_sway(process: subprocess.Popen[str] | None) -> None:
     log = getattr(process, "_termeric_log", None)
     if log is not None:
         log.close()
+    cleanup_private_runtime(process)
 
 
 def main() -> int:
