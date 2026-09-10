@@ -1,12 +1,15 @@
 import base64
 import unittest
+from unittest import mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from scripts.run_native_gui_soak import (
+    AcceptanceError,
     evaluate_native_checks,
     fixture_arguments,
     kitty_image_ack_count,
+    perform_until,
     progress_count,
     runtime_error_count,
 )
@@ -136,6 +139,16 @@ class NativeGuiSoakTests(unittest.TestCase):
         arguments = fixture_arguments(Path("transcript.jsonl"), 7)
         self.assertIn("--soak-output", arguments)
         self.assertIn("--skip-external-graphics", arguments)
+
+    def test_native_action_retries_only_until_observable_effect(self) -> None:
+        action = mock.Mock()
+        with mock.patch(
+            "scripts.run_native_gui_soak.wait_until",
+            side_effect=[AcceptanceError("first attempt"), None],
+        ) as wait:
+            perform_until("pane startup", action, lambda: False)
+        self.assertEqual(action.call_count, 2)
+        self.assertEqual(wait.call_count, 2)
 
 
 if __name__ == "__main__":

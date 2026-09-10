@@ -558,15 +558,22 @@ class AppProcess:
             assert self.window_id is not None
             self.activate()
             self.xdo("key", "--clearmodifiers", "alt+F4")
+            close_attempts = 1
+            close_timeout = 8
         else:
-            run(
-                ["wtype", "-M", "alt", "-P", "F4", "-p", "F4", "-m", "alt"],
-                env=self.env,
-            )
-        try:
-            return_code = self.process.wait(timeout=8)
-        except subprocess.TimeoutExpired as error:
-            raise AcceptanceError("Termeric did not honor the native close request") from error
+            close_attempts = 3
+            close_timeout = 3
+        return_code: int | None = None
+        for _ in range(close_attempts):
+            if backend != "x11":
+                self.wayland_chord(("alt",), "F4")
+            try:
+                return_code = self.process.wait(timeout=close_timeout)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if return_code is None:
+            raise AcceptanceError("Termeric did not honor the native close request")
         if return_code != 0:
             raise AcceptanceError(f"Termeric exited with status {return_code}")
         if not self.log_contains("Close requested"):

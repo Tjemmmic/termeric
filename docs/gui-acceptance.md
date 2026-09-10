@@ -214,6 +214,9 @@ tested key without adding bytes to the PTY. Input assertions reconstruct the
 ordered byte stream independently for each fixture PID, since a PTY may split
 one injected token across arbitrary reads. One-shot `wl-copy` sources stay
 alive concurrently until Termeric requests the paste, then must exit cleanly.
+The displayed soak retries an injected action up to three times only while its
+specific pane-lifecycle or PID-routing effect remains absent; exhaustion still
+fails the lane.
 
 ```bash
 WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \

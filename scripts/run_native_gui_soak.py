@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -77,6 +77,26 @@ def runtime_error_count(log_text: str) -> int:
             "renderer recovery failed",
         )
     )
+
+
+def perform_until(
+    description: str,
+    action: Callable[[], None],
+    predicate: Callable[[], bool],
+    *,
+    attempts: int = 3,
+    attempt_timeout: float = 2,
+) -> None:
+    for attempt in range(attempts):
+        action()
+        try:
+            wait_until(description, predicate, attempt_timeout)
+            return
+        except AcceptanceError:
+            if attempt + 1 == attempts:
+                raise AcceptanceError(
+                    f"timed out waiting for {description} after {attempts} attempts"
+                )
 
 
 def evaluate_native_checks(
@@ -274,9 +294,9 @@ def main() -> int:
                         if record.get("event") == "started"
                     ]
                     focused_pid = int(starts[-1]["pid"])
-                    app.wayland_chord(("alt", "shift"), "w")
-                    wait_until(
+                    perform_until(
                         "native soak split cleanup",
+                        lambda: app.wayland_chord(("alt", "shift"), "w"),
                         lambda: not Path(f"/proc/{focused_pid}").exists(),
                     )
                     split_open = False
@@ -285,9 +305,9 @@ def main() -> int:
                         record.get("event") == "started"
                         for record in read_records(transcript)
                     )
-                    app.wayland_chord(("alt", "shift"), "Right")
-                    wait_until(
+                    perform_until(
                         "native soak split startup",
+                        lambda: app.wayland_chord(("alt", "shift"), "Right"),
                         lambda: sum(
                             record.get("event") == "started"
                             for record in read_records(transcript)
@@ -295,7 +315,6 @@ def main() -> int:
                         > starts_before,
                     )
                     token = f"NATIVE_SOAK_ROUTE_{action_generation}".encode()
-                    app.wayland_type(token.decode())
                     focused_pid = int(
                         [
                             record
@@ -303,8 +322,9 @@ def main() -> int:
                             if record.get("event") == "started"
                         ][-1]["pid"]
                     )
-                    wait_until(
+                    perform_until(
                         "native soak exact pane route",
+                        lambda: app.wayland_type(token.decode()),
                         lambda: pids_receiving_token(read_records(transcript), token)
                         == {focused_pid},
                     )

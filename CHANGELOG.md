@@ -776,7 +776,8 @@ Versioning once public beta tags begin.
   activates each short-lived virtual keyboard before injecting tested input,
   serves one-shot clipboard data without deadlocking the driver, and uses
   owned short runtime paths that cannot exceed Unix socket limits. The complete
-  interaction scenario and 30-second displayed-process soak now run reliably.
+  interaction scenario and displayed-process soak also retry a bounded input
+  request only when its exact observable effect is still absent.
 - Kitty graphics now interoperates with the current `kitten icat` wire format:
   bounded 128-KiB direct chunks, raw-unpadded standard base64, and bare POSIX
   shared-memory names are accepted while existing image and local-media limits
