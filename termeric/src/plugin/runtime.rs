@@ -10,7 +10,8 @@
 //! separately granted non-destructive tab-order and divider-ratio adjustment,
 //! API v9 lets handlers contribute bounded, namespaced palette commands, and
 //! API v10 adds bounded, typed, explicitly user-configured non-secret settings.
-//! API v11 adds an independently granted, bounded presented-terminal query.
+//! API v11 adds an independently granted, bounded presented-terminal query,
+//! and API v12 adds exact, separately granted ordinary-pane creation.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -23,7 +24,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 11;
+pub const PLUGIN_API_VERSION: u32 = 12;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -61,6 +62,7 @@ pub enum PluginPermission {
     Clipboard,
     TerminalText,
     TerminalQuery,
+    PaneCreate,
     Secrets,
 }
 
@@ -79,6 +81,7 @@ impl std::fmt::Display for PluginPermission {
             Self::Clipboard => "clipboard",
             Self::TerminalText => "terminal-text",
             Self::TerminalQuery => "terminal-query",
+            Self::PaneCreate => "pane-create",
             Self::Secrets => "secrets",
         })
     }
@@ -101,6 +104,7 @@ impl std::str::FromStr for PluginPermission {
             "clipboard" => Ok(Self::Clipboard),
             "terminal-text" => Ok(Self::TerminalText),
             "terminal-query" => Ok(Self::TerminalQuery),
+            "pane-create" => Ok(Self::PaneCreate),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -509,6 +513,15 @@ impl PluginManifest {
         {
             bail!("terminal-query requires an API v11 persistent event handler");
         }
+        if self.permissions.contains(&PluginPermission::PaneCreate)
+            && (self.api_version < 12
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("pane-create requires an API v12 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -631,6 +644,7 @@ impl PluginRegistry {
                         | PluginPermission::UiActions
                         | PluginPermission::TerminalText
                         | PluginPermission::TerminalQuery
+                        | PluginPermission::PaneCreate
                 )
             }) {
                 bail!(
@@ -1048,6 +1062,9 @@ impl DeclarativePlugin {
                     allow_terminal_query: self.manifest.api_version >= 11
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && self.grants.contains(&PluginPermission::TerminalQuery),
+                    allow_pane_create: self.manifest.api_version >= 12
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::PaneCreate),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -1707,6 +1724,18 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::TerminalText
                 | PluginPermission::TerminalQuery
         ),
+        12 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+        ),
         _ => false,
     }
 }
@@ -2205,6 +2234,31 @@ events = ["command-completed"]
         manifest
     }
 
+    fn pane_create_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = event_grants(true);
+        grants.insert(PluginPermission::PaneCreate);
+        grants
+    }
+
+    fn pane_create_manifest() -> PluginManifest {
+        let mut manifest = workspace_query_manifest();
+        manifest.api_version = 12;
+        manifest.id = "pane-builder".into();
+        manifest.permissions.insert(PluginPermission::PaneCreate);
+        manifest.commands.push(DeclarativeHandlerCommand {
+            id: "split-active-pane".into(),
+            name: "Split Active Pane".into(),
+            description: String::new(),
+        });
+        manifest
+            .event_handler
+            .as_mut()
+            .unwrap()
+            .events
+            .insert(StructuredEventKind::CommandInvoked);
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -2522,7 +2576,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 12");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 13");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -2872,6 +2926,36 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn checked_in_api_v12_pane_builder_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/pane-builder");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 12);
+        assert_eq!(manifest.id, "pane-builder");
+        assert_eq!(manifest.commands.len(), 1);
+        assert_eq!(manifest.commands[0].id, "split-active-pane");
+        assert_eq!(manifest.permissions, pane_create_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        let registry = PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "pane-builder".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: pane_create_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        };
+        registry.validate().unwrap();
+    }
+
+    #[test]
     fn api_v1_cannot_gain_workspace_query_and_oversized_context_fails_visible() {
         let v1: PluginManifest = toml::from_str(&manifest(
             "1.0.0",
@@ -3158,6 +3242,70 @@ events = ["command-invoked"]
                 .to_string()
                 .contains("permissions denied: terminal-query")
         );
+    }
+
+    #[test]
+    fn api_v12_pane_creation_requires_persistent_mode_and_exact_grant() {
+        let manifest = pane_create_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &pane_create_grants()).unwrap();
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 1,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, pane_create_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "pane-builder.split-active-pane".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v12 pane creation handler did not create an invocation")
+        };
+        assert!(invocation.allow_workspace_query);
+        assert!(invocation.allow_pane_create);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v11 = manifest.clone();
+        v11.api_version = 11;
+        assert!(v11.validate().unwrap_err().to_string().contains("API v12"));
+
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+
+        let mut grants = pane_create_grants();
+        grants.remove(&PluginPermission::PaneCreate);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: pane-create")
+        );
+
+        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "pane-builder.split-active-pane".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted pane creation fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_pane_create);
     }
 
     #[test]

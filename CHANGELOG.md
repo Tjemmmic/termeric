@@ -253,6 +253,15 @@ Versioning once public beta tags begin.
   runtime, local-process, and in-memory terminal tests use no AI provider or
   tokens.
 
+- Declarative plugin API v12 adds an independent `pane-create` grant for one
+  exact ordinary-pane split in the originating window. Stable tab/pane IDs,
+  typed direction, tab kind/lifecycle, pane limits, renderer availability, and
+  PTY spawn validate before mutation; success returns the new pane ID and
+  failures remain bounded. Creation is the response's sole host operation and
+  its result removes every query/mutation authority to prevent recursive
+  growth. A checked-in command-driven pane builder and hermetic parser,
+  runtime, local-process, and exact-routing tests use no AI provider or token.
+
 - Settings now exposes a bounded installed third-party plugin manager. It shows
   exact source, version, health, requested/granted permissions, effective
   settings, and explicit override counts; supports enable/disable; and requires

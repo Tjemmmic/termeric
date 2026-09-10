@@ -1050,6 +1050,7 @@ API v8 adds separately granted tab ordering and divider-ratio adjustment.\n\
 API v9 adds bounded namespaced handler commands with exact-owner dispatch.\n\
 API v10 adds bounded typed non-secret settings with explicit user overrides.\n\
 API v11 adds a separately granted bounded exact-pane presented-terminal query.\n\
+API v12 adds separately granted exact ordinary-pane creation.\n\
 Installation records the\n\
 canonical local source and a manifest fingerprint; it never downloads code."
         .into()

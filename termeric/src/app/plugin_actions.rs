@@ -68,6 +68,9 @@ impl App {
                     | crate::plugin::structured::StructuredResponseAction::MoveTab { .. }
                     | crate::plugin::structured::StructuredResponseAction::ResizeDivider {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::CreatePane {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -106,6 +109,9 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::MoveTab { .. } => "move-tab",
                 crate::plugin::structured::StructuredResponseAction::ResizeDivider { .. } => {
                     "resize-divider"
+                }
+                crate::plugin::structured::StructuredResponseAction::CreatePane { .. } => {
+                    "create-pane"
                 }
                 _ => unreachable!("only workspace operations are retained"),
             };
@@ -170,11 +176,15 @@ impl App {
                 invocation.allow_workspace_actions = false;
                 invocation.allow_workspace_topology = false;
                 invocation.allow_terminal_query = false;
+                invocation.allow_pane_create = false;
             }
             action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
             | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
             | crate::plugin::structured::StructuredResponseAction::MoveTab { .. }
             | crate::plugin::structured::StructuredResponseAction::ResizeDivider {
+                ..
+            }
+            | crate::plugin::structured::StructuredResponseAction::CreatePane {
                 ..
             }) => {
                 invocation.event_json =
@@ -184,6 +194,7 @@ impl App {
                 invocation.allow_workspace_actions = false;
                 invocation.allow_workspace_topology = false;
                 invocation.allow_terminal_query = false;
+                invocation.allow_pane_create = false;
             }
             _ => return Err("structured response did not contain a workspace operation".into()),
         }
@@ -420,6 +431,50 @@ impl App {
                     })
                 }
             },
+            crate::plugin::structured::StructuredResponseAction::CreatePane {
+                action_id,
+                tab_id,
+                pane_id,
+                direction,
+            } => {
+                let pane_direction = match direction {
+                    crate::control::protocol::SplitDirection::Horizontal => {
+                        crate::panes::SplitDirection::Horizontal
+                    }
+                    crate::control::protocol::SplitDirection::Vertical => {
+                        crate::panes::SplitDirection::Vertical
+                    }
+                };
+                match self.create_control_pane(tab_id, pane_id, pane_direction) {
+                    Ok(created_pane_id) => serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "create-pane",
+                        "ok": true,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "direction": direction,
+                        "created_pane_id": created_pane_id,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "workspace-action-result",
+                            "action_id": action_id,
+                            "action": "create-pane",
+                            "ok": false,
+                            "tab_id": tab_id,
+                            "pane_id": pane_id,
+                            "direction": direction,
+                            "created_pane_id": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
             _ => return Err("structured response did not contain a workspace action".into()),
         };
         let envelope = serde_json::json!({

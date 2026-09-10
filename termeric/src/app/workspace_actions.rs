@@ -1118,11 +1118,6 @@ impl App {
     ) -> std::result::Result<u32, String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
-        let (cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| (renderer.cell_width(), renderer.cell_height()))
-            .ok_or_else(|| "Target window has no initialized renderer".to_string())?;
         let tabs = self
             .tabs
             .as_mut()
@@ -1163,6 +1158,11 @@ impl App {
                 format!("Could not split pane {pane_id} {direction_name}: {error:#}")
             })?
         } else {
+            let (cell_width, cell_height) = self
+                .renderer
+                .as_ref()
+                .map(|renderer| (renderer.cell_width(), renderer.cell_height()))
+                .ok_or_else(|| "Target window has no initialized renderer".to_string())?;
             let sole_pane = tab.single_pane_id();
             if target != sole_pane {
                 return Err(format!(

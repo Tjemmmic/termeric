@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v11 are constrained local extension formats. They
+Termeric plugin APIs v1 through v12 are constrained local extension formats. They
 turn a reviewed TOML manifest into command-palette launch profiles; they do not
 load native libraries, execute manifest scripts in the UI process, or download
 anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -23,6 +23,9 @@ safe update compatibility checks without adding process or host authority.
 API v11 adds a separate `terminal-query` grant for one bounded read of the
 presented text of an exact current-window pane. It is neither a PTY stream nor
 terminal input, and its result cannot initiate another host operation.
+API v12 adds a separate `pane-create` grant for splitting one exact ordinary
+pane in the current window. It cannot select a command, close anything, mutate
+a live domain, or act again from its correlated result.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -48,6 +51,8 @@ The API v10 typed-settings sample is
 [`examples/plugins/configurable-command/termeric-plugin.toml`](../examples/plugins/configurable-command/termeric-plugin.toml).
 The API v11 presented-terminal sample is
 [`examples/plugins/terminal-reader/termeric-plugin.toml`](../examples/plugins/terminal-reader/termeric-plugin.toml).
+The API v12 pane-creation sample is
+[`examples/plugins/pane-builder/termeric-plugin.toml`](../examples/plugins/pane-builder/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -823,14 +828,82 @@ the text budget and reports `truncated = true`; the complete source event still
 fits below 16 KiB.
 
 One response may contain at most one host operation across workspace query,
-terminal query, navigation, and topology actions, though bounded UI notices may
-coexist. A workspace-query result retains separately granted terminal-query
-authority so one external command can discover stable IDs and read one pane.
+terminal query, navigation, topology, and pane-creation actions, though bounded
+UI notices may coexist. A workspace-query result retains separately granted
+terminal-query and pane-create authority so one external command can discover
+stable IDs and then read or split one pane.
 After a terminal-query result, all query and workspace-mutation authority is
 cleared. A later external subscribed event may start another independently
 bounded request. The API does not expose cell styles, images, selection,
 clipboard, environment, raw PTY bytes, live output subscriptions, terminal
 input, other windows, or process-global terminal discovery.
+
+## Manifest API v12 ordinary-pane creation
+
+API v12 preserves every earlier contract and adds the independent
+`pane-create` permission. Only a persistent handler may use it. Install the
+sample only after reviewing its ordinary Python process and both host-data and
+pane-creation grants:
+
+```bash
+termeric plugin validate examples/plugins/pane-builder
+termeric plugin install examples/plugins/pane-builder \
+  --allow process-spawn --allow workspace-query \
+  --allow pane-create --allow event-subscribe --allow ui-actions --enable
+```
+
+The sample contributes **Pane Builder: Split Active Pane** to the command
+palette. It first uses the existing bounded current-window inventory to obtain
+stable IDs, then returns exactly one operation:
+
+```json
+{
+  "schema_version": 2,
+  "request_id": 12,
+  "actions": [{
+    "type": "create-pane",
+    "action_id": "split-active-pane",
+    "tab_id": 4,
+    "pane_id": 1,
+    "direction": "vertical"
+  }]
+}
+```
+
+`direction` is exactly `horizontal` (panes stacked vertically) or `vertical`
+(panes side by side). IDs are resolved when the operation executes. The target
+must be a live, non-closing ordinary shell/profile/plugin pane in the
+originating window. Missing IDs, serial tabs, live-domain tabs, the per-tab pane
+limit, an unavailable renderer for a first split, and PTY spawn failures return
+bounded errors without retargeting another pane.
+
+Success returns the new stable pane ID; failure returns it as `null`:
+
+```json
+{
+  "schema_version": 1,
+  "plugin_id": "pane-builder",
+  "event": {
+    "type": "workspace-action-result",
+    "action_id": "split-active-pane",
+    "action": "create-pane",
+    "ok": true,
+    "tab_id": 4,
+    "pane_id": 1,
+    "direction": "vertical",
+    "created_pane_id": 2,
+    "error": null
+  }
+}
+```
+
+The pane inherits the target tab's frozen split launch and configured cwd
+policy. No executable, argv, environment, cwd, title, or input field exists in
+this action. Creation counts as the response's sole host operation, and its
+result clears query, navigation, topology, terminal-query, and pane-creation
+authority. A later external event may begin a new bounded request. Tab
+creation, closure, arbitrary commands, live-domain mutation, and cross-window
+placement remain separate unsupported powers.
 
 ## Permissions and isolation
 
@@ -847,6 +920,7 @@ input, other windows, or process-global terminal discovery.
 | `clipboard` | Reserved and denied. |
 | `terminal-text` | API v4+, after `--allow terminal-text`; discloses bounded authoritative text from subscribed completed OSC 133 regions, never arbitrary grid/selection/transcript/raw PTY data. |
 | `terminal-query` | API v11+, after `--allow terminal-query`; permits one exact current-window stable-ID query of at most 256 history lines and 8 KiB of presented text through a persistent handler, with correlated results and host-operation loop prevention. |
+| `pane-create` | API v12+, after `--allow pane-create`; permits one exact current-window ordinary-pane split through a persistent handler, with inherited launch/cwd policy, a correlated stable-ID result, and host-operation loop prevention. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -854,7 +928,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v11 may also request `terminal-text` for
+`ui-actions`; API v4 through v12 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -865,6 +939,8 @@ API v10 also adds no grant; typed settings are explicit user-authored input and
 are always visible through plugin diagnostics.
 API v11 adds only `terminal-query`, independently of `terminal-text`, workspace
 mutation, UI, filesystem, network, clipboard, or secret access.
+API v12 adds only `pane-create`, independently of query, navigation, topology,
+terminal text, UI, filesystem, network, clipboard, or secret access.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -939,6 +1015,10 @@ Before distributing a local directory:
     hidden synchronized output, UTF-8/JSON clipping, history/byte limits,
     one-host-operation rejection, and complete authority removal after the
     result. Treat all returned terminal text as potentially sensitive.
+16. For API v12, test exact grant/version/mode denial, typed split direction,
+    stale and unsupported stable-ID targets, workspace-to-create correlation,
+    one-host-operation rejection, returned pane identity, inherited launch/cwd
+    policy, and complete authority removal after the result.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -974,6 +1054,11 @@ limit validation, stable-ID success/failure routing, presentation-safe hidden-
 output exclusion, JSON-envelope clipping, same-process correlation, host-
 operation loop prevention, and a checked-in terminal reader. The tests use only
 in-memory terminals and inert local shell/Python fixtures; no provider runs.
+API v12 adds exact permission/version/mode gating, typed direction parsing,
+stable-ID creation and failure routing, ordinary/live/serial target
+distinction, same-process correlation, host-operation loop prevention, and a
+checked-in pane builder. Its PTYs run only inert local shell fixtures; no
+provider runs.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -991,8 +1076,8 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v11's current-window inventory/navigation/topology and exact
-presented-text surface,
+and secrets. API v12's current-window inventory/navigation/topology, exact
+presented-text, and separately granted ordinary-pane creation surface,
 persistent lifetime, namespaced handler commands, and non-secret settings,
 plus the narrowly granted completed-region snapshot, are not
 enough to represent those privileged workflows; broader migration waits for a
@@ -1008,7 +1093,8 @@ after that PTY write and remains outside automated acceptance.
 
 `api_version = 1`, `api_version = 2`, `api_version = 3`, `api_version = 4`,
 `api_version = 5`, `api_version = 6`, `api_version = 7`, `api_version = 8`,
-`api_version = 9`, `api_version = 10`, and `api_version = 11`
+`api_version = 9`, `api_version = 10`, `api_version = 11`, and
+`api_version = 12`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -1025,6 +1111,8 @@ API v10 adds bounded typed non-secret settings and explicit migration refusal,
 again without adding a permission or host-action surface.
 API v11 adds the separately granted, bounded exact-pane presented-terminal
 query and terminal-result authority reduction described above.
+API v12 adds separately granted exact ordinary-pane creation and returns the
+new stable pane identity before removing every host-operation authority.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit

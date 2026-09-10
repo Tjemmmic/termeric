@@ -865,6 +865,161 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
 
 #[cfg(unix)]
 #[test]
+fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let tab_id = tabs.new_tab().unwrap();
+    let tab = tabs.tab_mut_by_id(tab_id).unwrap();
+    let owner = tab.take_terminal_owner().unwrap();
+    let mut panes = PaneManager::from_existing(
+        owner,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    panes.split(SplitDirection::Vertical).unwrap();
+    tab.pane_manager = Some(panes);
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+
+    let created = app
+        .structured_workspace_action_event(
+            "pane-builder",
+            crate::plugin::structured::StructuredResponseAction::CreatePane {
+                action_id: "split-exact-pane".into(),
+                tab_id: tab_id as u64,
+                pane_id: 0,
+                direction: crate::control::protocol::SplitDirection::Horizontal,
+            },
+        )
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+    assert_eq!(created["event"]["type"], "workspace-action-result");
+    assert_eq!(created["event"]["action"], "create-pane");
+    assert_eq!(created["event"]["action_id"], "split-exact-pane");
+    assert_eq!(created["event"]["ok"], true);
+    assert_eq!(created["event"]["tab_id"], tab_id as u64);
+    assert_eq!(created["event"]["pane_id"], 0);
+    assert_eq!(created["event"]["direction"], "horizontal");
+    let created_pane_id = created["event"]["created_pane_id"].as_u64().unwrap() as u32;
+    assert!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(tab_id)
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .get_pane(PaneId(created_pane_id))
+            .is_some()
+    );
+
+    let stale = app
+        .structured_workspace_action_event(
+            "pane-builder",
+            crate::plugin::structured::StructuredResponseAction::CreatePane {
+                action_id: "stale-pane".into(),
+                tab_id: tab_id as u64,
+                pane_id: u32::MAX,
+                direction: crate::control::protocol::SplitDirection::Vertical,
+            },
+        )
+        .unwrap();
+    let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+    assert_eq!(stale["event"]["ok"], false);
+    assert!(stale["event"]["created_pane_id"].is_null());
+    assert!(
+        stale["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("does not exist"))
+    );
+
+    let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(tab_id).unwrap();
+    tab.live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "fake-domain".into(),
+        tab_id: 8,
+        pane_ids: HashMap::new(),
+    });
+    let live = app
+        .structured_workspace_action_event(
+            "pane-builder",
+            crate::plugin::structured::StructuredResponseAction::CreatePane {
+                action_id: "reject-live".into(),
+                tab_id: tab_id as u64,
+                pane_id: 0,
+                direction: crate::control::protocol::SplitDirection::Vertical,
+            },
+        )
+        .unwrap();
+    let live: serde_json::Value = serde_json::from_str(&live).unwrap();
+    assert_eq!(live["event"]["ok"], false);
+    assert!(
+        live["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("live-domain"))
+    );
+
+    let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(tab_id).unwrap();
+    tab.live_domain = None;
+    tab.tab_type = crate::tabs::TabType::Serial {
+        name: "fixture".into(),
+    };
+    let serial = app
+        .structured_workspace_action_event(
+            "pane-builder",
+            crate::plugin::structured::StructuredResponseAction::CreatePane {
+                action_id: "reject-serial".into(),
+                tab_id: tab_id as u64,
+                pane_id: 0,
+                direction: crate::control::protocol::SplitDirection::Vertical,
+            },
+        )
+        .unwrap();
+    let serial: serde_json::Value = serde_json::from_str(&serial).unwrap();
+    assert_eq!(serial["event"]["ok"], false);
+    assert!(
+        serial["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Serial"))
+    );
+
+    let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(tab_id).unwrap();
+    tab.tab_type = crate::tabs::TabType::Shell;
+    tab.closing_at = Some(Instant::now());
+    let closing = app
+        .structured_workspace_action_event(
+            "pane-builder",
+            crate::plugin::structured::StructuredResponseAction::CreatePane {
+                action_id: "reject-closing".into(),
+                tab_id: tab_id as u64,
+                pane_id: 0,
+                direction: crate::control::protocol::SplitDirection::Vertical,
+            },
+        )
+        .unwrap();
+    let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+    assert_eq!(closing["event"]["ok"], false);
+    assert!(
+        closing["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("closing"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execution() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;

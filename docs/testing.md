@@ -983,10 +983,14 @@ grant/version/mode gating, 256-line and 8 KiB action bounds, stable-ID target
 success/failure, presented-state exclusion of hidden synchronized output,
 UTF-8/JSON-envelope clipping, same-process request correlation, one-host-
 operation enforcement, result-authority removal, and a checked-in terminal
-reader. Only inert local shell/Python fixtures and in-memory terminals are
-used; no AI provider process or tokens are involved. In-app management cases use temporary registries and
-non-executed fake profile names to cover the Settings action row, keyboard and
-pointer routing, AccessKit button semantics, bounded pagination, stale overlay
+reader. API v12 adds exact pane-create version/mode/grant denial, typed
+direction parsing, stable-ID success/failure routing, ordinary/live/serial tab
+distinction, returned pane identity, one-operation enforcement, result-
+authority removal, and a checked-in pane builder. Only inert local shell/Python
+fixtures and in-memory terminals are used; no AI provider process or tokens are
+involved. In-app management cases use temporary registries and non-executed
+fake profile names to cover the Settings action row, keyboard and pointer
+routing, AccessKit button semantics, bounded pagination, stale overlay
 requests, exact detail disclosure, enable/disable persistence, confirmed reset,
 cancelled/confirmed removal, and preservation of the original source directory.
 The samples

@@ -63,6 +63,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit one bounded presented-text query for an exact current-window
     /// terminal. A terminal result clears every host-operation authority.
     pub allow_terminal_query: bool,
+    /// Permit one exact ordinary-pane split in the current window. Its result
+    /// clears every host-operation authority to prevent recursive growth.
+    pub allow_pane_create: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -105,6 +108,12 @@ pub enum StructuredResponseAction {
         tab_id: u64,
         divider_id: u64,
         ratio_millis: u16,
+    },
+    CreatePane {
+        action_id: String,
+        tab_id: u64,
+        pane_id: u32,
+        direction: crate::control::protocol::SplitDirection,
     },
 }
 
@@ -411,13 +420,14 @@ fn run_handler(
             "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
         ));
     }
-    parse_response(
+    parse_response_with_pane_create(
         &stdout,
         invocation.allow_ui_actions,
         invocation.allow_workspace_query,
         invocation.allow_workspace_actions,
         invocation.allow_workspace_topology,
         invocation.allow_terminal_query,
+        invocation.allow_pane_create,
     )
 }
 
@@ -537,6 +547,7 @@ impl PersistentHandler {
         allow_workspace_actions: bool,
         allow_workspace_topology: bool,
         allow_terminal_query: bool,
+        allow_pane_create: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -592,13 +603,14 @@ impl PersistentHandler {
                 "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
             ));
         }
-        let actions = parse_persistent_response(
+        let actions = parse_persistent_response_with_pane_create(
             &bytes,
             self.allow_ui_actions,
             allow_workspace_query,
             allow_workspace_actions,
             allow_workspace_topology,
             allow_terminal_query,
+            allow_pane_create,
             request_id,
         )?;
         if let Some(status) = self
@@ -669,6 +681,7 @@ fn run_persistent_handler(
                 invocation.allow_workspace_actions,
                 invocation.allow_workspace_topology,
                 invocation.allow_terminal_query,
+                invocation.allow_pane_create,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -806,6 +819,7 @@ fn read_bounded(mut stream: impl Read, max: u64) -> std::io::Result<(Vec<u8>, bo
     Ok((bytes, truncated))
 }
 
+#[cfg(test)]
 fn parse_response(
     bytes: &[u8],
     allow_ui_actions: bool,
@@ -813,6 +827,26 @@ fn parse_response(
     allow_workspace_actions: bool,
     allow_workspace_topology: bool,
     allow_terminal_query: bool,
+) -> Result<Vec<StructuredResponseAction>, String> {
+    parse_response_with_pane_create(
+        bytes,
+        allow_ui_actions,
+        allow_workspace_query,
+        allow_workspace_actions,
+        allow_workspace_topology,
+        allow_terminal_query,
+        false,
+    )
+}
+
+fn parse_response_with_pane_create(
+    bytes: &[u8],
+    allow_ui_actions: bool,
+    allow_workspace_query: bool,
+    allow_workspace_actions: bool,
+    allow_workspace_topology: bool,
+    allow_terminal_query: bool,
+    allow_pane_create: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -829,9 +863,11 @@ fn parse_response(
         allow_workspace_actions,
         allow_workspace_topology,
         allow_terminal_query,
+        allow_pane_create,
     )
 }
 
+#[cfg(test)]
 fn parse_persistent_response(
     bytes: &[u8],
     allow_ui_actions: bool,
@@ -839,6 +875,28 @@ fn parse_persistent_response(
     allow_workspace_actions: bool,
     allow_workspace_topology: bool,
     allow_terminal_query: bool,
+    expected_request_id: u64,
+) -> Result<Vec<StructuredResponseAction>, String> {
+    parse_persistent_response_with_pane_create(
+        bytes,
+        allow_ui_actions,
+        allow_workspace_query,
+        allow_workspace_actions,
+        allow_workspace_topology,
+        allow_terminal_query,
+        false,
+        expected_request_id,
+    )
+}
+
+fn parse_persistent_response_with_pane_create(
+    bytes: &[u8],
+    allow_ui_actions: bool,
+    allow_workspace_query: bool,
+    allow_workspace_actions: bool,
+    allow_workspace_topology: bool,
+    allow_terminal_query: bool,
+    allow_pane_create: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -862,6 +920,7 @@ fn parse_persistent_response(
         allow_workspace_actions,
         allow_workspace_topology,
         allow_terminal_query,
+        allow_pane_create,
     )
 }
 
@@ -872,6 +931,7 @@ fn validate_response_actions(
     allow_workspace_actions: bool,
     allow_workspace_topology: bool,
     allow_terminal_query: bool,
+    allow_pane_create: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -988,6 +1048,16 @@ fn validate_response_actions(
                     );
                 }
             }
+            StructuredResponseAction::CreatePane { action_id, .. } => {
+                if !allow_pane_create {
+                    return Err(
+                        "handler requested pane creation without API v12 persistent pane-create authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("pane creation action id", action_id, MAX_ACTION_ID_BYTES)?;
+            }
         }
     }
     if host_operations > 1 {
@@ -1047,6 +1117,7 @@ mod tests {
             allow_workspace_actions: false,
             allow_workspace_topology: false,
             allow_terminal_query: false,
+            allow_pane_create: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1298,6 +1369,82 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pane_creation_is_typed_independently_gated_and_single_operation() {
+        let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"horizontal"}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_pane_create(
+                create, false, false, false, false, false, true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::CreatePane {
+                action_id: "split-1".into(),
+                tab_id: 42,
+                pane_id: 7,
+                direction: crate::control::protocol::SplitDirection::Horizontal,
+            }]
+        );
+        assert!(
+            parse_persistent_response(create, false, false, false, false, false, 9)
+                .unwrap_err()
+                .contains("pane-create authority")
+        );
+
+        let invalid_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"diagonal"}]}"#;
+        assert!(
+            parse_persistent_response_with_pane_create(
+                invalid_direction,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("invalid handler response JSON")
+        );
+        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"vertical","command":"forbidden"}]}"#;
+        assert!(
+            parse_persistent_response_with_pane_create(
+                unknown_field,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("unknown field")
+        );
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"bad\naction","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
+        assert!(
+            parse_persistent_response_with_pane_create(
+                unsafe_id, false, false, false, false, false, true, 9,
+            )
+            .unwrap_err()
+            .contains("control-safe")
+        );
+        let query_and_create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"create-pane","action_id":"split-2","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
+        assert!(
+            parse_persistent_response_with_pane_create(
+                query_and_create,
+                false,
+                true,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn persistent_workspace_query_round_trip_reuses_the_handler() {
@@ -1371,6 +1518,35 @@ done"#,
             }]
         );
         assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_pane_creation_result_cannot_create_again() {
+        let mut invocation = persistent_fixture(
+            "pane-create-fixture",
+            r#"while IFS= read -r event; do
+  printf '{"schema_version":2,"request_id":1,"actions":[{"type":"create-pane","action_id":"split","tab_id":7,"pane_id":3,"direction":"vertical"}]}\n'
+done"#,
+        );
+        invocation.allow_pane_create = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::CreatePane { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"create-pane","ok":true}}"#.into();
+        invocation.allow_pane_create = false;
+        assert!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap_err()
+                .contains("pane-create authority")
+        );
+        assert!(handlers.is_empty());
     }
 
     #[cfg(unix)]
@@ -1714,6 +1890,7 @@ done"#,
             allow_workspace_actions: false,
             allow_workspace_topology: false,
             allow_terminal_query: false,
+            allow_pane_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -1748,6 +1925,7 @@ done"#,
             allow_workspace_actions: false,
             allow_workspace_topology: false,
             allow_terminal_query: false,
+            allow_pane_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -1769,6 +1947,7 @@ done"#,
             allow_workspace_actions: false,
             allow_workspace_topology: false,
             allow_terminal_query: false,
+            allow_pane_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));
