@@ -109,8 +109,9 @@ session. It requires the target window/PTY to expand on at least one pixel axis
 without shrinking the other, return to its exact character and pixel geometry
 on exit, and leave its sibling window/PTY
 unchanged. Request diagnostics and two-window close behavior are retained with
-the transcript. The capability remains Partial until this newly added scenario
-has a green CI artifact; source presence alone is not acceptance evidence.
+the transcript. Clean local commit `f9ccc2d` passed the private-Sway scenario;
+the capability remains Partial until the X11 counterpart and accepted CI
+history are green. Source presence alone is not acceptance evidence.
 
 ## Visual evidence
 

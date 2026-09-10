@@ -89,9 +89,13 @@ then proves keyboard, clipboard, pane routing, child cleanup, and native close
 against the surviving PTYs. Acceptance-only fault paths are initially absent
 files; the harness creates them sequentially and the renderer consumes each at
 most once per process. This prevents a recovery resize from accidentally
-injecting the next requested failure. Both native lanes await clean committed
-artifacts for the current implementation; real vendor-GPU acceptance remains
-separate.
+injecting the next requested failure. Clean local commit `f9ccc2d` passed both
+the private-Sway interaction and two-window fullscreen scenarios on an AMD
+Radeon RX 7900 XTX with all three injections enabled. The schema-3 records bind
+both runs to debug binary SHA-256
+`9cfc391dd5fd4b321c002c3afeb38568f677012fd25081e20e9ecaaae86541b0`.
+Equivalent current X11 evidence and portable vendor-GPU memory observation
+remain open.
 
 On a real-GPU release host, set both `TERMERIC_GPU_SMOKE=1` and
 `TERMERIC_GPU_SMOKE_HARDWARE=1` to reject CPU adapters and run the identical
@@ -106,6 +110,11 @@ The release benchmark also requests the fallback adapter first. Its p95
 steady-frame pipeline-buffer allocations and the normal incremental-row
 budgets. This is a deliberately broad minimum-functional budget, not a claim
 that software rendering matches a GPU or includes compositor presentation.
+On clean commit `f9ccc2d`, Mesa 26.2.2 llvmpipe/Vulkan passed the deterministic
+visual signature and every release budget; the renderer frame p95 was 2.363 ms
+and steady-frame pipeline-buffer allocations were zero. The visual artifact's
+SHA-256 is
+`80b8c3b2e9a38c4e52f697e986702463f24dc3741f1b16dcd14fa2d71b8d2471`.
 
 There is not yet evidence that a separate CPU window/framebuffer renderer is
 needed. Add one only if supported hosts cannot expose a WGPU fallback despite
