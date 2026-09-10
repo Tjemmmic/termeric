@@ -2956,6 +2956,70 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn api_v12_pane_create_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/pane-builder")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: event_grants(true),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("pane-create"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: pane_create_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "pane-builder".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "pane-builder")
+            .unwrap();
+        assert!(installed.enabled);
+        assert_eq!(installed.grants, pane_create_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("pane-builder")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
     fn api_v1_cannot_gain_workspace_query_and_oversized_context_fails_visible() {
         let v1: PluginManifest = toml::from_str(&manifest(
             "1.0.0",
