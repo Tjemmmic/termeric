@@ -183,10 +183,29 @@ dirty roadmap work and this artifact predates the new embedded dirty-state and
 binary-digest fields, it is strong local duration evidence but not an accepted
 clean-candidate or scheduled-CI record.
 
+On 2026-09-10, clean commit `9a70020` passed the current 30-second core contract
+in `target/soak/issue-23-current-clean.json`: 61 samples, 505 complete workload
+iterations, 40,972 KiB peak RSS, 6,696 KiB first-to-last-quartile RSS growth,
+zero thread/fd growth, four peak children, complete child cleanup, complete
+queue drainage with no drops, and no GPU validation/device error. All 18 gates
+passed. This is clean short-lane evidence, but the earlier 600-second result is
+still not a clean-candidate or scheduled-CI record.
+
+Clean commit `d623154` then passed the first local 30-second displayed-process
+contract in `target/soak/issue-23-d623154-native`: 49 samples, 142,732 KiB peak
+RSS, 11,556 KiB first-to-last-quartile RSS growth, one thread and three file
+descriptors of growth, and two peak fixture children. The real application
+completed 49 progress records, 12 compositor resizes, 12 pane create/route/
+close actions, and 31 accepted Kitty image replacements before a normal native
+close. All observed children exited and the log contained no recognized
+renderer, GPU, or runtime error; all 14 gates passed. The artifact is local
+short-lane evidence rather than a ten-minute scheduled or release-candidate
+record.
+
 The core soak still does not create a window; the new native lane does
 so under a private software-rendered compositor. Neither measures vendor GPU
 memory, substitutes for a long real-desktop observation, validates macOS/
 Windows runtime behavior, or proves every terminal protocol. The native lane is
-configured but has no accepted artifact yet. Those remaining boundaries stay
-separate platform/manual rows in [platform-support.md](platform-support.md) and
+now locally exercised, but those remaining boundaries stay separate
+platform/manual rows in [platform-support.md](platform-support.md) and
 [release-acceptance.md](release-acceptance.md).
