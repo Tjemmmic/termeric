@@ -71,6 +71,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::CreatePane {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::CreateTab {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -112,6 +115,9 @@ impl App {
                 }
                 crate::plugin::structured::StructuredResponseAction::CreatePane { .. } => {
                     "create-pane"
+                }
+                crate::plugin::structured::StructuredResponseAction::CreateTab { .. } => {
+                    "create-tab"
                 }
                 _ => unreachable!("only workspace operations are retained"),
             };
@@ -177,6 +183,7 @@ impl App {
                 invocation.allow_workspace_topology = false;
                 invocation.allow_terminal_query = false;
                 invocation.allow_pane_create = false;
+                invocation.allow_tab_create = false;
             }
             action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
             | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
@@ -186,7 +193,8 @@ impl App {
             }
             | crate::plugin::structured::StructuredResponseAction::CreatePane {
                 ..
-            }) => {
+            }
+            | crate::plugin::structured::StructuredResponseAction::CreateTab { .. }) => {
                 invocation.event_json =
                     self.structured_workspace_action_event(plugin_id, action)?;
                 // A mutation result is terminal for host operations.
@@ -195,6 +203,7 @@ impl App {
                 invocation.allow_workspace_topology = false;
                 invocation.allow_terminal_query = false;
                 invocation.allow_pane_create = false;
+                invocation.allow_tab_create = false;
             }
             _ => return Err("structured response did not contain a workspace operation".into()),
         }
@@ -469,6 +478,31 @@ impl App {
                             "pane_id": pane_id,
                             "direction": direction,
                             "created_pane_id": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
+            crate::plugin::structured::StructuredResponseAction::CreateTab { action_id } => {
+                match self.create_plugin_tab() {
+                    Ok(created_tab_id) => serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "create-tab",
+                        "ok": true,
+                        "created_tab_id": created_tab_id,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "workspace-action-result",
+                            "action_id": action_id,
+                            "action": "create-tab",
+                            "ok": false,
+                            "created_tab_id": null,
                             "error": error,
                             "error_truncated": error_truncated,
                         })

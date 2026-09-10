@@ -1020,6 +1020,160 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
 
 #[cfg(unix)]
 #[test]
+fn plugin_tab_creation_returns_stable_identity_without_lifecycle_redispatch() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    #[derive(Debug)]
+    struct TabCreatedObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl crate::plugin::hooks::Plugin for TabCreatedObserver {
+        fn id(&self) -> &str {
+            "tab-created-observer"
+        }
+
+        fn name(&self) -> &str {
+            "Tab Created Observer"
+        }
+
+        fn on_hook(
+            &mut self,
+            hook: &crate::plugin::Hook,
+            _ctx: &crate::plugin::PluginContext,
+        ) -> crate::plugin::hooks::HookResponse {
+            if matches!(hook, crate::plugin::Hook::TabCreated { .. }) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            crate::plugin::hooks::HookResponse::Ignored
+        }
+    }
+
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let initial_tab_id = tabs.new_tab().unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.plugin_manager.unload_all();
+    let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let context = app.build_plugin_context();
+    app.plugin_manager
+        .register(
+            Box::new(TabCreatedObserver(std::sync::Arc::clone(&observed))),
+            &context,
+        )
+        .unwrap();
+
+    let created = app
+        .structured_workspace_action_event(
+            "tab-builder",
+            crate::plugin::structured::StructuredResponseAction::CreateTab {
+                action_id: "new-task".into(),
+            },
+        )
+        .unwrap();
+    let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+    assert_eq!(created["event"]["type"], "workspace-action-result");
+    assert_eq!(created["event"]["action"], "create-tab");
+    assert_eq!(created["event"]["action_id"], "new-task");
+    assert_eq!(created["event"]["ok"], true);
+    let created_tab_id = created["event"]["created_tab_id"].as_u64().unwrap() as usize;
+    assert_ne!(created_tab_id, initial_tab_id);
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 2);
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab().unwrap().id,
+        created_tab_id
+    );
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    let control_tab_id = app.create_control_tab().unwrap() as usize;
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 3);
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab().unwrap().id,
+        control_tab_id
+    );
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "fake-domain".into(),
+        tab_id: 8,
+        pane_ids: HashMap::new(),
+    });
+    let live = app
+        .structured_workspace_action_event(
+            "tab-builder",
+            crate::plugin::structured::StructuredResponseAction::CreateTab {
+                action_id: "reject-live".into(),
+            },
+        )
+        .unwrap();
+    let live: serde_json::Value = serde_json::from_str(&live).unwrap();
+    assert_eq!(live["event"]["ok"], false);
+    assert!(live["event"]["created_tab_id"].is_null());
+    assert!(
+        live["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("live domain"))
+    );
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 3);
+
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.active_tab_mut().unwrap().live_domain = None;
+    tabs.set_shell_config(ShellConfig {
+        program: Some("/definitely/missing/termeric-shell".into()),
+        args: Vec::new(),
+        env: Default::default(),
+    });
+    let launch_failure = app
+        .structured_workspace_action_event(
+            "tab-builder",
+            crate::plugin::structured::StructuredResponseAction::CreateTab {
+                action_id: "failed-launch".into(),
+            },
+        )
+        .unwrap();
+    let launch_failure: serde_json::Value = serde_json::from_str(&launch_failure).unwrap();
+    assert_eq!(launch_failure["event"]["ok"], false);
+    assert!(launch_failure["event"]["created_tab_id"].is_null());
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 3);
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    assert!(
+        super::workspace_actions::validate_ordinary_tab_creation_capacity(
+            crate::control::protocol::MAX_TABS_PER_WINDOW,
+        )
+        .unwrap_err()
+        .contains("tab limit")
+    );
+
+    let mut uninitialized = App::new_headless(Config::default()).unwrap();
+    let unavailable = uninitialized
+        .structured_workspace_action_event(
+            "tab-builder",
+            crate::plugin::structured::StructuredResponseAction::CreateTab {
+                action_id: "no-tabs".into(),
+            },
+        )
+        .unwrap();
+    let unavailable: serde_json::Value = serde_json::from_str(&unavailable).unwrap();
+    assert_eq!(unavailable["event"]["ok"], false);
+    assert!(
+        unavailable["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("tab manager"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execution() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;

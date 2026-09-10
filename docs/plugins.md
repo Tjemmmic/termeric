@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v12 are constrained local extension formats. They
+Termeric plugin APIs v1 through v13 are constrained local extension formats. They
 turn a reviewed TOML manifest into command-palette launch profiles; they do not
 load native libraries, execute manifest scripts in the UI process, or download
 anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -26,6 +26,9 @@ terminal input, and its result cannot initiate another host operation.
 API v12 adds a separate `pane-create` grant for splitting one exact ordinary
 pane in the current window. It cannot select a command, close anything, mutate
 a live domain, or act again from its correlated result.
+API v13 adds an independent `tab-create` grant for creating one ordinary local
+shell tab in the originating window. The action has no launch, destination, or
+input fields, and its result cannot initiate another host operation.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -53,6 +56,8 @@ The API v11 presented-terminal sample is
 [`examples/plugins/terminal-reader/termeric-plugin.toml`](../examples/plugins/terminal-reader/termeric-plugin.toml).
 The API v12 pane-creation sample is
 [`examples/plugins/pane-builder/termeric-plugin.toml`](../examples/plugins/pane-builder/termeric-plugin.toml).
+The API v13 tab-creation sample is
+[`examples/plugins/tab-builder/termeric-plugin.toml`](../examples/plugins/tab-builder/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -828,10 +833,10 @@ the text budget and reports `truncated = true`; the complete source event still
 fits below 16 KiB.
 
 One response may contain at most one host operation across workspace query,
-terminal query, navigation, topology, and pane-creation actions, though bounded
-UI notices may coexist. A workspace-query result retains separately granted
-terminal-query and pane-create authority so one external command can discover
-stable IDs and then read or split one pane.
+terminal query, navigation, topology, pane creation, and tab creation, though
+bounded UI notices may coexist. A workspace-query result retains separately
+granted terminal-query, pane-create, and tab-create authority so one external
+command can discover current state and then perform one granted operation.
 After a terminal-query result, all query and workspace-mutation authority is
 cleared. A later external subscribed event may start another independently
 bounded request. The API does not expose cell styles, images, selection,
@@ -902,8 +907,69 @@ policy. No executable, argv, environment, cwd, title, or input field exists in
 this action. Creation counts as the response's sole host operation, and its
 result clears query, navigation, topology, terminal-query, and pane-creation
 authority. A later external event may begin a new bounded request. Tab
-creation, closure, arbitrary commands, live-domain mutation, and cross-window
-placement remain separate unsupported powers.
+creation requires the separate API v13 grant; closure, arbitrary commands,
+live-domain mutation, and cross-window placement remain unsupported powers.
+
+## Manifest API v13 ordinary-tab creation
+
+API v13 preserves every earlier contract and adds the independent `tab-create`
+permission. Only a persistent handler may use it. Install the sample only after
+reviewing its ordinary Python process and tab-creation grant:
+
+```bash
+termeric plugin validate examples/plugins/tab-builder
+termeric plugin install examples/plugins/tab-builder \
+  --allow process-spawn --allow tab-create \
+  --allow event-subscribe --allow ui-actions --enable
+```
+
+The sample contributes **Tab Builder: New Task Tab** to the command palette and
+returns exactly one operation:
+
+```json
+{
+  "schema_version": 2,
+  "request_id": 13,
+  "actions": [{
+    "type": "create-tab",
+    "action_id": "new-task-tab"
+  }]
+}
+```
+
+The action always targets the handler's originating native window and creates
+the same ordinary local shell tab as the in-app New Tab action. It accepts no
+window ID, executable, argv, environment, cwd, title, profile, domain, or input.
+The new tab becomes active and uses the window's current validated default
+shell configuration. If the tab manager is unavailable, the active tab belongs
+to a live domain, the per-window limit is reached, or PTY launch fails, creation
+returns a bounded error without a fabricated identity.
+
+Success returns the new stable window-local tab ID; failure returns it as
+`null`:
+
+```json
+{
+  "schema_version": 1,
+  "plugin_id": "tab-builder",
+  "event": {
+    "type": "workspace-action-result",
+    "action_id": "new-task-tab",
+    "action": "create-tab",
+    "ok": true,
+    "created_tab_id": 5,
+    "error": null
+  }
+}
+```
+
+Creation counts as the response's sole host operation. Its result clears query,
+navigation, topology, terminal-query, pane-create, and tab-create authority.
+Termeric deliberately suppresses the derived `tab-created` hook for this
+plugin-originated action, so neither the requester nor another plugin can turn
+one creation into a lifecycle feedback loop. A later independent external
+event may begin another bounded request. Arbitrary launch selection,
+live-domain creation, cross-window placement, and closure remain unsupported.
 
 ## Permissions and isolation
 
@@ -921,6 +987,7 @@ placement remain separate unsupported powers.
 | `terminal-text` | API v4+, after `--allow terminal-text`; discloses bounded authoritative text from subscribed completed OSC 133 regions, never arbitrary grid/selection/transcript/raw PTY data. |
 | `terminal-query` | API v11+, after `--allow terminal-query`; permits one exact current-window stable-ID query of at most 256 history lines and 8 KiB of presented text through a persistent handler, with correlated results and host-operation loop prevention. |
 | `pane-create` | API v12+, after `--allow pane-create`; permits one exact current-window ordinary-pane split through a persistent handler, with inherited launch/cwd policy, a correlated stable-ID result, and host-operation loop prevention. |
+| `tab-create` | API v13+, after `--allow tab-create`; permits one ordinary local shell tab in the originating window through a persistent handler, with a correlated stable-ID result and lifecycle/host-operation loop prevention. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -928,7 +995,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v12 may also request `terminal-text` for
+`ui-actions`; API v4 through v13 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -941,6 +1008,9 @@ API v11 adds only `terminal-query`, independently of `terminal-text`, workspace
 mutation, UI, filesystem, network, clipboard, or secret access.
 API v12 adds only `pane-create`, independently of query, navigation, topology,
 terminal text, UI, filesystem, network, clipboard, or secret access.
+API v13 adds only `tab-create`, independently of pane creation, query,
+navigation, topology, terminal text, UI, filesystem, network, clipboard, or
+secret access.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -1019,6 +1089,10 @@ Before distributing a local directory:
     stale and unsupported stable-ID targets, workspace-to-create correlation,
     one-host-operation rejection, returned pane identity, inherited launch/cwd
     policy, and complete authority removal after the result.
+17. For API v13, test exact grant/version/mode denial, action-ID and schema
+    bounds, current-window stable identity, unavailable/live/capacity/launch
+    failures, lifecycle-hook suppression, one-host-operation rejection, and
+    complete authority removal after the result.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -1059,6 +1133,11 @@ stable-ID creation and failure routing, ordinary/live/serial target
 distinction, same-process correlation, host-operation loop prevention, and a
 checked-in pane builder. Its PTYs run only inert local shell fixtures; no
 provider runs.
+API v13 adds exact permission/version/mode gating, strict action parsing,
+ordinary stable-ID creation, unavailable/live/capacity/launch failure routing,
+lifecycle-hook suppression, same-process correlation, authority removal, and a
+checked-in tab builder. Its PTYs run only inert local shell fixtures; no
+provider runs.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -1076,8 +1155,8 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v12's current-window inventory/navigation/topology, exact
-presented-text, and separately granted ordinary-pane creation surface,
+and secrets. API v13's current-window inventory/navigation/topology, exact
+presented-text, and separately granted ordinary pane/tab creation surface,
 persistent lifetime, namespaced handler commands, and non-secret settings,
 plus the narrowly granted completed-region snapshot, are not
 enough to represent those privileged workflows; broader migration waits for a
@@ -1093,8 +1172,8 @@ after that PTY write and remains outside automated acceptance.
 
 `api_version = 1`, `api_version = 2`, `api_version = 3`, `api_version = 4`,
 `api_version = 5`, `api_version = 6`, `api_version = 7`, `api_version = 8`,
-`api_version = 9`, `api_version = 10`, `api_version = 11`, and
-`api_version = 12`
+`api_version = 9`, `api_version = 10`, `api_version = 11`,
+`api_version = 12`, and `api_version = 13`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -1113,6 +1192,9 @@ API v11 adds the separately granted, bounded exact-pane presented-terminal
 query and terminal-result authority reduction described above.
 API v12 adds separately granted exact ordinary-pane creation and returns the
 new stable pane identity before removing every host-operation authority.
+API v13 adds separately granted ordinary-tab creation in the originating
+window, returns the new stable tab identity, and suppresses lifecycle feedback
+before removing every host-operation authority.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit

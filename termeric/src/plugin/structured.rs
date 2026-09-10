@@ -66,6 +66,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit one exact ordinary-pane split in the current window. Its result
     /// clears every host-operation authority to prevent recursive growth.
     pub allow_pane_create: bool,
+    /// Permit one ordinary local tab in the current window. Its result clears
+    /// every host-operation authority to prevent recursive growth.
+    pub allow_tab_create: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -114,6 +117,9 @@ pub enum StructuredResponseAction {
         tab_id: u64,
         pane_id: u32,
         direction: crate::control::protocol::SplitDirection,
+    },
+    CreateTab {
+        action_id: String,
     },
 }
 
@@ -420,7 +426,7 @@ fn run_handler(
             "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
         ));
     }
-    parse_response_with_pane_create(
+    parse_response_with_host_creation(
         &stdout,
         invocation.allow_ui_actions,
         invocation.allow_workspace_query,
@@ -428,6 +434,7 @@ fn run_handler(
         invocation.allow_workspace_topology,
         invocation.allow_terminal_query,
         invocation.allow_pane_create,
+        invocation.allow_tab_create,
     )
 }
 
@@ -548,6 +555,7 @@ impl PersistentHandler {
         allow_workspace_topology: bool,
         allow_terminal_query: bool,
         allow_pane_create: bool,
+        allow_tab_create: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -603,7 +611,7 @@ impl PersistentHandler {
                 "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
             ));
         }
-        let actions = parse_persistent_response_with_pane_create(
+        let actions = parse_persistent_response_with_host_creation(
             &bytes,
             self.allow_ui_actions,
             allow_workspace_query,
@@ -611,6 +619,7 @@ impl PersistentHandler {
             allow_workspace_topology,
             allow_terminal_query,
             allow_pane_create,
+            allow_tab_create,
             request_id,
         )?;
         if let Some(status) = self
@@ -682,6 +691,7 @@ fn run_persistent_handler(
                 invocation.allow_workspace_topology,
                 invocation.allow_terminal_query,
                 invocation.allow_pane_create,
+                invocation.allow_tab_create,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -828,7 +838,7 @@ fn parse_response(
     allow_workspace_topology: bool,
     allow_terminal_query: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_response_with_pane_create(
+    parse_response_with_host_creation(
         bytes,
         allow_ui_actions,
         allow_workspace_query,
@@ -836,10 +846,11 @@ fn parse_response(
         allow_workspace_topology,
         allow_terminal_query,
         false,
+        false,
     )
 }
 
-fn parse_response_with_pane_create(
+fn parse_response_with_host_creation(
     bytes: &[u8],
     allow_ui_actions: bool,
     allow_workspace_query: bool,
@@ -847,6 +858,7 @@ fn parse_response_with_pane_create(
     allow_workspace_topology: bool,
     allow_terminal_query: bool,
     allow_pane_create: bool,
+    allow_tab_create: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -864,6 +876,7 @@ fn parse_response_with_pane_create(
         allow_workspace_topology,
         allow_terminal_query,
         allow_pane_create,
+        allow_tab_create,
     )
 }
 
@@ -877,7 +890,7 @@ fn parse_persistent_response(
     allow_terminal_query: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
-    parse_persistent_response_with_pane_create(
+    parse_persistent_response_with_host_creation(
         bytes,
         allow_ui_actions,
         allow_workspace_query,
@@ -885,11 +898,12 @@ fn parse_persistent_response(
         allow_workspace_topology,
         allow_terminal_query,
         false,
+        false,
         expected_request_id,
     )
 }
 
-fn parse_persistent_response_with_pane_create(
+fn parse_persistent_response_with_host_creation(
     bytes: &[u8],
     allow_ui_actions: bool,
     allow_workspace_query: bool,
@@ -897,6 +911,7 @@ fn parse_persistent_response_with_pane_create(
     allow_workspace_topology: bool,
     allow_terminal_query: bool,
     allow_pane_create: bool,
+    allow_tab_create: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -921,6 +936,7 @@ fn parse_persistent_response_with_pane_create(
         allow_workspace_topology,
         allow_terminal_query,
         allow_pane_create,
+        allow_tab_create,
     )
 }
 
@@ -932,6 +948,7 @@ fn validate_response_actions(
     allow_workspace_topology: bool,
     allow_terminal_query: bool,
     allow_pane_create: bool,
+    allow_tab_create: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1058,6 +1075,16 @@ fn validate_response_actions(
                 host_operations += 1;
                 validate_text("pane creation action id", action_id, MAX_ACTION_ID_BYTES)?;
             }
+            StructuredResponseAction::CreateTab { action_id } => {
+                if !allow_tab_create {
+                    return Err(
+                        "handler requested tab creation without API v13 persistent tab-create authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("tab creation action id", action_id, MAX_ACTION_ID_BYTES)?;
+            }
         }
     }
     if host_operations > 1 {
@@ -1118,6 +1145,7 @@ mod tests {
             allow_workspace_topology: false,
             allow_terminal_query: false,
             allow_pane_create: false,
+            allow_tab_create: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1373,8 +1401,8 @@ mod tests {
     fn pane_creation_is_typed_independently_gated_and_single_operation() {
         let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"horizontal"}]}"#;
         assert_eq!(
-            parse_persistent_response_with_pane_create(
-                create, false, false, false, false, false, true, 9,
+            parse_persistent_response_with_host_creation(
+                create, false, false, false, false, false, true, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::CreatePane {
@@ -1392,7 +1420,7 @@ mod tests {
 
         let invalid_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"diagonal"}]}"#;
         assert!(
-            parse_persistent_response_with_pane_create(
+            parse_persistent_response_with_host_creation(
                 invalid_direction,
                 false,
                 false,
@@ -1400,6 +1428,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 9,
             )
             .unwrap_err()
@@ -1407,8 +1436,69 @@ mod tests {
         );
         let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"split-1","tab_id":42,"pane_id":7,"direction":"vertical","command":"forbidden"}]}"#;
         assert!(
-            parse_persistent_response_with_pane_create(
+            parse_persistent_response_with_host_creation(
                 unknown_field,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                9,
+            )
+            .unwrap_err()
+            .contains("unknown field")
+        );
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"bad\naction","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_creation(
+                unsafe_id, false, false, false, false, false, true, false, 9,
+            )
+            .unwrap_err()
+            .contains("control-safe")
+        );
+        let query_and_create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"create-pane","action_id":"split-2","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_creation(
+                query_and_create,
+                false,
+                true,
+                false,
+                false,
+                false,
+                true,
+                false,
+                9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+    }
+
+    #[test]
+    fn tab_creation_is_independently_gated_strict_and_single_operation() {
+        let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-tab","action_id":"new-task"}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_host_creation(
+                create, false, false, false, false, false, false, true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::CreateTab {
+                action_id: "new-task".into(),
+            }]
+        );
+        assert!(
+            parse_persistent_response(create, false, false, false, false, false, 9)
+                .unwrap_err()
+                .contains("tab-create authority")
+        );
+
+        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-tab","action_id":"new-task","command":"forbidden"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_creation(
+                unknown_field,
+                false,
                 false,
                 false,
                 false,
@@ -1420,20 +1510,44 @@ mod tests {
             .unwrap_err()
             .contains("unknown field")
         );
-        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-pane","action_id":"bad\naction","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-tab","action_id":"bad\naction"}]}"#;
         assert!(
-            parse_persistent_response_with_pane_create(
-                unsafe_id, false, false, false, false, false, true, 9,
+            parse_persistent_response_with_host_creation(
+                unsafe_id, false, false, false, false, false, false, true, 9,
             )
             .unwrap_err()
             .contains("control-safe")
         );
-        let query_and_create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"create-pane","action_id":"split-2","tab_id":42,"pane_id":7,"direction":"vertical"}]}"#;
+        let oversized_id = serde_json::json!({
+            "schema_version": 2,
+            "request_id": 9,
+            "actions": [{
+                "type": "create-tab",
+                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
+            }],
+        });
         assert!(
-            parse_persistent_response_with_pane_create(
+            parse_persistent_response_with_host_creation(
+                &serde_json::to_vec(&oversized_id).unwrap(),
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("within 64 bytes")
+        );
+        let query_and_create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"create-tab","action_id":"new-task"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_creation(
                 query_and_create,
                 false,
                 true,
+                false,
                 false,
                 false,
                 false,
@@ -1545,6 +1659,35 @@ done"#,
             run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
                 .unwrap_err()
                 .contains("pane-create authority")
+        );
+        assert!(handlers.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_tab_creation_result_cannot_create_again() {
+        let mut invocation = persistent_fixture(
+            "tab-create-fixture",
+            r#"while IFS= read -r event; do
+  printf '{"schema_version":2,"request_id":1,"actions":[{"type":"create-tab","action_id":"new-task"}]}\n'
+done"#,
+        );
+        invocation.allow_tab_create = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::CreateTab { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"create-tab","ok":true}}"#.into();
+        invocation.allow_tab_create = false;
+        assert!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap_err()
+                .contains("tab-create authority")
         );
         assert!(handlers.is_empty());
     }
@@ -1891,6 +2034,7 @@ done"#,
             allow_workspace_topology: false,
             allow_terminal_query: false,
             allow_pane_create: false,
+            allow_tab_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -1926,6 +2070,7 @@ done"#,
             allow_workspace_topology: false,
             allow_terminal_query: false,
             allow_pane_create: false,
+            allow_tab_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -1948,6 +2093,7 @@ done"#,
             allow_workspace_topology: false,
             allow_terminal_query: false,
             allow_pane_create: false,
+            allow_tab_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

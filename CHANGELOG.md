@@ -262,6 +262,16 @@ Versioning once public beta tags begin.
   growth. A checked-in command-driven pane builder and hermetic parser,
   runtime, local-process, and exact-routing tests use no AI provider or token.
 
+- Declarative plugin API v13 adds an independent `tab-create` grant for one
+  ordinary local shell tab in the originating window. The action exposes no
+  launch, destination, or input fields; success returns the stable tab ID and
+  unavailable, live-domain-active, capacity, or PTY-launch failures remain
+  bounded. Creation is the response's sole host operation, removes every host
+  authority from its result, and suppresses the derived lifecycle hook to
+  prevent feedback growth. A checked-in command-driven tab builder and
+  hermetic parser, runtime, local-process, and exact-routing tests use no AI
+  provider or token.
+
 - Settings now exposes a bounded installed third-party plugin manager. It shows
   exact source, version, health, requested/granted permissions, effective
   settings, and explicit override counts; supports enable/disable; and requires

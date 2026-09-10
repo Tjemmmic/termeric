@@ -5,6 +5,18 @@ use super::*;
 const MAX_COMMAND_REGION_COMMAND_BYTES: usize = 4 * 1024;
 const MAX_COMMAND_REGION_OUTPUT_BYTES: usize = 64 * 1024;
 
+pub(super) fn validate_ordinary_tab_creation_capacity(
+    tab_count: usize,
+) -> std::result::Result<(), String> {
+    if tab_count >= crate::control::protocol::MAX_TABS_PER_WINDOW {
+        return Err(format!(
+            "GUI window tab limit of {} reached",
+            crate::control::protocol::MAX_TABS_PER_WINDOW
+        ));
+    }
+    Ok(())
+}
+
 fn bounded_tab_rename_text(text: &str, max_chars: usize) -> String {
     text.chars()
         .filter(|character| !character.is_control())
@@ -2758,7 +2770,7 @@ impl App {
             self.queue_live_domain_control(LiveDomainControl::SpawnTab { domain_id, spawn });
             return;
         }
-        if let Err(error) = self.create_local_tab() {
+        if let Err(error) = self.create_ordinary_tab(true) {
             log::error!("Failed to create new tab: {error}");
         }
     }
@@ -2768,6 +2780,22 @@ impl App {
     /// rejected until the control protocol can acknowledge the resulting
     /// stable local ID without blocking the event loop.
     pub(super) fn create_control_tab(&mut self) -> std::result::Result<u64, String> {
+        self.create_ordinary_tab(true)
+    }
+
+    /// Create one ordinary tab for a declarative plugin without redispatching
+    /// the derived tab-created hook. The correlated action result is the only
+    /// follow-up event, preventing lifecycle-driven creation loops.
+    pub(super) fn create_plugin_tab(&mut self) -> std::result::Result<u64, String> {
+        self.create_ordinary_tab(false)
+    }
+
+    fn create_ordinary_tab(
+        &mut self,
+        dispatch_plugin_hook: bool,
+    ) -> std::result::Result<u64, String> {
+        let tab_count = self.tabs.as_ref().map_or(0, TabManager::count);
+        validate_ordinary_tab_creation_capacity(tab_count)?;
         if self
             .tabs
             .as_ref()
@@ -2775,15 +2803,18 @@ impl App {
             .is_some_and(|tab| tab.live_domain_tab_route().is_some())
         {
             return Err(
-                "Control-created tabs are not yet supported while the target window's active tab belongs to a live domain"
+                "Ordinary local tab creation is unavailable while the target window's active tab belongs to a live domain"
                     .into(),
             );
         }
-        let id = self.create_local_tab()?;
+        let id = self.create_local_tab(dispatch_plugin_hook)?;
         u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
     }
 
-    fn create_local_tab(&mut self) -> std::result::Result<usize, String> {
+    fn create_local_tab(
+        &mut self,
+        dispatch_plugin_hook: bool,
+    ) -> std::result::Result<usize, String> {
         let tabs = self
             .tabs
             .as_mut()
@@ -2793,7 +2824,9 @@ impl App {
             .map_err(|error| format!("Could not create a new tab: {error:#}"))?;
         log::info!("Created new tab {id}");
         self.maybe_show_splash(true);
-        self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
+        if dispatch_plugin_hook {
+            self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
+        }
         self.refresh_focused_terminal_surfaces();
         Ok(id)
     }

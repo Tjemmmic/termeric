@@ -987,8 +987,12 @@ reader. API v12 adds exact pane-create version/mode/grant denial, typed
 direction parsing, stable-ID success/failure routing, ordinary/live/serial tab
 distinction, returned pane identity, one-operation enforcement, result-
 authority removal, and a checked-in pane builder. Only inert local shell/Python
-fixtures and in-memory terminals are used; no AI provider process or tokens are
-involved. In-app management cases use temporary registries and non-executed
+fixtures and in-memory terminals are used. API v13 adds exact tab-create
+version/mode/grant denial, strict action parsing, stable returned identity,
+unavailable/live/capacity/launch failure routing, lifecycle-hook suppression,
+one-operation enforcement, result-authority removal, and a checked-in tab
+builder. No AI provider process or tokens are involved. In-app management cases
+use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay
 requests, exact detail disclosure, enable/disable persistence, confirmed reset,
