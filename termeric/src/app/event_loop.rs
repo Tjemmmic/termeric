@@ -306,65 +306,148 @@ impl ApplicationHandler<AppEvent> for App {
                         use crate::ui::info_overlay::InfoOverlayAction;
                         use winit::keyboard::{Key, NamedKey};
                         let request_id = self.info_overlay.request_id();
-                        let action = match &event.logical_key {
-                            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
-                                InfoOverlayAction::Dismiss { request_id }
+                        let action = if self.info_overlay.has_input() {
+                            match &event.logical_key {
+                                Key::Named(NamedKey::Enter) => {
+                                    InfoOverlayAction::SubmitInput { request_id }
+                                }
+                                Key::Named(NamedKey::Escape) => {
+                                    InfoOverlayAction::CancelInput { request_id }
+                                }
+                                Key::Named(NamedKey::Backspace) => {
+                                    self.info_overlay.backspace_input(request_id);
+                                    InfoOverlayAction::None
+                                }
+                                Key::Named(NamedKey::Delete) => {
+                                    self.info_overlay.delete_input(request_id);
+                                    InfoOverlayAction::None
+                                }
+                                Key::Named(NamedKey::ArrowLeft) => {
+                                    self.info_overlay.move_input_left(request_id);
+                                    InfoOverlayAction::None
+                                }
+                                Key::Named(NamedKey::ArrowRight) => {
+                                    self.info_overlay.move_input_right(request_id);
+                                    InfoOverlayAction::None
+                                }
+                                Key::Named(NamedKey::Home) => {
+                                    self.info_overlay.move_input_home(request_id);
+                                    InfoOverlayAction::None
+                                }
+                                Key::Named(NamedKey::End) => {
+                                    self.info_overlay.move_input_end(request_id);
+                                    InfoOverlayAction::None
+                                }
+                                Key::Named(NamedKey::ArrowUp) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: -1,
+                                },
+                                Key::Named(NamedKey::ArrowDown) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: 1,
+                                },
+                                Key::Named(NamedKey::PageUp) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: -(self.info_overlay.viewport_rows() as isize),
+                                },
+                                Key::Named(NamedKey::PageDown) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: self.info_overlay.viewport_rows() as isize,
+                                },
+                                Key::Character(character)
+                                    if self.modifiers.control_key()
+                                        && character.as_str().eq_ignore_ascii_case("c") =>
+                                {
+                                    InfoOverlayAction::Copy { request_id }
+                                }
+                                Key::Character(character)
+                                    if self.modifiers.control_key()
+                                        && character.as_str().eq_ignore_ascii_case("d") =>
+                                {
+                                    self.info_overlay.choice(request_id, "unset").map_or(
+                                        InfoOverlayAction::None,
+                                        |_| InfoOverlayAction::Choose {
+                                            request_id,
+                                            choice_id: "unset".into(),
+                                        },
+                                    )
+                                }
+                                Key::Character(character)
+                                    if !self.modifiers.control_key()
+                                        && !self.modifiers.super_key()
+                                        && !self.modifiers.alt_key() =>
+                                {
+                                    self.info_overlay
+                                        .insert_input_text(request_id, character.as_str());
+                                    InfoOverlayAction::None
+                                }
+                                _ => InfoOverlayAction::None,
                             }
-                            Key::Named(NamedKey::ArrowUp) => InfoOverlayAction::ScrollLines {
-                                request_id,
-                                delta: -1,
-                            },
-                            Key::Named(NamedKey::ArrowDown) => InfoOverlayAction::ScrollLines {
-                                request_id,
-                                delta: 1,
-                            },
-                            Key::Named(NamedKey::PageUp) => InfoOverlayAction::ScrollLines {
-                                request_id,
-                                delta: -(self.info_overlay.viewport_rows() as isize),
-                            },
-                            Key::Named(NamedKey::PageDown) => InfoOverlayAction::ScrollLines {
-                                request_id,
-                                delta: self.info_overlay.viewport_rows() as isize,
-                            },
-                            Key::Named(NamedKey::ArrowLeft) => InfoOverlayAction::ScrollColumns {
-                                request_id,
-                                delta: -4,
-                            },
-                            Key::Named(NamedKey::ArrowRight) => InfoOverlayAction::ScrollColumns {
-                                request_id,
-                                delta: 4,
-                            },
-                            Key::Named(NamedKey::Home) if self.modifiers.control_key() => {
-                                InfoOverlayAction::ScrollToTop { request_id }
-                            }
-                            Key::Named(NamedKey::End) if self.modifiers.control_key() => {
-                                InfoOverlayAction::ScrollToBottom { request_id }
-                            }
-                            Key::Named(NamedKey::Home) => {
-                                InfoOverlayAction::ScrollToLeft { request_id }
-                            }
-                            Key::Named(NamedKey::End) => {
-                                InfoOverlayAction::ScrollToRight { request_id }
-                            }
-                            Key::Character(character)
-                                if character.as_str().eq_ignore_ascii_case("c") =>
-                            {
-                                InfoOverlayAction::Copy { request_id }
-                            }
-                            Key::Character(character) => character
-                                .as_str()
-                                .chars()
-                                .next()
-                                .and_then(|shortcut| {
-                                    self.info_overlay.choice_for_shortcut(request_id, shortcut)
-                                })
-                                .map_or(InfoOverlayAction::None, |choice| {
-                                    InfoOverlayAction::Choose {
+                        } else {
+                            match &event.logical_key {
+                                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
+                                    InfoOverlayAction::Dismiss { request_id }
+                                }
+                                Key::Named(NamedKey::ArrowUp) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: -1,
+                                },
+                                Key::Named(NamedKey::ArrowDown) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: 1,
+                                },
+                                Key::Named(NamedKey::PageUp) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: -(self.info_overlay.viewport_rows() as isize),
+                                },
+                                Key::Named(NamedKey::PageDown) => InfoOverlayAction::ScrollLines {
+                                    request_id,
+                                    delta: self.info_overlay.viewport_rows() as isize,
+                                },
+                                Key::Named(NamedKey::ArrowLeft) => {
+                                    InfoOverlayAction::ScrollColumns {
                                         request_id,
-                                        choice_id: choice.id.clone(),
+                                        delta: -4,
                                     }
-                                }),
-                            _ => InfoOverlayAction::None,
+                                }
+                                Key::Named(NamedKey::ArrowRight) => {
+                                    InfoOverlayAction::ScrollColumns {
+                                        request_id,
+                                        delta: 4,
+                                    }
+                                }
+                                Key::Named(NamedKey::Home) if self.modifiers.control_key() => {
+                                    InfoOverlayAction::ScrollToTop { request_id }
+                                }
+                                Key::Named(NamedKey::End) if self.modifiers.control_key() => {
+                                    InfoOverlayAction::ScrollToBottom { request_id }
+                                }
+                                Key::Named(NamedKey::Home) => {
+                                    InfoOverlayAction::ScrollToLeft { request_id }
+                                }
+                                Key::Named(NamedKey::End) => {
+                                    InfoOverlayAction::ScrollToRight { request_id }
+                                }
+                                Key::Character(character)
+                                    if character.as_str().eq_ignore_ascii_case("c") =>
+                                {
+                                    InfoOverlayAction::Copy { request_id }
+                                }
+                                Key::Character(character) => character
+                                    .as_str()
+                                    .chars()
+                                    .next()
+                                    .and_then(|shortcut| {
+                                        self.info_overlay.choice_for_shortcut(request_id, shortcut)
+                                    })
+                                    .map_or(InfoOverlayAction::None, |choice| {
+                                        InfoOverlayAction::Choose {
+                                            request_id,
+                                            choice_id: choice.id.clone(),
+                                        }
+                                    }),
+                                _ => InfoOverlayAction::None,
+                            }
                         };
                         self.apply_info_overlay_action(action);
                         if let Some(window) = &self.window {
@@ -1182,20 +1265,47 @@ impl ApplicationHandler<AppEvent> for App {
                             let action = if layout.copy_button.contains(mx, my) {
                                 crate::ui::info_overlay::InfoOverlayAction::Copy { request_id }
                             } else if layout.continue_button.contains(mx, my) {
-                                crate::ui::info_overlay::InfoOverlayAction::Dismiss { request_id }
+                                if self.info_overlay.has_input() {
+                                    crate::ui::info_overlay::InfoOverlayAction::SubmitInput {
+                                        request_id,
+                                    }
+                                } else {
+                                    crate::ui::info_overlay::InfoOverlayAction::Dismiss {
+                                        request_id,
+                                    }
+                                }
                             } else if let Some(line) = layout.content_row_at(
                                 mx,
                                 my,
                                 self.info_overlay.scroll_offset(),
                                 self.info_overlay.lines().len(),
                             ) {
-                                self.info_overlay.choice_at_line(request_id, line).map_or(
-                                    crate::ui::info_overlay::InfoOverlayAction::None,
-                                    |choice| crate::ui::info_overlay::InfoOverlayAction::Choose {
-                                        request_id,
-                                        choice_id: choice.id.clone(),
-                                    },
-                                )
+                                if self
+                                    .info_overlay
+                                    .input_info(request_id)
+                                    .is_some_and(|input| input.source_line == line)
+                                {
+                                    let column =
+                                        self.info_overlay.horizontal_offset().saturating_add(
+                                            ((mx - layout.content.x) / layout.char_scale)
+                                                .floor()
+                                                .max(0.0)
+                                                as usize,
+                                        );
+                                    self.info_overlay
+                                        .set_input_cursor_from_column(request_id, column);
+                                    crate::ui::info_overlay::InfoOverlayAction::None
+                                } else {
+                                    self.info_overlay.choice_at_line(request_id, line).map_or(
+                                        crate::ui::info_overlay::InfoOverlayAction::None,
+                                        |choice| {
+                                            crate::ui::info_overlay::InfoOverlayAction::Choose {
+                                                request_id,
+                                                choice_id: choice.id.clone(),
+                                            }
+                                        },
+                                    )
+                                }
                             } else {
                                 crate::ui::info_overlay::InfoOverlayAction::None
                             };

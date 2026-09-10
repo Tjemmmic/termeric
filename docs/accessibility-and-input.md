@@ -3,8 +3,9 @@
 Termeric enables Winit's platform input-method path on every native window.
 `Ime::Preedit` is local UI state: it is drawn beside the focused pane cursor and
 is never sent to a PTY. Only `Ime::Commit` is routed, once, to the current text
-owner (terminal, search, settings filter, command palette, workspace rename, or
-command form). Changing pane focus, losing window focus, or disabling the IME
+owner (terminal, search, settings filter, command palette, workspace rename,
+command form, or typed plugin-setting dialog). Changing pane focus, losing
+window focus, or disabling the IME
 cancels stale preedit. Candidate geometry is reported in physical pixels from
 the same vertical-tab rail, padding, chrome/search offsets, pane rectangle,
 cursor row/column, and
@@ -177,8 +178,13 @@ vertical boundaries. Rendering, pointer rows/buttons, viewport sizing, and
 AccessKit all use `InfoOverlayLayout`.
 
 The semantic tree contains only the modal dialog, heading, visible document
-slice, polite position status, explicit choices, Copy, and default Continue
-button. Offscreen text and choices are retired until scrolled into view. Every
+slice, polite position status, explicit choices, Copy, and default action
+button. An optional single-line text input is used by typed plugin settings; it
+publishes its value, UTF-8 cursor, byte limit, exact visible-row bounds, and
+SetValue action, while the default action becomes Save. Keyboard editing,
+pointer cursor placement, IME candidates/preedit, rendering, and AccessKit use
+the same bounded input and geometry. Offscreen text and choices are retired
+until scrolled into view. Every
 action includes the notice generation; dismissing revokes actions immediately
 while the closing animation continues, and a replaced profile picker cannot
 apply a hidden stale number, pointer, or screen-reader choice. Profile choices

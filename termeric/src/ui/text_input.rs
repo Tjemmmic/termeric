@@ -31,6 +31,15 @@ impl TextInput {
         self.cursor
     }
 
+    /// Place the cursor at an exact UTF-8 byte boundary.
+    pub fn set_cursor_byte(&mut self, byte_offset: usize) -> bool {
+        if byte_offset > self.buffer.len() || !self.buffer.is_char_boundary(byte_offset) {
+            return false;
+        }
+        self.cursor = byte_offset;
+        true
+    }
+
     /// Clear the buffer and reset cursor.
     pub fn clear(&mut self) {
         self.buffer.clear();

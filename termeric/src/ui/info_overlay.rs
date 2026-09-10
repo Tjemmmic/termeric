@@ -2,11 +2,13 @@
 
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
+use super::text_input::TextInput;
 
 pub const MAX_INFO_TITLE_CHARS: usize = 256;
 pub const MAX_INFO_LINES: usize = 512;
 pub const MAX_INFO_LINE_CHARS: usize = 4096;
 pub const MAX_INFO_CHOICES: usize = 32;
+pub const MAX_INFO_INPUT_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InfoOverlayRect {
@@ -51,6 +53,8 @@ pub enum InfoOverlayAction {
     Copy { request_id: u64 },
     Dismiss { request_id: u64 },
     Choose { request_id: u64, choice_id: String },
+    SubmitInput { request_id: u64 },
+    CancelInput { request_id: u64 },
     ScrollLines { request_id: u64, delta: isize },
     ScrollColumns { request_id: u64, delta: isize },
     ScrollToTop { request_id: u64 },
@@ -58,6 +62,22 @@ pub enum InfoOverlayAction {
     ScrollToLeft { request_id: u64 },
     ScrollToRight { request_id: u64 },
     None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoOverlayInputInfo {
+    pub label: String,
+    pub value: String,
+    pub cursor_byte: usize,
+    pub source_line: usize,
+    pub max_bytes: usize,
+}
+
+struct InfoOverlayInput {
+    label: String,
+    value: TextInput,
+    source_line: usize,
+    max_bytes: usize,
 }
 
 /// Geometry shared by rendering, pointer hit testing, viewport sizing, and
@@ -178,6 +198,26 @@ impl InfoOverlayLayout {
         let source_row = scroll_offset.saturating_add(visible_row);
         (source_row < total_lines).then_some(source_row)
     }
+
+    pub fn source_line_rect(
+        &self,
+        source_line: usize,
+        scroll_offset: usize,
+        total_lines: usize,
+    ) -> Option<InfoOverlayRect> {
+        if source_line >= total_lines
+            || source_line < scroll_offset
+            || source_line >= scroll_offset.saturating_add(self.rows_that_fit)
+        {
+            return None;
+        }
+        Some(InfoOverlayRect {
+            x: self.content.x,
+            y: self.content.y + source_line.saturating_sub(scroll_offset) as f32 * self.line_height,
+            width: self.content.width,
+            height: self.line_height,
+        })
+    }
 }
 
 /// Request-scoped information overlay state.
@@ -193,6 +233,7 @@ pub struct InfoOverlay {
     viewport_rows: usize,
     viewport_columns: usize,
     max_line_chars: usize,
+    input: Option<InfoOverlayInput>,
 }
 
 impl InfoOverlay {
@@ -209,6 +250,7 @@ impl InfoOverlay {
             viewport_rows: 1,
             viewport_columns: 1,
             max_line_chars: 0,
+            input: None,
         }
     }
 
@@ -253,11 +295,43 @@ impl InfoOverlay {
             .max()
             .unwrap_or(0);
         self.choices = bounded_choices(choices, self.lines.len());
+        self.input = None;
         self.accepting = true;
         self.scroll_offset = 0;
         self.horizontal_offset = 0;
         self.animation.open();
         self.request_id
+    }
+
+    pub fn show_input(
+        &mut self,
+        title: impl Into<String>,
+        lines: Vec<String>,
+        source_line: usize,
+        label: impl Into<String>,
+        value: impl Into<String>,
+        max_bytes: usize,
+        choices: Vec<InfoOverlayChoice>,
+    ) -> u64 {
+        let request_id = self.show_choices(title, lines, choices);
+        if source_line >= self.lines.len() {
+            return request_id;
+        }
+        let label = bounded_text(&label.into(), 128);
+        let max_bytes = max_bytes
+            .clamp(1, MAX_INFO_INPUT_BYTES)
+            .min(MAX_INFO_LINE_CHARS.saturating_sub(label.len()).max(1));
+        let value = sanitize_input(&value.into(), max_bytes);
+        let mut input = TextInput::new();
+        input.replace(value);
+        self.input = Some(InfoOverlayInput {
+            label,
+            value: input,
+            source_line,
+            max_bytes,
+        });
+        self.refresh_input_line();
+        request_id
     }
 
     pub fn dismiss(&mut self, request_id: u64) -> bool {
@@ -293,6 +367,203 @@ impl InfoOverlay {
         &self.choices
     }
 
+    pub fn input_info(&self, request_id: u64) -> Option<InfoOverlayInputInfo> {
+        let input = (self.request_id == request_id).then_some(self.input.as_ref())??;
+        Some(InfoOverlayInputInfo {
+            label: input.label.clone(),
+            value: input.value.text().to_string(),
+            cursor_byte: input.value.cursor(),
+            source_line: input.source_line,
+            max_bytes: input.max_bytes,
+        })
+    }
+
+    pub fn has_input(&self) -> bool {
+        self.is_awaiting_current() && self.input.is_some()
+    }
+
+    pub fn input_value(&self, request_id: u64) -> Option<&str> {
+        let input = self
+            .is_awaiting(request_id)
+            .then_some(self.input.as_ref())??;
+        Some(input.value.text())
+    }
+
+    pub fn insert_input_text(&mut self, request_id: u64, text: &str) -> bool {
+        if !self.is_awaiting(request_id) {
+            return false;
+        }
+        let Some(input) = self.input.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        for character in text.chars().filter(|character| !character.is_control()) {
+            if input
+                .value
+                .text()
+                .len()
+                .saturating_add(character.len_utf8())
+                > input.max_bytes
+            {
+                break;
+            }
+            input.value.insert_char(character);
+            changed = true;
+        }
+        if changed {
+            self.refresh_input_line();
+        }
+        changed
+    }
+
+    pub fn replace_input_text(&mut self, request_id: u64, text: &str) -> bool {
+        if !self.is_awaiting(request_id)
+            || text.len() > self.input.as_ref().map_or(0, |input| input.max_bytes)
+            || text.chars().any(char::is_control)
+        {
+            return false;
+        }
+        let Some(input) = self.input.as_mut() else {
+            return false;
+        };
+        if input.value.text() == text {
+            return false;
+        }
+        input.value.replace(text);
+        self.refresh_input_line();
+        true
+    }
+
+    pub fn backspace_input(&mut self, request_id: u64) -> bool {
+        self.mutate_input(request_id, TextInput::backspace)
+    }
+
+    pub fn delete_input(&mut self, request_id: u64) -> bool {
+        self.mutate_input(request_id, TextInput::delete)
+    }
+
+    pub fn move_input_left(&mut self, request_id: u64) -> bool {
+        self.mutate_input(request_id, TextInput::cursor_left)
+    }
+
+    pub fn move_input_right(&mut self, request_id: u64) -> bool {
+        self.mutate_input(request_id, TextInput::cursor_right)
+    }
+
+    pub fn move_input_home(&mut self, request_id: u64) -> bool {
+        self.set_input_cursor(request_id, 0)
+    }
+
+    pub fn move_input_end(&mut self, request_id: u64) -> bool {
+        let end = self
+            .input
+            .as_ref()
+            .map_or(0, |input| input.value.text().len());
+        self.set_input_cursor(request_id, end)
+    }
+
+    pub fn set_input_cursor_from_column(&mut self, request_id: u64, column: usize) -> bool {
+        if !self.is_awaiting(request_id) {
+            return false;
+        }
+        let Some(input) = self.input.as_ref() else {
+            return false;
+        };
+        let value_column = column.saturating_sub(input.label.chars().count());
+        let byte = input
+            .value
+            .text()
+            .char_indices()
+            .nth(value_column)
+            .map_or(input.value.text().len(), |(byte, _)| byte);
+        self.set_input_cursor(request_id, byte)
+    }
+
+    pub fn input_cursor_source_column(&self, request_id: u64) -> Option<usize> {
+        let input = self
+            .is_awaiting(request_id)
+            .then_some(self.input.as_ref())??;
+        Some(
+            input.label.chars().count()
+                + input.value.text()[..input.value.cursor()].chars().count(),
+        )
+    }
+
+    fn set_input_cursor(&mut self, request_id: u64, byte: usize) -> bool {
+        if !self.is_awaiting(request_id) {
+            return false;
+        }
+        let Some(input) = self.input.as_mut() else {
+            return false;
+        };
+        let before = input.value.cursor();
+        if !input.value.set_cursor_byte(byte) || before == byte {
+            return false;
+        }
+        self.ensure_input_cursor_visible();
+        true
+    }
+
+    fn mutate_input(
+        &mut self,
+        request_id: u64,
+        mutation: impl FnOnce(&mut TextInput) -> bool,
+    ) -> bool {
+        if !self.is_awaiting(request_id) {
+            return false;
+        }
+        let Some(input) = self.input.as_mut() else {
+            return false;
+        };
+        let changed = mutation(&mut input.value);
+        if changed {
+            self.refresh_input_line();
+        }
+        changed
+    }
+
+    fn refresh_input_line(&mut self) {
+        let Some(input) = self.input.as_ref() else {
+            return;
+        };
+        self.lines[input.source_line] = format!("{}{}", input.label, input.value.text());
+        self.max_line_chars = self
+            .lines
+            .iter()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0);
+        self.ensure_input_visible();
+    }
+
+    fn ensure_input_cursor_visible(&mut self) {
+        let Some(column) = self.input_cursor_source_column(self.request_id) else {
+            return;
+        };
+        if column < self.horizontal_offset {
+            self.horizontal_offset = column;
+        } else if column >= self.horizontal_offset.saturating_add(self.viewport_columns) {
+            self.horizontal_offset = column
+                .saturating_add(1)
+                .saturating_sub(self.viewport_columns);
+        }
+        self.clamp_scroll();
+    }
+
+    fn ensure_input_visible(&mut self) {
+        let Some(source_line) = self.input.as_ref().map(|input| input.source_line) else {
+            return;
+        };
+        if source_line < self.scroll_offset {
+            self.scroll_offset = source_line;
+        } else if source_line >= self.scroll_offset.saturating_add(self.viewport_rows) {
+            self.scroll_offset = source_line
+                .saturating_add(1)
+                .saturating_sub(self.viewport_rows);
+        }
+        self.ensure_input_cursor_visible();
+    }
+
     pub fn copy_text(&self, request_id: u64) -> Option<String> {
         self.is_awaiting(request_id).then(|| self.lines.join("\n"))
     }
@@ -326,6 +597,7 @@ impl InfoOverlay {
         self.viewport_rows = rows.max(1);
         self.viewport_columns = columns.max(1);
         self.clamp_scroll();
+        self.ensure_input_visible();
     }
 
     pub fn scroll_lines(&mut self, request_id: u64, delta: isize) -> bool {
@@ -448,12 +720,24 @@ impl InfoOverlay {
             self.title.clear();
             self.lines.clear();
             self.choices.clear();
+            self.input = None;
             self.scroll_offset = 0;
             self.horizontal_offset = 0;
             self.max_line_chars = 0;
         }
         animating
     }
+}
+
+fn sanitize_input(value: &str, max_bytes: usize) -> String {
+    let mut output = String::new();
+    for character in value.chars().filter(|character| !character.is_control()) {
+        if output.len().saturating_add(character.len_utf8()) > max_bytes {
+            break;
+        }
+        output.push(character);
+    }
+    output
 }
 
 fn bounded_text(text: &str, limit: usize) -> String {
@@ -618,6 +902,53 @@ mod tests {
         assert_eq!(
             layout.content_row_at(layout.content.x - 1.0, layout.content.y, 5, lines.len()),
             None
+        );
+    }
+
+    #[test]
+    fn input_is_request_scoped_bounded_and_utf8_cursor_safe() {
+        let mut overlay = InfoOverlay::new();
+        let request = overlay.show_input(
+            "Edit",
+            vec!["Setting".into(), String::new()],
+            1,
+            "Value: ",
+            "a🫚",
+            8,
+            Vec::new(),
+        );
+        let input = overlay.input_info(request).unwrap();
+        assert_eq!(input.value, "a🫚");
+        assert_eq!(input.cursor_byte, "a🫚".len());
+        assert_eq!(overlay.lines()[1], "Value: a🫚");
+
+        assert!(overlay.move_input_left(request));
+        assert!(overlay.insert_input_text(request, "é"));
+        assert_eq!(overlay.input_value(request), Some("aé🫚"));
+        overlay.insert_input_text(request, "root");
+        assert!(overlay.input_value(request).unwrap().len() <= 8);
+        assert!(!overlay.replace_input_text(request, "bad\nvalue"));
+        assert!(overlay.set_input_cursor_from_column(request, "Value: ".chars().count()));
+        assert!(overlay.delete_input(request));
+        assert!(!overlay.input_value(request).unwrap().starts_with('a'));
+
+        let replacement = overlay.show("Replacement", vec!["body".into()]);
+        assert_ne!(request, replacement);
+        assert!(overlay.input_info(request).is_none());
+        assert!(!overlay.insert_input_text(request, "stale"));
+    }
+
+    #[test]
+    fn input_line_geometry_tracks_the_shared_scrolled_layout() {
+        let layout = InfoOverlayLayout::calculate(900.0, 500.0, 10.0, 20.0, 1.0, "Edit", 20, 20);
+        let rect = layout.source_line_rect(7, 5, 20).unwrap();
+        assert_eq!(rect.x, layout.content.x);
+        assert_eq!(rect.y, layout.content.y + layout.line_height * 2.0);
+        assert!(layout.source_line_rect(4, 5, 20).is_none());
+        assert!(
+            layout
+                .source_line_rect(5 + layout.rows_that_fit, 5, 20)
+                .is_none()
         );
     }
 }

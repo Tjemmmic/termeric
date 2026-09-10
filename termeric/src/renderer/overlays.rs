@@ -158,6 +158,10 @@ impl Renderer {
 
         for (visible_row, (source_row, line)) in info.visible_lines.iter().enumerate() {
             let line_y = content_start_y + visible_row as f32 * line_height;
+            let input = info
+                .input
+                .as_ref()
+                .filter(|input| input.source_line == *source_row);
             let choice = info
                 .choices
                 .iter()
@@ -167,7 +171,23 @@ impl Renderer {
                 && layout.content.contains(mouse_x, mouse_y)
                 && mouse_y >= line_y
                 && mouse_y <= line_y + line_height;
-            if choice.is_some() {
+            if input.is_some() {
+                self.rect_pipeline.push_rounded_rect(
+                    layout.content.x,
+                    line_y,
+                    layout.content.width,
+                    line_height,
+                    adjust_alpha(self.ui.palette_accent, 0.08 * anim),
+                    BUTTON_CORNER_RADIUS,
+                );
+                self.rect_pipeline.push_rect(
+                    layout.content.x,
+                    line_y + line_height - BORDER_WIDTH,
+                    layout.content.width,
+                    BORDER_WIDTH,
+                    adjust_alpha(self.ui.palette_accent, 0.55 * anim),
+                );
+            } else if choice.is_some() {
                 let alpha = if choice_hovered { 0.14 } else { 0.06 };
                 self.rect_pipeline.push_rounded_rect(
                     layout.content.x,
@@ -191,6 +211,27 @@ impl Renderer {
             for (i, c) in line.chars().enumerate() {
                 let cx = content_x + i as f32 * char_scale;
                 self.text_pipeline.push_char(c, cx, line_y, color);
+            }
+            if let Some(input) = input {
+                let cursor_column =
+                    input.label.chars().count() + input.value[..input.cursor_byte].chars().count();
+                if cursor_column >= info.horizontal_offset
+                    && cursor_column
+                        < info
+                            .horizontal_offset
+                            .saturating_add(layout.columns_that_fit)
+                {
+                    let cursor_x = content_x
+                        + cursor_column.saturating_sub(info.horizontal_offset) as f32 * char_scale;
+                    self.rect_pipeline.push_rounded_rect(
+                        cursor_x,
+                        line_y + cell_height * 0.12,
+                        2.0_f32.max(char_scale * 0.12),
+                        (line_height - cell_height * 0.24).max(1.0),
+                        adjust_alpha(self.ui.palette_accent, anim),
+                        1.0,
+                    );
+                }
             }
         }
 
@@ -235,7 +276,11 @@ impl Renderer {
 
         // ── Two buttons: "Copy" and "Continue" ──
         let copy_label = "Copy";
-        let continue_label = "Continue";
+        let continue_label = if info.input.is_some() {
+            "Save"
+        } else {
+            "Continue"
+        };
         let copy_btn_x = layout.copy_button.x;
         let copy_btn_w = layout.copy_button.width;
         let continue_btn_x = layout.continue_button.x;

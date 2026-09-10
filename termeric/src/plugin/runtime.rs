@@ -35,7 +35,7 @@ const MAX_SOURCE_PATH_BYTES: usize = 16 * 1024;
 const MAX_PROFILES: usize = 32;
 const MAX_HANDLER_COMMANDS: usize = 32;
 const MAX_SETTINGS: usize = 32;
-const MAX_SETTING_TEXT_BYTES: usize = 512;
+pub(crate) const MAX_SETTING_TEXT_BYTES: usize = 512;
 const MAX_SETTING_CHOICES: usize = 32;
 const MAX_SETTING_VALUE_BYTES: usize = 8 * 1024;
 const MAX_ARGS: usize = 64;
@@ -136,7 +136,7 @@ pub struct PluginManifest {
     pub event_handler: Option<DeclarativeEventHandler>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum DeclarativeSetting {
     Boolean {
@@ -174,7 +174,7 @@ pub enum DeclarativeSetting {
 }
 
 impl DeclarativeSetting {
-    fn id(&self) -> &str {
+    pub(crate) fn id(&self) -> &str {
         match self {
             Self::Boolean { id, .. }
             | Self::Integer { id, .. }
@@ -183,7 +183,7 @@ impl DeclarativeSetting {
         }
     }
 
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         match self {
             Self::Boolean { name, .. }
             | Self::Integer { name, .. }
@@ -192,7 +192,7 @@ impl DeclarativeSetting {
         }
     }
 
-    fn description(&self) -> &str {
+    pub(crate) fn description(&self) -> &str {
         match self {
             Self::Boolean { description, .. }
             | Self::Integer { description, .. }
@@ -201,7 +201,7 @@ impl DeclarativeSetting {
         }
     }
 
-    fn default_value(&self) -> PluginSettingValue {
+    pub(crate) fn default_value(&self) -> PluginSettingValue {
         match self {
             Self::Boolean { default, .. } => PluginSettingValue::Boolean(*default),
             Self::Integer { default, .. } => PluginSettingValue::Integer(*default),
@@ -697,6 +697,10 @@ pub struct RuntimePluginStatus {
     pub requested: BTreeSet<PluginPermission>,
     pub granted: BTreeSet<PluginPermission>,
     pub settings: BTreeMap<String, PluginSettingValue>,
+    /// Validated manifest schema for healthy installations.
+    pub setting_definitions: Vec<DeclarativeSetting>,
+    /// Explicit user overrides, kept separate from effective defaults.
+    pub configured_settings: BTreeMap<String, PluginSettingValue>,
     /// Number of explicit user overrides stored in the registry. Effective
     /// settings above may also contain manifest defaults.
     pub configured_setting_count: usize,
@@ -738,6 +742,8 @@ fn discover_from_registry(
                     granted: installed.grants.clone(),
                     settings: effective_settings(&manifest, &installed.settings)
                         .expect("installed settings were validated during load"),
+                    setting_definitions: manifest.settings.clone(),
+                    configured_settings: installed.settings.clone(),
                     configured_setting_count: installed.settings.len(),
                     diagnostic: None,
                 };
@@ -769,6 +775,8 @@ fn discover_from_registry(
                         .map_or_else(BTreeSet::new, |manifest| manifest.permissions),
                     granted: installed.grants.clone(),
                     settings: BTreeMap::new(),
+                    setting_definitions: Vec::new(),
+                    configured_settings: BTreeMap::new(),
                     configured_setting_count: installed.settings.len(),
                     diagnostic: Some(format!("{error:#}")),
                 });

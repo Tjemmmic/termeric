@@ -95,6 +95,7 @@ pub struct InfoOverlayInfo {
     pub title: String,
     pub visible_lines: Vec<(usize, String)>,
     pub choices: Vec<crate::ui::info_overlay::InfoOverlayChoice>,
+    pub input: Option<crate::ui::info_overlay::InfoOverlayInputInfo>,
     pub total_lines: usize,
     pub scroll_offset: usize,
     pub horizontal_offset: usize,

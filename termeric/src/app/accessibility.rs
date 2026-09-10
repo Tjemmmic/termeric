@@ -157,6 +157,7 @@ enum GuardrailSemanticTarget {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum InfoSemanticTarget {
     Content(u64),
+    Input(u64),
     Copy(u64),
     Dismiss(u64),
     Choice { request_id: u64, id: String },
@@ -1356,6 +1357,7 @@ impl App {
         };
         let request_id = match &target {
             InfoSemanticTarget::Content(request_id)
+            | InfoSemanticTarget::Input(request_id)
             | InfoSemanticTarget::Copy(request_id)
             | InfoSemanticTarget::Dismiss(request_id) => *request_id,
             InfoSemanticTarget::Choice { request_id, .. } => *request_id,
@@ -1372,7 +1374,20 @@ impl App {
                 InfoOverlayAction::Copy { request_id }
             }
             (Action::Click, InfoSemanticTarget::Dismiss(request_id)) => {
-                InfoOverlayAction::Dismiss { request_id }
+                if self.info_overlay.has_input() {
+                    InfoOverlayAction::SubmitInput { request_id }
+                } else {
+                    InfoOverlayAction::Dismiss { request_id }
+                }
+            }
+            (Action::SetValue, InfoSemanticTarget::Input(request_id)) => {
+                let Some(ActionData::Value(value)) = request.data.as_ref() else {
+                    return;
+                };
+                if self.info_overlay.replace_input_text(request_id, value) {
+                    self.accessibility.focus_override = Some(request.target_node);
+                }
+                InfoOverlayAction::None
             }
             (
                 Action::Click,
@@ -3393,6 +3408,12 @@ impl App {
         let scroll_offset = self.info_overlay.scroll_offset();
         let horizontal_offset = self.info_overlay.horizontal_offset();
         let total_lines = self.info_overlay.lines().len();
+        let input_info = self.info_overlay.input_info(request_id);
+        let input_visible = input_info.as_ref().is_some_and(|input| {
+            layout
+                .source_line_rect(input.source_line, scroll_offset, total_lines)
+                .is_some()
+        });
 
         let content_target = InfoSemanticTarget::Content(request_id);
         let copy_target = InfoSemanticTarget::Copy(request_id);
@@ -3412,6 +3433,9 @@ impl App {
             copy_target.clone(),
             dismiss_target.clone(),
         ]);
+        if input_visible {
+            targets.insert(InfoSemanticTarget::Input(request_id));
+        }
         targets.extend(
             visible_choices
                 .iter()
@@ -3424,6 +3448,10 @@ impl App {
         let content_id = self.accessibility.info_node(content_target);
         let copy_id = self.accessibility.info_node(copy_target);
         let dismiss_id = self.accessibility.info_node(dismiss_target);
+        let input_id = input_visible.then(|| {
+            self.accessibility
+                .info_node(InfoSemanticTarget::Input(request_id))
+        });
         let choice_nodes: Vec<_> = visible_choices
             .iter()
             .map(|choice| {
@@ -3475,12 +3503,9 @@ impl App {
         content.set_value(visible_lines.join("\n"));
         content.set_description(status_text.clone());
         content.set_bounds(info_rect(layout.content));
-        content.set_children(
-            choice_nodes
-                .iter()
-                .map(|(_, node)| *node)
-                .collect::<Vec<_>>(),
-        );
+        let mut content_children = input_id.into_iter().collect::<Vec<_>>();
+        content_children.extend(choice_nodes.iter().map(|(_, node)| *node));
+        content.set_children(content_children);
         if awaiting {
             content.add_action(Action::Focus);
             if self.info_overlay.scroll_offset() > 0 {
@@ -3499,6 +3524,43 @@ impl App {
             content.set_disabled();
         }
         nodes.push((content_id, content));
+
+        if let (Some(input), Some(input_id)) = (input_info.as_ref(), input_id)
+            && let Some(input_rect) =
+                layout.source_line_rect(input.source_line, scroll_offset, total_lines)
+        {
+            let mut node = Node::new(Role::TextInput);
+            node.set_label(input.label.trim_end_matches([' ', ':']));
+            node.set_description(format!(
+                "Single-line plugin setting value, at most {} UTF-8 bytes",
+                input.max_bytes
+            ));
+            node.set_value(input.value.clone());
+            node.set_character_lengths(
+                input
+                    .value
+                    .chars()
+                    .map(|character| character.len_utf8() as u8)
+                    .collect::<Vec<_>>(),
+            );
+            let cursor = input.value[..input.cursor_byte].chars().count();
+            let position = TextPosition {
+                node: input_id,
+                character_index: cursor,
+            };
+            node.set_text_selection(TextSelection {
+                anchor: position,
+                focus: position,
+            });
+            node.set_bounds(info_rect(input_rect));
+            if awaiting {
+                node.add_action(Action::Focus);
+                node.add_action(Action::SetValue);
+            } else {
+                node.set_disabled();
+            }
+            nodes.push((input_id, node));
+        }
 
         for (choice, node_id) in &choice_nodes {
             let visible_row = choice.source_line.saturating_sub(scroll_offset);
@@ -3541,8 +3603,13 @@ impl App {
         nodes.push((copy_id, copy));
 
         let mut dismiss = Node::new(Role::DefaultButton);
-        dismiss.set_label("Continue and close notice");
-        dismiss.set_keyboard_shortcut("Enter or Escape");
+        if input_info.is_some() {
+            dismiss.set_label("Save plugin setting");
+            dismiss.set_keyboard_shortcut("Enter");
+        } else {
+            dismiss.set_label("Continue and close notice");
+            dismiss.set_keyboard_shortcut("Enter or Escape");
+        }
         dismiss.set_bounds(info_rect(layout.continue_button));
         if awaiting {
             dismiss.add_action(Action::Click);
@@ -3569,7 +3636,11 @@ impl App {
                 && nodes.iter().any(|(current, _)| current == node)
                 && (awaiting || *node == INFO_DIALOG)
         });
-        let focus = requested_focus.unwrap_or(if awaiting { dismiss_id } else { INFO_DIALOG });
+        let focus = requested_focus.unwrap_or(if awaiting {
+            input_id.unwrap_or(dismiss_id)
+        } else {
+            INFO_DIALOG
+        });
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
             self.accessibility.focus_override = None;
         }
@@ -7121,6 +7192,65 @@ mod tests {
             data: None,
         });
         assert!(!app.info_overlay.is_awaiting(request));
+    }
+
+    #[test]
+    fn info_overlay_input_is_editable_focused_and_uses_shared_row_geometry() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let request = app.info_overlay.show_input(
+            "Edit setting",
+            vec!["Typed value".into(), String::new(), "Enter saves".into()],
+            1,
+            "Value: ",
+            "root",
+            32,
+            Vec::new(),
+        );
+        let layout = app.info_accessibility_layout();
+        let snapshot = app.accessibility_snapshot();
+        let input_id = *app
+            .accessibility
+            .info_nodes
+            .get(&InfoSemanticTarget::Input(request))
+            .unwrap();
+        let input = &snapshot
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == input_id)
+            .unwrap()
+            .1;
+        assert_eq!(input.role(), Role::TextInput);
+        assert_eq!(input.value(), Some("root"));
+        assert!(input.supports_action(Action::SetValue));
+        assert_eq!(snapshot.focus, input_id);
+        let actual = input.bounds().unwrap();
+        let expected = layout
+            .source_line_rect(1, app.info_overlay.scroll_offset(), 3)
+            .map(info_rect)
+            .unwrap();
+        for (actual, expected) in [
+            (actual.x0, expected.x0),
+            (actual.y0, expected.y0),
+            (actual.x1, expected.x1),
+            (actual.y1, expected.y1),
+        ] {
+            assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
+        }
+
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: input_id,
+            data: Some(ActionData::Value("warm 🫚".into())),
+        });
+        assert_eq!(app.info_overlay.input_value(request), Some("warm 🫚"));
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: input_id,
+            data: Some(ActionData::Value("bad\nvalue".into())),
+        });
+        assert_eq!(app.info_overlay.input_value(request), Some("warm 🫚"));
     }
 
     fn show_diff_fixture(app: &mut App, id: u64) -> u64 {

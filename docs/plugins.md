@@ -78,15 +78,19 @@ Plugins shows a bounded status summary and opens a keyboard-, pointer-, and
 screen-reader-accessible manager for every installed plugin. The manager shows
 the exact source path, version, enabled/diagnostic state, requested and granted
 permissions, effective setting values, and explicit-override count. It can
-enable or disable immediately and uses request-scoped confirmations before
-updating from source, resetting overrides, or removing the managed copy. A
-removal never deletes the recorded original source directory.
+edit every declared Boolean, integer, text, and choice setting, restore one
+manifest default, enable or disable immediately, and use request-scoped
+confirmations before updating from source, resetting all overrides, or removing
+the managed copy. Integer/text editing is single-line, UTF-8-safe, bounded, and
+available to keyboard, pointer, IME, and screen-reader input. Every save is
+revalidated through the same atomic registry path as the CLI, and an editor
+whose plugin schema changed after opening fails closed. A removal never deletes
+the recorded original source directory.
 
-Installation, grant selection, default-profile selection, and arbitrary typed
-setting set/unset remain explicit CLI operations. `plugin list/show` also
-remains the untruncated/scriptable diagnostic record. This keeps filesystem
-selection and value entry out of a modal that does not yet provide suitable
-native inputs while still covering routine installed-plugin management in-app.
+Installation, grant selection, and default-profile selection remain explicit
+CLI operations. Typed setting set/unset is supported both in-app and through the
+CLI. `plugin list/show` also remains the untruncated/scriptable diagnostic
+record.
 
 ```bash
 termeric plugin disable task-runner
@@ -731,6 +735,11 @@ termeric plugin configure configurable-command --set include-command-id true
 termeric plugin configure configurable-command --unset greeting
 termeric plugin configure configurable-command --reset-settings
 ```
+
+The same four setting types can be edited under Settings → Plugins → select the
+plugin → Configure settings. Boolean and choice values use bounded option lists;
+integer and text values use a visible single-line editor. `Ctrl+D` restores the
+selected setting's manifest default while an input is active.
 
 `--unset` restores one manifest default; `--reset-settings` restores every
 default. The registry stores only explicit overrides. `plugin show ID` and its

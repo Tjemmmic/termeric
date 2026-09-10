@@ -73,9 +73,11 @@ impl App {
     /// Return whether the current focus owner is a text destination. Modal
     /// surfaces without an editable field intentionally swallow IME input.
     fn accepts_ime_text(&self) -> bool {
+        if self.info_overlay.is_active() {
+            return self.info_overlay.has_input();
+        }
         if matches!(self.broadcast, BroadcastState::Armed { .. })
             || self.guardrail.is_active()
-            || self.info_overlay.is_active()
             || self.diff_review.is_active()
             || self.context_picker.is_active()
             || self.domain_picker.is_active()
@@ -115,7 +117,10 @@ impl App {
         }
 
         let printable = || text.chars().filter(|c| !c.is_control());
-        if self.command_palette.is_active() {
+        if self.info_overlay.has_input() {
+            let request_id = self.info_overlay.request_id();
+            self.info_overlay.insert_input_text(request_id, text);
+        } else if self.command_palette.is_active() {
             for character in printable() {
                 self.command_palette.handle_char(character);
             }
@@ -178,6 +183,49 @@ impl App {
         panes: &[crate::terminal::container::PaneRenderInfo],
     ) -> Option<crate::renderer::ImePreeditRenderInfo> {
         let renderer = self.renderer.as_ref()?;
+        if self.info_overlay.has_input() {
+            let request_id = self.info_overlay.request_id();
+            let input = self.info_overlay.input_info(request_id)?;
+            let (window_width, window_height) = renderer.window_size();
+            let layout = crate::ui::info_overlay::InfoOverlayLayout::calculate(
+                window_width as f32,
+                window_height as f32,
+                renderer.cell_width(),
+                renderer.cell_height(),
+                self.info_overlay.animation(),
+                self.info_overlay.title(),
+                self.info_overlay.lines().len(),
+                self.info_overlay.max_line_chars(),
+            );
+            let row = layout.source_line_rect(
+                input.source_line,
+                self.info_overlay.scroll_offset(),
+                self.info_overlay.lines().len(),
+            )?;
+            let cursor_column =
+                input.label.chars().count() + input.value[..input.cursor_byte].chars().count();
+            let x = row.x
+                + cursor_column.saturating_sub(self.info_overlay.horizontal_offset()) as f32
+                    * layout.char_scale;
+            let y = row.y;
+            if let Some(window) = &self.window {
+                window.set_ime_cursor_area(
+                    winit::dpi::PhysicalPosition::new(x.round() as i32, y.round() as i32),
+                    winit::dpi::PhysicalSize::new(
+                        layout.char_scale.ceil().max(1.0) as u32,
+                        layout.line_height.ceil().max(1.0) as u32,
+                    ),
+                );
+            }
+            let preedit = self.ime.preedit()?;
+            return Some(crate::renderer::ImePreeditRenderInfo {
+                text: preedit.text.clone(),
+                cursor: preedit.cursor,
+                x,
+                y,
+                max_width: (row.x + row.width - x).max(layout.char_scale),
+            });
+        }
         let terminal = self.active_terminal()?;
         let cursor = terminal.grid().cursor();
         let search_height = if self.search.is_active() || self.search.has_results() {
@@ -262,6 +310,25 @@ mod tests {
 
         app.handle_ime_event(Ime::Commit("日本".into()));
         assert_eq!(app.command_palette.build_info().input, "日本");
+        assert!(app.ime.preedit().is_none());
+    }
+
+    #[test]
+    fn ime_commit_reaches_the_active_information_overlay_input_only() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let request = app.info_overlay.show_input(
+            "Edit setting",
+            vec![String::new()],
+            0,
+            "Value: ",
+            "root",
+            32,
+            Vec::new(),
+        );
+        app.handle_ime_event(Ime::Preedit("しょうが".into(), None));
+        assert_eq!(app.info_overlay.input_value(request), Some("root"));
+        app.handle_ime_event(Ime::Commit("生姜".into()));
+        assert_eq!(app.info_overlay.input_value(request), Some("root生姜"));
         assert!(app.ime.preedit().is_none());
     }
 

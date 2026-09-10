@@ -700,6 +700,24 @@ enum RuntimePluginManagerView {
         plugin_id: String,
         page: usize,
     },
+    Settings {
+        plugin_id: String,
+        page: usize,
+        settings_page: usize,
+    },
+    Setting {
+        plugin_id: String,
+        page: usize,
+        settings_page: usize,
+        value_page: usize,
+        setting: crate::plugin::runtime::DeclarativeSetting,
+    },
+    EditSetting {
+        plugin_id: String,
+        page: usize,
+        settings_page: usize,
+        setting: crate::plugin::runtime::DeclarativeSetting,
+    },
     Confirm {
         plugin_id: String,
         page: usize,
@@ -2177,6 +2195,7 @@ impl App {
                 title: self.info_overlay.title().to_string(),
                 visible_lines,
                 choices,
+                input: self.info_overlay.input_info(self.info_overlay.request_id()),
                 total_lines: self.info_overlay.lines().len(),
                 scroll_offset,
                 horizontal_offset,

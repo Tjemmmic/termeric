@@ -733,6 +733,24 @@ impl App {
                     profile_name,
                 }]);
             }
+            InfoOverlayAction::SubmitInput { request_id } => {
+                if !self.submit_runtime_plugin_setting_input(request_id)
+                    && self.info_overlay.dismiss(request_id)
+                {
+                    self.pending_profile_selection = None;
+                    self.pending_runtime_plugin_management = None;
+                    self.pending_file_upload = None;
+                }
+            }
+            InfoOverlayAction::CancelInput { request_id } => {
+                if !self.cancel_runtime_plugin_setting_input(request_id)
+                    && self.info_overlay.dismiss(request_id)
+                {
+                    self.pending_profile_selection = None;
+                    self.pending_runtime_plugin_management = None;
+                    self.pending_file_upload = None;
+                }
+            }
             InfoOverlayAction::ScrollLines { request_id, delta } => {
                 self.info_overlay.scroll_lines(request_id, delta);
             }
