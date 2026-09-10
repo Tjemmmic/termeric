@@ -1053,6 +1053,7 @@ API v11 adds a separately granted bounded exact-pane presented-terminal query.\n
 API v12 adds separately granted exact ordinary-pane creation.\n\
 API v13 adds separately granted ordinary-tab creation in the current window.\n\
 API v14 adds separately granted exact ordinary-pane closure.\n\
+API v15 adds separately granted exact ordinary-tab closure scheduling.\n\
 Installation records the\n\
 canonical local source and a manifest fingerprint; it never downloads code."
         .into()

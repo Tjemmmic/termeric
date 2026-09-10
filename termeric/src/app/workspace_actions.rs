@@ -3257,6 +3257,30 @@ impl App {
     }
 
     pub(super) fn close_control_tab(&mut self, tab_id: u64) -> std::result::Result<(), String> {
+        self.close_ordinary_tab(tab_id, "Control-requested", true, true)
+            .map(|_| ())
+    }
+
+    pub(super) fn close_plugin_tab(
+        &mut self,
+        tab_id: u64,
+    ) -> std::result::Result<(u16, u64, bool), String> {
+        let (remaining, active, active_changed) =
+            self.close_ordinary_tab(tab_id, "Plugin-requested", false, false)?;
+        Ok((
+            remaining,
+            active.expect("last-tab protection leaves one active ordinary or live-domain tab"),
+            active_changed,
+        ))
+    }
+
+    fn close_ordinary_tab(
+        &mut self,
+        tab_id: u64,
+        request_origin: &str,
+        dispatch_plugin_hook: bool,
+        allow_last_tab: bool,
+    ) -> std::result::Result<(u16, Option<u64>, bool), String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
         let tabs = self
@@ -3271,10 +3295,23 @@ impl App {
             return Err(format!("GUI tab {tab_id} is already closing"));
         }
         if tab.live_domain_tab_route().is_some() {
-            return Err(
-                "Control-requested tab closure is not yet supported for live-domain tabs".into(),
-            );
+            return Err(format!(
+                "{request_origin} tab closure is not yet supported for live-domain tabs"
+            ));
         }
+        let non_closing_tabs = tabs
+            .iter()
+            .filter(|(_, tab)| !tab.closed && tab.closing_at.is_none())
+            .count();
+        if !allow_last_tab && non_closing_tabs <= 1 {
+            return Err(format!(
+                "Cannot close the final non-closing tab {tab_id}; window closure requires separate authority"
+            ));
+        }
+        let previous_active = tabs.active_tab_id();
+        let close_copy_mode = self
+            .copy_mode_target
+            .is_some_and(|target| target.tab == tab_id);
         if !self
             .tabs
             .as_mut()
@@ -3283,12 +3320,28 @@ impl App {
         {
             return Err(format!("GUI tab {tab_id} could not begin closing"));
         }
-        self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id });
+        if close_copy_mode {
+            self.leave_copy_mode(false);
+        }
+        if dispatch_plugin_hook {
+            self.dispatch_plugin_hook(crate::plugin::Hook::TabClosed { tab_id });
+        }
         self.refresh_focused_terminal_surfaces();
         if let Some(window) = &self.window {
             window.request_redraw();
         }
-        Ok(())
+        let active_local = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .filter(|tab| !tab.closed && tab.closing_at.is_none())
+            .map(|tab| tab.id);
+        let active = active_local.map(|id| u64::try_from(id).expect("tab ID fits u64"));
+        Ok((
+            u16::try_from(non_closing_tabs - 1).expect("tab count is bounded below u16::MAX"),
+            active,
+            previous_active != active_local,
+        ))
     }
 
     pub(super) fn close_control_pane(

@@ -1,6 +1,30 @@
 use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
+#[derive(Debug)]
+struct CountingTabClosedPlugin(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Plugin for CountingTabClosedPlugin {
+    fn id(&self) -> &str {
+        "tab-closed-observer"
+    }
+
+    fn name(&self) -> &str {
+        "Tab Closed Observer"
+    }
+
+    fn on_hook(
+        &mut self,
+        hook: &crate::plugin::Hook,
+        _ctx: &crate::plugin::PluginContext,
+    ) -> HookResponse {
+        if matches!(hook, crate::plugin::Hook::TabClosed { .. }) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        HookResponse::Ignored
+    }
+}
+
 #[test]
 fn native_window_title_tracks_the_active_tab_without_losing_product_identity() {
     assert_eq!(native_window_title(false, None), "Termeric");
@@ -1267,6 +1291,296 @@ fn plugin_pane_closure_is_exact_correlated_and_preserves_last_pane() {
             .as_str()
             .is_some_and(|error| error.contains("does not exist") || error.contains("fit"))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_tab_closure_is_scheduled_exact_bounded_and_hook_suppressed() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let survivor = tabs.new_tab().unwrap();
+    let serial = tabs.new_tab().unwrap();
+    let live_candidate = tabs.new_tab().unwrap();
+    let initially_active = tabs.new_tab().unwrap();
+    tabs.tab_mut_by_id(survivor).unwrap().pinned = true;
+    tabs.tab_mut_by_id(serial).unwrap().pinned = true;
+    tabs.tab_mut_by_id(serial).unwrap().tab_type = crate::tabs::TabType::Serial {
+        name: "fixture".into(),
+    };
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.plugin_manager.unload_all();
+    let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let context = app.build_plugin_context();
+    app.plugin_manager
+        .register(
+            Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(&observed))),
+            &context,
+        )
+        .unwrap();
+
+    let background = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "close-serial-background".into(),
+                tab_id: serial as u64,
+            },
+        )
+        .unwrap();
+    let background: serde_json::Value = serde_json::from_str(&background).unwrap();
+    assert_eq!(background["event"]["type"], "workspace-action-result");
+    assert_eq!(background["event"]["action"], "close-tab");
+    assert_eq!(background["event"]["action_id"], "close-serial-background");
+    assert_eq!(background["event"]["ok"], true);
+    assert_eq!(background["event"]["tab_id"], serial as u64);
+    assert_eq!(background["event"]["scheduled"], true);
+    assert_eq!(background["event"]["remaining_tabs"], 3);
+    assert_eq!(
+        background["event"]["active_tab_id"],
+        initially_active as u64
+    );
+    assert_eq!(background["event"]["active_changed"], false);
+    assert!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(serial)
+            .unwrap()
+            .closing_at
+            .is_some()
+    );
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab_id(),
+        Some(initially_active)
+    );
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(live_candidate)
+        .unwrap()
+        .live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "fake-domain".into(),
+        tab_id: 8,
+        pane_ids: HashMap::new(),
+    });
+    let live = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "reject-live".into(),
+                tab_id: live_candidate as u64,
+            },
+        )
+        .unwrap();
+    let live: serde_json::Value = serde_json::from_str(&live).unwrap();
+    assert_eq!(live["event"]["ok"], false);
+    assert_eq!(live["event"]["scheduled"], false);
+    assert!(live["event"]["remaining_tabs"].is_null());
+    assert!(live["event"]["active_tab_id"].is_null());
+    assert!(live["event"]["active_changed"].is_null());
+    assert!(
+        live["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("live-domain"))
+    );
+    assert!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(live_candidate)
+            .unwrap()
+            .closing_at
+            .is_none()
+    );
+
+    let tab = app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(live_candidate)
+        .unwrap();
+    tab.live_domain = None;
+    tab.closed = true;
+    let closed = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "reject-closed".into(),
+                tab_id: live_candidate as u64,
+            },
+        )
+        .unwrap();
+    let closed: serde_json::Value = serde_json::from_str(&closed).unwrap();
+    assert_eq!(closed["event"]["ok"], false);
+    assert_eq!(closed["event"]["scheduled"], false);
+    assert!(
+        closed["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("already closing"))
+    );
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(live_candidate)
+        .unwrap()
+        .closed = false;
+
+    let already_closing = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "already-closing".into(),
+                tab_id: serial as u64,
+            },
+        )
+        .unwrap();
+    let already_closing: serde_json::Value = serde_json::from_str(&already_closing).unwrap();
+    assert_eq!(already_closing["event"]["ok"], false);
+    assert!(
+        already_closing["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("already closing"))
+    );
+
+    let missing = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "missing-tab".into(),
+                tab_id: u64::MAX,
+            },
+        )
+        .unwrap();
+    let missing: serde_json::Value = serde_json::from_str(&missing).unwrap();
+    assert_eq!(missing["event"]["ok"], false);
+    assert!(
+        missing["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("does not exist") || error.contains("fit"))
+    );
+
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(live_candidate)
+        .unwrap()
+        .live_domain = None;
+    app.copy_mode_target = Some(CopyModeTarget {
+        tab: initially_active,
+        pane: None,
+    });
+    let active = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "close-active".into(),
+                tab_id: initially_active as u64,
+            },
+        )
+        .unwrap();
+    let active: serde_json::Value = serde_json::from_str(&active).unwrap();
+    assert_eq!(active["event"]["ok"], true);
+    assert_eq!(active["event"]["scheduled"], true);
+    assert_eq!(active["event"]["remaining_tabs"], 2);
+    assert_eq!(active["event"]["active_tab_id"], live_candidate as u64);
+    assert_eq!(active["event"]["active_changed"], true);
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab_id(),
+        Some(live_candidate)
+    );
+    assert!(app.copy_mode_target.is_none());
+
+    let next_active = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "leave-one".into(),
+                tab_id: live_candidate as u64,
+            },
+        )
+        .unwrap();
+    let next_active: serde_json::Value = serde_json::from_str(&next_active).unwrap();
+    assert_eq!(next_active["event"]["ok"], true);
+    assert_eq!(next_active["event"]["remaining_tabs"], 1);
+    assert_eq!(next_active["event"]["active_tab_id"], survivor as u64);
+    assert_eq!(next_active["event"]["active_changed"], true);
+
+    let final_tab = app
+        .structured_workspace_action_event(
+            "tab-pruner",
+            crate::plugin::structured::StructuredResponseAction::CloseTab {
+                action_id: "reject-final".into(),
+                tab_id: survivor as u64,
+            },
+        )
+        .unwrap();
+    let final_tab: serde_json::Value = serde_json::from_str(&final_tab).unwrap();
+    assert_eq!(final_tab["event"]["ok"], false);
+    assert_eq!(final_tab["event"]["scheduled"], false);
+    assert!(
+        final_tab["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("final non-closing tab"))
+    );
+    assert!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(survivor)
+            .unwrap()
+            .closing_at
+            .is_none()
+    );
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(survivor));
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn control_tab_closure_retains_final_tab_authority() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    let tab_id = tabs.new_tab().unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.plugin_manager.unload_all();
+    let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let context = app.build_plugin_context();
+    app.plugin_manager
+        .register(
+            Box::new(CountingTabClosedPlugin(std::sync::Arc::clone(&observed))),
+            &context,
+        )
+        .unwrap();
+
+    app.close_control_tab(tab_id as u64).unwrap();
+    assert!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(tab_id)
+            .unwrap()
+            .closing_at
+            .is_some()
+    );
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[cfg(unix)]

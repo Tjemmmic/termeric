@@ -14,6 +14,7 @@
 //! API v12 adds exact, separately granted ordinary-pane creation, and API v13
 //! adds separately granted ordinary-tab creation in the originating window.
 //! API v14 adds separately granted exact ordinary-pane closure.
+//! API v15 adds separately granted exact ordinary-tab closure scheduling.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -26,7 +27,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 14;
+pub const PLUGIN_API_VERSION: u32 = 15;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -67,6 +68,7 @@ pub enum PluginPermission {
     PaneCreate,
     TabCreate,
     PaneClose,
+    TabClose,
     Secrets,
 }
 
@@ -88,6 +90,7 @@ impl std::fmt::Display for PluginPermission {
             Self::PaneCreate => "pane-create",
             Self::TabCreate => "tab-create",
             Self::PaneClose => "pane-close",
+            Self::TabClose => "tab-close",
             Self::Secrets => "secrets",
         })
     }
@@ -113,6 +116,7 @@ impl std::str::FromStr for PluginPermission {
             "pane-create" => Ok(Self::PaneCreate),
             "tab-create" => Ok(Self::TabCreate),
             "pane-close" => Ok(Self::PaneClose),
+            "tab-close" => Ok(Self::TabClose),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -548,6 +552,15 @@ impl PluginManifest {
         {
             bail!("pane-close requires an API v14 persistent event handler");
         }
+        if self.permissions.contains(&PluginPermission::TabClose)
+            && (self.api_version < 15
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("tab-close requires an API v15 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -673,6 +686,7 @@ impl PluginRegistry {
                         | PluginPermission::PaneCreate
                         | PluginPermission::TabCreate
                         | PluginPermission::PaneClose
+                        | PluginPermission::TabClose
                 )
             }) {
                 bail!(
@@ -1107,6 +1121,9 @@ impl DeclarativePlugin {
                     allow_pane_close: self.manifest.api_version >= 14
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && self.grants.contains(&PluginPermission::PaneClose),
+                    allow_tab_close: self.manifest.api_version >= 15
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::TabClose),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -1805,6 +1822,21 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::TabCreate
                 | PluginPermission::PaneClose
         ),
+        15 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+        ),
         _ => false,
     }
 }
@@ -2378,6 +2410,31 @@ events = ["command-completed"]
         manifest
     }
 
+    fn tab_close_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = event_grants(true);
+        grants.insert(PluginPermission::TabClose);
+        grants
+    }
+
+    fn tab_close_manifest() -> PluginManifest {
+        let mut manifest = workspace_query_manifest();
+        manifest.api_version = 15;
+        manifest.id = "tab-pruner".into();
+        manifest.permissions.insert(PluginPermission::TabClose);
+        manifest.commands.push(DeclarativeHandlerCommand {
+            id: "close-background-tab".into(),
+            name: "Close Background Tab".into(),
+            description: String::new(),
+        });
+        manifest
+            .event_handler
+            .as_mut()
+            .unwrap()
+            .events
+            .insert(StructuredEventKind::CommandInvoked);
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -2695,7 +2752,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 15");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 16");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -3075,6 +3132,36 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn checked_in_api_v15_tab_pruner_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/tab-pruner");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 15);
+        assert_eq!(manifest.id, "tab-pruner");
+        assert_eq!(manifest.commands.len(), 1);
+        assert_eq!(manifest.commands[0].id, "close-background-tab");
+        assert_eq!(manifest.permissions, tab_close_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        let registry = PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "tab-pruner".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: tab_close_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        };
+        registry.validate().unwrap();
+    }
+
+    #[test]
     fn checked_in_api_v14_pane_pruner_example_is_a_valid_manifest() {
         let directory =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/pane-pruner");
@@ -3132,6 +3219,70 @@ events = ["command-invoked"]
             }],
         };
         registry.validate().unwrap();
+    }
+
+    #[test]
+    fn api_v15_tab_close_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/tab-pruner")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: event_grants(true),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("tab-close"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: tab_close_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "tab-pruner".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "tab-pruner")
+            .unwrap();
+        assert!(installed.enabled);
+        assert_eq!(installed.grants, tab_close_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("tab-pruner")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
     }
 
     #[test]
@@ -3677,6 +3828,71 @@ events = ["command-invoked"]
             panic!("ungranted pane creation fixture did not create an invocation")
         };
         assert!(!invocation.allow_pane_create);
+    }
+
+    #[test]
+    fn api_v15_tab_closure_requires_persistent_mode_and_exact_grant() {
+        let manifest = tab_close_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &tab_close_grants()).unwrap();
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 2,
+            active_tab: 1,
+            terminal_size: (80, 24),
+        };
+        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, tab_close_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "tab-pruner.close-background-tab".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v15 tab closure handler did not create an invocation")
+        };
+        assert!(invocation.allow_workspace_query);
+        assert!(invocation.allow_tab_close);
+        assert!(!invocation.allow_pane_close);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v14 = manifest.clone();
+        v14.api_version = 14;
+        assert!(v14.validate().unwrap_err().to_string().contains("API v15"));
+
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+
+        let mut grants = tab_close_grants();
+        grants.remove(&PluginPermission::TabClose);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: tab-close")
+        );
+
+        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "tab-pruner.close-background-tab".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted tab closure fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_tab_close);
     }
 
     #[test]

@@ -997,8 +997,14 @@ parsing, missing/live/serial/closing/last-pane refusal, non-active target focus
 preservation, split collapse, correlated remaining/focused state, same-process
 query-to-close reuse, one-operation enforcement, authority removal, and a
 checked-in pane pruner. Only inert local shell/Python fixtures are used; no AI
-provider process or tokens are involved. In-app management cases
-use temporary registries and non-executed
+provider process or tokens are involved. API v15 adds exact tab-close
+version/mode/grant denial, strict stable-ID action parsing, local serial
+acceptance, missing/live/closing/final-tab refusal, background focus
+preservation, active handoff, copy-mode cleanup, scheduled correlated results,
+lifecycle-hook suppression, same-process query-to-close reuse, one-operation
+enforcement, authority removal, and a checked-in tab pruner. Only inert local
+shell/Python fixtures are used; no AI provider process or tokens are involved.
+In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay
 requests, exact detail disclosure, enable/disable persistence, confirmed reset,

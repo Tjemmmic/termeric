@@ -282,6 +282,18 @@ Versioning once public beta tags begin.
   authority. A checked-in command-driven pane pruner and hermetic parser,
   runtime, local-process, and exact-routing tests use no AI provider or token.
 
+- Declarative plugin API v15 adds an independent `tab-close` grant for
+  scheduling closure of one exact ordinary local tab in the originating
+  window. Stable IDs, local/live ownership, lifecycle state, and the final
+  non-closing-tab floor validate before mutation. Background closure preserves
+  selection; active closure uses the existing deterministic handoff and clears
+  copy mode owned by the target. Success truthfully reports scheduled teardown,
+  remaining/active tab state, and selection change before normal animation,
+  autosave, and PTY removal complete. The result removes every host authority
+  and the derived lifecycle hook is suppressed. A checked-in command-driven
+  tab pruner and hermetic parser, runtime, local-process, and exact-routing
+  tests use no AI provider or token.
+
 - Settings now exposes a bounded installed third-party plugin manager. It shows
   exact source, version, health, requested/granted permissions, effective
   settings, and explicit override counts; supports enable/disable; and requires
