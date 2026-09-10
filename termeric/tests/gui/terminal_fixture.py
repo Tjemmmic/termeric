@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import fcntl
 import json
 import os
@@ -16,6 +17,7 @@ import sys
 import termios
 import time
 import tty
+import zlib
 
 
 def write_record(path: str, event: str, **fields: object) -> None:
@@ -59,31 +61,126 @@ def render_fixture(instance: int) -> None:
     emit(b"\x1b]2;Termeric GUI Acceptance\x07")
 
 
-def render_external_graphics_clients(transcript: str) -> None:
-    """Emit output from independent Sixel and iTerm2 client implementations."""
+def png_chunk(kind: bytes, data: bytes) -> bytes:
+    payload = kind + data
+    return (
+        struct.pack(">I", len(data))
+        + payload
+        + struct.pack(">I", binascii.crc32(payload))
+    )
+
+
+def write_graphics_fixture(path: str) -> None:
+    """Write a bounded multi-row RGBA fixture without an image-library dependency."""
+    width = 64
+    height = 64
+    scanlines = bytearray()
+    for row in range(height):
+        scanlines.append(0)
+        for col in range(width):
+            scanlines.extend((col * 4, row * 4, (col ^ row) * 4, 255))
+    payload = b"\x89PNG\r\n\x1a\n"
+    payload += png_chunk(
+        b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    )
+    payload += png_chunk(b"IDAT", zlib.compress(bytes(scanlines), 9))
+    payload += png_chunk(b"IEND", b"")
+    with open(path, "wb") as fixture:
+        fixture.write(payload)
+
+
+def command_version(command: list[str]) -> str:
+    result = subprocess.run(command, check=True, capture_output=True, timeout=5)
+    output = (result.stdout + result.stderr).decode("utf-8", "replace")
+    first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+    if not first_line:
+        raise RuntimeError(f"{' '.join(command)} produced no version output")
+    return "".join(character if character.isprintable() else "�" for character in first_line)[
+        :256
+    ]
+
+
+def render_external_graphics_clients(
+    transcript: str,
+    terminal_geometry: tuple[int, int, int, int] | None = None,
+) -> None:
+    """Emit current Kitty, independent Sixel, and iTerm2 client output."""
     image = os.path.join(
         os.path.dirname(transcript), f"graphics-client-{os.getpid()}.png"
     )
-    with open(image, "wb") as fixture:
-        fixture.write(
-            base64.b64decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC"
-            )
-        )
+    write_graphics_fixture(image)
+    rows, cols, pixel_width, pixel_height = terminal_geometry or winsize()
+    window_size = f"{cols},{rows},{pixel_width},{pixel_height}"
+    versions = {
+        "kitten": command_version(["kitten", "--version"]),
+        "img2sixel": command_version(["img2sixel", "--version"]),
+        "timg": command_version(["timg", "--version"]),
+    }
 
-    for tool, command in (
-        ("img2sixel", ["img2sixel", image]),
-        ("timg-iterm2", ["timg", "-pi", "-g2x1", image]),
+    for tool, version_key, protocol, cursor_row, command in (
+        (
+            "kitten-stream",
+            "kitten",
+            "kitty",
+            8,
+            [
+                "kitten",
+                "icat",
+                "--stdin=no",
+                "--transfer-mode=stream",
+                f"--use-window-size={window_size}",
+                "--fit=none",
+                "--align=left",
+                "--image-id=1701",
+                image,
+            ],
+        ),
+        (
+            "kitten-unicode-placeholder",
+            "kitten",
+            "kitty-unicode-placeholder",
+            16,
+            [
+                "kitten",
+                "icat",
+                "--stdin=no",
+                "--unicode-placeholder",
+                "--transfer-mode=stream",
+                f"--use-window-size={window_size}",
+                "--fit=none",
+                "--align=left",
+                "--image-id=1702",
+                image,
+            ],
+        ),
+        ("img2sixel", "img2sixel", "sixel", 24, ["img2sixel", image]),
+        (
+            "timg-iterm2",
+            "timg",
+            "iterm2",
+            32,
+            ["timg", "-pi", "-g2x1", image],
+        ),
     ):
-        result = subprocess.run(command, check=True, capture_output=True)
+        result = subprocess.run(command, check=True, capture_output=True, timeout=15)
         if not result.stdout:
             raise RuntimeError(f"{tool} produced no terminal output")
-        emit(result.stdout)
+        emit(f"\x1b[{cursor_row};2H".encode() + result.stdout)
         write_record(
             transcript,
             "graphics_client",
             tool=tool,
+            version=versions[version_key],
+            protocol=protocol,
             output_bytes=len(result.stdout),
+            cursor_row=cursor_row,
+            cursor_col=2,
+            fixture_width=64,
+            fixture_height=64,
+            terminal_rows=rows,
+            terminal_cols=cols,
+            terminal_pixel_width=pixel_width,
+            terminal_pixel_height=pixel_height,
         )
 
 

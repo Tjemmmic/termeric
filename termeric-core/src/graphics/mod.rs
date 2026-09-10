@@ -1573,6 +1573,17 @@ impl GraphicsManager {
         } else {
             None
         };
+        let placement_kind = if pending.placement.virtual_placement {
+            "Unicode placeholder image"
+        } else {
+            "image"
+        };
+        log::debug!(
+            "Accepted Kitty {placement_kind}: id={}, {}x{} pixels",
+            pending.storage_id.0,
+            decoded.width,
+            decoded.height
+        );
         GraphicsCommandResult {
             response: response_fields(
                 pending.response_id,

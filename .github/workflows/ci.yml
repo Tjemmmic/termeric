@@ -157,7 +157,7 @@ jobs:
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
             libvulkan-dev mesa-vulkan-drivers xvfb xauth xdotool xclip \
             imagemagick ffmpeg python3-pil fonts-dejavu-core fonts-noto-color-emoji vim less tmux \
-            libsixel-bin timg openbox sway weston wl-clipboard wtype util-linux
+            libsixel-bin timg kitty openbox sway weston wl-clipboard wtype util-linux
       - name: Build the native application
         run: cargo build -p termeric --locked
       - name: Check native harness record analysis

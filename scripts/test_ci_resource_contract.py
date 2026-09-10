@@ -47,6 +47,13 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("if: always()", native)
         self.assertIn("if-no-files-found: error", native)
 
+    def test_native_lane_installs_every_real_graphics_client(self) -> None:
+        block = job_block(self.workflow, "linux-native-gui-acceptance")
+        for package in ("kitty", "libsixel-bin", "timg"):
+            self.assertRegex(block, rf"\b{re.escape(package)}\b")
+        self.assertIn("--backend x11", block)
+        self.assertNotIn("--scenario", block.split("Run X11 interaction", 1)[1].split("Run Wayland", 1)[0])
+
     def test_scheduled_lane_runs_and_retains_both_ten_minute_soaks(self) -> None:
         block = job_block(self.workflow, "scheduled-linux-resource-soak")
         self.assertIn("github.event_name == 'schedule'", block)

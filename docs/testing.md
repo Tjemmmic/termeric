@@ -706,20 +706,25 @@ relay replica, including after config reapplication.
 Compressed-local fixtures distinguish raw input ceilings from PNG decompressed
 sizes, cover short local objects and malformed streams, and prove cleanup before
 decode. The opt-in headless GPU smoke submits cropped negative/positive-z
-textures. Visible stream, temporary-file, shared-memory, disabled/enabled
-ordinary-file `kitten icat`, and direct relative-placement acceptance remain a manual Wayland/X11 row; see
-[`kitty-graphics.md`](kitty-graphics.md).
+textures. The native X11 workspace scenario now runs current `kitten icat`
+classic and Unicode-placeholder streams against one deterministic 64-by-64
+multi-row PNG at separate cursor locations, and requires both exact image IDs
+to reach successful terminal diagnostics. A current artifact and visual review,
+plus temporary-file, shared-memory, disabled/enabled ordinary-file, multi-pane,
+animation, and direct relative-placement acceptance remain manual Wayland/X11
+rows; see [`kitty-graphics.md`](kitty-graphics.md).
 
 The Sixel/iTerm2 lane adds independent encoder fixtures, DEC macro and raster
 pixel-aspect geometry, fragmented input, malformed and resource-exhaustion
 tests, cross-protocol cache/placement/scroll/resize/screen lifecycle checks,
 and the dedicated `graphics_protocols` fuzz target. The native X11 acceptance
-harness requires libsixel's `img2sixel` and `timg -pi`, runs them through real
-PTYs, and requires both adapters to accept their output. A pure harness regression test places fake
-clients on `PATH` and proves the fixture actually executes and emits both
-protocol streams; this prevents source presence or a dead fixture branch from
-being mistaken for native-client coverage. A current accepted native artifact
-and subjective visual review remain pending. Exact limits and unsupported extensions are in
+harness additionally requires libsixel's `img2sixel` and `timg -pi`, runs them
+through real PTYs, and requires both adapters to accept their output. A pure
+harness regression test places fake Kitty, Sixel, and iTerm2 clients on `PATH`
+and proves the fixture actually executes and emits all four configured streams;
+this prevents source presence or a dead fixture branch from being mistaken for
+native-client coverage. A current accepted native artifact and subjective
+visual review remain pending. Exact limits and unsupported extensions are in
 [`inline-images.md`](inline-images.md).
 
 The pane lifecycle lane adopts an existing real PTY, receives output while it

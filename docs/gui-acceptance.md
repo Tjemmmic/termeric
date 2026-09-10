@@ -44,6 +44,9 @@ Termeric binary with `xdotool`. Its workspace scenario asserts:
   remaining live;
 - a Kitty image receiving a successful reply through the native PTY route,
   paired with the GPU image-geometry smoke;
+- current `kitten icat` classic-stream and Unicode-placeholder-stream clients
+  rendering a deterministic multi-row PNG at separate live cursor positions,
+  with exact image IDs, client versions, and accepted-protocol diagnostics;
 - real `img2sixel` and `timg -pi` clients emitting Sixel and iTerm2 PNG output
   through the PTY into the shared, pane-clipped GPU image path;
 - a daemon-owned Kitty image created before closing the first live-domain
@@ -157,9 +160,10 @@ cargo build -p termeric --locked
 ```
 
 On Debian/Ubuntu, install `xvfb`, `xauth`, `xdotool`, `xclip`, `imagemagick`,
-`python3-pil`, `fonts-dejavu-core`, `fonts-noto-color-emoji`, `vim`, `less`, `tmux`, `libsixel-bin`,
-`timg`, `util-linux` (for `script`), `openbox`, `weston`, `sway`, `wtype`,
-Mesa's Vulkan drivers, and the normal Termeric build dependencies.
+`python3-pil`, `fonts-dejavu-core`, `fonts-noto-color-emoji`, `vim`, `less`,
+`tmux`, `libsixel-bin`, `kitty` (for `kitten`), `timg`, `util-linux` (for
+`script`), `openbox`, `weston`, `sway`, `wtype`, Mesa's Vulkan drivers, and the
+normal Termeric build dependencies.
 
 Run every X11 scenario:
 
@@ -182,12 +186,12 @@ Use repeated `--scenario workspace`, `--scenario fullscreen`, `--scenario cli`, 
 the exact config, PTY JSONL, application and window-manager logs, screenshots,
 fixture files, desktop-spy calls, and a machine-readable result.
 
-Prerequisite checks are scenario-local. Only `workspace` runs the independent
-`img2sixel`/`timg` clients and X11 clipboard round trips; only scenarios that
-capture a native window require ImageMagick, Spectacle, or FFmpeg. Fullscreen,
-CLI, Wayland, and full-screen application fixtures explicitly skip unrelated
-graphics emission, so an isolated reproduction cannot be blocked by tools that
-the selected scenario never executes.
+Prerequisite checks are scenario-local. Only `workspace` runs current
+`kitten`, independent `img2sixel`/`timg` clients, and X11 clipboard round trips;
+only scenarios that capture a native window require ImageMagick, Spectacle, or
+FFmpeg. Fullscreen, CLI, Wayland, and full-screen application fixtures
+explicitly skip unrelated graphics emission, so an isolated reproduction
+cannot be blocked by tools that the selected scenario never executes.
 
 Run Wayland launch/render/close:
 

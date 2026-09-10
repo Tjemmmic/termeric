@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import struct
 import sys
 import tempfile
 import tomllib
@@ -186,15 +187,43 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             app.stop_after_failure.assert_called_once_with()
             app.finish.assert_called_once_with()
 
-    def test_external_graphics_clients_execute_and_emit_both_protocols(self) -> None:
+    def test_external_graphics_clients_execute_every_configured_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             transcript = root / "transcript.jsonl"
+            kitten_args = root / "kitten-args.txt"
             fake_bin = root / "bin"
             fake_bin.mkdir()
             clients = {
-                "img2sixel": "#!/bin/sh\nprintf '\\033Pq~\\033\\\\'\n",
-                "timg": "#!/bin/sh\nprintf '\\033]1337;File=inline=1:AA==\\007'\n",
+                "kitten": """#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'kitten fixture 1.0\\n'
+  exit 0
+fi
+printf '%s\\n' "$*" >> "$TERMERIC_KITTEN_ARGS"
+case " $* " in
+  *" --unicode-placeholder "*)
+    printf '\\033_Ga=T,q=2,U=1,f=32,s=1,v=1,i=1702;AQIDBA==\\033\\\\'
+    ;;
+  *)
+    printf '\\033_Ga=T,q=2,f=32,s=1,v=1,i=1701;AQIDBA==\\033\\\\'
+    ;;
+esac
+""",
+                "img2sixel": """#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'img2sixel fixture 1.0\\n'
+else
+  printf '\\033Pq~\\033\\\\'
+fi
+""",
+                "timg": """#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf 'timg fixture 1.0\\n'
+else
+  printf '\\033]1337;File=inline=1:AA==\\007'
+fi
+""",
             }
             for name, script in clients.items():
                 executable = fake_bin / name
@@ -203,19 +232,50 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
 
             with mock.patch.dict(
                 os.environ,
-                {"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
+                {
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "TERMERIC_KITTEN_ARGS": str(kitten_args),
+                },
             ), mock.patch.object(terminal_fixture, "emit") as emit:
-                terminal_fixture.render_external_graphics_clients(str(transcript))
+                terminal_fixture.render_external_graphics_clients(
+                    str(transcript), (40, 100, 800, 800)
+                )
 
             records = [json.loads(line) for line in transcript.read_text().splitlines()]
             self.assertEqual(
                 {record["tool"] for record in records},
-                {"img2sixel", "timg-iterm2"},
+                {
+                    "kitten-stream",
+                    "kitten-unicode-placeholder",
+                    "img2sixel",
+                    "timg-iterm2",
+                },
             )
-            self.assertEqual(emit.call_count, 2)
+            self.assertEqual(
+                {record["version"] for record in records},
+                {
+                    "kitten fixture 1.0",
+                    "img2sixel fixture 1.0",
+                    "timg fixture 1.0",
+                },
+            )
+            self.assertEqual(emit.call_count, 4)
             emitted = [call.args[0] for call in emit.call_args_list]
-            self.assertTrue(any(payload.startswith(b"\x1bPq") for payload in emitted))
-            self.assertTrue(any(payload.startswith(b"\x1b]1337;") for payload in emitted))
+            self.assertTrue(any(b"i=1701" in payload for payload in emitted))
+            self.assertTrue(any(b"U=1" in payload for payload in emitted))
+            self.assertTrue(any(b"\x1bPq" in payload for payload in emitted))
+            self.assertTrue(any(b"\x1b]1337;" in payload for payload in emitted))
+            arguments = kitten_args.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(arguments), 2)
+            self.assertTrue(all("--transfer-mode=stream" in line for line in arguments))
+            self.assertEqual(
+                sum("--unicode-placeholder" in line for line in arguments), 1
+            )
+            self.assertTrue(all("--stdin=no" in line for line in arguments))
+            fixture = next(root.glob("graphics-client-*.png"))
+            fixture_bytes = fixture.read_bytes()
+            self.assertEqual(fixture_bytes[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", fixture_bytes[16:24]), (64, 64))
 
     def test_alternate_screen_capture_requires_entry_before_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -377,11 +437,13 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
         self.assertNotIn("sway", launch)
         self.assertNotIn("img2sixel", launch)
         self.assertNotIn("timg", launch)
+        self.assertNotIn("kitten", launch)
         self.assertIn("sway", fullscreen)
         self.assertIn("wtype", fullscreen)
         self.assertNotIn("weston", fullscreen)
         self.assertNotIn("img2sixel", fullscreen)
         self.assertNotIn("timg", fullscreen)
+        self.assertNotIn("kitten", fullscreen)
 
     def test_external_graphics_and_clipboard_tools_are_workspace_scoped(self) -> None:
         workspace = gui_acceptance.required_tools(
@@ -396,8 +458,8 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             start_weston=False,
             start_sway=False,
         )
-        self.assertTrue({"img2sixel", "timg", "xclip"}.issubset(workspace))
-        self.assertTrue({"img2sixel", "timg", "xclip"}.isdisjoint(vim))
+        self.assertTrue({"kitten", "img2sixel", "timg", "xclip"}.issubset(workspace))
+        self.assertTrue({"kitten", "img2sixel", "timg", "xclip"}.isdisjoint(vim))
 
     def test_capture_tool_is_required_only_by_scenarios_that_take_snapshots(self) -> None:
         with mock.patch.dict(

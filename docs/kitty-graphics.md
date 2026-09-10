@@ -252,7 +252,12 @@ They also prove that an elapsed Kitty frame boundary requests one redraw through
 idle scheduler instead of enabling the UI's 16 ms animation polling path.
 The opt-in headless Vulkan lane uploads a real RGBA texture, crops two source
 quadrants, queues negative and positive z placements, and submits both render
-passes.
+passes. The native X11 workspace scenario launches the installed current
+`kitten` twice against a deterministic 64-by-64 RGBA PNG: once with classic
+stream placement and once with Unicode placeholders. It fixes terminal pixel
+geometry, uses distinct image IDs and cursor rows, records exact client output
+sizes, versions, and geometry, and requires both images to reach successful protocol
+diagnostics before the scenario can pass.
 
 Manual release acceptance still requires visible Wayland and X11 runs with a
 current `kitten icat --transfer-mode=stream`,
@@ -262,8 +267,9 @@ with the policy both disabled and enabled, plus two simultaneous pane-local
 clients. Also run a direct `P/Q/H/V` protocol probe that moves and deletes both
 an ordinary parent and a Unicode-placeholder parent, confirming child movement,
 signed offsets, and cascading deletion. Record the exact Kitty version, commands, image fixtures, compositor,
-GPU, config state, and candidate SHA in `release-acceptance.md`; automated tests
-do not launch an external Kitty client.
+GPU, config state, and candidate SHA in `release-acceptance.md`. The automated
+workspace path covers only the two stream modes in one X11 window; the other
+media, multi-pane, Wayland, and subjective checks remain operator-owned.
 
 Also run a direct multi-frame `a=f`/`a=a`/`a=c` probe that exercises partial
 updates, alpha blend and replacement, loading and finite-loop playback, root

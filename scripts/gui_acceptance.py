@@ -888,15 +888,22 @@ def run_workspace_scenario(
             15,
         )
         wait_until(
-            "img2sixel and timg iTerm2 client output accepted by the terminal",
-            lambda: app.log_contains("Accepted Sixel image")
+            "current Kitty, img2sixel, and timg client output accepted by the terminal",
+            lambda: app.log_contains("Accepted Kitty image: id=1701")
+            and app.log_contains("Accepted Kitty Unicode placeholder image: id=1702")
+            and app.log_contains("Accepted Sixel image")
             and app.log_contains("Accepted iTerm2 inline image")
             and {
                 record.get("tool")
                 for record in read_records(transcript)
                 if record.get("event") == "graphics_client"
             }
-            == {"img2sixel", "timg-iterm2"},
+            == {
+                "kitten-stream",
+                "kitten-unicode-placeholder",
+                "img2sixel",
+                "timg-iterm2",
+            },
             15,
         )
         input_before_chrome = transcript_bytes(transcript)
@@ -2052,7 +2059,7 @@ def required_tools(
     if backend == "x11":
         tools.append("xdotool")
         if "workspace" in scenarios:
-            tools.extend(["img2sixel", "timg", "xclip"])
+            tools.extend(["kitten", "img2sixel", "timg", "xclip"])
         if set(scenarios) & {"workspace", "domain", "vim", "less", "tmux"}:
             capture_backend = os.environ.get("TERMERIC_GUI_CAPTURE", "auto")
             if capture_backend == "ffmpeg" or (
