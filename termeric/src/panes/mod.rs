@@ -1138,12 +1138,12 @@ impl PaneManager {
             return false;
         }
 
-        // Find a sibling to focus
-        if let Some(sibling) = self.tree.find_sibling(to_close) {
-            self.focused = sibling;
-        } else {
-            // Fallback to any remaining pane
-            if let Some(&id) = self.panes.keys().find(|&&id| id != to_close) {
+        // Closing a background pane must not steal focus. If the focused pane
+        // is the target, choose its nearest sibling before removing it.
+        if self.focused == to_close {
+            if let Some(sibling) = self.tree.find_sibling(to_close) {
+                self.focused = sibling;
+            } else if let Some(&id) = self.panes.keys().find(|&&id| id != to_close) {
                 self.focused = id;
             } else {
                 return false;

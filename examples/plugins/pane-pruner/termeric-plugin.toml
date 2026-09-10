@@ -1,0 +1,70 @@
+api_version = 14
+id = "pane-pruner"
+name = "Pane Pruner"
+version = "1.0.0"
+description = "Demonstrates permissioned closure of one non-focused ordinary pane"
+permissions = ["process-spawn", "workspace-query", "pane-close", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "close-sibling-pane"
+name = "Close Sibling Pane"
+description = "Close one non-focused pane in the active ordinary tab"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+def notice(message):
+    return [{
+        "type": "show-notice",
+        "title": "Pane Pruner",
+        "lines": [message[:400]],
+    }]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{
+            "type": "query-workspace",
+            "query_id": "find-sibling-pane",
+        }]
+    elif event["type"] == "workspace-query-result":
+        active = next(
+            (tab for tab in event["window"]["tabs"] if tab["active"]),
+            None,
+        )
+        sibling = next(
+            (pane for pane in active["panes"] if not pane["focused"]),
+            None,
+        ) if active else None
+        if active is None or sibling is None:
+            actions = notice("The active ordinary tab has no non-focused pane to close.")
+        else:
+            actions = [{
+                "type": "close-pane",
+                "action_id": "close-sibling-pane",
+                "tab_id": active["id"],
+                "pane_id": sibling["id"],
+            }]
+    elif event["type"] == "workspace-action-result":
+        if event["ok"]:
+            actions = notice(
+                f"Closed pane {event['pane_id']}; "
+                f"{event['remaining_panes']} pane(s) remain."
+            )
+        else:
+            actions = notice("Pane closure failed: " + event["error"])
+    else:
+        actions = notice("Unexpected pane-pruner event.")
+    response = {
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }
+    print(json.dumps(response, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

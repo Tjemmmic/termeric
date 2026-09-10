@@ -991,7 +991,13 @@ fixtures and in-memory terminals are used. API v13 adds exact tab-create
 version/mode/grant denial, strict action parsing, stable returned identity,
 unavailable/live/capacity/launch failure routing, lifecycle-hook suppression,
 one-operation enforcement, result-authority removal, and a checked-in tab
-builder. No AI provider process or tokens are involved. In-app management cases
+builder. No AI provider process or tokens are involved. API v14 adds exact
+pane-close version/mode/grant denial, strict stable-ID action
+parsing, missing/live/serial/closing/last-pane refusal, non-active target focus
+preservation, split collapse, correlated remaining/focused state, same-process
+query-to-close reuse, one-operation enforcement, authority removal, and a
+checked-in pane pruner. Only inert local shell/Python fixtures are used; no AI
+provider process or tokens are involved. In-app management cases
 use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

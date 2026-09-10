@@ -272,6 +272,16 @@ Versioning once public beta tags begin.
   hermetic parser, runtime, local-process, and exact-routing tests use no AI
   provider or token.
 
+- Declarative plugin API v14 adds an independent `pane-close` grant for one
+  exact ordinary pane in the originating window. Stable tab/pane IDs and tab
+  lifecycle/kind validate before mutation; missing, closed, closing,
+  live-domain, serial, unsplit, and last-pane targets fail closed. Success
+  reports the remaining pane count and focused pane ID, collapses a one-pane
+  split, and preserves the selected tab when another tab was targeted. Closure
+  is the response's sole host operation and its result removes every host
+  authority. A checked-in command-driven pane pruner and hermetic parser,
+  runtime, local-process, and exact-routing tests use no AI provider or token.
+
 - Settings now exposes a bounded installed third-party plugin manager. It shows
   exact source, version, health, requested/granted permissions, effective
   settings, and explicit override counts; supports enable/disable; and requires

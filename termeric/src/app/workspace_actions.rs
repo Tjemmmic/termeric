@@ -3296,6 +3296,23 @@ impl App {
         tab_id: u64,
         pane_id: u32,
     ) -> std::result::Result<(u16, u32), String> {
+        self.close_ordinary_pane(tab_id, pane_id, "Control-requested")
+    }
+
+    pub(super) fn close_plugin_pane(
+        &mut self,
+        tab_id: u64,
+        pane_id: u32,
+    ) -> std::result::Result<(u16, u32), String> {
+        self.close_ordinary_pane(tab_id, pane_id, "Plugin-requested")
+    }
+
+    fn close_ordinary_pane(
+        &mut self,
+        tab_id: u64,
+        pane_id: u32,
+        request_origin: &str,
+    ) -> std::result::Result<(u16, u32), String> {
         let tab_id = usize::try_from(tab_id)
             .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
         let tabs = self
@@ -3310,9 +3327,12 @@ impl App {
             return Err(format!("GUI tab {tab_id} is closing"));
         }
         if tab.live_domain_tab_route().is_some() {
-            return Err(
-                "Control-requested pane closure is not yet supported for live-domain tabs".into(),
-            );
+            return Err(format!(
+                "{request_origin} pane closure is not yet supported for live-domain tabs"
+            ));
+        }
+        if !tab.allows_pane_splits() {
+            return Err("Serial terminal tabs do not contain closable panes".into());
         }
         let target = PaneId(pane_id);
         let manager = tab.pane_manager.as_ref().ok_or_else(|| {
