@@ -2225,9 +2225,13 @@ impl ApplicationHandler<AppEvent> for Application {
                 self.remove_closed_windows(event_loop);
                 return;
             }
-            AppEvent::LiveDomainTopology { window_id, result } => {
+            AppEvent::LiveDomainTopology {
+                window_id,
+                domain_id,
+                result,
+            } => {
                 if let Some(window) = self.windows.get_mut(&window_id) {
-                    window.handle_live_domain_topology(result);
+                    window.handle_live_domain_topology(domain_id, result);
                 }
                 self.remove_closed_windows(event_loop);
                 return;

@@ -2546,14 +2546,17 @@ impl App {
 
     pub(super) fn handle_live_domain_topology(
         &mut self,
+        domain_id: String,
         result: std::result::Result<crate::domain::DomainTopologyEvent, String>,
     ) {
         let event = match result {
             Ok(event) => event,
             Err(error) => {
-                self.toasts.warning(format!(
-                    "Live-domain topology disconnected; retrying: {error}"
-                ));
+                if self.disconnected_live_domains.insert(domain_id.clone()) {
+                    let route = self.live_domain_route_label(&domain_id);
+                    self.toasts
+                        .warning(format!("Live {route} disconnected; retrying: {error}"));
+                }
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -2562,11 +2565,21 @@ impl App {
         };
         match event {
             crate::domain::DomainTopologyEvent::Snapshot { revision, domain } => {
-                if self
-                    .live_domain_revisions
-                    .get(&domain.domain_id)
-                    .is_some_and(|applied| *applied >= revision)
-                {
+                if domain.domain_id != domain_id {
+                    self.toasts.error(format!(
+                        "Rejected live-domain topology for {}; expected {domain_id}",
+                        domain.domain_id
+                    ));
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                let applied_revision = self.live_domain_revisions.get(&domain.domain_id).copied();
+                let recovering = self.disconnected_live_domains.contains(&domain_id);
+                if applied_revision.is_some_and(|applied| {
+                    applied > revision || (applied == revision && !recovering)
+                }) {
                     return;
                 }
                 let Some(relay_command) = self.live_domain_relay_command.as_ref() else {
@@ -2637,6 +2650,10 @@ impl App {
                             }
                             self.refresh_focused_terminal_surfaces();
                         }
+                        if self.disconnected_live_domains.remove(&domain_id) {
+                            let route = self.live_domain_route_label(&domain_id);
+                            self.toasts.success(format!("Reconnected live {route}"));
+                        }
                     }
                     Err(error) => self.toasts.error(format!(
                         "Could not apply live-domain topology revision {revision}: {error:#}"
@@ -2644,6 +2661,16 @@ impl App {
                 }
             }
             crate::domain::DomainTopologyEvent::Closed { domain, message } => {
+                if domain != domain_id {
+                    self.toasts.error(format!(
+                        "Rejected live-domain close for {domain}; expected {domain_id}"
+                    ));
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                self.disconnected_live_domains.remove(&domain);
                 self.live_domain_revisions.remove(&domain);
                 self.live_domain_topologies.remove(&domain);
                 let closed = self
@@ -2660,6 +2687,18 @@ impl App {
         }
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+    }
+
+    fn live_domain_route_label(&self, domain_id: &str) -> String {
+        match &self.live_domain_authority {
+            Some(crate::domain::DomainAuthority::Local) => {
+                format!("domain {domain_id} on this host")
+            }
+            Some(crate::domain::DomainAuthority::Ssh { destination }) => {
+                format!("domain {domain_id} via SSH to {destination}")
+            }
+            None => format!("domain {domain_id}"),
         }
     }
 
@@ -3414,6 +3453,54 @@ mod workspace_control_tests {
     }
 
     #[test]
+    fn live_domain_disconnect_feedback_names_the_ssh_route() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.live_domain_authority = Some(crate::domain::DomainAuthority::Ssh {
+            destination: "builder@example.test".into(),
+        });
+
+        app.handle_live_domain_topology("domain-ssh".into(), Err("connection reset".into()));
+
+        let toast = app.toasts.iter().last().unwrap();
+        assert_eq!(toast.severity, crate::ui::toast::ToastSeverity::Warning);
+        assert_eq!(
+            toast.message,
+            "Live domain domain-ssh via SSH to builder@example.test disconnected; retrying: connection reset"
+        );
+    }
+
+    #[test]
+    fn failed_topology_reconciliation_does_not_declare_recovery() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.live_domain_authority = Some(crate::domain::DomainAuthority::Local);
+        app.live_domain_relay_command = Some(crate::domain::DomainRelayCommand::local("ignored"));
+        app.handle_live_domain_topology("domain-reconcile".into(), Err("socket closed".into()));
+
+        app.handle_live_domain_topology(
+            "domain-reconcile".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 1,
+                domain: crate::domain::model::DomainTopology {
+                    domain_id: "domain-reconcile".into(),
+                    active_tab: 0,
+                    tabs: Vec::new(),
+                },
+            }),
+        );
+
+        assert!(app.disconnected_live_domains.contains("domain-reconcile"));
+        assert!(app.toasts.iter().any(|toast| {
+            toast.severity == crate::ui::toast::ToastSeverity::Error
+                && toast.message.contains("tab manager is unavailable")
+        }));
+        assert!(
+            app.toasts
+                .iter()
+                .all(|toast| toast.severity != crate::ui::toast::ToastSeverity::Success)
+        );
+    }
+
+    #[test]
     fn failed_broadcast_targets_are_pruned_and_the_two_target_floor_is_enforced() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.broadcast = BroadcastState::Active {
@@ -3737,10 +3824,13 @@ mod workspace_control_tests {
             closed: false,
             attachments: 0,
         });
-        app.handle_live_domain_topology(Ok(crate::domain::DomainTopologyEvent::Snapshot {
-            revision: 2,
-            domain: crate::domain::model::DomainTopology::from(&revision_two),
-        }));
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 2,
+                domain: crate::domain::model::DomainTopology::from(&revision_two),
+            }),
+        );
         assert_eq!(app.live_domain_revisions["domain-topology"], 2);
         assert_eq!(app.tabs.as_ref().unwrap().iter().count(), 2);
         let stable_routes: std::collections::HashMap<_, _> = app
@@ -3773,10 +3863,13 @@ mod workspace_control_tests {
         pinned.user_title = Some("daemon build".into());
         pinned.pinned = true;
         revision_three.workspace.tabs.insert(0, pinned);
-        app.handle_live_domain_topology(Ok(crate::domain::DomainTopologyEvent::Snapshot {
-            revision: 3,
-            domain: crate::domain::model::DomainTopology::from(&revision_three),
-        }));
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 3,
+                domain: crate::domain::model::DomainTopology::from(&revision_three),
+            }),
+        );
         let tabs = app.tabs.as_ref().unwrap();
         let order: Vec<_> = tabs
             .iter()
@@ -3857,10 +3950,13 @@ mod workspace_control_tests {
             first: Box::new(LivePaneLayout::Pane { pane: 201 }),
             second: Box::new(LivePaneLayout::Pane { pane: 200 }),
         };
-        app.handle_live_domain_topology(Ok(crate::domain::DomainTopologyEvent::Snapshot {
-            revision: 4,
-            domain: crate::domain::model::DomainTopology::from(&revision_four),
-        }));
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 4,
+                domain: crate::domain::model::DomainTopology::from(&revision_four),
+            }),
+        );
         let active = app.tabs.as_ref().unwrap().active_tab().unwrap();
         assert_eq!(active.live_domain.as_ref().unwrap().pane_ids, relay_routes);
         let divider = active.pane_manager.as_ref().unwrap().get_dividers()[0];
@@ -3918,10 +4014,13 @@ mod workspace_control_tests {
         };
         revision_five.workspace.tabs[1].focused_pane = 201;
         revision_five.workspace.active_tab = 10;
-        app.handle_live_domain_topology(Ok(crate::domain::DomainTopologyEvent::Snapshot {
-            revision: 5,
-            domain: crate::domain::model::DomainTopology::from(&revision_five),
-        }));
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 5,
+                domain: crate::domain::model::DomainTopology::from(&revision_five),
+            }),
+        );
         let tabs = app.tabs.as_ref().unwrap();
         let source = tabs
             .iter()
@@ -3958,17 +4057,93 @@ mod workspace_control_tests {
         );
         assert_eq!(destination.live_domain_focus_route().unwrap().1, 201);
 
-        app.handle_live_domain_topology(Ok(crate::domain::DomainTopologyEvent::Snapshot {
-            revision: 1,
-            domain: crate::domain::model::DomainTopology::from(&initial),
+        app.handle_live_domain_topology("domain-topology".into(), Err("transport reset".into()));
+        assert!(app.disconnected_live_domains.contains("domain-topology"));
+        let disconnect_warnings = app
+            .toasts
+            .iter()
+            .filter(|toast| {
+                toast.severity == crate::ui::toast::ToastSeverity::Warning
+                    && toast
+                        .message
+                        .contains("Live domain domain-topology on this host disconnected")
+            })
+            .count();
+        assert_eq!(disconnect_warnings, 1);
+        app.handle_live_domain_topology("domain-topology".into(), Err("same outage".into()));
+        assert_eq!(
+            app.toasts
+                .iter()
+                .filter(|toast| {
+                    toast.severity == crate::ui::toast::ToastSeverity::Warning
+                        && toast
+                            .message
+                            .contains("Live domain domain-topology on this host disconnected")
+                })
+                .count(),
+            disconnect_warnings,
+            "one outage should produce one warning"
+        );
+
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 5,
+                domain: crate::domain::model::DomainTopology::from(&revision_five),
+            }),
+        );
+        assert!(
+            !app.disconnected_live_domains.contains("domain-topology"),
+            "an equal fresh snapshot must still complete recovery"
+        );
+        assert!(app.toasts.iter().any(|toast| {
+            toast.severity == crate::ui::toast::ToastSeverity::Success
+                && toast.message == "Reconnected live domain domain-topology on this host"
         }));
+
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Err("transport reset again".into()),
+        );
+        let mut wrong_route = crate::domain::model::DomainTopology::from(&revision_five);
+        wrong_route.domain_id = "different-domain".into();
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 6,
+                domain: wrong_route,
+            }),
+        );
+        assert!(
+            app.disconnected_live_domains.contains("domain-topology"),
+            "a mismatched snapshot must not declare the expected route recovered"
+        );
+        assert!(app.toasts.iter().any(|toast| {
+            toast.severity == crate::ui::toast::ToastSeverity::Error
+                && toast.message.contains("Rejected live-domain topology")
+        }));
+
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Snapshot {
+                revision: 1,
+                domain: crate::domain::model::DomainTopology::from(&initial),
+            }),
+        );
         assert_eq!(app.tabs.as_ref().unwrap().iter().count(), 2);
 
-        app.handle_live_domain_topology(Ok(crate::domain::DomainTopologyEvent::Closed {
-            domain: "domain-topology".into(),
-            message: "terminated".into(),
-        }));
+        app.handle_live_domain_topology(
+            "domain-topology".into(),
+            Ok(crate::domain::DomainTopologyEvent::Closed {
+                domain: "domain-topology".into(),
+                message: "terminated".into(),
+            }),
+        );
         assert!(!app.live_domain_revisions.contains_key("domain-topology"));
+        assert!(
+            !app.disconnected_live_domains.contains("domain-topology"),
+            "a definitive close ends the outage without a reconnect notice"
+        );
         assert!(
             app.tabs
                 .as_ref()

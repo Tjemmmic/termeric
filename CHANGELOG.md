@@ -8,6 +8,12 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Live-domain windows now name the exact local or SSH authority when a topology
+  subscription disconnects, emit only one warning per outage, and confirm
+  reconnection only after a route-matched authoritative snapshot reconciles.
+  Equal-revision reconnect snapshots count as fresh connection evidence;
+  mismatched route frames fail closed and cannot clear the disconnected state.
+
 - The headless GPU acceptance lane now reads back and checks every pixel of a
   52-row Kitty classic placement against 52 independently queued Unicode-
   placeholder slices. Initial presentation, output-scrolled clipping, and

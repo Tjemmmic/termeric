@@ -126,7 +126,13 @@ daemon's existing five-second socket-write deadline disconnects that client
 without blocking PTY draining. Topology/output queues remain bounded at the
 daemon. Killing SSH, losing the network, or closing the local command removes
 only that attachment; remote PTYs and domain state remain owned by the daemon.
-The next command creates a fresh SSH channel and can reconnect.
+The next command creates a fresh SSH channel and can reconnect. An attached GUI
+retries its topology subscription with bounded exponential backoff, identifies
+the exact domain and pinned SSH destination in one warning per outage, and
+announces recovery only after a route-matched authoritative snapshot has been
+reconciled. An unchanged equal-revision snapshot confirms the new channel;
+mismatched frames and reconciliation failures cannot clear the disconnected
+state.
 
 The helper starts the remote user's daemon on demand using the same private
 runtime-directory checks as a local invocation. One SSH process is used per
@@ -202,7 +208,10 @@ and verifies no token appears in argv. A separate early-disconnect
 fixture must fail promptly. No fixture contacts a network host or uses
 credentials. An executable-level check also proves the protocol-version probe
 is machine-readable and creates no daemon socket or token. Native-window
-attachment to a real remote host remains a manual acceptance step.
+attachment to a real remote host remains a manual acceptance step. Headless GUI
+tests cover authority-specific disconnect text, one-warning outage
+deduplication, equal-revision recovery, route-mismatch rejection, and
+domain-close cleanup without opening an SSH connection.
 
 The local daemon contract, resource limits, and GUI behavior are in
 [`live-domains.md`](live-domains.md).

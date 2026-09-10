@@ -766,7 +766,11 @@ unsafe destinations, nested transports, and disconnects before negotiation.
 Parser and authority tests prove remote GUI attachment retains the selected SSH
 destination for topology, controls, focus, reconnect, and relay argv while
 identically named local and remote domains remain disjoint. The fake SSH also
-streams a relay marker without contacting a host. Saved-profile fixtures cover
+streams a relay marker without contacting a host. Headless window tests inject
+topology events directly and require one authority-specific warning per outage,
+an accepted equal-revision snapshot before recovery is announced, rejection of
+mismatched domain routes without clearing the outage, and definitive-close
+cleanup. Saved-profile fixtures cover
 bounded config validation and round trips, human/JSON inventory, resolved
 control and attachment authorities, pinned relay argv, and fail-before-launch
 unknown profiles using an isolated config directory and command spy. In-app

@@ -154,6 +154,7 @@ impl App {
                             window_open = proxy
                                 .send_event(AppEvent::LiveDomainTopology {
                                     window_id,
+                                    domain_id: domain_id.clone(),
                                     result: Ok(event),
                                 })
                                 .is_ok();
@@ -169,6 +170,7 @@ impl App {
                         failure_reported = proxy
                             .send_event(AppEvent::LiveDomainTopology {
                                 window_id,
+                                domain_id: domain_id.clone(),
                                 result: Err(format!("{error:#}")),
                             })
                             .is_ok();

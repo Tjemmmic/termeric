@@ -121,8 +121,14 @@ the moved pane. Attached GUIs transfer their existing local relay owner before
 applying the authoritative source and destination trees.
 Stale/replayed revisions are ignored, a lagging subscriber is evicted and
 reconnects to a fresh snapshot, transient disconnects retry with bounded
-backoff, and closing a window cancels its reader. Saved workspace archives and
-live domains intentionally remain separate concepts and storage formats.
+backoff, and closing a window cancels its reader. The GUI names the affected
+domain and local/SSH authority once per outage. It reports recovery only after
+a fresh, route-matched authoritative snapshot reconciles successfully; an
+unchanged equal-revision snapshot is still valid reconnect evidence, while a
+mismatched route or failed reconciliation leaves the outage active. A
+definitive domain-close frame ends the outage without claiming reconnection.
+Saved workspace archives and live domains intentionally remain separate
+concepts and storage formats.
 
 The daemon is not durable across its own crash or host reboot. A daemon crash
 closes PTY masters and the operating system terminates or hangs up their child

@@ -89,6 +89,7 @@ pub(crate) enum AppEvent {
     },
     LiveDomainTopology {
         window_id: winit::window::WindowId,
+        domain_id: String,
         result: std::result::Result<crate::domain::DomainTopologyEvent, String>,
     },
     DomainPickerLoaded {
@@ -1007,6 +1008,9 @@ pub struct App {
     /// Latest whole-domain revision applied by this window. Replayed or
     /// reordered subscriber frames are ignored before they touch local PTYs.
     live_domain_revisions: std::collections::HashMap<String, u64>,
+    /// Domain subscriptions that have reported a transport failure and have
+    /// not yet reconciled a fresh authoritative snapshot.
+    disconnected_live_domains: std::collections::HashSet<String>,
     /// Last authoritative snapshot, used to roll back optimistic live-domain
     /// divider and tab-metadata/order previews when a request is rejected.
     live_domain_topologies: std::collections::HashMap<String, crate::domain::model::DomainTopology>,
@@ -1262,6 +1266,7 @@ impl App {
             broadcast: BroadcastState::Inactive,
             pending_live_domain_controls: std::collections::HashSet::new(),
             live_domain_revisions: std::collections::HashMap::new(),
+            disconnected_live_domains: std::collections::HashSet::new(),
             live_domain_topologies: std::collections::HashMap::new(),
             live_domain_topology_alive: Arc::new(AtomicBool::new(true)),
             live_domain_authority: None,

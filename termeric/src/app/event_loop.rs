@@ -1858,14 +1858,18 @@ impl ApplicationHandler<AppEvent> for App {
                     self.handle_live_domain_control_completed(control, result);
                 }
             }
-            AppEvent::LiveDomainTopology { window_id, result } => {
+            AppEvent::LiveDomainTopology {
+                window_id,
+                domain_id,
+                result,
+            } => {
                 if self
                     .window
                     .as_ref()
                     .is_some_and(|window| window.id() == window_id)
                 {
                     self.redraw_scheduler.request(RedrawReason::BackgroundTask);
-                    self.handle_live_domain_topology(result);
+                    self.handle_live_domain_topology(domain_id, result);
                 }
             }
             AppEvent::DomainPickerLoaded {
