@@ -259,9 +259,15 @@ python3 -m unittest scripts.test_integration_acceptance_record
 python3 -m unittest scripts.test_run_fake_provider_acceptance
 ```
 
-No accepted schema-1 integration record exists for the current working tree.
-The dated table above remains implementation/history evidence and cannot
-substitute for a sealed candidate record.
+Clean commit `ccb234a` produced the first sealed partial schema-1 record in
+`target/integration-acceptance/ccb234a/record.json`. Its two fake-provider cases
+pass all 30 named checks against test-binary SHA-256
+`de44a9ca9cd2cb68396e0f69054a7b46faa5aa84179ea0d414325d1af1c3a297`;
+the record SHA-256 is
+`c7659749b0c581fa62eac52411953840255799392de5d39a47b353cc7d6ffb55`.
+Every shell, Harvest, desktop, and authenticated-provider row remains
+unrecorded, so this is not a complete candidate record. The dated table above
+remains implementation/history evidence and cannot fill those rows.
 
 ## Authenticated-provider procedure
 
