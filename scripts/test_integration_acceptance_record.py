@@ -1,6 +1,8 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -62,6 +64,20 @@ def completed_record() -> dict[str, object]:
 
 
 class IntegrationAcceptanceRecordTests(unittest.TestCase):
+    def test_documented_script_entrypoint_works_outside_the_repository(self) -> None:
+        script = Path(__file__).with_name("integration_acceptance_record.py")
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(script), "--help"],
+                cwd=directory,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=15,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("create, seal, and validate", result.stdout.casefold())
+
     def test_template_cli_requires_clean_candidate_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "record.json"

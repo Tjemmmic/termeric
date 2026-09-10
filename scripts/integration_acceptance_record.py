@@ -11,6 +11,10 @@ from pathlib import Path
 import subprocess
 import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from scripts.native_acceptance_record import (
     COMMIT_SHA,
     PLACEHOLDER,
@@ -581,7 +585,7 @@ def main() -> int:
             if candidate_sha is None:
                 result = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
-                    cwd=Path(__file__).resolve().parents[1],
+                    cwd=ROOT,
                     capture_output=True,
                     text=True,
                     timeout=15,

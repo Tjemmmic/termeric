@@ -793,6 +793,10 @@ Versioning once public beta tags begin.
   executes only the fake Claude/Codex real-PTY workflow, and seals its logs and
   machine result into the versioned integration record. CI uploads that partial
   record while leaving shell, desktop, Harvest, and provider rows unrecorded.
+- The integration acceptance record CLI now bootstraps the repository import
+  root, so its documented direct `python3 scripts/...` template, seal, and
+  validate commands work independently of the caller's working directory or
+  ambient `PYTHONPATH`.
 - Kitty graphics now interoperates with the current `kitten icat` wire format:
   bounded 128-KiB direct chunks, raw-unpadded standard base64, and bare POSIX
   shared-memory names are accepted while existing image and local-media limits
