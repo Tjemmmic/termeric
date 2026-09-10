@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v15 are constrained local extension formats.
+Termeric plugin APIs v1 through v16 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -33,6 +33,9 @@ API v14 adds an independent `pane-close` grant for closing one exact ordinary
 pane without retargeting or allowing the last pane in a tab to be destroyed.
 API v15 adds an independent `tab-close` grant for scheduling closure of one
 exact ordinary local tab while protecting the window's final non-closing tab.
+API v16 adds an independent `pane-move` grant for transferring one exact
+ordinary pane between tabs in the originating window without recreating its
+PTY.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -66,6 +69,8 @@ The API v14 pane-closure sample is
 [`examples/plugins/pane-pruner/termeric-plugin.toml`](../examples/plugins/pane-pruner/termeric-plugin.toml).
 The API v15 tab-closure sample is
 [`examples/plugins/tab-pruner/termeric-plugin.toml`](../examples/plugins/tab-pruner/termeric-plugin.toml).
+The API v16 pane-movement sample is
+[`examples/plugins/pane-mover/termeric-plugin.toml`](../examples/plugins/pane-mover/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -850,11 +855,11 @@ the text budget and reports `truncated = true`; the complete source event still
 fits below 16 KiB.
 
 One response may contain at most one host operation across workspace query,
-terminal query, navigation, topology, pane/tab creation, and pane/tab closure,
-though bounded UI notices may coexist. A workspace-query result retains
-separately granted terminal-query, pane-create, tab-create, pane-close, and
-tab-close authority so one external command can discover current state and
-then perform one granted operation.
+terminal query, navigation, topology, pane/tab creation, pane/tab closure, and
+pane movement, though bounded UI notices may coexist. A workspace-query result
+retains separately granted terminal-query, pane-create, tab-create, pane-close,
+tab-close, and pane-move authority so one external command can discover current
+state and then perform one granted operation.
 After a terminal-query result, all query and workspace-mutation authority is
 cleared. A later external subscribed event may start another independently
 bounded request. The API does not expose cell styles, images, selection,
@@ -985,7 +990,7 @@ Success returns the new stable window-local tab ID; failure returns it as
 
 Creation counts as the response's sole host operation. Its result clears query,
 navigation, topology, terminal-query, pane-create, tab-create, pane-close, and
-tab-close authority.
+tab-close and pane-move authority.
 Termeric deliberately suppresses the derived `tab-created` hook for this
 plugin-originated action, so neither the requester nor another plugin can turn
 one creation into a lifecycle feedback loop. A later independent external
@@ -1054,10 +1059,11 @@ those fields `null` and returns a bounded, sanitized error:
 
 Pane closure is the response's sole host operation. Its result clears query,
 navigation, topology, terminal-query, pane-create, tab-create, pane-close, and
-tab-close authority. A later external event may begin another bounded
-request. API v14 does not itself grant tab closure, live-domain mutation,
-terminal input, cross-window targeting, arbitrary process signaling, or a
-force/confirmation bypass. Tab closure requires the separate API v15 grant.
+tab-close and pane-move authority. A later external event may begin another
+bounded request. API v14 does not itself grant tab closure, live-domain
+mutation, terminal input, cross-window targeting, arbitrary process signaling,
+or a force/confirmation bypass. Tab closure requires the separate API v15
+grant.
 
 ## Manifest API v15 ordinary-tab closure
 
@@ -1125,12 +1131,103 @@ already completed:
 Failures return `scheduled: false`, null remaining/active fields, and a bounded
 sanitized error. Tab closure is the response's sole host operation, and its
 result clears query, navigation, topology, terminal-query, creation, and both
-closure authorities. Termeric suppresses the derived `tab-closed` hook for a
-plugin-originated close, making the correlated result the only follow-up and
-preventing lifecycle-driven close loops. A later independent external event
-may begin another bounded request. API v15 does not grant final-tab/window
-closure, live-domain mutation, cross-window targeting, force-kill/signals,
-terminal input, or a confirmation bypass.
+closure authorities, plus pane-move authority. Termeric suppresses the derived
+`tab-closed` hook for a plugin-originated close, making the correlated result
+the only follow-up and preventing lifecycle-driven close loops. A later
+independent external event may begin another bounded request. API v15 does not
+grant final-tab/window closure, live-domain mutation, cross-window targeting,
+force-kill/signals, terminal input, or a confirmation bypass.
+
+## Manifest API v16 ordinary-pane movement
+
+API v16 preserves every earlier contract and adds the independent `pane-move`
+permission. Only a persistent handler may use it. Install the sample only after
+reviewing its ordinary Python process plus the workspace-query and pane-move
+grants:
+
+```bash
+termeric plugin validate examples/plugins/pane-mover
+termeric plugin install examples/plugins/pane-mover \
+  --allow process-spawn --allow workspace-query \
+  --allow pane-move --allow event-subscribe --allow ui-actions --enable
+```
+
+The sample contributes **Pane Mover: Move Sibling Pane** to the command palette.
+It queries the bounded current-window inventory, chooses a non-focused pane in
+the active split tab and an exact anchor in another ordinary tab, then returns:
+
+```json
+{
+  "schema_version": 2,
+  "request_id": 16,
+  "actions": [{
+    "type": "move-pane",
+    "action_id": "move-sibling-pane",
+    "source_tab_id": 4,
+    "pane_id": 1,
+    "destination_tab_id": 7,
+    "target_pane_id": 0,
+    "direction": "vertical"
+  }]
+}
+```
+
+Every ID is resolved again in the exact originating native window when the
+action executes. The source and destination tabs must be distinct, ordinary,
+present, and non-closing. The source must be split and keep at least one pane;
+the selected pane must exist, remain open, and not own a tab-scoped plugin
+process. The destination must permit splits, the anchor must exist, and its
+pane, divider, and stable-ID capacities must remain available. Live-domain
+sources or destinations and serial destinations fail before detachment.
+
+`horizontal` stacks the moved pane below the destination anchor; `vertical`
+places it beside the anchor. The existing atomic transfer path validates both
+halves before mutation, detaches the live owner, and attaches it under a fresh
+destination-local stable pane ID. The PTY process, terminal state, scrollback,
+launch identity, and retained metadata are not recreated. Callers must use the
+returned identity rather than assuming the source pane ID survived.
+
+A successful transfer activates the destination tab and focuses the moved
+pane. It exits copy mode, disables broadcast, clears an active terminal mouse
+drag, refreshes focused terminal surfaces, and requests a redraw. The result
+reports that exact state:
+
+```json
+{
+  "schema_version": 1,
+  "plugin_id": "pane-mover",
+  "event": {
+    "type": "workspace-action-result",
+    "action_id": "move-sibling-pane",
+    "action": "move-pane",
+    "ok": true,
+    "source_tab_id": 4,
+    "pane_id": 1,
+    "destination_tab_id": 7,
+    "target_pane_id": 0,
+    "direction": "vertical",
+    "destination_pane_id": 3,
+    "source_remaining_panes": 1,
+    "active_tab_id": 7,
+    "focused_pane_id": 3,
+    "active_changed": true,
+    "error": null
+  }
+}
+```
+
+Failure keeps the destination/state fields `null` and returns a bounded,
+sanitized error without detaching the source. Pane movement is the response's
+sole host operation. Its result clears query, navigation, topology,
+terminal-query, pane/tab creation, pane/tab closure, and pane-move authority.
+The correlated result is the only follow-up; plugin-originated movement does
+not synthesize tab lifecycle hooks. A later independent external event may
+begin another bounded request.
+
+API v16 does not grant same-tab layout-tree rearrangement, cross-window
+movement, live-domain mutation, movement of a tab-owned plugin process, window
+or final-tab closure, terminal input, arbitrary launch selection, or access to
+another window's inventory.
 
 ## Permissions and isolation
 
@@ -1151,6 +1248,7 @@ terminal input, or a confirmation bypass.
 | `tab-create` | API v13+, after `--allow tab-create`; permits one ordinary local shell tab in the originating window through a persistent handler, with a correlated stable-ID result and lifecycle/host-operation loop prevention. |
 | `pane-close` | API v14+, after `--allow pane-close`; permits closure of one exact ordinary current-window pane through a persistent handler, refuses unsupported or last-pane targets, and returns a correlated bounded result. |
 | `tab-close` | API v15+, after `--allow tab-close`; permits scheduling closure of one exact ordinary local current-window tab through a persistent handler, protects the final non-closing tab, and returns correlated selection state. |
+| `pane-move` | API v16+, after `--allow pane-move`; permits moving one exact ordinary pane between distinct tabs in the originating window through a persistent handler, preserves its live PTY, and returns the fresh destination-local identity. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -1158,7 +1256,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v15 may also request `terminal-text` for
+`ui-actions`; API v4 through v16 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -1180,6 +1278,9 @@ secret access.
 API v15 adds only `tab-close`, independently of pane/tab creation, pane close,
 query, navigation, topology, terminal text, UI, filesystem, network, clipboard,
 or secret access.
+API v16 adds only `pane-move`, independently of creation, closure, query,
+navigation, topology, terminal text, UI, filesystem, network, clipboard, or
+secret access.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -1271,6 +1372,12 @@ Before distributing a local directory:
     background/active selection behavior, final-non-closing-tab protection,
     scheduled result fields, copy-mode cleanup, lifecycle-hook suppression,
     one-host-operation rejection, and complete authority removal.
+20. For API v16, test exact grant/version/mode denial, strict action shape and
+    direction, complete stable-ID source/destination validation, same-tab,
+    missing, closed, closing, last-pane, live-domain, serial-destination,
+    plugin-owned-source, invalid-anchor, and capacity refusal, live PTY and
+    launch-identity preservation, fresh destination-local identity, focus and
+    mode cleanup, one-host-operation rejection, and complete authority removal.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -1327,6 +1434,12 @@ background focus preservation, active handoff, copy-mode cleanup, scheduled
 correlated results, lifecycle-hook suppression, same-process query-to-close
 correlation, one-operation enforcement, authority removal, and a checked-in
 tab pruner. Its PTYs run only inert local shell fixtures; no provider runs.
+API v16 adds exact permission/version/mode gating, typed strict source,
+destination, anchor, and direction parsing, atomic unsupported-target refusal,
+live PTY identity preservation, fresh destination-local identity, correlated
+source/focus state, copy-mode and broadcast cleanup, same-process query-to-move
+correlation, one-operation enforcement, authority removal, and a checked-in
+pane mover. Its PTYs run only inert local shell fixtures; no provider runs.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -1344,9 +1457,10 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v15's current-window inventory/navigation/topology, exact
+and secrets. API v16's current-window inventory/navigation/topology, exact
 presented-text, separately granted ordinary pane/tab creation and closure,
-persistent lifetime, namespaced handler commands, and non-secret settings, plus
+separately granted pane movement, persistent lifetime, namespaced handler
+commands, and non-secret settings, plus
 the narrowly granted completed-region snapshot, are not
 enough to represent those privileged workflows; broader migration waits for a
 separately designed sandboxed API.
@@ -1362,8 +1476,8 @@ after that PTY write and remains outside automated acceptance.
 `api_version = 1`, `api_version = 2`, `api_version = 3`, `api_version = 4`,
 `api_version = 5`, `api_version = 6`, `api_version = 7`, `api_version = 8`,
 `api_version = 9`, `api_version = 10`, `api_version = 11`,
-`api_version = 12`, `api_version = 13`, `api_version = 14`, and
-`api_version = 15`
+`api_version = 12`, `api_version = 13`, `api_version = 14`,
+`api_version = 15`, and `api_version = 16`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -1391,6 +1505,10 @@ before removing every host-operation authority.
 API v15 adds separately granted exact ordinary-tab closure scheduling, protects
 the final non-closing tab, returns the remaining/active tab state, and
 suppresses lifecycle feedback before removing every host-operation authority.
+API v16 adds separately granted exact ordinary-pane movement between distinct
+current-window tabs, preserves the live PTY, returns the fresh destination-local
+pane identity and resulting focus state, and removes every host-operation
+authority from the result.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit

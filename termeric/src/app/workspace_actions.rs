@@ -2942,6 +2942,59 @@ impl App {
         Ok(id.0)
     }
 
+    /// Move one exact ordinary pane between tabs in this plugin handler's
+    /// originating window. The shared control path validates the complete
+    /// transfer before detaching the live PTY and assigns a fresh
+    /// destination-local pane ID.
+    pub(super) fn move_plugin_pane_within_window(
+        &mut self,
+        source_tab_id: u64,
+        pane_id: u32,
+        destination_tab_id: u64,
+        target_pane_id: u32,
+        direction: SplitDirection,
+    ) -> std::result::Result<(u32, u16, bool), String> {
+        let source_tab_key = usize::try_from(source_tab_id)
+            .map_err(|_| "Source tab ID does not fit this platform".to_string())?;
+        let destination_tab_key = usize::try_from(destination_tab_id)
+            .map_err(|_| "Destination tab ID does not fit this platform".to_string())?;
+        let active_before = self.tabs.as_ref().and_then(TabManager::active_tab_id);
+        let destination_pane_id = self.move_control_pane_within_window(
+            source_tab_id,
+            pane_id,
+            destination_tab_id,
+            target_pane_id,
+            direction,
+        )?;
+        let tabs = self
+            .tabs
+            .as_ref()
+            .expect("successful pane move retains its tab manager");
+        let source = tabs
+            .tab_by_id(source_tab_key)
+            .expect("successful pane move retains its source tab");
+        let source_remaining_panes = source
+            .pane_manager
+            .as_ref()
+            .map_or(1, PaneManager::open_pane_count);
+        let source_remaining_panes = u16::try_from(source_remaining_panes)
+            .expect("bounded per-tab pane count fits the plugin result");
+        let destination = tabs
+            .tab_by_id(destination_tab_key)
+            .expect("successful pane move retains its destination tab");
+        let focused = destination
+            .pane_manager
+            .as_ref()
+            .map_or_else(|| destination.single_pane_id(), PaneManager::focused_id);
+        debug_assert_eq!(tabs.active_tab_id(), Some(destination_tab_key));
+        debug_assert_eq!(focused, PaneId(destination_pane_id));
+        Ok((
+            destination_pane_id,
+            source_remaining_panes,
+            active_before != Some(destination_tab_key),
+        ))
+    }
+
     pub(super) fn resize_control_divider(
         &mut self,
         tab_id: u64,

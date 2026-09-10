@@ -25,6 +25,30 @@ impl Plugin for CountingTabClosedPlugin {
     }
 }
 
+#[derive(Debug)]
+struct CountingTabSwitchedPlugin(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Plugin for CountingTabSwitchedPlugin {
+    fn id(&self) -> &str {
+        "tab-switched-observer"
+    }
+
+    fn name(&self) -> &str {
+        "Tab Switched Observer"
+    }
+
+    fn on_hook(
+        &mut self,
+        hook: &crate::plugin::Hook,
+        _ctx: &crate::plugin::PluginContext,
+    ) -> HookResponse {
+        if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        HookResponse::Ignored
+    }
+}
+
 #[test]
 fn native_window_title_tracks_the_active_tab_without_losing_product_identity() {
     assert_eq!(native_window_title(false, None), "Termeric");
@@ -1040,6 +1064,379 @@ fn plugin_pane_creation_is_exact_correlated_and_rejects_unsupported_tabs() {
             .as_str()
             .is_some_and(|error| error.contains("closing"))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let source_tab_id = tabs.new_tab().unwrap();
+    let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
+    let owner = source.take_terminal_owner().unwrap();
+    let moved_child = owner.pty.child_id();
+    let mut source_panes = PaneManager::from_existing(
+        owner,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    let surviving_source_pane = source_panes.split(SplitDirection::Vertical).unwrap();
+    source.pane_manager = Some(source_panes);
+    let destination_tab_id = tabs.new_tab().unwrap();
+    let destination_anchor = tabs.tab_by_id(destination_tab_id).unwrap().single_pane_id();
+    tabs.switch_to(0);
+
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.plugin_manager.unload_all();
+    let observed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let context = app.build_plugin_context();
+    app.plugin_manager
+        .register(
+            Box::new(CountingTabSwitchedPlugin(std::sync::Arc::clone(&observed))),
+            &context,
+        )
+        .unwrap();
+    app.copy_mode_target = Some(CopyModeTarget {
+        tab: source_tab_id,
+        pane: Some(PaneId(0)),
+    });
+    app.broadcast = BroadcastState::Active {
+        tab_id: source_tab_id,
+        targets: vec![PaneId(0), surviving_source_pane],
+    };
+
+    let moved = app
+        .structured_workspace_action_event(
+            "pane-mover",
+            crate::plugin::structured::StructuredResponseAction::MovePane {
+                action_id: "move-build-output".into(),
+                source_tab_id: source_tab_id as u64,
+                pane_id: 0,
+                destination_tab_id: destination_tab_id as u64,
+                target_pane_id: destination_anchor.0,
+                direction: crate::control::protocol::SplitDirection::Horizontal,
+            },
+        )
+        .unwrap();
+    let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
+    assert_eq!(moved["event"]["type"], "workspace-action-result");
+    assert_eq!(moved["event"]["action"], "move-pane");
+    assert_eq!(moved["event"]["action_id"], "move-build-output");
+    assert_eq!(moved["event"]["ok"], true);
+    assert_eq!(moved["event"]["source_tab_id"], source_tab_id as u64);
+    assert_eq!(moved["event"]["pane_id"], 0);
+    assert_eq!(
+        moved["event"]["destination_tab_id"],
+        destination_tab_id as u64
+    );
+    assert_eq!(
+        moved["event"]["target_pane_id"],
+        u64::from(destination_anchor.0)
+    );
+    assert_eq!(moved["event"]["direction"], "horizontal");
+    assert_eq!(moved["event"]["source_remaining_panes"], 1);
+    assert_eq!(moved["event"]["active_tab_id"], destination_tab_id as u64);
+    assert_eq!(moved["event"]["active_changed"], true);
+    assert!(moved["event"]["error"].is_null());
+
+    let destination_pane_id = PaneId(
+        moved["event"]["destination_pane_id"]
+            .as_u64()
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    );
+    assert_eq!(
+        moved["event"]["focused_pane_id"],
+        u64::from(destination_pane_id.0)
+    );
+    let tabs = app.tabs.as_ref().unwrap();
+    assert_eq!(tabs.active_tab_id(), Some(destination_tab_id));
+    let source = tabs.tab_by_id(source_tab_id).unwrap();
+    assert_eq!(
+        source.pane_manager.as_ref().unwrap().pane_ids(),
+        vec![surviving_source_pane]
+    );
+    let destination = tabs.tab_by_id(destination_tab_id).unwrap();
+    let destination_panes = destination.pane_manager.as_ref().unwrap();
+    assert_eq!(destination_panes.focused_id(), destination_pane_id);
+    assert_eq!(
+        destination_panes
+            .get_pane(destination_pane_id)
+            .unwrap()
+            .pty
+            .child_id(),
+        moved_child
+    );
+    assert!(app.copy_mode_target.is_none());
+    assert!(matches!(app.broadcast, BroadcastState::Inactive));
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+
+    fn fixture() -> (App, usize, usize, PaneId) {
+        let shell = ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "sleep 2".into()],
+            env: Default::default(),
+        };
+        let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let source_tab_id = tabs.new_tab().unwrap();
+        let source = tabs.tab_mut_by_id(source_tab_id).unwrap();
+        let owner = source.take_terminal_owner().unwrap();
+        let mut panes = PaneManager::from_existing(
+            owner,
+            shell,
+            1_000,
+            8 * 1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        );
+        let sibling = panes.split(SplitDirection::Vertical).unwrap();
+        source.pane_manager = Some(panes);
+        let destination_tab_id = tabs.new_tab().unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+        (app, source_tab_id, destination_tab_id, sibling)
+    }
+
+    fn move_result(
+        app: &mut App,
+        source_tab_id: u64,
+        pane_id: u32,
+        destination_tab_id: u64,
+        target_pane_id: u32,
+    ) -> serde_json::Value {
+        let encoded = app
+            .structured_workspace_action_event(
+                "pane-mover",
+                crate::plugin::structured::StructuredResponseAction::MovePane {
+                    action_id: "refused-move".into(),
+                    source_tab_id,
+                    pane_id,
+                    destination_tab_id,
+                    target_pane_id,
+                    direction: crate::control::protocol::SplitDirection::Vertical,
+                },
+            )
+            .unwrap();
+        serde_json::from_str(&encoded).unwrap()
+    }
+
+    fn assert_refused(result: &serde_json::Value, expected: &str) {
+        assert_eq!(result["event"]["ok"], false);
+        assert!(result["event"]["destination_pane_id"].is_null());
+        assert!(result["event"]["source_remaining_panes"].is_null());
+        assert!(result["event"]["active_tab_id"].is_null());
+        assert!(result["event"]["focused_pane_id"].is_null());
+        assert!(result["event"]["active_changed"].is_null());
+        assert!(
+            result["event"]["error"]
+                .as_str()
+                .is_some_and(|error| error.contains(expected)),
+            "unexpected error: {}",
+            result["event"]["error"]
+        );
+    }
+
+    fn assert_source_intact(app: &App, source_tab_id: usize) {
+        let pane_count = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(source_tab_id)
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .pane_count();
+        assert_eq!(pane_count, 2);
+    }
+
+    let (mut same, source, _, sibling) = fixture();
+    assert_refused(
+        &move_result(&mut same, source as u64, 0, source as u64, sibling.0),
+        "same tab",
+    );
+    assert_source_intact(&same, source);
+
+    let (mut missing, source, destination, _) = fixture();
+    assert_refused(
+        &move_result(&mut missing, u64::MAX, 0, destination as u64, 0),
+        "does not exist",
+    );
+    assert_refused(
+        &move_result(&mut missing, source as u64, 0, destination as u64, u32::MAX),
+        "does not exist",
+    );
+    assert_source_intact(&missing, source);
+
+    let (mut closing, source, destination, _) = fixture();
+    closing
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(source)
+        .unwrap()
+        .closing_at = Some(Instant::now());
+    assert_refused(
+        &move_result(&mut closing, source as u64, 0, destination as u64, 0),
+        "closing",
+    );
+    assert_source_intact(&closing, source);
+
+    let (mut closed, source, destination, _) = fixture();
+    closed
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(source)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(PaneId(0))
+        .unwrap()
+        .closed = true;
+    assert_refused(
+        &move_result(&mut closed, source as u64, 0, destination as u64, 0),
+        "closed",
+    );
+    assert_source_intact(&closed, source);
+
+    let (mut last_live, source, destination, sibling) = fixture();
+    last_live
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(source)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(sibling)
+        .unwrap()
+        .closed = true;
+    assert_refused(
+        &move_result(&mut last_live, source as u64, 0, destination as u64, 0),
+        "last pane",
+    );
+    assert_source_intact(&last_live, source);
+
+    let (mut live, source, destination, _) = fixture();
+    live.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(source)
+        .unwrap()
+        .live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "fake-domain".into(),
+        tab_id: 8,
+        pane_ids: HashMap::new(),
+    });
+    assert_refused(
+        &move_result(&mut live, source as u64, 0, destination as u64, 0),
+        "Live-domain",
+    );
+    assert_source_intact(&live, source);
+
+    let (mut serial, source, destination, _) = fixture();
+    serial
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(destination)
+        .unwrap()
+        .tab_type = crate::tabs::TabType::Serial {
+        name: "fixture".into(),
+    };
+    assert_refused(
+        &move_result(&mut serial, source as u64, 0, destination as u64, 0),
+        "serial terminal",
+    );
+    assert_source_intact(&serial, source);
+
+    let (mut closed_anchor, source, destination, _) = fixture();
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let destination_tab = closed_anchor
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(destination)
+        .unwrap();
+    let owner = destination_tab.take_terminal_owner().unwrap();
+    let mut destination_panes = PaneManager::from_existing(
+        owner,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    destination_panes.split(SplitDirection::Vertical).unwrap();
+    destination_panes.get_pane_mut(PaneId(0)).unwrap().closed = true;
+    destination_tab.pane_manager = Some(destination_panes);
+    assert_refused(
+        &move_result(&mut closed_anchor, source as u64, 0, destination as u64, 0),
+        "destination pane 0 is closed",
+    );
+    assert_source_intact(&closed_anchor, source);
+
+    let (mut plugin, source, destination, _) = fixture();
+    plugin
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(source)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(PaneId(0))
+        .unwrap()
+        .launch = crate::workspace::WorkspaceLaunch::Plugin {
+        plugin_id: "fake".into(),
+        profile: None,
+    };
+    assert_refused(
+        &move_result(&mut plugin, source as u64, 0, destination as u64, 0),
+        "move the whole tab",
+    );
+    assert_source_intact(&plugin, source);
+
+    let (mut last, source, destination, _) = fixture();
+    assert_refused(
+        &move_result(&mut last, destination as u64, 0, source as u64, 0),
+        "Split the source tab",
+    );
+    assert_source_intact(&last, source);
 }
 
 #[cfg(unix)]

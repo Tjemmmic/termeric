@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v16 adds an independent `pane-move` grant for moving
+  one exact ordinary pane between distinct tabs in the originating window.
+  Complete stable-ID source and destination validation happens before the live
+  PTY is detached; unsupported same-tab, live-domain, serial, closing,
+  last-pane, plugin-owned, invalid-anchor, and capacity targets fail atomically.
+  Success preserves the process and terminal owner, returns the fresh
+  destination-local pane identity plus exact source/focus state, and clears
+  copy, broadcast, pointer, and every result-side host-operation authority. A
+  checked-in command-driven pane mover and hermetic parser, registry,
+  persistent-process, App, and PTY-identity tests require no AI provider.
+
 - Live-domain windows now name the exact local or SSH authority when a topology
   subscription disconnects, emit only one warning per outage, and confirm
   reconnection only after a route-matched authoritative snapshot reconciles.

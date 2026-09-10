@@ -1,0 +1,88 @@
+api_version = 16
+id = "pane-mover"
+name = "Pane Mover"
+version = "1.0.0"
+description = "Demonstrates permissioned movement of one ordinary pane between local tabs"
+permissions = ["process-spawn", "workspace-query", "pane-move", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "move-sibling-pane"
+name = "Move Sibling Pane"
+description = "Move one non-focused pane from the active tab into another ordinary tab"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+def notice(message):
+    return [{
+        "type": "show-notice",
+        "title": "Pane Mover",
+        "lines": [message[:400]],
+    }]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{
+            "type": "query-workspace",
+            "query_id": "find-pane-destination",
+        }]
+    elif event["type"] == "workspace-query-result":
+        tabs = event["window"]["tabs"]
+        source = next((tab for tab in tabs if tab["active"]), None)
+        movable = next(
+            (pane for pane in source["panes"] if not pane["focused"]),
+            None,
+        ) if source and len(source["panes"]) > 1 else None
+        destination = next(
+            (
+                tab for tab in tabs
+                if source is not None
+                and tab["id"] != source["id"]
+                and not tab["closed"]
+                and tab["kind"] not in ("live_domain", "serial")
+                and tab["panes"]
+            ),
+            None,
+        )
+        target = next(
+            (pane for pane in destination["panes"] if pane["focused"]),
+            destination["panes"][0] if destination else None,
+        ) if destination else None
+        if source is None or movable is None or destination is None or target is None:
+            actions = notice(
+                "The active split tab and another ordinary destination tab are required."
+            )
+        else:
+            actions = [{
+                "type": "move-pane",
+                "action_id": "move-sibling-pane",
+                "source_tab_id": source["id"],
+                "pane_id": movable["id"],
+                "destination_tab_id": destination["id"],
+                "target_pane_id": target["id"],
+                "direction": "vertical",
+            }]
+    elif event["type"] == "workspace-action-result":
+        if event["ok"]:
+            actions = notice(
+                f"Moved pane {event['pane_id']} to destination pane "
+                f"{event['destination_pane_id']}."
+            )
+        else:
+            actions = notice("Pane movement failed: " + event["error"])
+    else:
+        actions = notice("Unexpected pane-mover event.")
+    response = {
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }
+    print(json.dumps(response, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

@@ -135,7 +135,10 @@ API v9 lets handlers contribute bounded, namespaced command-palette commands
 that are dispatched only to their owning plugin; API v10 adds bounded typed
 non-secret settings with explicit set/unset/reset and safe update behavior; API
 v11 adds a separately granted, stable-ID read of bounded presented text from
-one exact current-window pane, without raw PTY streaming or terminal input.
+one exact current-window pane, without raw PTY streaming or terminal input;
+APIs v12-v15 separately grant ordinary pane/tab creation and closure, and API
+v16 separately grants exact cross-tab movement of one ordinary pane while
+preserving its live PTY and returning its fresh destination-local identity.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

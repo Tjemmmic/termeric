@@ -80,6 +80,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::CloseTab {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::MovePane {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -129,6 +132,7 @@ impl App {
                     "close-pane"
                 }
                 crate::plugin::structured::StructuredResponseAction::CloseTab { .. } => "close-tab",
+                crate::plugin::structured::StructuredResponseAction::MovePane { .. } => "move-pane",
                 _ => unreachable!("only workspace operations are retained"),
             };
             let result = self.continue_structured_workspace_operation(
@@ -196,6 +200,7 @@ impl App {
                 invocation.allow_tab_create = false;
                 invocation.allow_pane_close = false;
                 invocation.allow_tab_close = false;
+                invocation.allow_pane_move = false;
             }
             action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
             | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
@@ -208,7 +213,8 @@ impl App {
             }
             | crate::plugin::structured::StructuredResponseAction::CreateTab { .. }
             | crate::plugin::structured::StructuredResponseAction::ClosePane { .. }
-            | crate::plugin::structured::StructuredResponseAction::CloseTab { .. }) => {
+            | crate::plugin::structured::StructuredResponseAction::CloseTab { .. }
+            | crate::plugin::structured::StructuredResponseAction::MovePane { .. }) => {
                 invocation.event_json =
                     self.structured_workspace_action_event(plugin_id, action)?;
                 // A mutation result is terminal for host operations.
@@ -220,6 +226,7 @@ impl App {
                 invocation.allow_tab_create = false;
                 invocation.allow_pane_close = false;
                 invocation.allow_tab_close = false;
+                invocation.allow_pane_move = false;
             }
             _ => return Err("structured response did not contain a workspace operation".into()),
         }
@@ -584,6 +591,72 @@ impl App {
                             "scheduled": false,
                             "remaining_tabs": null,
                             "active_tab_id": null,
+                            "active_changed": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
+            crate::plugin::structured::StructuredResponseAction::MovePane {
+                action_id,
+                source_tab_id,
+                pane_id,
+                destination_tab_id,
+                target_pane_id,
+                direction,
+            } => {
+                let pane_direction = match direction {
+                    crate::control::protocol::SplitDirection::Horizontal => {
+                        crate::panes::SplitDirection::Horizontal
+                    }
+                    crate::control::protocol::SplitDirection::Vertical => {
+                        crate::panes::SplitDirection::Vertical
+                    }
+                };
+                match self.move_plugin_pane_within_window(
+                    source_tab_id,
+                    pane_id,
+                    destination_tab_id,
+                    target_pane_id,
+                    pane_direction,
+                ) {
+                    Ok((destination_pane_id, source_remaining_panes, active_changed)) => {
+                        serde_json::json!({
+                            "type": "workspace-action-result",
+                            "action_id": action_id,
+                            "action": "move-pane",
+                            "ok": true,
+                            "source_tab_id": source_tab_id,
+                            "pane_id": pane_id,
+                            "destination_tab_id": destination_tab_id,
+                            "target_pane_id": target_pane_id,
+                            "direction": direction,
+                            "destination_pane_id": destination_pane_id,
+                            "source_remaining_panes": source_remaining_panes,
+                            "active_tab_id": destination_tab_id,
+                            "focused_pane_id": destination_pane_id,
+                            "active_changed": active_changed,
+                            "error": null,
+                        })
+                    }
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "workspace-action-result",
+                            "action_id": action_id,
+                            "action": "move-pane",
+                            "ok": false,
+                            "source_tab_id": source_tab_id,
+                            "pane_id": pane_id,
+                            "destination_tab_id": destination_tab_id,
+                            "target_pane_id": target_pane_id,
+                            "direction": direction,
+                            "destination_pane_id": null,
+                            "source_remaining_panes": null,
+                            "active_tab_id": null,
+                            "focused_pane_id": null,
                             "active_changed": null,
                             "error": error,
                             "error_truncated": error_truncated,

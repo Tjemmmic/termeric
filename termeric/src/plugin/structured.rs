@@ -76,6 +76,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit scheduling closure of one exact ordinary tab in the current
     /// window. Its result clears every host-operation authority.
     pub allow_tab_close: bool,
+    /// Permit moving one exact ordinary pane between current-window tabs.
+    /// Its result clears every host-operation authority.
+    pub allow_pane_move: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -136,6 +139,14 @@ pub enum StructuredResponseAction {
     CloseTab {
         action_id: String,
         tab_id: u64,
+    },
+    MovePane {
+        action_id: String,
+        source_tab_id: u64,
+        pane_id: u32,
+        destination_tab_id: u64,
+        target_pane_id: u32,
+        direction: crate::control::protocol::SplitDirection,
     },
 }
 
@@ -442,7 +453,7 @@ fn run_handler(
             "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
         ));
     }
-    parse_response_with_host_creation(
+    parse_response_with_host_mutation(
         &stdout,
         invocation.allow_ui_actions,
         invocation.allow_workspace_query,
@@ -453,6 +464,7 @@ fn run_handler(
         invocation.allow_tab_create,
         invocation.allow_pane_close,
         invocation.allow_tab_close,
+        invocation.allow_pane_move,
     )
 }
 
@@ -576,6 +588,7 @@ impl PersistentHandler {
         allow_tab_create: bool,
         allow_pane_close: bool,
         allow_tab_close: bool,
+        allow_pane_move: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -631,7 +644,7 @@ impl PersistentHandler {
                 "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
             ));
         }
-        let actions = parse_persistent_response_with_host_creation(
+        let actions = parse_persistent_response_with_host_mutation(
             &bytes,
             self.allow_ui_actions,
             allow_workspace_query,
@@ -642,6 +655,7 @@ impl PersistentHandler {
             allow_tab_create,
             allow_pane_close,
             allow_tab_close,
+            allow_pane_move,
             request_id,
         )?;
         if let Some(status) = self
@@ -716,6 +730,7 @@ fn run_persistent_handler(
                 invocation.allow_tab_create,
                 invocation.allow_pane_close,
                 invocation.allow_tab_close,
+                invocation.allow_pane_move,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -876,6 +891,7 @@ fn parse_response(
     )
 }
 
+#[cfg(test)]
 fn parse_response_with_host_creation(
     bytes: &[u8],
     allow_ui_actions: bool,
@@ -887,6 +903,35 @@ fn parse_response_with_host_creation(
     allow_tab_create: bool,
     allow_pane_close: bool,
     allow_tab_close: bool,
+) -> Result<Vec<StructuredResponseAction>, String> {
+    parse_response_with_host_mutation(
+        bytes,
+        allow_ui_actions,
+        allow_workspace_query,
+        allow_workspace_actions,
+        allow_workspace_topology,
+        allow_terminal_query,
+        allow_pane_create,
+        allow_tab_create,
+        allow_pane_close,
+        allow_tab_close,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_response_with_host_mutation(
+    bytes: &[u8],
+    allow_ui_actions: bool,
+    allow_workspace_query: bool,
+    allow_workspace_actions: bool,
+    allow_workspace_topology: bool,
+    allow_terminal_query: bool,
+    allow_pane_create: bool,
+    allow_tab_create: bool,
+    allow_pane_close: bool,
+    allow_tab_close: bool,
+    allow_pane_move: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -907,6 +952,7 @@ fn parse_response_with_host_creation(
         allow_tab_create,
         allow_pane_close,
         allow_tab_close,
+        allow_pane_move,
     )
 }
 
@@ -935,6 +981,7 @@ fn parse_persistent_response(
     )
 }
 
+#[cfg(test)]
 fn parse_persistent_response_with_host_creation(
     bytes: &[u8],
     allow_ui_actions: bool,
@@ -946,6 +993,37 @@ fn parse_persistent_response_with_host_creation(
     allow_tab_create: bool,
     allow_pane_close: bool,
     allow_tab_close: bool,
+    expected_request_id: u64,
+) -> Result<Vec<StructuredResponseAction>, String> {
+    parse_persistent_response_with_host_mutation(
+        bytes,
+        allow_ui_actions,
+        allow_workspace_query,
+        allow_workspace_actions,
+        allow_workspace_topology,
+        allow_terminal_query,
+        allow_pane_create,
+        allow_tab_create,
+        allow_pane_close,
+        allow_tab_close,
+        false,
+        expected_request_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_persistent_response_with_host_mutation(
+    bytes: &[u8],
+    allow_ui_actions: bool,
+    allow_workspace_query: bool,
+    allow_workspace_actions: bool,
+    allow_workspace_topology: bool,
+    allow_terminal_query: bool,
+    allow_pane_create: bool,
+    allow_tab_create: bool,
+    allow_pane_close: bool,
+    allow_tab_close: bool,
+    allow_pane_move: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -973,6 +1051,7 @@ fn parse_persistent_response_with_host_creation(
         allow_tab_create,
         allow_pane_close,
         allow_tab_close,
+        allow_pane_move,
     )
 }
 
@@ -987,6 +1066,7 @@ fn validate_response_actions(
     allow_tab_create: bool,
     allow_pane_close: bool,
     allow_tab_close: bool,
+    allow_pane_move: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1143,6 +1223,16 @@ fn validate_response_actions(
                 host_operations += 1;
                 validate_text("tab closure action id", action_id, MAX_ACTION_ID_BYTES)?;
             }
+            StructuredResponseAction::MovePane { action_id, .. } => {
+                if !allow_pane_move {
+                    return Err(
+                        "handler requested pane movement without API v16 persistent pane-move authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("pane movement action id", action_id, MAX_ACTION_ID_BYTES)?;
+            }
         }
     }
     if host_operations > 1 {
@@ -1206,6 +1296,7 @@ mod tests {
             allow_tab_create: false,
             allow_pane_close: false,
             allow_tab_close: false,
+            allow_pane_move: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1796,6 +1887,127 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pane_movement_is_typed_independently_gated_strict_and_single_operation() {
+        let move_pane = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"horizontal"}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_host_mutation(
+                move_pane, false, false, false, false, false, false, false, false, false, true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::MovePane {
+                action_id: "relocate-1".into(),
+                source_tab_id: 42,
+                pane_id: 7,
+                destination_tab_id: 43,
+                target_pane_id: 2,
+                direction: crate::control::protocol::SplitDirection::Horizontal,
+            }]
+        );
+        assert!(
+            parse_persistent_response(move_pane, false, false, false, false, false, 9)
+                .unwrap_err()
+                .contains("pane-move authority")
+        );
+
+        let invalid_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"diagonal"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                invalid_direction,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("unknown variant")
+        );
+        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"vertical","window_id":9}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                unknown_field,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("unknown field")
+        );
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"bad\naction","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"vertical"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                unsafe_id, false, false, false, false, false, false, false, false, false, true, 9,
+            )
+            .unwrap_err()
+            .contains("control-safe")
+        );
+        let oversized_id = serde_json::json!({
+            "schema_version": 2,
+            "request_id": 9,
+            "actions": [{
+                "type": "move-pane",
+                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
+                "source_tab_id": 42,
+                "pane_id": 7,
+                "destination_tab_id": 43,
+                "target_pane_id": 2,
+                "direction": "vertical",
+            }],
+        });
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                &serde_json::to_vec(&oversized_id).unwrap(),
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("within 64 bytes")
+        );
+        let query_and_move = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"vertical"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                query_and_move,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn persistent_workspace_query_round_trip_reuses_the_handler() {
@@ -2020,6 +2232,54 @@ done"#,
                 .unwrap(),
             vec![StructuredResponseAction::ShowMessage {
                 message: "close-result-received".into(),
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_query_then_pane_move_then_result_is_bounded() {
+        let mut invocation = persistent_fixture(
+            "pane-move-fixture",
+            r#"count=0
+while IFS= read -r event; do
+  count=$((count + 1))
+  if [ "$count" -eq 1 ]; then
+    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
+  elif [ "$count" -eq 2 ]; then
+    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"move-pane","action_id":"relocate","source_tab_id":7,"pane_id":3,"destination_tab_id":8,"target_pane_id":1,"direction":"vertical"}]}\n'
+  else
+    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"move-result-received"}]}\n'
+  fi
+done"#,
+        );
+        invocation.allow_workspace_query = true;
+        invocation.allow_pane_move = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::QueryWorkspace { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
+        invocation.allow_workspace_query = false;
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::MovePane { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"move-pane","ok":true}}"#.into();
+        invocation.allow_pane_move = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowMessage {
+                message: "move-result-received".into(),
             }]
         );
         assert_eq!(handlers.len(), 1);
@@ -2370,6 +2630,7 @@ done"#,
             allow_tab_create: false,
             allow_pane_close: false,
             allow_tab_close: false,
+            allow_pane_move: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -2408,6 +2669,7 @@ done"#,
             allow_tab_create: false,
             allow_pane_close: false,
             allow_tab_close: false,
+            allow_pane_move: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -2433,6 +2695,7 @@ done"#,
             allow_tab_create: false,
             allow_pane_close: false,
             allow_tab_close: false,
+            allow_pane_move: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

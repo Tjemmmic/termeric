@@ -1387,6 +1387,12 @@ impl PaneManager {
         self.panes.len()
     }
 
+    /// Count panes that still own a live presentation. Closed records remain
+    /// briefly until lifecycle cleanup and must not satisfy transfer safety.
+    pub(crate) fn open_pane_count(&self) -> usize {
+        self.panes.values().filter(|pane| !pane.closed).count()
+    }
+
     /// Toggle view-only zoom for the focused pane.
     pub fn toggle_zoom(&mut self) -> bool {
         if self.panes.len() <= 1 {
@@ -1465,14 +1471,23 @@ impl PaneManager {
     /// authoritative live-domain handoff even when another attached window
     /// currently has a different local focus.
     pub(crate) fn detach(&mut self, detached: PaneId) -> Option<Pane> {
-        if self.panes.len() <= 1 || !self.panes.contains_key(&detached) {
+        let detached_is_open = match self.panes.get(&detached) {
+            Some(pane) => !pane.closed,
+            None => return None,
+        };
+        if self.panes.len() <= 1 || (detached_is_open && self.open_pane_count() <= 1) {
             return None;
         }
         if self.focused == detached {
             self.focused = self
                 .tree
                 .find_sibling(detached)
-                .or_else(|| self.panes.keys().copied().find(|id| *id != detached))?;
+                .filter(|id| self.panes.get(id).is_some_and(|pane| !pane.closed))
+                .or_else(|| {
+                    self.panes
+                        .iter()
+                        .find_map(|(id, pane)| (*id != detached && !pane.closed).then_some(*id))
+                })?;
         }
         self.tree.remove(detached);
         self.zoomed = None;
@@ -1504,8 +1519,12 @@ impl PaneManager {
     /// Validate an exact destination anchor and stable-ID allocation without
     /// mutating the layout. Call this before detaching a pane from its source.
     pub(crate) fn validate_attach_target(&self, target: PaneId) -> anyhow::Result<()> {
-        if !self.panes.contains_key(&target) {
-            anyhow::bail!("destination pane {} does not exist", target.0);
+        let target_pane = self
+            .panes
+            .get(&target)
+            .with_context(|| format!("destination pane {} does not exist", target.0))?;
+        if target_pane.closed {
+            anyhow::bail!("destination pane {} is closed", target.0);
         }
         if self.panes.len() >= crate::control::protocol::MAX_PANES_PER_TAB {
             anyhow::bail!(
@@ -2344,6 +2363,52 @@ mod tests {
         assert_eq!(destination.get_pane(target).unwrap().pty.child_id(), child);
         assert_eq!(destination.focused_id(), target);
         assert_eq!(destination.pane_count(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transfer_guards_do_not_treat_closed_records_as_live_panes_or_anchors() {
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let shell = ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "sleep 1".into()],
+            env: Default::default(),
+        };
+        let make = || {
+            PaneManager::new(
+                80,
+                24,
+                shell.clone(),
+                1_000,
+                8 * 1024 * 1024,
+                800.0,
+                480.0,
+                10.0,
+                20.0,
+            )
+            .unwrap()
+        };
+
+        let mut source = make();
+        let first_closed = source.split(SplitDirection::Vertical).unwrap();
+        let second_closed = source.split(SplitDirection::Horizontal).unwrap();
+        source.get_pane_mut(first_closed).unwrap().closed = true;
+        source.get_pane_mut(second_closed).unwrap().closed = true;
+        assert_eq!(source.pane_count(), 3);
+        assert_eq!(source.open_pane_count(), 1);
+        assert!(source.detach(PaneId(0)).is_none());
+        assert!(source.get_pane(PaneId(0)).is_some());
+
+        let mut destination = make();
+        let closed_anchor = destination.split(SplitDirection::Vertical).unwrap();
+        destination.get_pane_mut(closed_anchor).unwrap().closed = true;
+        let error = destination
+            .validate_attach_target(closed_anchor)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("is closed"), "{error}");
     }
 
     #[cfg(unix)]

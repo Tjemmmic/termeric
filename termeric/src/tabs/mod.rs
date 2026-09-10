@@ -1088,7 +1088,7 @@ impl TabManager {
             .pane_manager
             .as_ref()
             .context("Split the source tab before moving a pane")?;
-        if source_manager.pane_count() <= 1 {
+        if source_manager.open_pane_count() <= 1 {
             anyhow::bail!("The last pane in a tab cannot be moved");
         }
         if source_manager.focused_pane_is_plugin_owned() {
@@ -1144,7 +1144,7 @@ impl TabManager {
             .pane_manager
             .as_ref()
             .context("Split the source tab before moving a pane")?;
-        if manager.pane_count() <= 1 {
+        if manager.open_pane_count() <= 1 {
             anyhow::bail!("The last pane in a tab cannot be moved");
         }
         if manager.focused_pane_is_plugin_owned() {
@@ -1175,14 +1175,14 @@ impl TabManager {
             .pane_manager
             .as_ref()
             .context("Split the source tab before moving a pane")?;
-        if manager.pane_count() <= 1 {
-            anyhow::bail!("The last pane in a tab cannot be moved");
-        }
         let pane = manager
             .get_pane(pane_id)
             .with_context(|| format!("GUI pane {} does not exist in tab {tab_id}", pane_id.0))?;
         if pane.closed {
             anyhow::bail!("GUI pane {} in tab {tab_id} is closed", pane_id.0);
+        }
+        if manager.open_pane_count() <= 1 {
+            anyhow::bail!("The last pane in a tab cannot be moved");
         }
         if manager.pane_is_plugin_owned(pane_id) {
             anyhow::bail!(

@@ -1004,6 +1004,14 @@ preservation, active handoff, copy-mode cleanup, scheduled correlated results,
 lifecycle-hook suppression, same-process query-to-close reuse, one-operation
 enforcement, authority removal, and a checked-in tab pruner. Only inert local
 shell/Python fixtures are used; no AI provider process or tokens are involved.
+API v16 adds exact pane-move version/mode/grant denial, strict typed action
+parsing, complete stable-ID source/destination validation, same-tab,
+missing/closed/closing/live/serial/last-pane/plugin-owned/invalid-anchor
+refusal before detachment, live PTY identity preservation, fresh destination-
+local IDs, correlated source/focus state, copy-mode and broadcast cleanup,
+same-process query-to-move reuse, one-operation enforcement, authority removal,
+and a checked-in pane mover. Only inert local shell/Python fixtures are used;
+no AI provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay
