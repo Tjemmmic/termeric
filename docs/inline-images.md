@@ -117,6 +117,8 @@ continuously asserts the cache, placement, and ownership bounds.
 The native Linux GUI harness additionally requires `img2sixel` from libsixel
 and `timg -pi`, runs both against a real PNG through the PTY, requires both
 commands to reach the protocol adapters, and presents their normalized geometry
-through the WGPU image path. The hermetic fixture test proves that both client
-commands execute and emit their protocol streams, but a current accepted native
-artifact and subjective scaling/color review on vendor GPUs remain pending.
+through the WGPU image path. The same `timg` executable is independently invoked
+with `-pk` for the Kitty adapter; its generated image ID is not reused as iTerm2
+evidence. The hermetic fixture test proves that all distinct client commands
+execute and emit their protocol streams, but a current accepted native artifact
+and subjective scaling/color review on vendor GPUs remain pending.

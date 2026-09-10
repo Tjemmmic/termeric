@@ -710,10 +710,11 @@ one negative-z classic image and 52 positive-z Unicode-placeholder slices.
 Every pixel must agree in the initial frame, after output scroll clips three
 rows, and after scrollback restores them, so draw submission alone cannot
 masquerade as a graphics pass. The native X11 workspace scenario runs current
-classic and Unicode-placeholder streams against one deterministic 64-by-64
-multi-row PNG at separate cursor locations, and requires both exact image IDs
-to reach successful terminal diagnostics while retaining a dedicated graphics
-capture. A current artifact and visual review, plus temporary-file,
+`kitten icat` classic and Unicode-placeholder streams plus independent
+`timg -pk` direct-PNG output against one deterministic 64-by-64 multi-row PNG.
+It binds both fixed `kitten` IDs and the client-generated `timg` ID to successful
+terminal diagnostics while retaining a dedicated graphics capture. A current
+artifact and visual review, plus temporary-file,
 shared-memory, disabled/enabled ordinary-file, multi-pane, animation, and direct
 relative-placement acceptance remain manual Wayland/X11 rows; see
 [`kitty-graphics.md`](kitty-graphics.md).
@@ -725,7 +726,7 @@ and the dedicated `graphics_protocols` fuzz target. The native X11 acceptance
 harness additionally requires libsixel's `img2sixel` and `timg -pi`, runs them
 through real PTYs, and requires both adapters to accept their output. A pure
 harness regression test places fake Kitty, Sixel, and iTerm2 clients on `PATH`
-and proves the fixture actually executes and emits all four configured streams;
+and proves the fixture actually executes and emits all five configured streams;
 this prevents source presence or a dead fixture branch from being mistaken for
 native-client coverage. A current accepted native artifact and subjective
 visual review remain pending. Exact limits and unsupported extensions are in

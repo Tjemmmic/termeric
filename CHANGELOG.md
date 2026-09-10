@@ -17,10 +17,12 @@ Versioning once public beta tags begin.
 
 - Native X11 workspace acceptance now launches current `kitten icat` in both
   classic-stream and Unicode-placeholder-stream modes against a deterministic
-  multi-row PNG at separate cursor positions. Exact IDs, versions, PTY geometry,
-  client output, successful terminal diagnostics, and scenario-local prerequisites
-  turn the previously ad hoc checks into reproducible artifacts while leaving
-  visual/media/multi-pane/animation judgment explicit.
+  multi-row PNG at separate cursor positions, plus the independent `timg -pk`
+  Kitty backend against the same fixture. Exact fixed or client-generated IDs,
+  versions, PTY geometry, client output, successful terminal diagnostics, and
+  scenario-local prerequisites turn the previously ad hoc checks into
+  reproducible artifacts while leaving visual/media/multi-pane/animation
+  judgment explicit.
 
 - `termeric domain protocol-version [--json]` now reports the local live-domain
   wire version without discovering or starting a daemon, giving upgrade and

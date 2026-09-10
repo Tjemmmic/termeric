@@ -887,23 +887,45 @@ def run_workspace_scenario(
             lambda: b"\x1b_Gi=17;OK\x1b\\" in transcript_bytes(transcript),
             15,
         )
-        wait_until(
-            "current Kitty, img2sixel, and timg client output accepted by the terminal",
-            lambda: app.log_contains("Accepted Kitty image: id=1701")
-            and app.log_contains("Accepted Kitty Unicode placeholder image: id=1702")
-            and app.log_contains("Accepted Sixel image")
-            and app.log_contains("Accepted iTerm2 inline image")
-            and {
-                record.get("tool")
+
+        def graphics_clients_accepted() -> bool:
+            client_records = [
+                record
                 for record in read_records(transcript)
                 if record.get("event") == "graphics_client"
+            ]
+            expected_protocols = {
+                "kitten-stream": "kitty",
+                "kitten-unicode-placeholder": "kitty-unicode-placeholder",
+                "timg-kitty": "kitty",
+                "img2sixel": "sixel",
+                "timg-iterm2": "iterm2",
             }
-            == {
-                "kitten-stream",
-                "kitten-unicode-placeholder",
-                "img2sixel",
-                "timg-iterm2",
-            },
+            if len(client_records) != len(expected_protocols) or {
+                str(record.get("tool")): record.get("protocol")
+                for record in client_records
+            } != expected_protocols:
+                return False
+            timg_record = next(
+                record for record in client_records if record.get("tool") == "timg-kitty"
+            )
+            try:
+                timg_image_id = int(timg_record["image_id"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if timg_image_id <= 0 or timg_image_id in {17, 1701, 1702}:
+                return False
+            return (
+                app.log_contains("Accepted Kitty image: id=1701")
+                and app.log_contains("Accepted Kitty Unicode placeholder image: id=1702")
+                and app.log_contains(f"Accepted Kitty image: id={timg_image_id}")
+                and app.log_contains("Accepted Sixel image")
+                and app.log_contains("Accepted iTerm2 inline image")
+            )
+
+        wait_until(
+            "kitten, independent timg Kitty, img2sixel, and timg iTerm2 output accepted",
+            graphics_clients_accepted,
             15,
         )
         app.snapshot("graphics-clients", update, review_only=True)

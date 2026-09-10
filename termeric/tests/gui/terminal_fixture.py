@@ -100,6 +100,28 @@ def command_version(command: list[str]) -> str:
     ]
 
 
+def kitty_image_id(payload: bytes) -> int:
+    """Extract the first explicit nonzero Kitty image ID from client output."""
+    offset = 0
+    while True:
+        start = payload.find(b"\x1b_G", offset)
+        if start < 0:
+            break
+        separator = payload.find(b";", start + 3)
+        if separator < 0:
+            break
+        for field in payload[start + 3 : separator].split(b","):
+            if not field.startswith(b"i="):
+                continue
+            encoded = field[2:]
+            if encoded.isdigit():
+                image_id = int(encoded)
+                if 0 < image_id <= 0xFFFFFFFF:
+                    return image_id
+        offset = separator + 1
+    raise RuntimeError("Kitty client output contains no explicit nonzero image ID")
+
+
 def render_external_graphics_clients(
     transcript: str,
     terminal_geometry: tuple[int, int, int, int] | None = None,
@@ -153,7 +175,14 @@ def render_external_graphics_clients(
                 image,
             ],
         ),
-        ("img2sixel", "img2sixel", "sixel", 24, ["img2sixel", image]),
+        (
+            "timg-kitty",
+            "timg",
+            "kitty",
+            24,
+            ["timg", "-I", "-pk", "--compress=0", "-g2x1", image],
+        ),
+        ("img2sixel", "img2sixel", "sixel", 27, ["img2sixel", image]),
         (
             "timg-iterm2",
             "timg",
@@ -166,6 +195,9 @@ def render_external_graphics_clients(
         if not result.stdout:
             raise RuntimeError(f"{tool} produced no terminal output")
         emit(f"\x1b[{cursor_row};2H".encode() + result.stdout)
+        protocol_fields: dict[str, int] = {}
+        if protocol.startswith("kitty"):
+            protocol_fields["image_id"] = kitty_image_id(result.stdout)
         write_record(
             transcript,
             "graphics_client",
@@ -181,6 +213,7 @@ def render_external_graphics_clients(
             terminal_cols=cols,
             terminal_pixel_width=pixel_width,
             terminal_pixel_height=pixel_height,
+            **protocol_fields,
         )
 
 

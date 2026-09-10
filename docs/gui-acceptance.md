@@ -48,6 +48,8 @@ Termeric binary with `xdotool`. Its workspace scenario asserts:
   rendering a deterministic multi-row PNG at separate live cursor positions,
   with exact image IDs, client versions, accepted-protocol diagnostics, and a
   dedicated post-client native capture;
+- independent `timg -pk` Kitty PNG output with its client-generated image ID
+  extracted from the APC stream and bound to an exact acceptance diagnostic;
 - real `img2sixel` and `timg -pi` clients emitting Sixel and iTerm2 PNG output
   through the PTY into the shared, pane-clipped GPU image path;
 - a daemon-owned Kitty image created before closing the first live-domain

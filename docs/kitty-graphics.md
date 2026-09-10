@@ -260,7 +260,11 @@ native X11 workspace scenario launches the installed current
 stream placement and once with Unicode placeholders. It fixes terminal pixel
 geometry, uses distinct image IDs and cursor rows, records exact client output
 sizes, versions, and geometry, requires both images to reach successful
-protocol diagnostics, and retains a dedicated post-client capture.
+protocol diagnostics, and retains a dedicated post-client capture. The same
+scenario invokes independent `timg -pk --compress=0` direct-PNG output, extracts
+its client-generated image ID from the APC control fields, and requires the
+matching terminal diagnostic rather than treating nonempty client output as a
+pass.
 
 Manual release acceptance still requires visible Wayland and X11 runs with a
 current `kitten icat --transfer-mode=stream`,
@@ -271,8 +275,9 @@ clients. Also run a direct `P/Q/H/V` protocol probe that moves and deletes both
 an ordinary parent and a Unicode-placeholder parent, confirming child movement,
 signed offsets, and cascading deletion. Record the exact Kitty version, commands, image fixtures, compositor,
 GPU, config state, and candidate SHA in `release-acceptance.md`. The automated
-workspace path covers only the two stream modes in one X11 window; the other
-media, multi-pane, Wayland, and subjective checks remain operator-owned.
+workspace path covers the two `kitten` stream modes plus static direct-PNG
+output from independent `timg` in one X11 window; the other media, multi-pane,
+Wayland, and subjective checks remain operator-owned.
 
 Also run a direct multi-frame `a=f`/`a=a`/`a=c` probe that exercises partial
 updates, alpha blend and replacement, loading and finite-loop playback, root

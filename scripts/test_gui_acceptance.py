@@ -192,6 +192,7 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             root = Path(directory)
             transcript = root / "transcript.jsonl"
             kitten_args = root / "kitten-args.txt"
+            timg_args = root / "timg-args.txt"
             fake_bin = root / "bin"
             fake_bin.mkdir()
             clients = {
@@ -220,9 +221,17 @@ fi
                 "timg": """#!/bin/sh
 if [ "$1" = "--version" ]; then
   printf 'timg fixture 1.0\\n'
-else
-  printf '\\033]1337;File=inline=1:AA==\\007'
+  exit 0
 fi
+printf '%s\\n' "$*" >> "$TERMERIC_TIMG_ARGS"
+case " $* " in
+  *" -pk "*)
+    printf '\\033[?25l\\033_Ga=T,i=2701,q=2,f=100,m=0;iVBORw0KGgo=\\033\\\\\\033[?25h'
+    ;;
+  *)
+    printf '\\033]1337;File=inline=1:AA==\\007'
+    ;;
+esac
 """,
             }
             for name, script in clients.items():
@@ -235,6 +244,7 @@ fi
                 {
                     "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
                     "TERMERIC_KITTEN_ARGS": str(kitten_args),
+                    "TERMERIC_TIMG_ARGS": str(timg_args),
                 },
             ), mock.patch.object(terminal_fixture, "emit") as emit:
                 terminal_fixture.render_external_graphics_clients(
@@ -247,6 +257,7 @@ fi
                 {
                     "kitten-stream",
                     "kitten-unicode-placeholder",
+                    "timg-kitty",
                     "img2sixel",
                     "timg-iterm2",
                 },
@@ -259,10 +270,11 @@ fi
                     "timg fixture 1.0",
                 },
             )
-            self.assertEqual(emit.call_count, 4)
+            self.assertEqual(emit.call_count, 5)
             emitted = [call.args[0] for call in emit.call_args_list]
             self.assertTrue(any(b"i=1701" in payload for payload in emitted))
             self.assertTrue(any(b"U=1" in payload for payload in emitted))
+            self.assertTrue(any(b"i=2701" in payload for payload in emitted))
             self.assertTrue(any(b"\x1bPq" in payload for payload in emitted))
             self.assertTrue(any(b"\x1b]1337;" in payload for payload in emitted))
             arguments = kitten_args.read_text(encoding="utf-8").splitlines()
@@ -272,10 +284,40 @@ fi
                 sum("--unicode-placeholder" in line for line in arguments), 1
             )
             self.assertTrue(all("--stdin=no" in line for line in arguments))
+            timg_arguments = timg_args.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(timg_arguments), 2)
+            self.assertEqual(sum("-pk" in line for line in timg_arguments), 1)
+            self.assertEqual(sum("-pi" in line for line in timg_arguments), 1)
+            self.assertTrue(any("--compress=0" in line for line in timg_arguments))
+            self.assertTrue(all("-g2x1" in line for line in timg_arguments))
+            records_by_tool = {record["tool"]: record for record in records}
+            self.assertEqual(records_by_tool["kitten-stream"]["image_id"], 1701)
+            self.assertEqual(
+                records_by_tool["kitten-unicode-placeholder"]["image_id"], 1702
+            )
+            self.assertEqual(records_by_tool["timg-kitty"]["image_id"], 2701)
             fixture = next(root.glob("graphics-client-*.png"))
             fixture_bytes = fixture.read_bytes()
             self.assertEqual(fixture_bytes[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", fixture_bytes[16:24]), (64, 64))
+
+    def test_graphics_fixture_extracts_only_explicit_nonzero_kitty_image_ids(self) -> None:
+        payload = (
+            b"\x1b[?25l"
+            b"\x1b_Ga=T,i=0,q=2;ignored\x1b\\"
+            b"\x1b_Ga=T,i=2701,q=2,f=100;payload\x1b\\"
+        )
+        self.assertEqual(terminal_fixture.kitty_image_id(payload), 2701)
+        for invalid in (
+            b"plain text",
+            b"\x1b_Ga=T,q=2;missing\x1b\\",
+            b"\x1b_Ga=T,i=not-a-number;bad\x1b\\",
+            b"\x1b_Ga=T,i=4294967296;too-large\x1b\\",
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                RuntimeError, "no explicit nonzero image ID"
+            ):
+                terminal_fixture.kitty_image_id(invalid)
 
     def test_alternate_screen_capture_requires_entry_before_exit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
