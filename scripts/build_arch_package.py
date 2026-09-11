@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Build the current Termeric checkout with the maintained Arch PKGBUILD.
+
+The PKGBUILD uses an upstream VCS source for normal users. This helper stages
+the exact local checkout instead, allowing CI and maintainers to package an
+unpublished candidate without changing the recipe or contacting GitHub.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+class BuildError(RuntimeError):
+    pass
+
+
+EXCLUDED_ROOT_NAMES = {"target"}
+
+
+def require_tool(name: str) -> str:
+    path = shutil.which(name)
+    if path is None:
+        raise BuildError(f"required tool is unavailable: {name}")
+    return path
+
+
+def copy_checkout(source: Path, destination: Path) -> None:
+    if not (source / "Cargo.toml").is_file() or not (source / ".git").exists():
+        raise BuildError(f"source is not a Git-backed Termeric checkout: {source}")
+
+    source = source.resolve()
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        if Path(directory).resolve() == source:
+            return set(names) & EXCLUDED_ROOT_NAMES
+        return set()
+
+    shutil.copytree(source, destination, symlinks=True, ignore=ignore)
+
+
+def build_package(source: Path, output: Path, *, run_check: bool) -> Path:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        raise BuildError("makepkg refuses root; run this helper as an unprivileged user")
+    makepkg = require_tool("makepkg")
+    recipe = source / "packaging/arch/PKGBUILD"
+    if not recipe.is_file():
+        raise BuildError(f"maintained PKGBUILD is missing: {recipe}")
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="termeric-arch-build-") as directory:
+        staging = Path(directory)
+        (staging / "src").mkdir()
+        copy_checkout(source, staging / "src/termeric")
+        shutil.copy2(recipe, staging / "PKGBUILD")
+        command = [makepkg, "--noextract", "--nodeps", "--force", "--nocolor"]
+        if not run_check:
+            command.append("--nocheck")
+        result = subprocess.run(command, cwd=staging, text=True)
+        if result.returncode != 0:
+            raise BuildError(f"makepkg failed with exit status {result.returncode}")
+        packages = sorted(staging.glob("termeric-git-*.pkg.tar.zst"))
+        if len(packages) != 1:
+            raise BuildError(
+                f"makepkg produced {len(packages)} candidate package archives, expected one"
+            )
+        destination = output / packages[0].name
+        shutil.copy2(packages[0], destination)
+        return destination
+
+
+def main(argv: list[str] | None = None) -> int:
+    repository = Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=repository)
+    parser.add_argument("--output", type=Path, default=repository / "target/arch")
+    parser.add_argument(
+        "--run-check",
+        action="store_true",
+        help="run the PKGBUILD check() function instead of reusing separate test gates",
+    )
+    arguments = parser.parse_args(argv)
+    try:
+        package = build_package(
+            arguments.source.resolve(),
+            arguments.output.resolve(),
+            run_check=arguments.run_check,
+        )
+    except (BuildError, OSError, subprocess.SubprocessError) as error:
+        print(f"Arch package build failed: {error}", file=sys.stderr)
+        return 1
+    print(package)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

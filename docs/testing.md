@@ -665,6 +665,37 @@ a GUI launch or compatibility evidence against an actual prior Termeric
 release. The uploaded schema-1 JSON report binds those results to the package's
 SHA-256 digest, byte size, control metadata, candidate commit, and UTC time.
 
+## Arch package lifecycle lane
+
+The maintained [`packaging/arch/PKGBUILD`](../packaging/arch/PKGBUILD) is a
+normal `termeric-git` VCS recipe. CI packages the exact checked-out candidate
+with an unprivileged staging helper, so pull requests and unpublished commits
+are tested without rewriting the upstream source declaration:
+
+```bash
+python3 scripts/build_arch_package.py --output target/arch
+python3 scripts/check_arch_package.py target/arch/termeric-git-*.pkg.tar.zst \
+  --report target/arch/package-acceptance.json
+```
+
+Read-only inspection rejects traversal, links, duplicate or unexpected archive
+members, missing metadata or runtime dependencies, wrong modes, invalid
+desktop/PNG/terminfo payloads, unresolved libraries, and a broken non-GUI
+version path. Unit fixtures deliberately exercise those failure modes. The CI
+job runs in an official timestamp-pinned `archlinux:base-devel` container and
+verifies that `.SRCINFO` still matches the recipe.
+
+The install/upgrade/remove phase is deliberately unavailable by default. It
+requires root, an Arch-family host, `--system-lifecycle`, and the exact
+`TERMERIC_ARCH_PACKAGE_LIFECYCLE_ACCEPT=1` opt-in. It refuses either
+`termeric-git` or conflicting `termeric` if already installed. On the disposable
+CI host it creates and validates a candidate-payload predecessor with an older
+Arch version, installs it with Pacman, upgrades to the unchanged candidate,
+runs only `termeric --version`, removes the package, rejects owned-file residue,
+and confirms a synthetic user-state sentinel survives. A cleanup attempt runs
+after any failure. This proves package-manager mechanics, not migration from a
+real previous release or GUI behavior.
+
 The OSC integration lane adds BEL/ST and chunk-boundary parser coverage for
 titles, clipboard operations, and dynamic colors; malformed and oversized input
 recovery; security-policy defaults; xterm query formatting; and terminal-local

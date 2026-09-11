@@ -1,0 +1,75 @@
+# Maintainer: Termeric Contributors <Tjemmmic@users.noreply.github.com>
+
+pkgname=termeric-git
+_pkgname=termeric
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc="GPU-accelerated terminal emulator with a warm, turmeric-inspired theme"
+arch=('x86_64')
+url="https://github.com/Tjemmmic/termeric"
+license=('MIT')
+depends=(
+  'brotli'
+  'fontconfig'
+  'gcc-libs'
+  'glibc'
+  'libx11'
+  'libxkbcommon'
+  'openssl'
+  'wayland'
+  'zlib'
+  'zstd'
+)
+makedepends=('cargo' 'git' 'ncurses' 'pkgconf')
+optdepends=(
+  'mesa: Mesa Vulkan/OpenGL drivers, including the documented software-renderer fallback'
+  'vulkan-icd-loader: Vulkan renderer backend'
+)
+provides=('termeric')
+conflicts=('termeric')
+source=("${_pkgname}::git+${url}.git")
+sha256sums=('SKIP')
+# Cargo is configured to use rust-lld. Arch's global GCC LTO flags produce
+# bundled libgit2/libssh2 objects that rust-lld cannot consume, so keep Cargo's
+# own release optimization while disabling makepkg's cross-language LTO layer.
+options=('!debug' '!lto')
+
+pkgver() {
+  cd "${srcdir}/${_pkgname}"
+  local base revision short
+  base="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n1)"
+  revision="$(git rev-list --count HEAD)"
+  short="$(git rev-parse --short=7 HEAD)"
+  printf '%s.r%s.g%s' "${base}" "${revision}" "${short}"
+}
+
+build() {
+  cd "${srcdir}/${_pkgname}"
+  CARGO_TARGET_DIR="${srcdir}/target" cargo build \
+    --workspace --release --locked
+}
+
+check() {
+  cd "${srcdir}/${_pkgname}"
+  CARGO_TARGET_DIR="${srcdir}/target" cargo test \
+    --workspace --locked
+}
+
+package() {
+  cd "${srcdir}/${_pkgname}"
+
+  install -Dm755 "${srcdir}/target/release/termeric" \
+    "${pkgdir}/usr/bin/termeric"
+  install -Dm644 assets/termeric.desktop \
+    "${pkgdir}/usr/share/applications/termeric.desktop"
+  install -Dm644 assets/icons/termeric.png \
+    "${pkgdir}/usr/share/icons/hicolor/1024x1024/apps/termeric.png"
+  install -Dm644 LICENSE \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 README.md CHANGELOG.md -t \
+    "${pkgdir}/usr/share/doc/termeric"
+
+  install -d "${pkgdir}/usr/share/terminfo"
+  tic -x -o "${pkgdir}/usr/share/terminfo" \
+    assets/terminfo/xterm-termeric.terminfo
+}

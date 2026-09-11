@@ -210,6 +210,25 @@ fixtures have been run locally. Linux packaging remains **Partial** until the
 new CI lane produces its first accepted green artifact; no pass is inferred
 from workflow configuration.
 
+## Current Arch package-lifecycle gate
+
+The working tree also contains a maintained `termeric-git` PKGBUILD, checked
+`.SRCINFO`, and an exact-checkout staging helper. A read-only checker has passed
+locally against a real x86_64 archive derived from the current local Git
+revision, including exact payload/mode checks, declared runtime dependencies,
+desktop/PNG/terminfo validation, dynamic-library resolution, and
+`termeric --version`. Adversarial
+fixtures cover unsafe archive paths and types, duplicates, unexpected/missing
+members, metadata drift, and mode regressions.
+
+The separate lifecycle mode fails closed without explicit opt-in, root, an
+Arch-family host, and an initially absent `termeric-git`/`termeric` package. The
+official Arch-container CI lane will install a validated synthetic predecessor,
+upgrade to the unchanged candidate with Pacman, remove it, verify owned-file
+cleanup and user-state retention, and upload a digest-bound report. It has not
+been run against this developer host and remains unaccepted until CI produces
+its first green artifact.
+
 ## Candidate and environment
 
 - Candidate branch/commit at start: `improvements` / `8276753`
@@ -234,14 +253,14 @@ from workflow configuration.
 | Shell semantics | Partial | Real Bash PTY/OSC 133/Harvest fixture passes. Zsh and Fish binaries are not installed on this host. |
 | Protocol/core behavior | Partial (automated) | ANSI parsing, Unicode-safe classic CSI editing/tabulation, DECLRMM/DECSLRM rectangular margins, VT400 DECCRA/DECFRA/DECERA/DECSERA and DECSACE/DECCARA/DECRARA operations, opt-in/default-deny DECRQCRA/DECCKSR checksums, DECRQPSR/DECRSPS cursor-and-tab round trips, G0-G3 single/locking shifts, protected DEC selective erase, complete supported DECSC/DECRC state, non-destructive DECSTR soft reset, OSC 8/133 parsing, reflow, alt-screen behavior, bounded static Kitty/Sixel/iTerm2 profiles, DECRQSS SGR/margin/cursor/protection/attribute-extent/legacy-geometry/XTFMTKEYS replies, DECRQM live-mode reports, application cursor shape/blink/visibility, search, pane layout, sessions, plugin quick-exit paths, left-to-right Unicode geometry, SGR attributes, legacy/xterm, exact xterm resource-zero negotiation and runtime/configured legacy/VT220 keyboard types with shared private-mode save/restore and bounded DECUDK dispatch plus bounded modifyCursorKeys/modifyFunctionKeys/modifyKeypadKeys, encoder-neutral reserved modifyStringKeys state, modifyModifierKeys/modifySpecialKeys/modifyOtherKeys with CSI-27/CSI-u formatting, Kitty progressive keyboard encoding, and focused-pane mouse/focus/paste byte streams have automated coverage. The native lane runs real `img2sixel` and `timg -pi`; the headless GPU lane submits image geometry and Unicode/SGR pixels. Visual quality for every installed font/fallback, native compositor mouse interaction, visible `kitten icat`, and native Kitty-keyboard client behavior are not established. |
 | Plugin executable contracts | Partial | Installed Codex parses open and `resume --last` vectors without authentication; Claude/Codex authenticated interactive GUI workflows were not executed. |
-| Packaging | Pass with CI-only dependency check | Clean-index crate archives and Debian archive build; binary, license, desktop file, and icon were inspected. This Arch host lacks `dpkg-shlibdeps`; CI installs `dpkg-dev` and rejects an empty dependency field. |
+| Packaging | Partial | Clean-index crate archives and Debian archive build remain CI-gated. A real local Arch package passes read-only inspection, while both disposable package-manager lifecycle lanes await first-green CI artifacts and no real prior-release migration has been exercised. |
 
 Candidate rows use four explicit dispositions so an absent environment cannot
 silently become a pass:
 
 | Disposition | Current scope |
 |---|---|
-| Automated | Workspace quality, conformance/fuzz, headless GPU, native X11/Wayland acceptance, performance budgets, Debian archive checks, short/scheduled Linux resource soak, and macOS/Windows build/unit CI. |
+| Automated | Workspace quality, conformance/fuzz, headless GPU, native X11/Wayland acceptance, performance budgets, Debian/Arch archive checks, short/scheduled Linux resource soak, and macOS/Windows build/unit CI. |
 | Manual | Real-compositor visual quality and policy, SGR font/decorations and fallback quality, vendor-GPU behavior, assistive technology, audible output, and authenticated plugin workflows. |
 | Unavailable | Shells, tools, hardware counters, accounts, or native runners absent from the evidence host; record the exact absence. |
 | Accepted limitation | An explicitly approved partial/experimental/unsupported boundary allowed by the release gates; never re-label it as a pass. |
@@ -287,9 +306,9 @@ fresh candidate-bound artifacts before promotion:
   top/left tabs, panes/chrome/resize, replacement failure, renderer recovery,
   and memory ceilings.
 - The configured ten-minute core and private-Sway displayed-process soaks.
-- Fresh-host Debian install, synthetic-predecessor upgrade, non-GUI probe,
-  uninstall cleanup, and user-state retention with the generated dependency
-  field verified by `dpkg-shlibdeps`.
+- Fresh-host Debian and Arch installs, synthetic-predecessor upgrades, non-GUI
+  probes, uninstall cleanup, and user-state retention; Debian additionally
+  requires its generated dependency field verified by `dpkg-shlibdeps`.
 
 ## Required manual rows still open
 

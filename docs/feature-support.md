@@ -31,7 +31,7 @@ PTY-to-application-to-render/input path must work.
 | macOS | **Unverified** | Build-and-unit CI is configured but has not yet supplied accepted green evidence; native PTY/window/input/GPU/install/soak acceptance is absent. | [platform tiers](platform-support.md), [#23](https://github.com/Tjemmmic/termeric/issues/23) |
 | Windows | **Unverified** | Build-and-unit CI is configured but has not yet supplied accepted green evidence; native ConPTY/window/input/GPU/install/soak acceptance is absent. | [platform tiers](platform-support.md), [#23](https://github.com/Tjemmmic/termeric/issues/23) |
 | GPU/software rendering | **Supported** | Hardware selection automatically falls back through WGPU software; CLI/config can force either path, diagnostics identify the adapter/backend, and bounded generation-safe surface/device recovery preserves PTYs. Lost surfaces and outdated swap chains share a resize-or-single-recreation path rather than relying on another incidental redraw. Clean local `f9ccc2d` evidence passes the llvmpipe visual/performance subset and private-Sway recovery on an AMD Radeon RX 7900 XTX with both surface states plus device loss followed by continued PTY interaction. Equivalent current X11 recovery, accepted CI history, and portable vendor-GPU memory evidence remain release gates. A separate CPU framebuffer is intentionally not implemented. | [recovery contract](renderer-recovery.md), [#33](https://github.com/Tjemmmic/termeric/issues/33) |
-| Linux packaging | **Partial** | Debian artifact construction and archive validation are automated. CI now requires guarded install, synthetic-predecessor upgrade, non-GUI version probing, uninstall cleanup, and user-state retention on a fresh Ubuntu runner; the lane awaits its first accepted green artifact and does not substitute for a real prior-release upgrade. | [package lifecycle](testing.md#debian-package-lifecycle-lane), [release acceptance](release-acceptance.md) |
+| Linux packaging | **Partial** | Debian and Arch artifact construction plus fail-closed archive validation are automated. Disposable Ubuntu and official Arch-container lanes require guarded install, synthetic-predecessor upgrade, non-GUI version probing, uninstall cleanup, and user-state retention; both await first accepted green artifacts and neither substitutes for a real prior-release upgrade. Arch users have a maintained `termeric-git` PKGBUILD, exact-checkout helper, and checked `.SRCINFO`, but no published AUR package. | [Debian lifecycle](testing.md#debian-package-lifecycle-lane), [Arch lifecycle](testing.md#arch-package-lifecycle-lane), [release acceptance](release-acceptance.md) |
 
 Termeric is therefore a **Linux developer preview**, not a general beta or a
 cross-platform daily-driver terminal.
@@ -139,8 +139,8 @@ exact release candidate:
 6. Bash/Zsh/Fish/Nushell/Elvish, desktop integrations, and consent-based authenticated
    plugin checks in [#26](https://github.com/Tjemmmic/termeric/issues/26)
    either pass or are accepted as named beta limitations.
-7. A fresh Debian-family install/upgrade/uninstall check passes with package
-   dependencies populated.
+7. Fresh Debian-family and Arch install/upgrade/uninstall checks pass with
+   package dependencies populated.
 8. Every remaining **Partial**, **Experimental**, **Unverified**, or
    **Unsupported** item is described accurately in user-facing documentation.
 9. Required manual evidence records the candidate SHA, date, environment, tool

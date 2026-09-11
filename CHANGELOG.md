@@ -8,6 +8,15 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Arch Linux now has a maintained `termeric-git` PKGBUILD and checked
+  `.SRCINFO`, plus an unprivileged helper that packages the exact local checkout.
+  Fail-closed archive inspection validates safe membership, metadata and runtime
+  dependencies, exact modes, desktop/PNG/terminfo payloads, linked libraries,
+  and the non-GUI version path. An explicitly opted-in official Arch-container
+  lane installs a validated synthetic predecessor, upgrades it with Pacman,
+  removes it, checks owned-file cleanup and user-state retention, and uploads a
+  digest-bound report; it never replaces a pre-existing Termeric installation.
+
 - Declarative plugin API v19 adds an independent `window-close` grant for
   closing the exact native window in which a declared plugin command was
   explicitly invoked. Closure carries no target ID, is unavailable to

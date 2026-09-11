@@ -44,6 +44,30 @@ package that was already installed. CI runs that mode on its fresh Ubuntu
 runner. See [testing.md](testing.md#debian-package-lifecycle-lane) for the exact
 contract.
 
+On Arch Linux and derivatives, the maintained VCS recipe can clone and package
+the current upstream revision:
+
+```bash
+sudo pacman -S --needed base-devel git
+cd packaging/arch
+makepkg -si
+```
+
+Maintainers and CI can package the exact local checkout, including an
+unpublished candidate, without changing the VCS recipe:
+
+```bash
+python3 scripts/build_arch_package.py --output target/arch
+python3 scripts/check_arch_package.py target/arch/termeric-git-*.pkg.tar.zst
+```
+
+The helper intentionally refuses root because `makepkg` must run as an
+unprivileged user. It stages the checkout outside the repository, excludes the
+build tree, uses the locked Cargo graph, and leaves the resulting package under
+`target/arch`. Package installation is a separate, explicit action.
+To update a VCS installation, fetch the latest audited repository revision and
+repeat the same `makepkg -si` command; Pacman performs the owned-file upgrade.
+
 ## Upgrade or uninstall
 
 For a source installation, fetch the desired audited revision and repeat the
@@ -59,6 +83,10 @@ sudo rm /usr/local/share/terminfo/x/xterm-termeric
 For a Debian installation, use `sudo apt install ./new-package.deb` to upgrade
 and `sudo apt remove termeric` to uninstall. User configuration and session
 data are retained by both uninstall paths.
+
+For an Arch package, use `sudo pacman -U ./new-package.pkg.tar.zst` to upgrade
+and `sudo pacman -R termeric-git` to uninstall. Pacman removes package-owned
+files but retains user configuration and session data.
 
 ## User files and shell integration
 
@@ -108,7 +136,8 @@ been published to the target registry.
   equivalent WGPU software implementation. On a Mesa/OpenGL installation,
   `WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true termeric --renderer software`
   makes the driver choice explicit before WGPU starts. Startup reports every
-  failed path.
+  failed path. The Arch recipe exposes `mesa` and `vulkan-icd-loader` as the
+  corresponding optional renderer packages.
 - If launch fails under Wayland, confirm `libwayland` and `libxkbcommon` are
   installed; try `WINIT_UNIX_BACKEND=x11 termeric` to isolate display issues.
 - If glyphs are missing, install a monospace font with the required Unicode
