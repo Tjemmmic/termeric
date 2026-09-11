@@ -2331,7 +2331,9 @@ fn headless_image_presentations(
                 height: Some(1),
                 pixel_width: Some(image.width),
                 pixel_height: Some(HEADLESS_IMAGE_CELL_HEIGHT),
-                z_index: 1,
+                // Kitty Unicode placeholders are specified as text-backed
+                // virtual placements and render below the placeholder text.
+                z_index: -1,
             },
             image: image.clone(),
             pixel_rect: Some([

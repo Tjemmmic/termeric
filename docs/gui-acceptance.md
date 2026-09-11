@@ -136,9 +136,10 @@ tracks visible-pixel area, bounds, mean color, and row/column ink profiles with
 documented tolerances in `scripts/check_gui_visual.py`.
 
 The same opt-in GPU lane exercises the terminal image pipeline with a 52-row
-color fixture. One classic placement renders below text while 52 independent
-Unicode-placeholder slices render above it. Pixel readback requires both
-halves to match completely in the initial frame, after three rows scroll out
+color fixture. One classic placement and 52 independent Unicode-placeholder
+slices render below text, matching the protocol's real placeholder z-plane.
+Pixel readback requires both halves to match completely in the initial frame,
+after three rows scroll out
 through normal output, and after scrollback restores those rows. This is a
 deterministic regression gate for the observed row-at-a-time reveal failure;
 the separate native `graphics-clients.png` remains the compositor-level
