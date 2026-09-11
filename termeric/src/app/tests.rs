@@ -4652,6 +4652,48 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
     assert!(app.toasts.iter().all(|toast| toast.message != "unloaded"));
 }
 
+#[test]
+fn process_query_results_revoke_every_query_and_mutation_authority() {
+    let mut invocation = crate::plugin::structured::StructuredHandlerInvocation {
+        plugin_id: "process-inspector".into(),
+        program: "fixture".into(),
+        args: Vec::new(),
+        event_json: "{}".into(),
+        allow_ui_actions: true,
+        allow_workspace_query: true,
+        allow_workspace_actions: true,
+        allow_workspace_topology: true,
+        allow_terminal_query: true,
+        allow_pane_create: true,
+        allow_tab_create: true,
+        allow_pane_close: true,
+        allow_tab_close: true,
+        allow_pane_move: true,
+        allow_terminal_input: true,
+        allow_pane_layout: true,
+        allow_window_close: true,
+        allow_process_query: true,
+        mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
+    };
+
+    super::plugin_actions::clear_structured_host_authority(&mut invocation);
+
+    assert!(invocation.allow_ui_actions);
+    assert!(!invocation.allow_workspace_query);
+    assert!(!invocation.allow_workspace_actions);
+    assert!(!invocation.allow_workspace_topology);
+    assert!(!invocation.allow_terminal_query);
+    assert!(!invocation.allow_pane_create);
+    assert!(!invocation.allow_tab_create);
+    assert!(!invocation.allow_pane_close);
+    assert!(!invocation.allow_tab_close);
+    assert!(!invocation.allow_pane_move);
+    assert!(!invocation.allow_terminal_input);
+    assert!(!invocation.allow_pane_layout);
+    assert!(!invocation.allow_window_close);
+    assert!(!invocation.allow_process_query);
+}
+
 #[cfg(unix)]
 #[test]
 fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
@@ -4718,6 +4760,7 @@ fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
                 allow_terminal_input: false,
                 allow_pane_layout: false,
                 allow_window_close: true,
+                allow_process_query: false,
                 mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
             }),
         )

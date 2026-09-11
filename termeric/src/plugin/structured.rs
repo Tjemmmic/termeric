@@ -98,6 +98,9 @@ pub struct StructuredHandlerInvocation {
     /// only on an explicitly invoked plugin command and is cleared from the
     /// final result request.
     pub allow_window_close: bool,
+    /// Permit one bounded process-wide workspace inventory query. A result
+    /// clears every host-operation authority, including both query grants.
+    pub allow_process_query: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -112,6 +115,9 @@ pub enum StructuredResponseAction {
         lines: Vec<String>,
     },
     QueryWorkspace {
+        query_id: String,
+    },
+    QueryProcess {
         query_id: String,
     },
     QueryTerminal {
@@ -513,6 +519,7 @@ fn run_handler(
         invocation.allow_terminal_input,
         invocation.allow_pane_layout,
         invocation.allow_window_close,
+        invocation.allow_process_query,
     )
 }
 
@@ -640,6 +647,7 @@ impl PersistentHandler {
         allow_terminal_input: bool,
         allow_pane_layout: bool,
         allow_window_close: bool,
+        allow_process_query: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -710,6 +718,7 @@ impl PersistentHandler {
             allow_terminal_input,
             allow_pane_layout,
             allow_window_close,
+            allow_process_query,
             request_id,
         )?;
         if let Some(status) = self
@@ -788,6 +797,7 @@ fn run_persistent_handler(
                 invocation.allow_terminal_input,
                 invocation.allow_pane_layout,
                 invocation.allow_window_close,
+                invocation.allow_process_query,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -976,6 +986,7 @@ fn parse_response_with_host_creation(
         false,
         false,
         false,
+        false,
     )
 }
 
@@ -995,6 +1006,7 @@ fn parse_response_with_host_mutation(
     allow_terminal_input: bool,
     allow_pane_layout: bool,
     allow_window_close: bool,
+    allow_process_query: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -1019,6 +1031,7 @@ fn parse_response_with_host_mutation(
         allow_terminal_input,
         allow_pane_layout,
         allow_window_close,
+        allow_process_query,
     )
 }
 
@@ -1112,6 +1125,7 @@ fn parse_persistent_response_with_host_mutation(
         allow_terminal_input,
         allow_pane_layout,
         false,
+        false,
         expected_request_id,
     )
 }
@@ -1132,6 +1146,7 @@ fn parse_persistent_response_with_window_close(
     allow_terminal_input: bool,
     allow_pane_layout: bool,
     allow_window_close: bool,
+    allow_process_query: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1163,6 +1178,7 @@ fn parse_persistent_response_with_window_close(
         allow_terminal_input,
         allow_pane_layout,
         allow_window_close,
+        allow_process_query,
     )
 }
 
@@ -1181,6 +1197,7 @@ fn validate_response_actions(
     allow_terminal_input: bool,
     allow_pane_layout: bool,
     allow_window_close: bool,
+    allow_process_query: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1219,6 +1236,16 @@ fn validate_response_actions(
                 }
                 host_operations += 1;
                 validate_text("workspace query id", query_id, MAX_QUERY_ID_BYTES)?;
+            }
+            StructuredResponseAction::QueryProcess { query_id } => {
+                if !allow_process_query {
+                    return Err(
+                        "handler requested a process query without API v20 persistent process-query authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("process query id", query_id, MAX_QUERY_ID_BYTES)?;
             }
             StructuredResponseAction::QueryTerminal {
                 query_id,
@@ -1482,6 +1509,7 @@ mod tests {
             allow_terminal_input: false,
             allow_pane_layout: false,
             allow_window_close: false,
+            allow_process_query: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1566,6 +1594,56 @@ mod tests {
             parse_persistent_response(unsafe_id, false, true, false, false, false, 9)
                 .unwrap_err()
                 .contains("control-safe")
+        );
+    }
+
+    #[test]
+    fn process_query_actions_require_v20_authority_and_one_host_operation() {
+        let query = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"all-windows"}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_window_close(
+                query, false, false, false, false, false, false, false, false, false, false, false,
+                false, false, true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::QueryProcess {
+                query_id: "all-windows".into(),
+            }]
+        );
+        assert!(
+            parse_persistent_response(query, false, false, false, false, false, 9)
+                .unwrap_err()
+                .contains("API v20")
+        );
+
+        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"one"},{"type":"query-process","query_id":"two"}]}"#;
+        assert!(
+            parse_persistent_response_with_window_close(
+                duplicate, false, false, false, false, false, false, false, false, false, false,
+                false, false, false, true, 9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+
+        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"all"},{"type":"query-workspace","query_id":"current"}]}"#;
+        assert!(
+            parse_persistent_response_with_window_close(
+                mixed, false, true, false, false, false, false, false, false, false, false, false,
+                false, false, true, 9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"two\nlines"}]}"#;
+        assert!(
+            parse_persistent_response_with_window_close(
+                unsafe_id, false, false, false, false, false, false, false, false, false, false,
+                false, false, false, true, 9,
+            )
+            .unwrap_err()
+            .contains("control-safe")
         );
     }
 
@@ -2510,7 +2588,7 @@ mod tests {
         assert_eq!(
             parse_persistent_response_with_window_close(
                 close, false, false, false, false, false, false, false, false, false, false, false,
-                false, true, 9,
+                false, true, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::CloseWindow {
@@ -2527,7 +2605,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unknown, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, 9,
+                false, false, true, false, 9,
             )
             .unwrap_err()
             .contains("unknown field")
@@ -2537,7 +2615,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, 9,
+                false, false, true, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -2560,6 +2638,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 9,
             )
             .unwrap_err()
@@ -3340,6 +3419,7 @@ done"#,
             allow_terminal_input: false,
             allow_pane_layout: false,
             allow_window_close: false,
+            allow_process_query: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -3382,6 +3462,7 @@ done"#,
             allow_terminal_input: false,
             allow_pane_layout: false,
             allow_window_close: false,
+            allow_process_query: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -3411,6 +3492,7 @@ done"#,
             allow_terminal_input: false,
             allow_pane_layout: false,
             allow_window_close: false,
+            allow_process_query: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

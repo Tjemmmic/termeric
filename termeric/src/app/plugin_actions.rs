@@ -58,6 +58,16 @@ impl App {
                         );
                         None
                     }
+                    crate::plugin::structured::StructuredResponseAction::QueryProcess {
+                        query_id,
+                    } => {
+                        workspace_operation = Some(
+                            crate::plugin::structured::StructuredResponseAction::QueryProcess {
+                                query_id,
+                            },
+                        );
+                        None
+                    }
                     crate::plugin::structured::StructuredResponseAction::QueryTerminal {
                         query_id,
                         tab_id,
@@ -141,6 +151,9 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::QueryWorkspace { .. } => {
                     "query"
                 }
+                crate::plugin::structured::StructuredResponseAction::QueryProcess { .. } => {
+                    "process-query"
+                }
                 crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
                     "terminal-query"
                 }
@@ -222,6 +235,11 @@ impl App {
                 // separately granted workspace mutation.
                 invocation.allow_workspace_query = false;
             }
+            crate::plugin::structured::StructuredResponseAction::QueryProcess { .. } => {
+                return Err(
+                    "process queries require the process-owned Application window registry".into(),
+                );
+            }
             crate::plugin::structured::StructuredResponseAction::QueryTerminal {
                 query_id,
                 tab_id,
@@ -241,18 +259,7 @@ impl App {
                 // the public API. Its result cannot initiate another query or
                 // workspace mutation; a later external event may start a new
                 // independently bounded request.
-                invocation.allow_workspace_query = false;
-                invocation.allow_workspace_actions = false;
-                invocation.allow_workspace_topology = false;
-                invocation.allow_terminal_query = false;
-                invocation.allow_pane_create = false;
-                invocation.allow_tab_create = false;
-                invocation.allow_pane_close = false;
-                invocation.allow_tab_close = false;
-                invocation.allow_pane_move = false;
-                invocation.allow_terminal_input = false;
-                invocation.allow_pane_layout = false;
-                invocation.allow_window_close = false;
+                clear_structured_host_authority(&mut invocation);
             }
             action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
             | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
@@ -281,18 +288,7 @@ impl App {
                 invocation.event_json =
                     self.structured_workspace_action_event(plugin_id, action)?;
                 // A mutation result is terminal for host operations.
-                invocation.allow_workspace_query = false;
-                invocation.allow_workspace_actions = false;
-                invocation.allow_workspace_topology = false;
-                invocation.allow_terminal_query = false;
-                invocation.allow_pane_create = false;
-                invocation.allow_tab_create = false;
-                invocation.allow_pane_close = false;
-                invocation.allow_tab_close = false;
-                invocation.allow_pane_move = false;
-                invocation.allow_terminal_input = false;
-                invocation.allow_pane_layout = false;
-                invocation.allow_window_close = false;
+                clear_structured_host_authority(&mut invocation);
             }
             _ => return Err("structured response did not contain a workspace operation".into()),
         }
@@ -305,6 +301,20 @@ impl App {
                 result_request_id,
             });
         }
+        Ok(())
+    }
+
+    pub(super) fn continue_structured_process_query(
+        &mut self,
+        event_json: String,
+        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
+    ) -> Result<(), String> {
+        let mut invocation = continuation.ok_or_else(|| {
+            "process queries require a live persistent handler continuation".to_string()
+        })?;
+        invocation.event_json = event_json;
+        clear_structured_host_authority(&mut invocation);
+        self.submit_structured_handler(invocation)?;
         Ok(())
     }
 
@@ -396,6 +406,36 @@ impl App {
         if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
             return Err(format!(
                 "workspace query result exceeds {} bytes",
+                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+            ));
+        }
+        Ok(encoded)
+    }
+
+    pub(super) fn structured_process_query_event(
+        plugin_id: &str,
+        query_id: &str,
+        origin_window_id: u64,
+        inventory: &crate::control::protocol::ProcessInventory,
+    ) -> Result<String, String> {
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "plugin_id": plugin_id,
+            "event": {
+                "type": "process-query-result",
+                "query_id": query_id,
+                "snapshot_schema_version": 1,
+                "process_id": inventory.process_id,
+                "origin_window_id": origin_window_id,
+                "windows": inventory.windows,
+                "truncated": inventory.truncated,
+            },
+        });
+        let encoded = serde_json::to_string(&envelope)
+            .map_err(|error| format!("could not encode process query result: {error}"))?;
+        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
+            return Err(format!(
+                "process query result exceeds {} bytes",
                 crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
             ));
         }
@@ -2111,4 +2151,22 @@ impl App {
         }
         written
     }
+}
+
+pub(super) fn clear_structured_host_authority(
+    invocation: &mut crate::plugin::structured::StructuredHandlerInvocation,
+) {
+    invocation.allow_workspace_query = false;
+    invocation.allow_workspace_actions = false;
+    invocation.allow_workspace_topology = false;
+    invocation.allow_terminal_query = false;
+    invocation.allow_pane_create = false;
+    invocation.allow_tab_create = false;
+    invocation.allow_pane_close = false;
+    invocation.allow_tab_close = false;
+    invocation.allow_pane_move = false;
+    invocation.allow_terminal_input = false;
+    invocation.allow_pane_layout = false;
+    invocation.allow_window_close = false;
+    invocation.allow_process_query = false;
 }

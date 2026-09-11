@@ -341,6 +341,21 @@ pub(super) struct ControlInventoryBudget {
     metadata_bytes: usize,
 }
 
+const PLUGIN_PROCESS_MAX_WINDOWS: usize = 8;
+const PLUGIN_PROCESS_MAX_TABS: usize = 16;
+const PLUGIN_PROCESS_MAX_PANES: usize = 32;
+const PLUGIN_PROCESS_MAX_DIVIDERS: usize = 31;
+const PLUGIN_PROCESS_MAX_METADATA_BYTES: usize = 2 * 1024;
+
+fn plugin_process_inventory_budget() -> ControlInventoryBudget {
+    ControlInventoryBudget {
+        tabs: PLUGIN_PROCESS_MAX_TABS,
+        panes: PLUGIN_PROCESS_MAX_PANES,
+        dividers: PLUGIN_PROCESS_MAX_DIVIDERS,
+        metadata_bytes: PLUGIN_PROCESS_MAX_METADATA_BYTES,
+    }
+}
+
 impl Default for ControlInventoryBudget {
     fn default() -> Self {
         Self {

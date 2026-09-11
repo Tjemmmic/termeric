@@ -149,6 +149,11 @@ API v19 separately grants closure of the exact invoking window, only from a
 declared plugin command. Termeric delivers the bounded correlated result to the
 persistent handler before normal window teardown; lifecycle events, stale
 targets, duplicate requests, and cross-window IDs cannot initiate closure.
+API v20 adds a separate read-only process query that returns bounded,
+creation-ordered inventories for up to eight live Termeric windows, with the
+originating stable window ID and explicit truncation. It discloses no terminal
+text or raw PTY data, cannot chain another host operation, and grants no
+cross-window mutation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

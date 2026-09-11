@@ -332,6 +332,115 @@ impl Application {
         }
     }
 
+    fn plugin_process_inventory(&self) -> crate::control::protocol::ProcessInventory {
+        let live_window_count = self
+            .window_order
+            .iter()
+            .filter(|native_id| {
+                self.windows
+                    .get(native_id)
+                    .is_some_and(|window| !window.should_exit)
+            })
+            .count();
+        let windows: Vec<_> = self
+            .window_order
+            .iter()
+            .filter_map(|native_id| {
+                let window = self.windows.get(native_id)?;
+                let control_id = *self.control_window_ids.get(native_id)?;
+                Some((control_id, window))
+            })
+            .collect();
+        let mut inventory = build_plugin_process_inventory(&windows);
+        inventory.truncated |= windows
+            .iter()
+            .filter(|(_, window)| !window.should_exit)
+            .count()
+            != live_window_count;
+        inventory
+    }
+
+    fn handle_structured_plugin_completed(
+        &mut self,
+        mut completion: crate::plugin::structured::StructuredHandlerCompletion,
+    ) {
+        let process_query = completion.result.as_ref().ok().and_then(|actions| {
+            actions.iter().find_map(|action| match action {
+                crate::plugin::structured::StructuredResponseAction::QueryProcess { query_id } => {
+                    Some(query_id.clone())
+                }
+                _ => None,
+            })
+        });
+        let Some(query_id) = process_query else {
+            if let Some(window) = self.windows.get_mut(&completion.window_id) {
+                window.handle_structured_plugin_completed(completion);
+            }
+            return;
+        };
+
+        let Some(origin) = self.windows.get(&completion.window_id) else {
+            return;
+        };
+        if origin.should_exit {
+            log::debug!(
+                "Discarding process query from plugin {:?}: originating window is closing",
+                completion.plugin_id
+            );
+            return;
+        }
+        if completion.plugin_generation != origin.plugin_runtime_generation
+            || !origin.plugin_manager.contains(&completion.plugin_id)
+        {
+            if let Some(window) = self.windows.get_mut(&completion.window_id) {
+                window.handle_structured_plugin_completed(completion);
+            }
+            return;
+        }
+        let Some(origin_window_id) = self.control_window_ids.get(&completion.window_id).copied()
+        else {
+            log::warn!(
+                "Discarding process query from plugin {:?}: originating window has no stable process ID",
+                completion.plugin_id
+            );
+            return;
+        };
+
+        let inventory = self.plugin_process_inventory();
+        let plugin_id = completion.plugin_id.clone();
+        let event_json = App::structured_process_query_event(
+            &plugin_id,
+            &query_id,
+            origin_window_id,
+            &inventory,
+        );
+        let continuation = completion.continuation.take();
+        if let Ok(actions) = &mut completion.result {
+            actions.retain(|action| {
+                !matches!(
+                    action,
+                    crate::plugin::structured::StructuredResponseAction::QueryProcess { .. }
+                )
+            });
+        }
+        if let Some(window) = self.windows.get_mut(&completion.window_id) {
+            window.handle_structured_plugin_completed(completion);
+            let result = event_json.and_then(|event_json| {
+                window.continue_structured_process_query(event_json, continuation)
+            });
+            if let Err(error) = result {
+                log::error!(
+                    "Structured plugin {:?} process query failed: {}",
+                    plugin_id,
+                    error
+                );
+                window
+                    .toasts
+                    .error(format!("Plugin {plugin_id} process query failed: {error}"));
+            }
+        }
+    }
+
     fn handle_control_request(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -2005,6 +2114,34 @@ impl Application {
     }
 }
 
+fn build_plugin_process_inventory(
+    windows: &[(u64, &App)],
+) -> crate::control::protocol::ProcessInventory {
+    let live_window_count = windows
+        .iter()
+        .filter(|(_, window)| !window.should_exit)
+        .count();
+    let mut truncated = live_window_count > super::PLUGIN_PROCESS_MAX_WINDOWS;
+    let mut budget = super::plugin_process_inventory_budget();
+    let mut inventories =
+        Vec::with_capacity(live_window_count.min(super::PLUGIN_PROCESS_MAX_WINDOWS));
+    for (control_id, window) in windows
+        .iter()
+        .filter(|(_, window)| !window.should_exit)
+        .take(super::PLUGIN_PROCESS_MAX_WINDOWS)
+    {
+        let inventory = window.control_inventory(*control_id, &mut budget);
+        truncated |= inventory.truncated;
+        inventories.push(inventory);
+    }
+    truncated |= inventories.len() < live_window_count.min(super::PLUGIN_PROCESS_MAX_WINDOWS);
+    crate::control::protocol::ProcessInventory {
+        process_id: std::process::id(),
+        windows: inventories,
+        truncated,
+    }
+}
+
 fn validate_cli_launches(config: &Config, launch: &LaunchPlan) -> Result<()> {
     let quick_access_windows = launch
         .windows
@@ -2305,9 +2442,7 @@ impl ApplicationHandler<AppEvent> for Application {
                 return;
             }
             AppEvent::StructuredPluginCompleted(completion) => {
-                if let Some(window) = self.windows.get_mut(&completion.window_id) {
-                    window.handle_structured_plugin_completed(completion);
-                }
+                self.handle_structured_plugin_completed(completion);
                 self.remove_closed_windows(event_loop);
                 return;
             }
@@ -3196,6 +3331,69 @@ mod tests {
                 .iter()
                 .all(|window| !window.allow_auto_restore && window.managed_window)
         );
+    }
+
+    #[test]
+    fn plugin_process_inventory_is_ordered_bounded_and_excludes_closing_windows() {
+        let plan = LaunchPlan {
+            windows: vec![WindowLaunch::default(); super::super::PLUGIN_PROCESS_MAX_WINDOWS + 2],
+        };
+        let mut application = Application::from_config(Config::default(), None, plan).unwrap();
+        application.pending[1].should_exit = true;
+        let windows: Vec<_> = application
+            .pending
+            .iter()
+            .enumerate()
+            .map(|(index, window)| (100 + index as u64, window))
+            .collect();
+
+        let one_window = build_plugin_process_inventory(&windows[..1]);
+        assert_eq!(one_window.windows.len(), 1);
+        assert_eq!(one_window.windows[0].id, 100);
+        assert!(!one_window.truncated);
+
+        let two_live_windows = build_plugin_process_inventory(&windows[..3]);
+        assert_eq!(two_live_windows.windows.len(), 2);
+        assert_eq!(two_live_windows.windows[0].id, 100);
+        assert_eq!(two_live_windows.windows[1].id, 102);
+        assert!(!two_live_windows.truncated);
+
+        drop(windows);
+        application.pending[0].current_workspace_id = Some(format!("root\n{}", "β".repeat(2_000)));
+        let windows: Vec<_> = application
+            .pending
+            .iter()
+            .enumerate()
+            .map(|(index, window)| (100 + index as u64, window))
+            .collect();
+        let inventory = build_plugin_process_inventory(&windows);
+        assert_eq!(inventory.process_id, std::process::id());
+        assert_eq!(
+            inventory.windows.len(),
+            super::super::PLUGIN_PROCESS_MAX_WINDOWS
+        );
+        assert_eq!(inventory.windows[0].id, 100);
+        assert_eq!(inventory.windows[1].id, 102);
+        assert!(inventory.truncated);
+        assert!(inventory.windows[0].truncated);
+        let workspace = inventory.windows[0].workspace_id.as_deref().unwrap();
+        assert!(!workspace.contains('\n'));
+        assert!(std::str::from_utf8(workspace.as_bytes()).is_ok());
+
+        let encoded = App::structured_process_query_event(
+            "process-inspector",
+            "all-windows",
+            102,
+            &inventory,
+        )
+        .unwrap();
+        assert!(encoded.len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES);
+        let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(value["event"]["type"], "process-query-result");
+        assert_eq!(value["event"]["origin_window_id"], 102);
+        assert_eq!(value["event"]["windows"][0]["id"], 100);
+        assert_eq!(value["event"]["windows"][1]["id"], 102);
+        assert_eq!(value["event"]["truncated"], true);
     }
 
     #[test]

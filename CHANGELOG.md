@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v20 adds an independent `process-query` grant for a
+  bounded read-only inventory of the live windows owned by the current
+  Termeric process. Results identify the exact originating stable window ID,
+  preserve native creation order, omit closing windows, sanitize bounded
+  metadata, expose at most 8 windows/16 tabs/32 panes/31 dividers, and remain
+  inside the persistent-event frame ceiling. The correlated result loses all
+  query and mutation authority. Version/mode/grant/install-update validation,
+  strict action parsing, multi-window truncation, UTF-8 safety, and the
+  checked-in process-inspector example are covered hermetically without any
+  provider process or AI-service use.
+
 - A fixed-command hermetic release preflight now binds formatting, documentation
   contracts, Python/Rust tests, terminfo application probes, strict Clippy,
   debug/release/docs builds, and the non-GUI release version path to one clean

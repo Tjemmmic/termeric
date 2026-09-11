@@ -18,7 +18,8 @@
 //! API v16 adds separately granted exact ordinary-pane movement, API v17 adds
 //! bounded exact-pane terminal input, and API v18 adds exact same-tab pane
 //! swapping, balancing, and layout presets. API v19 adds exact current-window
-//! closure, available only from an explicitly invoked plugin command.
+//! closure, available only from an explicitly invoked plugin command. API v20
+//! adds a separately granted, bounded process-wide workspace inventory.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -31,7 +32,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 19;
+pub const PLUGIN_API_VERSION: u32 = 20;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -77,6 +78,7 @@ pub enum PluginPermission {
     TerminalInput,
     PaneLayout,
     WindowClose,
+    ProcessQuery,
     Secrets,
 }
 
@@ -103,6 +105,7 @@ impl std::fmt::Display for PluginPermission {
             Self::TerminalInput => "terminal-input",
             Self::PaneLayout => "pane-layout",
             Self::WindowClose => "window-close",
+            Self::ProcessQuery => "process-query",
             Self::Secrets => "secrets",
         })
     }
@@ -133,6 +136,7 @@ impl std::str::FromStr for PluginPermission {
             "terminal-input" => Ok(Self::TerminalInput),
             "pane-layout" => Ok(Self::PaneLayout),
             "window-close" => Ok(Self::WindowClose),
+            "process-query" => Ok(Self::ProcessQuery),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -616,6 +620,15 @@ impl PluginManifest {
         {
             bail!("window-close requires an API v19 persistent command-invoked event handler");
         }
+        if self.permissions.contains(&PluginPermission::ProcessQuery)
+            && (self.api_version < 20
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("process-query requires an API v20 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -746,6 +759,7 @@ impl PluginRegistry {
                         | PluginPermission::TerminalInput
                         | PluginPermission::PaneLayout
                         | PluginPermission::WindowClose
+                        | PluginPermission::ProcessQuery
                 )
             }) {
                 bail!(
@@ -1196,6 +1210,9 @@ impl DeclarativePlugin {
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && kind == StructuredEventKind::CommandInvoked
                         && self.grants.contains(&PluginPermission::WindowClose),
+                    allow_process_query: self.manifest.api_version >= 20
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::ProcessQuery),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -1979,6 +1996,26 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::PaneLayout
                 | PluginPermission::WindowClose
         ),
+        20 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+                | PluginPermission::PaneMove
+                | PluginPermission::TerminalInput
+                | PluginPermission::PaneLayout
+                | PluginPermission::WindowClose
+                | PluginPermission::ProcessQuery
+        ),
         _ => false,
     }
 }
@@ -2679,6 +2716,31 @@ events = ["command-completed"]
         manifest
     }
 
+    fn process_query_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = event_grants(false);
+        grants.insert(PluginPermission::ProcessQuery);
+        grants
+    }
+
+    fn process_query_manifest() -> PluginManifest {
+        let mut manifest = persistent_event_manifest();
+        manifest.api_version = 20;
+        manifest.id = "process-inspector".into();
+        manifest.permissions.insert(PluginPermission::ProcessQuery);
+        manifest.commands.push(DeclarativeHandlerCommand {
+            id: "inspect-process".into(),
+            name: "Inspect Process Windows".into(),
+            description: String::new(),
+        });
+        manifest
+            .event_handler
+            .as_mut()
+            .unwrap()
+            .events
+            .insert(StructuredEventKind::CommandInvoked);
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -2996,7 +3058,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 20");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 21");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -3496,6 +3558,36 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn checked_in_api_v20_process_inspector_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-inspector");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 20);
+        assert_eq!(manifest.id, "process-inspector");
+        assert_eq!(manifest.commands.len(), 1);
+        assert_eq!(manifest.commands[0].id, "inspect-process");
+        assert_eq!(manifest.permissions, process_query_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        let registry = PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "process-inspector".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: process_query_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        };
+        registry.validate().unwrap();
+    }
+
+    #[test]
     fn checked_in_api_v15_tab_pruner_example_is_a_valid_manifest() {
         let directory =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/tab-pruner");
@@ -3776,6 +3868,72 @@ events = ["command-invoked"]
         assert_eq!(installed.grants, window_close_grants());
         let (installed_manifest, _, _) =
             PluginManifest::from_directory(&root.join("window-closer")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
+    fn api_v20_process_query_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-inspector")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let mut missing_process_query = process_query_grants();
+        missing_process_query.remove(&PluginPermission::ProcessQuery);
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: missing_process_query,
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("process-query"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_query_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "process-inspector".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "process-inspector")
+            .unwrap();
+        assert!(installed.enabled);
+        assert_eq!(installed.grants, process_query_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("process-inspector")).unwrap();
         assert_eq!(installed_manifest.version, "1.1.0");
     }
 
@@ -4666,6 +4824,75 @@ events = ["command-invoked"]
             panic!("ungranted window close fixture did not create an invocation")
         };
         assert!(!invocation.allow_window_close);
+    }
+
+    #[test]
+    fn api_v20_process_query_requires_persistent_mode_and_exact_grant() {
+        let manifest = process_query_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &process_query_grants()).unwrap();
+        assert_eq!(PluginPermission::ProcessQuery.to_string(), "process-query");
+        assert_eq!(
+            "process-query".parse::<PluginPermission>().unwrap(),
+            PluginPermission::ProcessQuery
+        );
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 2,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, process_query_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-inspector.inspect-process".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v20 process query command did not create an invocation")
+        };
+        assert!(invocation.allow_process_query);
+        assert!(!invocation.allow_window_close);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v19 = manifest.clone();
+        v19.api_version = 19;
+        assert!(v19.validate().unwrap_err().to_string().contains("API v20"));
+
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+
+        let mut grants = process_query_grants();
+        grants.remove(&PluginPermission::ProcessQuery);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: process-query")
+        );
+
+        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(false));
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-inspector.inspect-process".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted process query fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_process_query);
     }
 
     #[test]

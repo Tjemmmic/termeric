@@ -1070,6 +1070,13 @@ refusal, submission-before-teardown behavior, exact plugin/generation/request
 correlation, stale/unloaded/error final callback handling, authority removal,
 and a checked-in window closer. Only inert local shell/Python fixtures are
 used; no AI provider process or tokens are involved.
+API v20 adds exact process-query version/mode/grant denial, strict bounded
+query parsing, deterministic process-window ordering and stable origin identity,
+closing-window exclusion, aggregate topology/metadata and encoded-frame
+ceilings, control-safe UTF-8 clipping, retained-grant install/update behavior,
+one-operation enforcement, complete result-authority removal, and a checked-in
+process inspector. All fixtures are local and hermetic; no AI provider process
+or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

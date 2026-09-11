@@ -1058,6 +1058,7 @@ API v16 adds separately granted exact ordinary-pane movement between tabs.\n\
 API v17 adds separately granted bounded input to one exact current-window terminal.\n\
 API v18 adds separately granted same-tab pane swapping, balancing, and presets.\n\
 API v19 adds command-scoped, separately granted closure of the invoking window.\n\
+API v20 adds a separately granted, bounded process-wide workspace inventory.\n\
 Installation records the\n\
 canonical local source and a manifest fingerprint; it never downloads code."
         .into()
