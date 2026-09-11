@@ -544,8 +544,18 @@ family = "OSC"
 syntax = "OSC 9, OSC 777 notify"
 layer = "core"
 status = "supported"
-evidence = ["fixture:notifications"]
-notes = "Emits typed notification events; desktop delivery is separately unverified."
+evidence = ["fixture:notifications", "test:src/ansi/handler.rs#legacy_notifications_are_bounded_safe_and_preserve_body_semicolons"]
+notes = "Bounded escape-safe UTF-8 emits typed notification events and preserves body semicolons; desktop delivery is separately unverified."
+
+[[sequence]]
+id = "osc99-notifications"
+family = "OSC"
+syntax = "OSC 99 Kitty notifications: i/p/d/e title, body, and query"
+layer = "app"
+status = "partial"
+evidence = ["fixture:osc99-notifications", "test:src/term/notification.rs#interleaved_identifiers_and_both_base64_chunk_styles_do_not_mix", "test:src/term/notification.rs#pending_count_and_bytes_are_hard_bounded", "test:src/ansi/processor.rs#osc99_notifications_are_chunked_queryable_and_reset_bounded", "test:../termeric/src/terminal/events.rs#osc99_notifications_are_forwarded_but_queries_stay_with_the_owner"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/71"
+notes = "Truthful capability queries advertise only title/body payloads and the always occasion. Plain escape-safe UTF-8 plus padded/unpadded RFC 4648 chunks assemble by strict 128-byte identifiers under 4-KiB title, 16-KiB body, 16-pending, and 256-KiB aggregate payload ceilings. Replies use owner-local S7C1T/S8C1T framing; interleaved state survives screen/DECSTR changes and clears on RIS. Replacement, activation/focus, buttons, close/alive reports, application/type filtering, urgency, expiry, sound selection, icons, and native presentation evidence are not claimed."
 
 [[sequence]]
 id = "osc-pointer-shapes"

@@ -90,6 +90,11 @@ source_test = "src/ansi/processor.rs#xterm_title_queries_and_stack_are_global_bo
 input_hex = "1b 20 47 1b 5d 30 3b 61 6c 70 68 61 1b 5c 1b 5b 32 32 74 1b 5d 31 3b 62 65 74 61 2d 69 63 6f 6e 1b 5c 1b 5d 32 3b 62 65 74 61 2d 77 69 6e 64 6f 77 1b 5c 1b 5b 32 30 74 1b 5b 32 31 74 1b 5b 23 53 1b 5b 32 33 74 1b 5b 32 30 74 1b 5b 32 31 74 1b 5b 23 53"
 
 [[seed]]
+id = "osc99-notifications"
+source_test = "src/ansi/processor.rs#osc99_notifications_are_chunked_queryable_and_reset_bounded"
+input_hex = "1b 20 47 1b 5d 39 39 3b 69 3d 6e 6f 74 65 3a 64 3d 30 3b 62 75 69 6c 64 1b 5c 1b 5d 39 39 3b 69 3d 6f 74 68 65 72 3a 64 3d 30 3b 73 69 64 65 1b 5c 1b 5d 39 39 3b 69 3d 6e 6f 74 65 3a 70 3d 62 6f 64 79 3a 65 3d 31 3b 59 32 39 74 63 47 78 6c 64 47 55 3d 1b 5c 1b 5d 39 39 3b 69 3d 6f 74 68 65 72 3b 20 70 61 74 68 1b 5c 1b 5d 39 39 3b 69 3d 71 75 65 72 79 3a 70 3d 3f 3b 1b 5c"
+
+[[seed]]
 id = "kitty-keyboard-negotiation"
 source_test = "src/ansi/processor.rs#kitty_keyboard_negotiation_is_screen_local_stack_based_and_resettable"
 input_hex = "1b 5b 3d 31 75 1b 5b 3f 75 1b 5b 3f 31 30 34 39 68 1b 5b 3e 32 75 1b 5b 3f 75 1b 5b 3c 75 1b 5b 3f 31 30 34 39 6c"

@@ -132,6 +132,45 @@ does not hang and no contents leak. Denied/oversized writes are ignored and
 logged. The parser also caps and discards the complete raw OSC sequence before
 dispatch, then releases its temporary buffer.
 
+## Desktop notifications
+
+Legacy OSC 9 messages and OSC 777 `notify` title/body requests emit the same
+typed application event. Their fields are escape-safe UTF-8, preserve body
+semicolons, and are capped at 4 KiB for a title and 16 KiB for a body. Invalid
+UTF-8, C0/C1 controls, and oversized fields are rejected before reaching the
+desktop helper.
+
+Termeric also implements a bounded subset of Kitty's
+[OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
+`d`, and `e` provide strict identifiers, title/body selection, completion, and
+plain or RFC 4648 base64 payloads. Plain chunks are limited to 2,048 bytes;
+encoded chunks are limited to 4,096 bytes and accept Kitty's encode-before-
+chunking and encode-after-chunking forms, including an unpadded final chunk.
+Assembled titles and bodies retain at most 4 KiB and 16 KiB respectively.
+
+Up to 16 identified notifications may be incomplete at once under a 256 KiB
+aggregate payload ceiling. Interleaved identifiers remain isolated, the least
+recently updated assembly is evicted when either ceiling is crossed, and an
+invalid continuation retires only its own assembly rather than allowing stale
+text to be completed later. Pending state is global across screen changes and
+DECSTR, while RIS clears it. A completed body-only message promotes its body to
+the title as Kitty specifies; an empty message is ignored.
+
+`OSC 99 ; i=id:p=? ; ST` receives the owner-routed response
+`OSC 99 ; i=id:p=? ; p=title,body:o=always ST`, under the requesting terminal's
+S7C1T/S8C1T framing. The response deliberately advertises only the implemented
+title/body payloads and `always` occasion. Non-`always` occasion requirements
+and close-event requests are rejected. Replacement, activation/focus, buttons,
+close/alive reports, filtering, urgency, expiry, sound selection, icon names or
+data, and icon caching are not advertised or claimed.
+
+Completed OSC 99 requests enter the same rate-limited, bounded background
+desktop-helper path as legacy notifications. Parser/helper tests do not claim
+that a real notification daemon displayed them; real-compositor permission and
+presentation remain manual acceptance.
+
+[kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
+
 ## Dynamic colors
 
 The supported color family is:

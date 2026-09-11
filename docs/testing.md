@@ -667,7 +667,8 @@ interacting with a nested split tree. See
 The default workspace suite uses real PTYs to issue simultaneous DSR, DA1, and
 DA2 requests from two panes, polls an inactive pane-owning tab, verifies
 byte-exact origin-local replies plus pane-tagged bell and notification delivery,
-addresses an app-mediated clipboard reply to an unfocused pane, and closes a
+keeps OSC 99 capability replies beside their originating PTY, addresses an
+app-mediated clipboard reply to an unfocused pane, and closes a
 pane during event-heavy output. Deterministic
 fixtures also overflow the app-event budget and leave a PTY reader undrained to
 prove both queue ceilings. The ownership and loss contracts are documented in
@@ -919,6 +920,14 @@ bounded and deduplicated audio/notification failures, retry recovery, and the
 warning per failing integration. The native X11 spies continue to prove exact
 `paplay` and `notify-send` argv; no external desktop service is contacted by the
 unit fixtures.
+
+The OSC 99 conformance fixture fragments two interleaved notification IDs,
+plain and base64 title/body payloads, completion, and a capability query under
+S8C1T. Focused core tests cover both legal base64 chunking strategies,
+UTF-8/control validation, strict identifiers, malformed-continuation cleanup,
+screen/DECSTR/RIS lifecycle, owner routing, the 16-pending and 256-KiB aggregate
+ceilings, and 4-KiB/16-KiB completed-field bounds. No native notification
+service is contacted.
 
 Diff-review tests are provider-free state and accessibility fixtures. They
 cover bounded row/line construction, exact shared layout and pointer targets,

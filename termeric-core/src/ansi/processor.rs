@@ -191,7 +191,7 @@ impl Processor {
                 }
                 b';' => {
                     self.osc_payload_mode = if self.osc_command_valid
-                        && matches!(self.osc_command, 0 | 1 | 2 | 8 | 9 | 777)
+                        && matches!(self.osc_command, 0 | 1 | 2 | 8 | 9 | 99 | 777)
                     {
                         OscPayloadMode::Utf8
                     } else {
@@ -1193,6 +1193,83 @@ mod tests {
                 crate::event::TerminalEvent::PtyWrite(b"\x9dLdirect\x9c".to_vec()),
                 crate::event::TerminalEvent::PtyWrite(b"\x9dldirect\x9c".to_vec()),
                 crate::event::TerminalEvent::PtyWrite(b"\x9b1;10#S".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn osc99_notifications_are_chunked_queryable_and_reset_bounded() {
+        let mut processor = Processor::new();
+        let mut terminal = Terminal::new(8, 2);
+
+        processor.process(
+            &mut terminal,
+            b"\x1b]99;;simple \xf0\x9f\x8c\xb1\x1b\\\
+              \x1b]99;i=first:d=0;build\x1b\\\
+              \x1b]99;i=second:d=0;other\x1b\\\
+              \x1b]99;i=first:p=body:e=1;Y29tcGxldGU=\x1b\\\
+              \x1b]99;i=second; result\x1b\\",
+        );
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
+                    title: Some("simple 🌱".into()),
+                    body: String::new(),
+                }),
+                crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
+                    title: Some("build".into()),
+                    body: "complete".into(),
+                }),
+                crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
+                    title: Some("other result".into()),
+                    body: String::new(),
+                }),
+            ]
+        );
+
+        processor.process(
+            &mut terminal,
+            b"\x1b]99;i=query-7:p=?;\x1b\\\
+              \x1b G\x1b]99;i=query-8:p=?;\x1b\\\
+              \x1b]99;i=bad=:p=?;\x1b\\\
+              \x1b]99;c=1;ignored\x1b\\\
+              \x1b]99;o=unfocused;ignored\x1b\\\
+              \x1b]99;e=1;%%%\x1b\\\
+              \x1b]99;p=future;ignored\x1b\\",
+        );
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                crate::event::TerminalEvent::PtyWrite(
+                    b"\x1b]99;i=query-7:p=?;p=title,body:o=always\x1b\\".to_vec(),
+                ),
+                crate::event::TerminalEvent::PtyWrite(
+                    b"\x9d99;i=query-8:p=?;p=title,body:o=always\x9c".to_vec(),
+                ),
+            ]
+        );
+
+        // Incomplete state is global across a screen switch and DECSTR, but a
+        // full RIS retires it so stale application text cannot be completed.
+        processor.process(
+            &mut terminal,
+            b"\x1b]99;i=keep:d=0;before-\x1b\\\x1b[?1049h\x1b[!p\
+              \x1b]99;i=keep;after\x1b\\\
+              \x1b]99;i=clear:d=0;stale-\x1b\\\x1bc\
+              \x1b]99;i=clear;fresh\x1b\\",
+        );
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
+                    title: Some("before-after".into()),
+                    body: String::new(),
+                }),
+                crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
+                    title: Some("fresh".into()),
+                    body: String::new(),
+                }),
             ]
         );
     }

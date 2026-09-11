@@ -370,7 +370,7 @@ impl Notifications {
         }
         self.last_delivery_failure = None;
 
-        log::debug!("Sent notification: {} - {}", title, body);
+        log::debug!("Sent notification: {title:?} - {body:?}");
         None
     }
 

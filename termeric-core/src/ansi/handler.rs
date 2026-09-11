@@ -5,7 +5,10 @@ use crate::event::{
     ClipboardRequest, DynamicColorOperation, DynamicColorTarget, NotificationRequest, TerminalEvent,
 };
 use crate::grid::{CellAttrs, Color, ColorSpec};
-use crate::term::{MAX_TITLE_BYTES, ReportedWorkingDirectory, Terminal, TerminalMode};
+use crate::term::{
+    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_TITLE_BYTES, MAX_TITLE_BYTES,
+    ReportedWorkingDirectory, Terminal, TerminalMode,
+};
 use base64::Engine as _;
 use vte::{Params, Perform};
 
@@ -45,6 +48,30 @@ fn parse_osc_title(params: &[&[u8]]) -> Option<String> {
             .filter(|character| !character.is_control())
             .collect(),
     )
+}
+
+fn parse_notification_text(params: &[&[u8]], limit: usize) -> Option<String> {
+    let mut bytes = Vec::new();
+    for (index, param) in params.iter().enumerate() {
+        let separator = usize::from(index > 0);
+        if bytes
+            .len()
+            .saturating_add(separator)
+            .saturating_add(param.len())
+            > limit
+        {
+            return None;
+        }
+        if index > 0 {
+            bytes.push(b';');
+        }
+        bytes.extend_from_slice(param);
+    }
+    let text = std::str::from_utf8(&bytes).ok()?;
+    (!text
+        .chars()
+        .any(|character| matches!(character as u32, 0x00..=0x1f | 0x7f..=0x9f)))
+    .then(|| text.to_string())
 }
 
 fn parse_osc_directory(params: &[&[u8]]) -> Option<ReportedWorkingDirectory> {
@@ -1436,9 +1463,12 @@ impl Perform for Handler<'_> {
             // Format: OSC 9 ; message ST
             9 => {
                 if params.len() > 1
-                    && let Ok(message) = std::str::from_utf8(params[1])
+                    && let Some(message) = parse_notification_text(
+                        params.get(1..).unwrap_or_default(),
+                        MAX_NOTIFICATION_BODY_BYTES,
+                    )
                 {
-                    log::info!("Desktop notification: {}", message);
+                    log::info!("Desktop notification: {message:?}");
                     self.terminal
                         .push_event(TerminalEvent::Notification(NotificationRequest {
                             title: None,
@@ -1446,6 +1476,9 @@ impl Perform for Handler<'_> {
                         }));
                 }
             }
+
+            // Bounded, capability-negotiated Kitty desktop notifications.
+            99 => self.terminal.handle_osc99_notification(&params[1..]),
 
             // Shell integration (OSC 133)
             // Used for prompt detection, command tracking
@@ -1468,20 +1501,24 @@ impl Perform for Handler<'_> {
             // Desktop notification (OSC 777) - rxvt-unicode style
             // Format: OSC 777 ; notify ; title ; body ST
             777 => {
-                if params.len() >= 2 {
-                    let subcommand = std::str::from_utf8(params[1]).unwrap_or("");
-                    if subcommand == "notify" {
-                        let title = if params.len() > 2 {
-                            std::str::from_utf8(params[2]).ok().map(String::from)
-                        } else {
-                            None
-                        };
-                        let body = if params.len() > 3 {
-                            std::str::from_utf8(params[3]).unwrap_or("").to_string()
-                        } else {
-                            String::new()
-                        };
-                        log::info!("Desktop notification: {:?} - {}", title, body);
+                if params.get(1) == Some(&b"notify".as_slice()) {
+                    let title = match params.get(2) {
+                        Some(title) => {
+                            let Some(title) =
+                                parse_notification_text(&[title], MAX_NOTIFICATION_TITLE_BYTES)
+                            else {
+                                return;
+                            };
+                            Some(title)
+                        }
+                        None => None,
+                    };
+                    let body = parse_notification_text(
+                        params.get(3..).unwrap_or_default(),
+                        MAX_NOTIFICATION_BODY_BYTES,
+                    );
+                    if let Some(body) = body {
+                        log::info!("Desktop notification: {title:?} - {body:?}");
                         self.terminal.push_event(TerminalEvent::Notification(
                             NotificationRequest { title, body },
                         ));
@@ -2009,6 +2046,31 @@ mod osc_tests {
             terminal.drain_events(),
             vec![TerminalEvent::TitleChanged("window;only".into())]
         );
+    }
+
+    #[test]
+    fn legacy_notifications_are_bounded_safe_and_preserve_body_semicolons() {
+        assert_eq!(
+            events(b"\x1b]9;build;complete\x1b\\"),
+            vec![TerminalEvent::Notification(NotificationRequest {
+                title: None,
+                body: "build;complete".into(),
+            })]
+        );
+        assert_eq!(
+            events(b"\x1b]777;notify;build;line;two\x07"),
+            vec![TerminalEvent::Notification(NotificationRequest {
+                title: Some("build".into()),
+                body: "line;two".into(),
+            })]
+        );
+        assert!(parse_notification_text(&[b"line\nfeed"], 64).is_none());
+        assert!(events(b"\x1b]9\x1b\\").is_empty());
+
+        let mut oversized = b"\x1b]9;".to_vec();
+        oversized.extend(std::iter::repeat_n(b'x', MAX_NOTIFICATION_BODY_BYTES + 1));
+        oversized.extend_from_slice(b"\x1b\\");
+        assert!(events(&oversized).is_empty());
     }
 
     #[test]

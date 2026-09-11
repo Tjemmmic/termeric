@@ -38,7 +38,7 @@ pub enum TerminalEvent {
     /// The active screen's OSC 22 mouse pointer shape changed.
     PointerShapeChanged,
 
-    /// Desktop notification request (OSC 9, OSC 777)
+    /// Desktop notification request (OSC 9, OSC 99, or OSC 777)
     Notification(NotificationRequest),
 
     /// Data that should be written back to the PTY (e.g., DSR responses)
@@ -51,7 +51,8 @@ pub enum TerminalEvent {
 /// Desktop notification request
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotificationRequest {
-    /// Notification title
+    /// Notification title. Kitty OSC 99 body-only requests promote their body
+    /// here as required by that protocol.
     pub title: Option<String>,
     /// Notification body/message
     pub body: String,

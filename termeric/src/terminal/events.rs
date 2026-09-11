@@ -158,6 +158,35 @@ mod tests {
     }
 
     #[test]
+    fn osc99_notifications_are_forwarded_but_queries_stay_with_the_owner() {
+        let mut terminal = Terminal::new(80, 24);
+        terminal.process(b"\x1b]99;i=capability:p=?;\x1b\\\x1b]99;;finished\x1b\\");
+        let mut forwarded = Vec::new();
+        let mut replies = Vec::new();
+
+        let result = drain_terminal_events(&mut terminal, &mut forwarded, 8, |data| {
+            replies.extend_from_slice(data);
+            Ok(())
+        });
+
+        assert_eq!(
+            forwarded,
+            vec![TerminalEvent::Notification(
+                termeric_core::NotificationRequest {
+                    title: Some("finished".into()),
+                    body: String::new(),
+                }
+            )]
+        );
+        assert_eq!(
+            replies,
+            b"\x1b]99;i=capability:p=?;p=title,body:o=always\x1b\\"
+        );
+        assert_eq!(result.protocol_replies, 1);
+        assert_eq!(result.dropped_app_events, 0);
+    }
+
+    #[test]
     fn repeated_app_events_are_fully_drained_into_a_bounded_batch() {
         let mut terminal = Terminal::new(80, 24);
         let mut stream = Vec::new();

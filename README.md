@@ -40,7 +40,8 @@ the [modern input and accessibility policy](docs/accessibility-and-input.md). Se
 [OSC integration policy](docs/osc-integration.md) for terminal-controlled
 titles, working directories, clipboard access, dynamic colors, and mouse
 pointer shapes, including bounded application-owned title/icon queries and the
-xterm title stack. See the
+xterm title stack, plus capability-negotiated Kitty OSC 99 title/body desktop
+notifications. See the
 [feature-support matrix](docs/feature-support.md) for exact boundaries rather
 than inferring support from a parser, setting, or UI entry.
 

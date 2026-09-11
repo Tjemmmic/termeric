@@ -91,7 +91,8 @@ leakage.
 The C1 lane replays raw IND/NEL/SS2/CSI/OSC/DCS/ST forms across every split,
 proves valid UTF-8 continuation bytes are not reinterpreted as controls, and
 checks S7C1T/S8C1T framing for CSI, DCS, APC, clipboard, and dynamic-color
-responses. The two app-mediated query events snapshot their reply mode before
+responses, plus terminal-owned OSC 99 capability replies. The two app-mediated
+query events snapshot their reply mode before
 later input is parsed. DECSTR preserves that preference and RIS restores the
 7-bit default. A separate fragmented fixture folds GR bytes across ESC, CSI,
 DCS, OSC protocol fields, APC, and two-byte ST while proving UTF-8 titles and
@@ -108,6 +109,11 @@ Focused tests cover all title selectors and direct slots, the fixed ring and
 partial-entry fallback, terminal-global reset lifecycle, owner routing, and
 malformed bounds. Outer-window/screen queries and window mutations produce no
 misleading reply or app event.
+The notification fixtures cover bounded semicolon-preserving OSC 9/777 and
+Kitty OSC 99 title/body assembly. OSC 99 evidence fragments interleaved IDs,
+base64, completion, and capability discovery at every input split; focused
+tests add malformed cleanup, both base64 chunking forms, reset lifecycle,
+owner routing, and retained-memory ceilings.
 The xterm keyboard fixtures fragment resource-zero modifyKeyboard/formatKeyboard,
 the mutually exclusive legacy/VT220 keyboard-type modes 1060/1061,
 their shared DEC private-mode save/restore lifecycle and configured startup/RIS type,

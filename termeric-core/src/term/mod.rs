@@ -6,6 +6,7 @@
 mod cursor;
 mod keyboard;
 mod mode;
+mod notification;
 mod pointer;
 mod selection;
 mod title;
@@ -19,6 +20,12 @@ pub use keyboard::{
     XtermUserDefinedKeys,
 };
 pub use mode::TerminalMode;
+pub use notification::{
+    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES, MAX_NOTIFICATION_TITLE_BYTES,
+    MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES, MAX_PENDING_NOTIFICATION_BYTES,
+    MAX_PENDING_NOTIFICATIONS,
+};
+use notification::{NotificationProtocol, Osc99Action};
 #[cfg(test)]
 pub(crate) use pointer::MAX_POINTER_SHAPE_PAYLOAD_BYTES;
 pub use pointer::{POINTER_SHAPE_STACK_DEPTH, PointerShape};
@@ -738,6 +745,8 @@ pub struct Terminal {
     /// Last valid OSC 7 directory report. This is shell/application metadata,
     /// not presentation state, so DECSTR/RIS and screen changes preserve it.
     reported_working_directory: Option<ReportedWorkingDirectory>,
+    /// Bounded, terminal-global in-progress Kitty OSC 99 notifications.
+    notification_protocol: NotificationProtocol,
     /// Application-authored window/icon labels and xterm's global title ring.
     /// This excludes user/native title metadata by construction.
     application_titles: ApplicationTitles,
@@ -842,6 +851,7 @@ impl Terminal {
             cols,
             rows,
             reported_working_directory: None,
+            notification_protocol: NotificationProtocol::default(),
             application_titles: ApplicationTitles::default(),
             grid_pixel_width: u32::try_from(cols)
                 .unwrap_or(u32::MAX)
@@ -918,6 +928,22 @@ impl Terminal {
             self.pending_events.push(TerminalEvent::TitleChanged(
                 self.application_titles.window().to_string(),
             ));
+        }
+    }
+
+    /// Parse one Kitty OSC 99 fragment and emit only the subset advertised by
+    /// our capability response. Replies and completed notifications remain
+    /// owned by this exact terminal.
+    pub(crate) fn handle_osc99_notification(&mut self, params: &[&[u8]]) {
+        match self.notification_protocol.handle(params) {
+            Osc99Action::None => {}
+            Osc99Action::Query(identifier) => {
+                let response = format!("\x1b]99;i={identifier}:p=?;p=title,body:o=always\x1b\\");
+                self.push_event(TerminalEvent::PtyWrite(response.into_bytes()));
+            }
+            Osc99Action::Notify(request) => {
+                self.push_event(TerminalEvent::Notification(request));
+            }
         }
     }
 
@@ -4483,6 +4509,7 @@ impl Terminal {
             );
         }
         self.prompt_navigation = None;
+        self.notification_protocol.clear();
         self.grid.clear();
         self.alt_grid.clear();
         self.grid.set_scroll_offset(0);
