@@ -73,6 +73,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -169,6 +172,9 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
                     ..
                 } => "focus-process-pane",
+                crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
+                    ..
+                } => "query-process-terminal",
                 crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
                     "terminal-query"
                 }
@@ -346,6 +352,20 @@ impl App {
     ) -> Result<(), String> {
         let mut invocation = continuation.ok_or_else(|| {
             "process actions require a live persistent handler continuation".to_string()
+        })?;
+        invocation.event_json = event_json;
+        clear_structured_host_authority(&mut invocation);
+        self.submit_structured_handler(invocation)?;
+        Ok(())
+    }
+
+    pub(super) fn continue_structured_process_terminal_query(
+        &mut self,
+        event_json: String,
+        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
+    ) -> Result<(), String> {
+        let mut invocation = continuation.ok_or_else(|| {
+            "process terminal queries require a live persistent handler continuation".to_string()
         })?;
         invocation.event_json = event_json;
         clear_structured_host_authority(&mut invocation);
@@ -2205,12 +2225,15 @@ pub(super) fn clear_structured_host_authority(
     invocation.allow_window_close = false;
     invocation.allow_process_query = false;
     invocation.allow_process_actions = false;
+    invocation.allow_process_terminal_text = false;
 }
 
 pub(super) fn reduce_structured_process_query_authority(
     invocation: &mut crate::plugin::structured::StructuredHandlerInvocation,
 ) {
     let retain_process_actions = invocation.allow_process_actions;
+    let retain_process_terminal_text = invocation.allow_process_terminal_text;
     clear_structured_host_authority(invocation);
     invocation.allow_process_actions = retain_process_actions;
+    invocation.allow_process_terminal_text = retain_process_terminal_text;
 }

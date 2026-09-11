@@ -43,7 +43,7 @@ The practical position is therefore:
 | Persistence | Atomic schema-2 workspaces preserve mixed pane launch identity, topology, metadata, and bounded scrollback; legacy snapshots are separate | kitty session files describe startup layouts; WezTerm has workspaces/domains; Konsole can save tab layouts | Strong and unusually explicit, but relaunch is not process checkpointing |
 | Search and keyboard navigation | Cancellable full-history literal/regex search, filter mode, copy mode, configurable quick-select hints, prompt navigation | Alacritty exposes search, Vi mode, and regex hints; WezTerm exposes search, copy mode, and QuickSelect; kitty exposes searchable history and hints | Competitive, with stronger deterministic memory/latency boundaries than most published feature lists |
 | Multiplexing and remote work | Experimental daemon-owned PTYs, local/SSH domains, detach/reattach, topology mutation, GUI picker, bounded relays | WezTerm supports local Unix, SSH, and TLS domains plus an embedded SSH client; kitty provides SSH tooling and a powerful remote-control protocol | Promising but behind WezTerm in transport maturity and behind kitty in application automation |
-| Extensibility and automation | Fuzzy palette, custom commands, bounded declarative process profiles, and APIs v2-v21 for permissioned context/events, persistent handlers, current-window inventory/navigation/topology, namespaced commands, typed settings, presented-text reads, ordinary pane/tab lifecycle, cross-tab pane movement, guarded exact-pane input, same-tab layouts, command-scoped exact-window closure, process-wide read-only inventory, and exact non-activating cross-window tab/pane navigation. The in-app manager exposes grants and typed settings; the domain and authenticated GUI CLIs provide a broader typed control surface. | kitty offers Python kittens, event watchers, and remote control; WezTerm exposes a large Lua configuration/action/event API; Konsole exposes desktop-oriented profiles/plugins | Gap narrowed again; plugin installation remains CLI-only, while cross-window plugin text queries, native activation, topology/input/lifecycle mutations, raw output/raw-byte input, arbitrary layout trees, broader destructive actions, and render hooks remain absent |
+| Extensibility and automation | Fuzzy palette, custom commands, bounded declarative process profiles, and APIs v2-v22 for permissioned context/events, persistent handlers, current-window inventory/navigation/topology, namespaced commands, typed settings, presented-text reads, ordinary pane/tab lifecycle, cross-tab pane movement, guarded exact-pane input, same-tab layouts, command-scoped exact-window closure, process-wide read-only inventory, exact non-activating cross-window tab/pane navigation, and bounded cross-window presented-text reads. The in-app manager exposes grants and typed settings; the domain and authenticated GUI CLIs provide a broader typed control surface. | kitty offers Python kittens, event watchers, and remote control; WezTerm exposes a large Lua configuration/action/event API; Konsole exposes desktop-oriented profiles/plugins | Gap narrowed again; plugin installation remains CLI-only, while native activation, cross-window topology/input/lifecycle mutations, raw output/raw-byte input, arbitrary layout trees, broader destructive actions, and render hooks remain absent |
 | Shell/developer workflows | Accepted OSC 7/133 for Bash/Zsh/Fish, acceptance-pending native Nushell wiring, opt-in Elvish module, Git status/completion/diff, transcripts, guarded plugin input, Harvest command history | kitty and Ghostty use shell integration for prompt navigation, cwd inheritance, command-output selection, and SSH helpers | Differentiated combination, but Nushell/Elvish PTY evidence, automatic Elvish setup, and real-provider/manual acceptance are incomplete |
 | Accessibility and input | AccessKit semantics for terminal/chrome/modals plus IME/preedit routing and tests | Ghostty emphasizes native platform UI; mainstream projects vary in screen-reader coverage | Architecturally serious, but remains Partial until Orca/real IME and desktop bridge acceptance exists |
 | Performance/resources | Event-driven scheduler, incremental row cache, persistent GPU buffers, compact byte-bounded history, allocation/RSS/latency/soak contracts, and a fail-closed external comparison runner | kitty, Ghostty, and Alacritty explicitly market performance; kitty publishes its own throughput tool | Optimized in several measured subsystems; one local Termeric/Ghostty artifact permits startup and PTY-response comparison, while its pixel mismatch correctly rejects RSS/idle ranking. No clean release or vendor-GPU artifact supports a fastest/best claim |
@@ -180,9 +180,11 @@ awaiting evidence:
   API v20 adds separately granted, bounded process-wide read-only inventory
   with creation-ordered stable window IDs and explicit origin identity.
   API v21 adds separately granted exact tab selection and pane focus in any
-  live process-owned window without activating its native window. There are
-  still no cross-window terminal-text queries, native activation, topology,
-  input, creation, or closure,
+  live process-owned window without activating its native window.
+  API v22 adds separately granted exact bounded presentation-safe text reads
+  from any live process-owned pane without activation or focus changes. There
+  are still no native activation, cross-window topology, input, creation, or
+  closure,
   raw terminal-output events, kernel-sandboxed runtimes, raw-byte input,
   arbitrary layout trees, broader destructive actions, or render decorations.
   This remains a
@@ -258,11 +260,11 @@ awaiting evidence:
    #31/#32/#33/#35; do not add more default-on surface area before this gate.
 2. Preserve #29's implemented request-correlated live-domain mutation and
    resumable-transfer authority while gathering native remote-host evidence.
-3. Continue #34/#36/#37/#39/#40/#41/#42/#43/#44/#47/#48 from the bounded API v21
+3. Continue #34/#36/#37/#39/#40/#41/#42/#43/#44/#47/#48/#49 from the bounded API v22
    current-window query/navigation/topology/handler-command/configuration/
    presented-text, process-wide inventory, and non-activating cross-window
-   navigation surfaces toward only demonstrably useful, separately permissioned
-   actions.
+   navigation and terminal-text surfaces toward only demonstrably useful,
+   separately permissioned actions.
    Keep external processes isolated;
    evaluate WASM only after permissions and resource accounting are proven.
 4. Record native compositor evidence for the implemented bounded background

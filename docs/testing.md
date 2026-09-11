@@ -1084,6 +1084,13 @@ suppression, bounded correlated results, process-query authority reduction,
 complete process-action result authority removal, retained-grant updates, and a
 checked-in process navigator. All fixtures are local and hermetic; no AI
 provider process or tokens are involved.
+API v22 adds exact process-terminal-text version/mode/grant denial, strict
+typed query parsing, history/byte and encoded-frame ceilings, same- and
+sibling-window stable-ID reads, stale/closed/closing/uninitialized refusal,
+presentation-safe text extraction, non-activation, correlated bounded errors,
+process-query authority reduction, complete terminal-result authority removal,
+retained-grant updates, and a checked-in process terminal reader. All fixtures
+are local and hermetic; no AI provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

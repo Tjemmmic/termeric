@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v21 are constrained local extension formats.
+Termeric plugin APIs v1 through v22 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -53,6 +53,9 @@ not disclose terminal text or grant cross-window mutation.
 API v21 adds an independent `process-actions` grant for exact, non-activating
 tab selection and pane focus in any live process-owned window. It grants no
 native activation or broader cross-window mutation.
+API v22 adds an independent `process-terminal-text` grant for one bounded,
+presentation-safe read of an exact pane in any live process-owned window. It
+does not expose raw PTY bytes, stream output, activate a window, or grant input.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -98,6 +101,8 @@ The API v20 process-inventory sample is
 [`examples/plugins/process-inspector/termeric-plugin.toml`](../examples/plugins/process-inspector/termeric-plugin.toml).
 The API v21 cross-window navigation sample is
 [`examples/plugins/process-navigator/termeric-plugin.toml`](../examples/plugins/process-navigator/termeric-plugin.toml).
+The API v22 cross-window terminal-text sample is
+[`examples/plugins/process-terminal-reader/termeric-plugin.toml`](../examples/plugins/process-terminal-reader/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -1497,11 +1502,11 @@ contains presented terminal cells, scrollback, raw PTY bytes, command text,
 selection, environment, clipboard, filesystem contents, or secrets. The
 `process-query` grant does not broaden `workspace-query` for existing plugins.
 For API v20, the result clears process/current-window/terminal query authority
-and every mutation authority before delivery. An API v21 handler may retain
-only its separately granted `process-actions` authority for the single bounded
-query-to-navigation sequence documented below. Cross-window terminal text,
-native activation, input, topology, movement, creation, and closure remain
-unsupported by this disclosure grant.
+and every mutation authority before delivery. An API v21+ handler may retain
+only separately granted `process-actions` and `process-terminal-text`
+authorities for the single bounded query-to-navigation or query-to-text
+sequences documented below. Native activation, input, topology, movement,
+creation, and closure remain unsupported by this disclosure grant.
 
 ## Manifest API v21 cross-window workspace navigation
 
@@ -1569,10 +1574,87 @@ A target failure is still a normal result with `ok: false`, the exact target
 IDs, null change fields, a control-safe error of at most 1 KiB, and an
 `error_truncated` flag. At most one host operation is accepted per handler
 response. Informational UI actions may coexist when separately granted. A
-process-query result retains only separately granted `process-actions`
-authority; the process-action result clears every query and mutation authority,
+For API v21, a process-query result retains only separately granted
+`process-actions` authority; the process-action result clears every query and mutation authority,
 so it cannot navigate, query, or mutate again. Existing API v7 navigation
 remains current-window-only and unchanged.
+
+## Manifest API v22 bounded cross-window terminal text
+
+API v22 preserves every earlier contract and adds the independent
+`process-terminal-text` disclosure grant. Review and install the sample with:
+
+```bash
+termeric plugin validate examples/plugins/process-terminal-reader
+termeric plugin install examples/plugins/process-terminal-reader \
+  --allow process-spawn --allow process-query \
+  --allow process-terminal-text --allow event-subscribe \
+  --allow ui-actions --enable
+```
+
+The sample contributes **Process Terminal Reader: Read Sibling Pane Text**.
+After requesting the API v20 inventory and choosing one exact pane, it emits:
+
+```json
+{"type":"query-process-terminal","query_id":"sibling-output","window_id":7,"tab_id":12,"pane_id":3,"history_lines":20,"max_bytes":2048}
+```
+
+Only an API v22 persistent handler with the retained
+`process-terminal-text` grant may emit this action. The process-lifetime
+`window_id`, window-local `tab_id`, and tab-local `pane_id` must be exact.
+Termeric revalidates the originating plugin, window, generation, persistent
+continuation, and authority before resolving the complete target path. A
+missing, stale, closed, closing, or uninitialized target produces a correlated
+failure; no active or focused target is substituted.
+
+The query returns only the terminal's presentation-safe text snapshot: the
+current primary or alternate screen plus at most 256 requested primary-screen
+history lines and at most 8 KiB of UTF-8 text. Pending synchronized-output
+updates, raw PTY bytes, selection state, transcripts, environment, clipboard,
+and filesystem contents are excluded. JSON framing is also capped by the
+existing persistent-event ceiling; the text budget is reduced and `truncated`
+is set if escaping or envelope metadata would otherwise exceed that ceiling.
+
+```json
+{
+  "schema_version": 2,
+  "request_id": 45,
+  "plugin_id": "process-terminal-reader",
+  "event": {
+    "type": "process-terminal-query-result",
+    "query_id": "sibling-output",
+    "text_schema_version": 1,
+    "ok": true,
+    "process_id": 12345,
+    "origin_window_id": 2,
+    "window_id": 7,
+    "tab_id": 12,
+    "pane_id": 3,
+    "screen": "primary",
+    "requested_history_lines": 20,
+    "requested_max_bytes": 2048,
+    "history_lines": 20,
+    "text_bytes": 731,
+    "text": "bounded presented text",
+    "truncated": false,
+    "error": null
+  }
+}
+```
+
+A target failure returns `ok: false`, the same correlation and target fields,
+null text/screen/history/truncation fields, zero `text_bytes`, and a bounded
+control-safe error with `error_truncated`. The operation never selects a tab,
+focuses a pane, changes scroll position, raises or activates a native window,
+or dispatches navigation hooks.
+
+At most one host operation is accepted per response. An API v22 process-query
+result may retain only separately granted `process-actions` and
+`process-terminal-text` authority, allowing one inventory-to-navigation or
+inventory-to-text sequence. A process-terminal-query result clears every host
+query and mutation authority before delivery, so it cannot read a second pane,
+navigate, send input, or otherwise chain. Existing API v11 `terminal-query`
+remains exact-current-window-only and unchanged.
 
 ## Permissions and isolation
 
@@ -1599,6 +1681,7 @@ remains current-window-only and unchanged.
 | `window-close` | API v19+, after `--allow window-close`; permits only a declared command invocation to schedule closure of its exact originating window through a persistent handler, after delivery of one correlated final result. |
 | `process-query` | API v20+, after `--allow process-query`; exposes one bounded, creation-ordered read-only inventory of the live windows owned by this Termeric process, including the exact originating stable window ID, through a persistent handler. |
 | `process-actions` | API v21+, after `--allow process-actions`; permits one exact non-activating tab selection or pane focus in any live process-owned window through a persistent handler, with atomic full-path validation and a correlated non-chainable result. |
+| `process-terminal-text` | API v22+, after `--allow process-terminal-text`; permits one exact, non-activating read of at most 256 history lines and 8 KiB of presentation-safe UTF-8 text from any live process-owned pane through a persistent handler, with a correlated non-chainable result. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -1606,7 +1689,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v21 may also request `terminal-text` for
+`ui-actions`; API v4 through v22 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -1648,6 +1731,10 @@ API v21 adds only `process-actions`, independently of process/current-window
 query, terminal text/input, native activation, topology, lifecycle, movement,
 layout, creation, closure, UI, filesystem, network, clipboard, or secret
 access.
+API v22 adds only `process-terminal-text`, independently of process/current-
+window inventory, navigation, terminal input, native activation, topology,
+lifecycle, movement, layout, creation, closure, UI, filesystem, network,
+clipboard, or secret access.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -1667,8 +1754,8 @@ described above, never in Termeric's UI/PTY/render threads. A handler executable
 is still ordinary native code with the user's OS authority despite its cleared
 environment; the API permission model is disclosure/action gating, not a kernel
 sandbox. WASM/in-process modules, network hooks supplied by Termeric,
-process-global terminal queries, raw terminal-output subscriptions, raw-byte
-input, and render actions remain unsupported. API v5+'s persistent newline protocol is deliberately narrower
+raw PTY or continuous terminal-output subscriptions, raw-byte input, and
+render actions remain unsupported. API v5+'s persistent newline protocol is deliberately narrower
 than a bidirectional JSON-RPC service.
 
 ## Author testing and upgrades
@@ -1775,6 +1862,13 @@ Before distributing a local directory:
     stale/closed/closing/uninitialized targets, non-activation, hook
     suppression, correlated bounded errors and change fields, process-query
     authority reduction, and complete process-action result authority removal.
+26. For API v22, test exact grant/version/mode denial, strict query shape,
+    malformed IDs, history/byte bounds, duplicate and mixed host-operation
+    rejection, same- and sibling-window reads, primary/alternate screen and
+    hidden synchronized-output behavior, stale/closed/closing/uninitialized
+    targets, UTF-8/JSON clipping, non-activation, correlated bounded errors,
+    process-query authority reduction, and complete terminal-result authority
+    removal. Treat every returned text snapshot as potentially sensitive.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -1869,6 +1963,14 @@ suppression, bounded correlated results, query-to-action authority reduction,
 one-operation enforcement, complete action-result authority removal, retained-
 grant install/update behavior, and a checked-in process navigator. All coverage
 is hermetic; no provider runs or AI tokens are consumed.
+API v22 adds exact permission/version/mode gating, strict bounded query parsing,
+same- and sibling-window exact stable-ID reads, presentation-safe text
+extraction, stale/closing target refusal, non-activation, UTF-8 and encoded-
+frame ceilings, bounded correlated errors, query-to-text authority reduction,
+one-operation enforcement, complete result-authority removal, retained-grant
+install/update behavior, and a checked-in process terminal reader. Its tests
+use only in-memory terminals and inert local shell/Python fixtures; no provider
+runs or AI tokens are consumed.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -1886,11 +1988,12 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v21's public surface includes current-window inventory,
+and secrets. API v22's public surface includes current-window inventory,
 navigation, topology, exact presented-text reads, ordinary pane/tab lifecycle,
 pane movement, bounded terminal input, same-tab pane layouts, command-scoped
 exact-window closure, process-wide read-only inventory, persistent handlers,
-non-activating cross-window tab/pane navigation, namespaced commands,
+non-activating cross-window tab/pane navigation, bounded cross-window
+presentation-safe terminal reads, namespaced commands,
 non-secret settings, and narrowly granted completed-region snapshots. Those
 capabilities are not enough to represent the privileged
 workflows; broader migration waits for a separately designed sandboxed API.
@@ -1908,8 +2011,8 @@ after that PTY write and remains outside automated acceptance.
 `api_version = 9`, `api_version = 10`, `api_version = 11`,
 `api_version = 12`, `api_version = 13`, `api_version = 14`,
 `api_version = 15`, `api_version = 16`, `api_version = 17`,
-`api_version = 18`, `api_version = 19`, `api_version = 20`, and
-`api_version = 21`
+`api_version = 18`, `api_version = 19`, `api_version = 20`,
+`api_version = 21`, and `api_version = 22`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -1960,6 +2063,10 @@ query/mutation authority removal from its correlated result for API v20.
 API v21 adds separately granted exact non-activating tab selection and pane
 focus in any live process-owned window. Process-query results may retain only
 that independently granted mutation authority, while process-action results
+remove every host authority.
+API v22 adds separately granted exact non-activating presentation-safe terminal
+text reads in any live process-owned window. Process-query results may retain
+that independently granted disclosure authority, while terminal-query results
 remove every host authority.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;

@@ -484,6 +484,112 @@ impl Application {
         Ok(encoded)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn plugin_process_terminal_query_event(
+        &self,
+        plugin_id: &str,
+        origin_window_id: u64,
+        query_id: &str,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+        history_lines: u16,
+        max_bytes: u32,
+    ) -> Result<String, String> {
+        if history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
+            return Err(format!(
+                "process terminal history is limited to {} lines",
+                crate::control::protocol::MAX_TEXT_HISTORY_LINES
+            ));
+        }
+        if !(1..=crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES).contains(&max_bytes) {
+            return Err(format!(
+                "process terminal query bytes must be between 1 and {}",
+                crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES
+            ));
+        }
+        let mut attempt_bytes = max_bytes;
+        loop {
+            let result = self
+                .control_native_window_id(window_id)
+                .and_then(|native_id| {
+                    self.windows
+                        .get(&native_id)
+                        .filter(|window| !window.should_exit)
+                        .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                        .read_control_text(tab_id, pane_id, history_lines, attempt_bytes)
+                });
+            let event = match result {
+                Ok((screen, included_history, text, truncated)) => serde_json::json!({
+                    "type": "process-terminal-query-result",
+                    "query_id": query_id,
+                    "text_schema_version": 1,
+                    "ok": true,
+                    "process_id": std::process::id(),
+                    "origin_window_id": origin_window_id,
+                    "window_id": window_id,
+                    "tab_id": tab_id,
+                    "pane_id": pane_id,
+                    "screen": screen,
+                    "requested_history_lines": history_lines,
+                    "requested_max_bytes": max_bytes,
+                    "history_lines": included_history,
+                    "text_bytes": text.len(),
+                    "text": text,
+                    "truncated": truncated || attempt_bytes < max_bytes,
+                    "error": null,
+                }),
+                Err(error) => {
+                    let mut budget = 1024;
+                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                    serde_json::json!({
+                        "type": "process-terminal-query-result",
+                        "query_id": query_id,
+                        "text_schema_version": 1,
+                        "ok": false,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "screen": null,
+                        "requested_history_lines": history_lines,
+                        "requested_max_bytes": max_bytes,
+                        "history_lines": null,
+                        "text_bytes": 0,
+                        "text": null,
+                        "truncated": null,
+                        "error": error,
+                        "error_truncated": error_truncated,
+                    })
+                }
+            };
+            let envelope = serde_json::json!({
+                "schema_version": 1,
+                "plugin_id": plugin_id,
+                "event": event,
+            });
+            let encoded = serde_json::to_string(&envelope).map_err(|error| {
+                format!("could not encode process terminal query result: {error}")
+            })?;
+            let limit = crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES;
+            if encoded.len() <= limit {
+                return Ok(encoded);
+            }
+            if attempt_bytes == 1 {
+                return Err(format!(
+                    "process terminal query result exceeds {limit} bytes"
+                ));
+            }
+            let scaled = (usize::try_from(attempt_bytes).expect("u32 fits usize") * limit
+                / encoded.len())
+            .min(usize::try_from(attempt_bytes - 1).expect("u32 fits usize"))
+            .max(1);
+            attempt_bytes =
+                u32::try_from(scaled).expect("scaled process terminal query budget fits u32");
+        }
+    }
+
     fn handle_structured_plugin_completed(
         &mut self,
         mut completion: crate::plugin::structured::StructuredHandlerCompletion,
@@ -497,6 +603,9 @@ impl Application {
                             ..
                         }
                         | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                            ..
+                        }
+                        | crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                             ..
                         }
                 )
@@ -541,6 +650,9 @@ impl Application {
                     | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
                         ..
                     } => continuation.allow_process_actions,
+                    crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
+                        ..
+                    } => continuation.allow_process_terminal_text,
                     _ => false,
                 });
         if !has_continuation_authority {
@@ -592,6 +704,26 @@ impl Application {
                     process_operation.clone(),
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
+                query_id,
+                window_id,
+                tab_id,
+                pane_id,
+                history_lines,
+                max_bytes,
+            } => (
+                "terminal-query",
+                self.plugin_process_terminal_query_event(
+                    &plugin_id,
+                    origin_window_id,
+                    query_id,
+                    *window_id,
+                    *tab_id,
+                    *pane_id,
+                    *history_lines,
+                    *max_bytes,
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -604,6 +736,9 @@ impl Application {
                             ..
                         }
                         | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                            ..
+                        }
+                        | crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                             ..
                         }
                 )
@@ -621,6 +756,9 @@ impl Application {
                 | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
                     ..
                 } => window.continue_structured_process_action(event_json, continuation),
+                crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
+                    ..
+                } => window.continue_structured_process_terminal_query(event_json, continuation),
                 _ => unreachable!("only process operations are intercepted"),
             });
             if let Err(error) = result {
@@ -3894,6 +4032,209 @@ mod tests {
         assert!(
             selected.to_string().len()
                 <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_terminal_queries_are_exact_bounded_and_non_activating() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+
+        let shell = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "exit 0".into()],
+            env: Default::default(),
+        };
+        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let target_tab = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "exit 0".into()],
+                None,
+                Some("query target"),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        let untouched_tab = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "exit 0".into()],
+                None,
+                Some("active tab"),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        tabs.tab_mut_by_id(target_tab)
+            .unwrap()
+            .focused_terminal_mut()
+            .unwrap()
+            .process(b"sibling-visible-text\x1b[?2026h\rhidden-sibling-update");
+        assert_eq!(tabs.active_tab_id(), Some(untouched_tab));
+
+        let mut target = App::new_headless(Config::default()).unwrap();
+        target.tabs = Some(tabs);
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        application.windows.insert(native_id, target);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let encoded = application
+            .plugin_process_terminal_query_event(
+                "process-terminal-reader",
+                9,
+                "sibling-output",
+                7,
+                target_tab as u64,
+                0,
+                20,
+                2048,
+            )
+            .unwrap();
+        assert!(encoded.len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES);
+        let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["plugin_id"], "process-terminal-reader");
+        assert_eq!(value["event"]["type"], "process-terminal-query-result");
+        assert_eq!(value["event"]["query_id"], "sibling-output");
+        assert_eq!(value["event"]["text_schema_version"], 1);
+        assert_eq!(value["event"]["ok"], true);
+        assert_eq!(value["event"]["origin_window_id"], 9);
+        assert_eq!(value["event"]["window_id"], 7);
+        assert_eq!(value["event"]["tab_id"], target_tab as u64);
+        assert_eq!(value["event"]["pane_id"], 0);
+        assert!(
+            value["event"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("sibling-visible-text")
+        );
+        assert!(
+            !value["event"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("hidden-sibling-update")
+        );
+        assert!(application.windows[&native_id].window.is_none());
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab_id(),
+            Some(untouched_tab)
+        );
+
+        let missing = application
+            .plugin_process_terminal_query_event(
+                "process-terminal-reader",
+                9,
+                "stale-target",
+                8,
+                target_tab as u64,
+                0,
+                0,
+                64,
+            )
+            .unwrap();
+        let missing: serde_json::Value = serde_json::from_str(&missing).unwrap();
+        assert_eq!(missing["event"]["ok"], false);
+        assert_eq!(missing["event"]["query_id"], "stale-target");
+        assert!(missing["event"]["text"].is_null());
+        let error = missing["event"]["error"].as_str().unwrap();
+        assert!(error.contains("does not exist"));
+        assert!(!error.chars().any(char::is_control));
+
+        application
+            .windows
+            .get_mut(&native_id)
+            .unwrap()
+            .tabs
+            .as_mut()
+            .unwrap()
+            .tab_mut_by_id(target_tab)
+            .unwrap()
+            .focused_terminal_mut()
+            .unwrap()
+            .process(format!("\x1b[?2026l\x1b[2J\x1b[H{}", "\\".repeat(9_000)).as_bytes());
+        let escaped = application
+            .plugin_process_terminal_query_event(
+                "process-terminal-reader",
+                9,
+                "escaped-text",
+                7,
+                target_tab as u64,
+                0,
+                256,
+                crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES,
+            )
+            .unwrap();
+        assert!(escaped.len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES);
+        let escaped: serde_json::Value = serde_json::from_str(&escaped).unwrap();
+        assert_eq!(escaped["event"]["ok"], true);
+        assert_eq!(escaped["event"]["truncated"], true);
+        assert!(
+            escaped["event"]["text_bytes"].as_u64().unwrap()
+                < u64::from(crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES)
+        );
+
+        assert!(
+            application
+                .plugin_process_terminal_query_event(
+                    "process-terminal-reader",
+                    9,
+                    "invalid-history",
+                    7,
+                    target_tab as u64,
+                    0,
+                    crate::control::protocol::MAX_TEXT_HISTORY_LINES + 1,
+                    64,
+                )
+                .unwrap_err()
+                .contains("limited")
+        );
+        assert!(
+            application
+                .plugin_process_terminal_query_event(
+                    "process-terminal-reader",
+                    9,
+                    "invalid-bytes",
+                    7,
+                    target_tab as u64,
+                    0,
+                    0,
+                    0,
+                )
+                .unwrap_err()
+                .contains("between")
+        );
+
+        application.windows.get_mut(&native_id).unwrap().should_exit = true;
+        let closing = application
+            .plugin_process_terminal_query_event(
+                "process-terminal-reader",
+                9,
+                "closing-window",
+                7,
+                target_tab as u64,
+                0,
+                0,
+                64,
+            )
+            .unwrap();
+        let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+        assert_eq!(closing["event"]["ok"], false);
+        assert!(
+            closing["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("closing")
         );
     }
 

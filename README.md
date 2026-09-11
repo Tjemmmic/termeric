@@ -159,6 +159,12 @@ pane using the process/window/tab/pane identities returned by API v20; the
 complete path is revalidated atomically and the result cannot chain another
 host operation. Native window activation and every broader mutation remain
 outside this grant.
+API v22 adds separately granted, non-activating cross-window terminal text
+queries. A persistent handler can read one exact process-owned pane using the
+same stable identities, with at most 256 history lines and 8 KiB of
+presentation-safe UTF-8 text inside the existing bounded event frame. The
+result clears every host authority; raw PTY streaming, terminal input, and
+fallback to an active target remain outside this grant.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

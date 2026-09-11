@@ -4674,6 +4674,7 @@ fn process_query_retains_only_process_actions_and_action_results_revoke_every_au
         allow_window_close: true,
         allow_process_query: true,
         allow_process_actions: true,
+        allow_process_terminal_text: true,
         mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
     };
 
@@ -4681,6 +4682,7 @@ fn process_query_retains_only_process_actions_and_action_results_revoke_every_au
     super::plugin_actions::reduce_structured_process_query_authority(&mut process_query_result);
     assert!(process_query_result.allow_ui_actions);
     assert!(process_query_result.allow_process_actions);
+    assert!(process_query_result.allow_process_terminal_text);
     assert!(!process_query_result.allow_workspace_query);
     assert!(!process_query_result.allow_workspace_actions);
     assert!(!process_query_result.allow_workspace_topology);
@@ -4712,6 +4714,7 @@ fn process_query_retains_only_process_actions_and_action_results_revoke_every_au
     assert!(!invocation.allow_window_close);
     assert!(!invocation.allow_process_query);
     assert!(!invocation.allow_process_actions);
+    assert!(!invocation.allow_process_terminal_text);
 }
 
 #[cfg(unix)]
@@ -4782,6 +4785,7 @@ fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
                 allow_window_close: true,
                 allow_process_query: false,
                 allow_process_actions: false,
+                allow_process_terminal_text: false,
                 mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
             }),
         )

@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v22 adds an independent `process-terminal-text` grant
+  for one exact, non-activating presentation-safe terminal snapshot from any
+  live process-owned pane. Requests are persistent-only, bounded to 256 history
+  lines and 8 KiB of UTF-8 text within the existing event-frame ceiling, and
+  return correlated target identity, screen, truncation, and bounded error
+  state without fallback. Process inventory results may retain this separately
+  granted authority; terminal-query results clear every host authority. Strict
+  parsing, target routing, permission/version/mode/install-update behavior, and
+  the checked-in process-terminal-reader sample are tested hermetically without
+  provider execution or AI-token use.
+
 - Declarative plugin API v21 adds an independent `process-actions` grant for
   exact, non-activating tab selection and pane focus in any live window owned
   by the current Termeric process. Complete stable window/tab/pane paths are

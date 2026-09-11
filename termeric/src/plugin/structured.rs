@@ -106,6 +106,10 @@ pub struct StructuredHandlerInvocation {
     /// window owned by this Termeric process. Its result clears every host
     /// operation authority.
     pub allow_process_actions: bool,
+    /// Permit one bounded presentation-safe text query for an exact terminal
+    /// in any live window owned by this Termeric process. Its result clears
+    /// every host operation authority.
+    pub allow_process_terminal_text: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -135,6 +139,14 @@ pub enum StructuredResponseAction {
         window_id: u64,
         tab_id: u64,
         pane_id: u32,
+    },
+    QueryProcessTerminal {
+        query_id: String,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+        history_lines: u16,
+        max_bytes: u32,
     },
     QueryTerminal {
         query_id: String,
@@ -537,6 +549,7 @@ fn run_handler(
         invocation.allow_window_close,
         invocation.allow_process_query,
         invocation.allow_process_actions,
+        invocation.allow_process_terminal_text,
     )
 }
 
@@ -666,6 +679,7 @@ impl PersistentHandler {
         allow_window_close: bool,
         allow_process_query: bool,
         allow_process_actions: bool,
+        allow_process_terminal_text: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -738,6 +752,7 @@ impl PersistentHandler {
             allow_window_close,
             allow_process_query,
             allow_process_actions,
+            allow_process_terminal_text,
             request_id,
         )?;
         if let Some(status) = self
@@ -818,6 +833,7 @@ fn run_persistent_handler(
                 invocation.allow_window_close,
                 invocation.allow_process_query,
                 invocation.allow_process_actions,
+                invocation.allow_process_terminal_text,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -1008,6 +1024,7 @@ fn parse_response_with_host_creation(
         false,
         false,
         false,
+        false,
     )
 }
 
@@ -1029,6 +1046,7 @@ fn parse_response_with_host_mutation(
     allow_window_close: bool,
     allow_process_query: bool,
     allow_process_actions: bool,
+    allow_process_terminal_text: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -1055,6 +1073,7 @@ fn parse_response_with_host_mutation(
         allow_window_close,
         allow_process_query,
         allow_process_actions,
+        allow_process_terminal_text,
     )
 }
 
@@ -1150,6 +1169,7 @@ fn parse_persistent_response_with_host_mutation(
         false,
         false,
         false,
+        false,
         expected_request_id,
     )
 }
@@ -1172,6 +1192,7 @@ fn parse_persistent_response_with_window_close(
     allow_window_close: bool,
     allow_process_query: bool,
     allow_process_actions: bool,
+    allow_process_terminal_text: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1205,6 +1226,7 @@ fn parse_persistent_response_with_window_close(
         allow_window_close,
         allow_process_query,
         allow_process_actions,
+        allow_process_terminal_text,
     )
 }
 
@@ -1225,6 +1247,7 @@ fn validate_response_actions(
     allow_window_close: bool,
     allow_process_query: bool,
     allow_process_actions: bool,
+    allow_process_terminal_text: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1284,6 +1307,32 @@ fn validate_response_actions(
                 }
                 host_operations += 1;
                 validate_text("process action id", action_id, MAX_ACTION_ID_BYTES)?;
+            }
+            StructuredResponseAction::QueryProcessTerminal {
+                query_id,
+                history_lines,
+                max_bytes,
+                ..
+            } => {
+                if !allow_process_terminal_text {
+                    return Err(
+                        "handler requested process terminal text without API v22 persistent process-terminal-text authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("process terminal query id", query_id, MAX_QUERY_ID_BYTES)?;
+                if *history_lines > crate::control::protocol::MAX_TEXT_HISTORY_LINES {
+                    return Err(format!(
+                        "process terminal query history is limited to {} lines",
+                        crate::control::protocol::MAX_TEXT_HISTORY_LINES
+                    ));
+                }
+                if !(1..=MAX_TERMINAL_QUERY_BYTES).contains(max_bytes) {
+                    return Err(format!(
+                        "process terminal query bytes must be between 1 and {MAX_TERMINAL_QUERY_BYTES}"
+                    ));
+                }
             }
             StructuredResponseAction::QueryTerminal {
                 query_id,
@@ -1549,6 +1598,7 @@ mod tests {
             allow_window_close: false,
             allow_process_query: false,
             allow_process_actions: false,
+            allow_process_terminal_text: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1642,7 +1692,7 @@ mod tests {
         assert_eq!(
             parse_persistent_response_with_window_close(
                 query, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, 9,
+                false, false, true, false, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::QueryProcess {
@@ -1659,7 +1709,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 duplicate, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, true, false, 9,
+                false, false, false, true, false, false, 9,
             )
             .unwrap_err()
             .contains("more than one host operation")
@@ -1669,7 +1719,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 mixed, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, 9,
+                false, false, true, false, false, 9,
             )
             .unwrap_err()
             .contains("more than one host operation")
@@ -1679,7 +1729,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, true, false, 9,
+                false, false, false, true, false, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -1708,6 +1758,35 @@ mod tests {
             false, // window close
             allow_process_query,
             allow_process_actions,
+            false, // process terminal text
+            9,
+        )
+    }
+
+    fn parse_process_terminal_response(
+        bytes: &[u8],
+        allow_process_query: bool,
+        allow_process_actions: bool,
+        allow_process_terminal_text: bool,
+    ) -> Result<Vec<StructuredResponseAction>, String> {
+        parse_persistent_response_with_window_close(
+            bytes,
+            false, // ui actions
+            false, // workspace query
+            false, // workspace actions
+            false, // workspace topology
+            false, // terminal query
+            false, // pane create
+            false, // tab create
+            false, // pane close
+            false, // tab close
+            false, // pane move
+            false, // terminal input
+            false, // pane layout
+            false, // window close
+            allow_process_query,
+            allow_process_actions,
+            allow_process_terminal_text,
             9,
         )
     }
@@ -1773,6 +1852,72 @@ mod tests {
 
         let unsupported = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"activate-process-window","action_id":"activate","window_id":7}]}"#;
         assert!(parse_process_action_response(unsupported, false, true).is_err());
+    }
+
+    #[test]
+    fn process_terminal_queries_require_v22_authority_and_strict_bounded_shape() {
+        let query = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"sibling-output","window_id":7,"tab_id":42,"pane_id":3,"history_lines":20,"max_bytes":2048}]}"#;
+        assert_eq!(
+            parse_process_terminal_response(query, false, false, true).unwrap(),
+            vec![StructuredResponseAction::QueryProcessTerminal {
+                query_id: "sibling-output".into(),
+                window_id: 7,
+                tab_id: 42,
+                pane_id: 3,
+                history_lines: 20,
+                max_bytes: 2048,
+            }]
+        );
+        assert!(
+            parse_process_terminal_response(query, true, true, false)
+                .unwrap_err()
+                .contains("API v22")
+        );
+
+        let excessive_history = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"text","window_id":7,"tab_id":42,"pane_id":3,"history_lines":257,"max_bytes":2048}]}"#;
+        assert!(
+            parse_process_terminal_response(excessive_history, false, false, true)
+                .unwrap_err()
+                .contains("limited to 256 lines")
+        );
+        for max_bytes in [0, MAX_TERMINAL_QUERY_BYTES + 1] {
+            let invalid = format!(
+                "{{\"schema_version\":2,\"request_id\":9,\"actions\":[{{\"type\":\"query-process-terminal\",\"query_id\":\"text\",\"window_id\":7,\"tab_id\":42,\"pane_id\":3,\"history_lines\":0,\"max_bytes\":{max_bytes}}}]}}"
+            );
+            assert!(
+                parse_process_terminal_response(invalid.as_bytes(), false, false, true)
+                    .unwrap_err()
+                    .contains("bytes must be between")
+            );
+        }
+
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"two\nlines","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
+        assert!(
+            parse_process_terminal_response(unsafe_id, false, false, true)
+                .unwrap_err()
+                .contains("control-safe")
+        );
+        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"text","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64,"activate":true}]}"#;
+        assert!(
+            parse_process_terminal_response(unknown, false, false, true)
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"text","window_id":"7","tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
+        assert!(parse_process_terminal_response(malformed, false, false, true).is_err());
+
+        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"query-process-terminal","query_id":"text","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
+        assert!(
+            parse_process_terminal_response(mixed, true, false, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
+        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process-terminal","query_id":"one","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64},{"type":"query-process-terminal","query_id":"two","window_id":7,"tab_id":42,"pane_id":3,"history_lines":0,"max_bytes":64}]}"#;
+        assert!(
+            parse_process_terminal_response(duplicate, false, false, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
     }
 
     #[test]
@@ -2716,7 +2861,7 @@ mod tests {
         assert_eq!(
             parse_persistent_response_with_window_close(
                 close, false, false, false, false, false, false, false, false, false, false, false,
-                false, true, false, false, 9,
+                false, true, false, false, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::CloseWindow {
@@ -2733,7 +2878,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unknown, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, 9,
+                false, false, true, false, false, false, 9,
             )
             .unwrap_err()
             .contains("unknown field")
@@ -2743,7 +2888,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, 9,
+                false, false, true, false, false, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -2766,6 +2911,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 false,
                 false,
                 9,
@@ -3307,6 +3453,144 @@ done"#,
 
     #[cfg(unix)]
     #[test]
+    fn persistent_process_query_then_terminal_query_then_result_is_bounded() {
+        let mut invocation = persistent_fixture(
+            "process-terminal-fixture",
+            r#"count=0
+while IFS= read -r event; do
+  count=$((count + 1))
+  if [ "$count" -eq 1 ]; then
+    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-process","query_id":"windows"}]}\n'
+  elif [ "$count" -eq 2 ]; then
+    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"query-process-terminal","query_id":"sibling-output","window_id":7,"tab_id":12,"pane_id":3,"history_lines":20,"max_bytes":2048}]}\n'
+  else
+    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"process-terminal-result-received"}]}\n'
+  fi
+done"#,
+        );
+        invocation.allow_process_query = true;
+        invocation.allow_process_terminal_text = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::QueryProcess { .. }]
+        ));
+
+        invocation.event_json =
+            r#"{"schema_version":1,"event":{"type":"process-query-result","query_id":"windows"}}"#
+                .into();
+        invocation.allow_process_query = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::QueryProcessTerminal {
+                query_id: "sibling-output".into(),
+                window_id: 7,
+                tab_id: 12,
+                pane_id: 3,
+                history_lines: 20,
+                max_bytes: 2048,
+            }]
+        );
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-terminal-query-result","query_id":"sibling-output","ok":true,"text":"bounded"}}"#.into();
+        invocation.allow_process_terminal_text = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowMessage {
+                message: "process-terminal-result-received".into(),
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_in_process_terminal_reader_completes_a_hermetic_three_event_conversation() {
+        if !std::path::Path::new("/usr/bin/python3").is_file()
+            && !std::path::Path::new("/bin/python3").is_file()
+        {
+            return;
+        }
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-terminal-reader");
+        let (manifest, _, _) =
+            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
+        let handler = manifest.event_handler.unwrap();
+        let mut invocation = StructuredHandlerInvocation {
+            plugin_id: manifest.id,
+            program: handler.program,
+            args: handler.args,
+            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
+            allow_ui_actions: true,
+            allow_workspace_query: false,
+            allow_workspace_actions: false,
+            allow_workspace_topology: false,
+            allow_terminal_query: false,
+            allow_pane_create: false,
+            allow_tab_create: false,
+            allow_pane_close: false,
+            allow_tab_close: false,
+            allow_pane_move: false,
+            allow_terminal_input: false,
+            allow_pane_layout: false,
+            allow_window_close: false,
+            allow_process_query: true,
+            allow_process_actions: false,
+            allow_process_terminal_text: true,
+            mode: StructuredHandlerMode::Persistent,
+        };
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::QueryProcess {
+                query_id: "terminal-targets".into(),
+            }]
+        );
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[]},{"id":7,"tabs":[{"id":12,"closed":false,"panes":[{"id":3,"closed":false}]}]}]}}"#.into();
+        invocation.allow_process_query = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::QueryProcessTerminal {
+                query_id: "sibling-output".into(),
+                window_id: 7,
+                tab_id: 12,
+                pane_id: 3,
+                history_lines: 20,
+                max_bytes: 2048,
+            }]
+        );
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-terminal-query-result","ok":true,"text_bytes":11,"history_lines":0,"truncated":false,"text":"hello\nworld"}}"#.into();
+        invocation.allow_process_terminal_text = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowNotice {
+                title: "Sibling pane text".into(),
+                lines: vec![
+                    "Text bytes: 11".into(),
+                    "History lines: 0".into(),
+                    "Truncated: False".into(),
+                    "Preview: hello world".into(),
+                ],
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn persistent_query_then_topology_then_result_reuses_one_bounded_handler() {
         let mut invocation = persistent_fixture(
             "workspace-topology-fixture",
@@ -3605,6 +3889,7 @@ done"#,
             allow_window_close: false,
             allow_process_query: false,
             allow_process_actions: false,
+            allow_process_terminal_text: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -3649,6 +3934,7 @@ done"#,
             allow_window_close: false,
             allow_process_query: false,
             allow_process_actions: false,
+            allow_process_terminal_text: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -3680,6 +3966,7 @@ done"#,
             allow_window_close: false,
             allow_process_query: false,
             allow_process_actions: false,
+            allow_process_terminal_text: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));
