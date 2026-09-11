@@ -2,16 +2,18 @@
 
 use super::*;
 use crate::plugin::runtime::{
-    DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginSettingValue,
-    RuntimePluginStatus,
+    DeclarativeSetting, PluginAdminCommand, PluginConfigurationChange, PluginInstallPreview,
+    PluginPermission, PluginSettingValue, RuntimePluginStatus, preview_install,
 };
 use crate::ui::info_overlay::InfoOverlayChoice;
+use std::collections::BTreeSet;
 
 const PLUGIN_MANAGER_PAGE_SIZE: usize = 24;
 const PLUGIN_SETTINGS_PAGE_SIZE: usize = 24;
 const PLUGIN_SETTING_VALUES_PAGE_SIZE: usize = 24;
+const PLUGIN_PERMISSION_PAGE_SIZE: usize = 24;
 const PLUGIN_LIST_SHORTCUTS: [char; PLUGIN_MANAGER_PAGE_SIZE] = [
-    '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l',
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'd', 'e', 'f', 'g', 'h', 't', 'j', 'k', 'l',
     'm', 'o', 'q', 'r', 's',
 ];
 
@@ -82,10 +84,17 @@ impl App {
                 page_count
             ),
             "Select a plugin to inspect its source, permissions, status, and actions.".into(),
-            "Installation remains available through `termeric plugin`.".into(),
             String::new(),
         ];
-        let mut choices = Vec::new();
+        let install_line = lines.len();
+        lines.push("[I] Install local plugin".into());
+        lines.push(String::new());
+        let mut choices = vec![InfoOverlayChoice::new(
+            "install",
+            "Install local plugin",
+            install_line,
+            Some('i'),
+        )];
         for (index, status) in statuses[start..end].iter().enumerate() {
             let source_line = lines.len();
             let health = if status.diagnostic.is_some() {
@@ -137,6 +146,205 @@ impl App {
         self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
             request_id,
             view: RuntimePluginManagerView::List { page },
+        });
+    }
+
+    fn show_runtime_plugin_install_path(
+        &mut self,
+        page: usize,
+        initial: String,
+        error: Option<&str>,
+    ) {
+        let mut lines = vec![
+            "Enter the absolute path to a local declarative plugin directory.".into(),
+            format!(
+                "The directory must contain a valid {} file.",
+                crate::plugin::runtime::MANIFEST_NAME
+            ),
+        ];
+        if let Some(error) = error {
+            lines.push(String::new());
+            push_wrapped_field(&mut lines, "Validation error", error);
+        }
+        lines.push(String::new());
+        let input_line = lines.len();
+        lines.push(String::new());
+        lines.push("Enter reviews · Escape cancels".into());
+        let cancel_line = lines.len();
+        lines.push("[Esc] Cancel".into());
+        let request_id = self.info_overlay.show_input(
+            "Install Local Plugin",
+            lines,
+            input_line,
+            "Directory: ",
+            initial,
+            crate::ui::info_overlay::MAX_INFO_INPUT_BYTES,
+            vec![InfoOverlayChoice::new(
+                "cancel",
+                "Cancel installation (Escape)",
+                cancel_line,
+                None,
+            )],
+        );
+        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
+            request_id,
+            view: RuntimePluginManagerView::InstallPath { page },
+        });
+    }
+
+    fn show_runtime_plugin_install_review(
+        &mut self,
+        page: usize,
+        preview: PluginInstallPreview,
+        grants: BTreeSet<PluginPermission>,
+        requested_permission_page: usize,
+        error: Option<&str>,
+    ) {
+        let permissions = preview.permissions.iter().copied().collect::<Vec<_>>();
+        let page_count = permissions
+            .len()
+            .div_ceil(PLUGIN_PERMISSION_PAGE_SIZE)
+            .max(1);
+        let permission_page = requested_permission_page.min(page_count - 1);
+        let start = permission_page * PLUGIN_PERMISSION_PAGE_SIZE;
+        let end = (start + PLUGIN_PERMISSION_PAGE_SIZE).min(permissions.len());
+        let mut lines = vec![
+            format!("{} ({})", preview.name, preview.id),
+            format!(
+                "Version: {} · API: {}",
+                preview.version, preview.api_version
+            ),
+            format!(
+                "Profiles: {} · Commands: {}",
+                preview.profile_count, preview.command_count
+            ),
+        ];
+        push_wrapped_field(
+            &mut lines,
+            "Canonical source",
+            &preview.source.display().to_string(),
+        );
+        lines.push(format!(
+            "Manifest fingerprint: {}",
+            preview.source_fingerprint
+        ));
+        if !preview.description.is_empty() {
+            push_wrapped_field(&mut lines, "Description", &preview.description);
+        }
+        if let Some(error) = error {
+            lines.push(String::new());
+            push_wrapped_field(&mut lines, "Install error", error);
+        }
+        lines.extend([
+            String::new(),
+            format!(
+                "Requested permissions: {} · page {}/{}",
+                permissions.len(),
+                permission_page + 1,
+                page_count
+            ),
+            "Select a permission to toggle its grant.".into(),
+        ]);
+
+        let mut choices = Vec::new();
+        for permission in &permissions[start..end] {
+            let source_line = lines.len();
+            let marker = if grants.contains(permission) {
+                "x"
+            } else {
+                " "
+            };
+            lines.push(format!("[{marker}] {permission}"));
+            choices.push(InfoOverlayChoice::new(
+                format!("permission:{permission}"),
+                format!("Toggle {permission} permission"),
+                source_line,
+                None,
+            ));
+        }
+        if permission_page > 0 {
+            let source_line = lines.len();
+            lines.push("[P] Previous permissions".into());
+            choices.push(InfoOverlayChoice::new(
+                "previous-page",
+                "Previous permissions",
+                source_line,
+                Some('p'),
+            ));
+        }
+        if permission_page + 1 < page_count {
+            let source_line = lines.len();
+            lines.push("[N] Next permissions".into());
+            choices.push(InfoOverlayChoice::new(
+                "next-page",
+                "Next permissions",
+                source_line,
+                Some('n'),
+            ));
+        }
+        lines.push(String::new());
+        if grants != preview.permissions {
+            let source_line = lines.len();
+            lines.push("[G] Grant all requested permissions".into());
+            choices.push(InfoOverlayChoice::new(
+                "grant-all",
+                "Grant all requested permissions",
+                source_line,
+                Some('g'),
+            ));
+        }
+        if !grants.is_empty() {
+            let source_line = lines.len();
+            lines.push("[R] Clear all grants".into());
+            choices.push(InfoOverlayChoice::new(
+                "clear-grants",
+                "Clear all grants",
+                source_line,
+                Some('r'),
+            ));
+        }
+        let disabled_line = lines.len();
+        lines.push("[D] Install disabled".into());
+        choices.push(InfoOverlayChoice::new(
+            "install-disabled",
+            "Install disabled",
+            disabled_line,
+            Some('d'),
+        ));
+        if grants == preview.permissions {
+            let enabled_line = lines.len();
+            lines.push("[E] Install and enable".into());
+            choices.push(InfoOverlayChoice::new(
+                "install-enabled",
+                "Install and enable",
+                enabled_line,
+                Some('e'),
+            ));
+        } else {
+            lines.push("Install and enable requires every requested permission.".into());
+        }
+        let back_line = lines.len();
+        lines.push("[B] Back to directory".into());
+        choices.push(InfoOverlayChoice::new(
+            "back",
+            "Back to directory",
+            back_line,
+            Some('b'),
+        ));
+
+        let request_id = self.info_overlay.show_choices(
+            format!("Review Plugin: {}", preview.name),
+            lines,
+            choices,
+        );
+        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
+            request_id,
+            view: RuntimePluginManagerView::ReviewInstall {
+                page,
+                preview,
+                grants,
+                permission_page,
+            },
         });
     }
 
@@ -645,7 +853,9 @@ impl App {
         error: &str,
     ) {
         let (plugin_id, page) = match &return_view {
-            RuntimePluginManagerView::List { page } => (None, *page),
+            RuntimePluginManagerView::List { page }
+            | RuntimePluginManagerView::InstallPath { page }
+            | RuntimePluginManagerView::ReviewInstall { page, .. } => (None, *page),
             RuntimePluginManagerView::Detail { plugin_id, page }
             | RuntimePluginManagerView::Settings {
                 plugin_id, page, ..
@@ -691,6 +901,7 @@ impl App {
         self.pending_runtime_plugin_management = None;
         match pending.view {
             RuntimePluginManagerView::List { page } => match choice_id {
+                "install" => self.show_runtime_plugin_install_path(page, String::new(), None),
                 "previous-page" => self.show_runtime_plugin_list(page.saturating_sub(1)),
                 "next-page" => self.show_runtime_plugin_list(page.saturating_add(1)),
                 "back" => self.show_runtime_plugin_list(page),
@@ -698,6 +909,83 @@ impl App {
                     self.show_runtime_plugin_detail(choice[7..].to_string(), page);
                 }
                 _ => {}
+            },
+            RuntimePluginManagerView::InstallPath { page } => match choice_id {
+                "cancel" | "back" => self.show_runtime_plugin_list(page),
+                _ => self.show_runtime_plugin_install_path(page, String::new(), None),
+            },
+            RuntimePluginManagerView::ReviewInstall {
+                page,
+                preview,
+                mut grants,
+                permission_page,
+            } => match choice_id {
+                "previous-page" => self.show_runtime_plugin_install_review(
+                    page,
+                    preview,
+                    grants,
+                    permission_page.saturating_sub(1),
+                    None,
+                ),
+                "next-page" => self.show_runtime_plugin_install_review(
+                    page,
+                    preview,
+                    grants,
+                    permission_page.saturating_add(1),
+                    None,
+                ),
+                "grant-all" => {
+                    grants = preview.permissions.clone();
+                    self.show_runtime_plugin_install_review(
+                        page,
+                        preview,
+                        grants,
+                        permission_page,
+                        None,
+                    );
+                }
+                "clear-grants" => self.show_runtime_plugin_install_review(
+                    page,
+                    preview,
+                    BTreeSet::new(),
+                    permission_page,
+                    None,
+                ),
+                "install-disabled" => {
+                    self.apply_runtime_plugin_install(preview, grants, false, page, permission_page)
+                }
+                "install-enabled" if grants == preview.permissions => {
+                    self.apply_runtime_plugin_install(preview, grants, true, page, permission_page)
+                }
+                "back" => self.show_runtime_plugin_install_path(
+                    page,
+                    preview.source.display().to_string(),
+                    None,
+                ),
+                choice if choice.starts_with("permission:") => {
+                    let permission = choice[11..].parse::<PluginPermission>().ok();
+                    if let Some(permission) =
+                        permission.filter(|permission| preview.permissions.contains(permission))
+                    {
+                        if !grants.remove(&permission) {
+                            grants.insert(permission);
+                        }
+                    }
+                    self.show_runtime_plugin_install_review(
+                        page,
+                        preview,
+                        grants,
+                        permission_page,
+                        None,
+                    );
+                }
+                _ => self.show_runtime_plugin_install_review(
+                    page,
+                    preview,
+                    grants,
+                    permission_page,
+                    None,
+                ),
             },
             RuntimePluginManagerView::Detail { plugin_id, page } => match choice_id {
                 "configure-settings" => self.show_runtime_plugin_settings(plugin_id, page, 0),
@@ -913,21 +1201,12 @@ impl App {
         true
     }
 
-    pub(super) fn submit_runtime_plugin_setting_input(&mut self, request_id: u64) -> bool {
+    pub(super) fn submit_runtime_plugin_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
             .pending_runtime_plugin_management
             .as_ref()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
-        else {
-            return false;
-        };
-        let RuntimePluginManagerView::EditSetting {
-            plugin_id,
-            page,
-            settings_page,
-            setting,
-        } = pending.view
         else {
             return false;
         };
@@ -938,26 +1217,89 @@ impl App {
         else {
             return false;
         };
-        if !self.runtime_plugin_setting_schema_is_current(&plugin_id, page, settings_page, &setting)
-        {
-            return true;
+        match pending.view {
+            RuntimePluginManagerView::InstallPath { page } => {
+                self.info_overlay.dismiss(request_id);
+                self.pending_runtime_plugin_management = None;
+                let directory = PathBuf::from(&value);
+                let preview = if value.is_empty() {
+                    Err(anyhow::anyhow!("plugin directory cannot be empty"))
+                } else if !directory.is_absolute() {
+                    Err(anyhow::anyhow!("plugin directory must be an absolute path"))
+                } else {
+                    preview_install(&directory)
+                };
+                match preview {
+                    Ok(preview) => {
+                        let duplicate =
+                            self.discover_runtime_plugins_for_app()
+                                .map(|(_, statuses)| {
+                                    statuses.iter().any(|status| status.id == preview.id)
+                                });
+                        match duplicate {
+                            Ok(true) => self.show_runtime_plugin_install_path(
+                                page,
+                                value,
+                                Some(&format!(
+                                    "plugin {:?} is already installed; use Update from its detail view",
+                                    preview.id
+                                )),
+                            ),
+                            Ok(false) => self.show_runtime_plugin_install_review(
+                                page,
+                                preview,
+                                BTreeSet::new(),
+                                0,
+                                None,
+                            ),
+                            Err(error) => self.show_runtime_plugin_install_path(
+                                page,
+                                value,
+                                Some(&format!("plugin registry rejected: {error:#}")),
+                            ),
+                        }
+                    }
+                    Err(error) => self.show_runtime_plugin_install_path(
+                        page,
+                        value,
+                        Some(&format!("{error:#}")),
+                    ),
+                }
+                true
+            }
+            RuntimePluginManagerView::EditSetting {
+                plugin_id,
+                page,
+                settings_page,
+                setting,
+            } => {
+                if !self.runtime_plugin_setting_schema_is_current(
+                    &plugin_id,
+                    page,
+                    settings_page,
+                    &setting,
+                ) {
+                    return true;
+                }
+                self.info_overlay.dismiss(request_id);
+                self.pending_runtime_plugin_management = None;
+                self.apply_runtime_plugin_setting_change(
+                    plugin_id,
+                    page,
+                    settings_page,
+                    setting.clone(),
+                    PluginConfigurationChange::Set {
+                        key: setting.id().to_string(),
+                        value,
+                    },
+                );
+                true
+            }
+            _ => false,
         }
-        self.info_overlay.dismiss(request_id);
-        self.pending_runtime_plugin_management = None;
-        self.apply_runtime_plugin_setting_change(
-            plugin_id,
-            page,
-            settings_page,
-            setting.clone(),
-            PluginConfigurationChange::Set {
-                key: setting.id().to_string(),
-                value,
-            },
-        );
-        true
     }
 
-    pub(super) fn cancel_runtime_plugin_setting_input(&mut self, request_id: u64) -> bool {
+    pub(super) fn cancel_runtime_plugin_manager_input(&mut self, request_id: u64) -> bool {
         let Some(pending) = self
             .pending_runtime_plugin_management
             .as_ref()
@@ -966,19 +1308,66 @@ impl App {
         else {
             return false;
         };
-        let RuntimePluginManagerView::EditSetting {
-            plugin_id,
-            page,
-            settings_page,
-            setting: _,
-        } = pending.view
-        else {
-            return false;
+        match pending.view {
+            RuntimePluginManagerView::InstallPath { page } => {
+                self.info_overlay.dismiss(request_id);
+                self.pending_runtime_plugin_management = None;
+                self.show_runtime_plugin_list(page);
+                true
+            }
+            RuntimePluginManagerView::EditSetting {
+                plugin_id,
+                page,
+                settings_page,
+                setting: _,
+            } => {
+                self.info_overlay.dismiss(request_id);
+                self.pending_runtime_plugin_management = None;
+                self.show_runtime_plugin_settings(plugin_id, page, settings_page);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn apply_runtime_plugin_install(
+        &mut self,
+        preview: PluginInstallPreview,
+        grants: BTreeSet<PluginPermission>,
+        enable: bool,
+        page: usize,
+        permission_page: usize,
+    ) {
+        let command = PluginAdminCommand::InstallReviewed {
+            directory: preview.source.clone(),
+            grants: grants.clone(),
+            enable,
+            expected_source_fingerprint: preview.source_fingerprint.clone(),
         };
-        self.info_overlay.dismiss(request_id);
-        self.pending_runtime_plugin_management = None;
-        self.show_runtime_plugin_settings(plugin_id, page, settings_page);
-        true
+        match self.execute_runtime_plugin_admin(command) {
+            Ok(message) => {
+                self.last_plugin_registry_mtime =
+                    std::fs::metadata(self.runtime_plugin_registry_path_for_app())
+                        .and_then(|metadata| metadata.modified())
+                        .ok();
+                self.sync_plugins_from_config();
+                self.reload_dynamic_keybindings();
+                self.toasts.success(message);
+                self.show_runtime_plugin_detail(preview.id, page);
+            }
+            Err(error) => {
+                let error = format!("{error:#}");
+                self.toasts
+                    .error(format!("Plugin installation failed: {error}"));
+                self.show_runtime_plugin_install_review(
+                    page,
+                    preview,
+                    grants,
+                    permission_page,
+                    Some(&error),
+                );
+            }
+        }
     }
 
     fn runtime_plugin_setting_schema_is_current(
@@ -1367,6 +1756,12 @@ program = "termeric-test-fixture-must-not-run"
         });
     }
 
+    fn submit_input(app: &mut App, value: &str) {
+        let request_id = app.info_overlay.request_id();
+        assert!(app.info_overlay.replace_input_text(request_id, value));
+        app.apply_info_overlay_action(InfoOverlayAction::SubmitInput { request_id });
+    }
+
     #[test]
     fn wrapped_detail_fields_preserve_bounded_unicode_text_exactly() {
         let value = "🫚root/".repeat(1_500);
@@ -1390,6 +1785,219 @@ program = "termeric-test-fixture-must-not-run"
             })
             .collect::<String>();
         assert_eq!(reconstructed, value);
+    }
+
+    #[test]
+    fn manager_reviews_permissions_and_installs_local_plugin() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = temp.path().join("registry.toml");
+        let root = temp.path().join("installed");
+        let source = temp.path().join("source-local-tool");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("local-tool", "1.0.0", false),
+        )
+        .unwrap();
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
+        app.open_runtime_plugin_manager();
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "install")
+                .is_some()
+        );
+        choose(&mut app, "install");
+        let cancelled_request = app.info_overlay.request_id();
+        app.apply_info_overlay_action(InfoOverlayAction::CancelInput {
+            request_id: cancelled_request,
+        });
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "install")
+                .is_some()
+        );
+        choose(&mut app, "install");
+        submit_input(&mut app, "relative/plugin");
+        assert_eq!(app.info_overlay.title(), "Install Local Plugin");
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("must be an absolute path"))
+        );
+
+        submit_input(&mut app, &source.display().to_string());
+        assert_eq!(
+            app.info_overlay.title(),
+            "Review Plugin: Fixture local-tool"
+        );
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| { line.contains(&format!("Canonical source: {}", source.display())) })
+        );
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("Manifest fingerprint: fnv1a64:"))
+        );
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "permission:process-spawn")
+                .is_some()
+        );
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "install-enabled")
+                .is_none()
+        );
+        choose(&mut app, "permission:process-spawn");
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "install-enabled")
+                .is_some()
+        );
+        choose(&mut app, "install-enabled");
+
+        let (_, statuses) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].id, "local-tool");
+        assert!(statuses[0].enabled);
+        assert_eq!(
+            statuses[0].granted,
+            BTreeSet::from([PluginPermission::ProcessSpawn])
+        );
+        assert!(app.info_overlay.title().starts_with("Plugin:"));
+
+        choose(&mut app, "back");
+        choose(&mut app, "install");
+        submit_input(&mut app, &source.display().to_string());
+        assert_eq!(app.info_overlay.title(), "Install Local Plugin");
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("already installed; use Update"))
+        );
+        let (_, statuses) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        assert_eq!(statuses.len(), 1);
+    }
+
+    #[test]
+    fn manager_rejects_source_changed_after_install_review() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = temp.path().join("registry.toml");
+        let root = temp.path().join("installed");
+        let source = temp.path().join("source-stale-tool");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("stale-tool", "1.0.0", false),
+        )
+        .unwrap();
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
+        app.open_runtime_plugin_manager();
+        choose(&mut app, "install");
+        submit_input(&mut app, &source.display().to_string());
+        let stale_request = app.info_overlay.request_id();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            fixture_manifest("stale-tool", "2.0.0", false),
+        )
+        .unwrap();
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id: stale_request + 1,
+            choice_id: "install-disabled".into(),
+        });
+        assert_eq!(app.info_overlay.request_id(), stale_request);
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id: stale_request,
+            choice_id: "permission:not-a-permission".into(),
+        });
+        assert_eq!(app.info_overlay.request_id(), stale_request);
+        choose(&mut app, "install-disabled");
+        assert_eq!(
+            app.info_overlay.title(),
+            "Review Plugin: Fixture stale-tool"
+        );
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("source changed after review"))
+        );
+        let (_, statuses) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        assert!(statuses.is_empty());
+        assert!(!root.join("stale-tool").exists());
+    }
+
+    #[test]
+    fn install_review_paginates_permissions_within_overlay_limits() {
+        let permissions = BTreeSet::from([
+            PluginPermission::ProcessSpawn,
+            PluginPermission::WorkspaceQuery,
+            PluginPermission::WorkspaceActions,
+            PluginPermission::WorkspaceTopology,
+            PluginPermission::EventSubscribe,
+            PluginPermission::UiActions,
+            PluginPermission::FilesystemRead,
+            PluginPermission::FilesystemWrite,
+            PluginPermission::Network,
+            PluginPermission::Clipboard,
+            PluginPermission::TerminalText,
+            PluginPermission::TerminalQuery,
+            PluginPermission::PaneCreate,
+            PluginPermission::TabCreate,
+            PluginPermission::PaneClose,
+            PluginPermission::TabClose,
+            PluginPermission::PaneMove,
+            PluginPermission::TerminalInput,
+            PluginPermission::PaneLayout,
+            PluginPermission::WindowClose,
+            PluginPermission::ProcessQuery,
+            PluginPermission::ProcessActions,
+            PluginPermission::ProcessTerminalText,
+            PluginPermission::ProcessTerminalInput,
+            PluginPermission::ProcessTabCreate,
+        ]);
+        let preview = PluginInstallPreview {
+            id: "many-permissions".into(),
+            name: "Many Permissions".into(),
+            version: "1.0.0".into(),
+            description: String::new(),
+            api_version: crate::plugin::runtime::PLUGIN_API_VERSION,
+            source: PathBuf::from("/tmp/many-permissions"),
+            source_fingerprint: "fnv1a64:0000000000000000".into(),
+            permissions,
+            profile_count: 1,
+            command_count: 0,
+        };
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.show_runtime_plugin_install_review(0, preview, BTreeSet::new(), 0, None);
+        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "next-page")
+                .is_some()
+        );
+        choose(&mut app, "next-page");
+        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "previous-page")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1515,14 +2123,14 @@ program = "termeric-test-fixture-must-not-run"
         let mut app = App::new_headless(Config::default()).unwrap();
         app.set_runtime_plugin_test_paths(registry, root);
         app.open_runtime_plugin_manager();
-        assert_eq!(app.info_overlay.choices().len(), 25);
+        assert_eq!(app.info_overlay.choices().len(), 26);
         let shortcuts = app
             .info_overlay
             .choices()
             .iter()
             .filter_map(|choice| choice.shortcut)
             .collect::<BTreeSet<_>>();
-        assert_eq!(shortcuts.len(), 25);
+        assert_eq!(shortcuts.len(), 26);
         assert!(!shortcuts.contains(&'c'), "C remains reserved for copy");
         assert_eq!(
             app.info_overlay
@@ -1537,7 +2145,7 @@ program = "termeric-test-fixture-must-not-run"
                 .any(|choice| choice.id == "next-page")
         );
         choose(&mut app, "next-page");
-        assert_eq!(app.info_overlay.choices().len(), 2);
+        assert_eq!(app.info_overlay.choices().len(), 3);
         assert!(
             app.info_overlay
                 .choices()

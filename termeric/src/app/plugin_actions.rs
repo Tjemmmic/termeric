@@ -1381,7 +1381,7 @@ impl App {
                 }]);
             }
             InfoOverlayAction::SubmitInput { request_id } => {
-                if !self.submit_runtime_plugin_setting_input(request_id)
+                if !self.submit_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
                     self.pending_profile_selection = None;
@@ -1390,7 +1390,7 @@ impl App {
                 }
             }
             InfoOverlayAction::CancelInput { request_id } => {
-                if !self.cancel_runtime_plugin_setting_input(request_id)
+                if !self.cancel_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
                     self.pending_profile_selection = None;

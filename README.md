@@ -222,7 +222,10 @@ without another request when already focused, refuses hidden/minimized and
 Wayland targets explicitly, and never claims compositor-confirmed activation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
-managed-copy removal; installation and typed value entry remain explicit CLI
+managed-copy removal. It can also review and install a local plugin from an
+absolute directory path with explicit grants; enabling is offered only after
+every requested permission is granted. Typed settings are editable in-app.
+Replacement installs and default-profile selection remain explicit CLI
 operations.
 See the [third-party plugin API and security model](docs/plugins.md).
 

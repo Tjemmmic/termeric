@@ -212,6 +212,37 @@ pub struct PluginManifest {
     pub event_handler: Option<DeclarativeEventHandler>,
 }
 
+/// Immutable metadata shown at the local-plugin trust boundary before install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginInstallPreview {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub api_version: u32,
+    pub source: PathBuf,
+    pub source_fingerprint: String,
+    pub permissions: BTreeSet<PluginPermission>,
+    pub profile_count: usize,
+    pub command_count: usize,
+}
+
+pub(crate) fn preview_install(directory: &Path) -> Result<PluginInstallPreview> {
+    let (manifest, source, bytes) = PluginManifest::from_directory(directory)?;
+    Ok(PluginInstallPreview {
+        id: manifest.id,
+        name: manifest.name,
+        version: manifest.version,
+        description: manifest.description,
+        api_version: manifest.api_version,
+        source,
+        source_fingerprint: fingerprint(&bytes),
+        permissions: manifest.permissions,
+        profile_count: manifest.profiles.len(),
+        command_count: manifest.commands.len(),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum DeclarativeSetting {
@@ -1543,6 +1574,12 @@ pub enum PluginAdminCommand {
         enable: bool,
         replace: bool,
     },
+    InstallReviewed {
+        directory: PathBuf,
+        grants: BTreeSet<PluginPermission>,
+        enable: bool,
+        expected_source_fingerprint: String,
+    },
     Update {
         id: String,
     },
@@ -1609,6 +1646,31 @@ pub(crate) fn execute_admin_at(
                 grants,
                 enable,
                 replace,
+            )
+        }
+        PluginAdminCommand::InstallReviewed {
+            directory,
+            grants,
+            enable,
+            expected_source_fingerprint,
+        } => {
+            let (manifest, source, bytes) = PluginManifest::from_directory(&directory)?;
+            let source_fingerprint = fingerprint(&bytes);
+            if source_fingerprint != expected_source_fingerprint {
+                bail!(
+                    "plugin source changed after review (expected {expected_source_fingerprint}, found {source_fingerprint}); review it again"
+                );
+            }
+            install_manifest(
+                &mut registry,
+                registry_path,
+                root,
+                manifest,
+                source,
+                bytes,
+                grants,
+                enable,
+                false,
             )
         }
         PluginAdminCommand::Update { id } => {
@@ -3760,6 +3822,58 @@ events = ["command-invoked"]
                 .plugins
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn reviewed_install_rejects_source_drift_before_mutating_state() {
+        let (_temp, source, root, registry_path) = fixture();
+        let preview = preview_install(&source).unwrap();
+        assert_eq!(preview.id, "sample-tools");
+        assert_eq!(preview.version, "1.0.0");
+        assert_eq!(preview.api_version, 1);
+        assert_eq!(preview.profile_count, 2);
+        assert_eq!(preview.command_count, 0);
+        assert_eq!(preview.source, source.canonicalize().unwrap());
+        assert!(preview.source_fingerprint.starts_with("fnv1a64:"));
+
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("2.0.0", "", "sample-cli"),
+        )
+        .unwrap();
+        let error = execute_admin_at(
+            PluginAdminCommand::InstallReviewed {
+                directory: source.clone(),
+                grants: process_grant(),
+                enable: true,
+                expected_source_fingerprint: preview.source_fingerprint,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("source changed after review"));
+        assert!(!registry_path.exists());
+        assert!(!root.exists());
+
+        let current = preview_install(&source).unwrap();
+        execute_admin_at(
+            PluginAdminCommand::InstallReviewed {
+                directory: current.source,
+                grants: BTreeSet::new(),
+                enable: false,
+                expected_source_fingerprint: current.source_fingerprint,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let (_, statuses) = discover_from_registry(&registry, &root);
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].version, "2.0.0");
+        assert!(!statuses[0].enabled);
+        assert!(statuses[0].granted.is_empty());
     }
 
     #[test]

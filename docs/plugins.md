@@ -177,6 +177,14 @@ Plugins shows a bounded status summary and opens a keyboard-, pointer-, and
 screen-reader-accessible manager for every installed plugin. The manager shows
 the exact source path, version, enabled/diagnostic state, requested and granted
 permissions, effective setting values, and explicit-override count. It can
+install a plugin from an absolute local directory path after showing the
+canonical source, manifest fingerprint, identity, version, API, profile and
+command counts, and every requested permission. Grants are selected explicitly;
+the reviewed plugin may be installed disabled with a subset, while installing
+enabled requires every requested permission. The runtime re-reads the manifest
+and requires its fingerprint to match the reviewed fingerprint immediately
+before using the same atomic install path as the CLI. Duplicate IDs are refused
+and directed to the existing Update action rather than replaced silently. It can
 edit every declared Boolean, integer, text, and choice setting, restore one
 manifest default, enable or disable immediately, and use request-scoped
 confirmations before updating from source, resetting all overrides, or removing
@@ -186,10 +194,11 @@ revalidated through the same atomic registry path as the CLI, and an editor
 whose plugin schema changed after opening fails closed. A removal never deletes
 the recorded original source directory.
 
-Installation, grant selection, and default-profile selection remain explicit
-CLI operations. Typed setting set/unset is supported both in-app and through the
-CLI. `plugin list/show` also remains the untruncated/scriptable diagnostic
-record.
+Replacement installation, relative-path interpretation, and default-profile
+selection remain explicit CLI operations. Typed setting set/unset is supported
+both in-app and through the CLI. `plugin list/show` also remains the
+untruncated/scriptable diagnostic record. Remote installation, catalogs, and
+download/signature trust are not implied by the local in-app flow.
 
 ```bash
 termeric plugin disable task-runner
@@ -209,7 +218,9 @@ Install copies only `termeric-plugin.toml` into the Termeric configuration
 directory. The registry records the canonical source directory and a
 deterministic content fingerprint. The fingerprint is change detection, not a
 cryptographic signature; provenance is the exact local path shown before and
-after installation. Modifying the installed copy outside this flow makes the
+after installation. The in-app review binds installation to that displayed
+manifest fingerprint, so a source edit requires a fresh review. Modifying the
+installed copy outside this flow makes the
 plugin fail closed. The registry, installed plugin directory, manifest, rollback
 copy, and administrative temporary files must be real files/directories rather
 than symlinks; replacement and removal reject unexpected file types before

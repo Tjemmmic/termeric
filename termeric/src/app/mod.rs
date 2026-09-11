@@ -726,6 +726,15 @@ enum RuntimePluginManagerView {
     List {
         page: usize,
     },
+    InstallPath {
+        page: usize,
+    },
+    ReviewInstall {
+        page: usize,
+        preview: crate::plugin::runtime::PluginInstallPreview,
+        grants: std::collections::BTreeSet<crate::plugin::runtime::PluginPermission>,
+        permission_page: usize,
+    },
     Detail {
         plugin_id: String,
         page: usize,

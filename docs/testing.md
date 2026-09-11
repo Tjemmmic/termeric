@@ -981,7 +981,9 @@ host and inspect ambiguous post-commit disconnect behavior manually. See the
 
 Plugin tests use isolated temporary registries and installed-copy directories.
 They cover the complete local lifecycle, version/schema mismatch, permission
-denial, forbidden capabilities, source fingerprint tamper, profile and command
+denial, forbidden capabilities, source fingerprint tamper, fingerprint-bound
+in-app installation review, explicit grant/enable gating, permission pagination,
+duplicate-ID refusal, source drift without mutation, profile and command
 conflicts, installed-directory and administrative-file symlink substitution,
 bounded hook dispatch, crash/timeout child profiles, resource ceilings,
 explicit update behavior, and default-profile configuration. API v2 cases also
