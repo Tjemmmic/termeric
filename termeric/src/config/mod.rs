@@ -304,6 +304,12 @@ impl Config {
                 bail!("font.fallback contains duplicate family {family:?}");
             }
         }
+        if self.font.features.len() > MAX_FONT_FEATURES {
+            bail!("font.features must contain at most {MAX_FONT_FEATURES} overrides");
+        }
+        for tag in self.font.features.keys() {
+            validate_font_feature_tag(tag)?;
+        }
         if self.font.range_overrides.len() > MAX_FONT_RANGE_OVERRIDES {
             bail!("font.range_overrides must contain at most {MAX_FONT_RANGE_OVERRIDES} rules");
         }
@@ -846,9 +852,24 @@ fn validate_font_family(owner: &str, family: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_font_feature_tag(tag: &str) -> Result<()> {
+    if tag.len() != 4
+        || !tag
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        bail!("font.features tag {tag:?} must be exactly four lowercase ASCII letters or digits");
+    }
+    if tag == "kern" {
+        bail!("font.features must not override kern because terminal cell origins are fixed");
+    }
+    Ok(())
+}
+
 /// Font configuration
 pub const MAX_FONT_FALLBACKS: usize = 16;
 pub const MAX_FONT_FAMILY_BYTES: usize = 256;
+pub const MAX_FONT_FEATURES: usize = 32;
 pub const MAX_FONT_RANGE_OVERRIDES: usize = 64;
 
 /// Inclusive Unicode-scalar interval routed to one preferred font family.
@@ -873,6 +894,8 @@ pub struct FontConfig {
     pub line_height: f32,
     /// Fallback font families
     pub fallback: Vec<String>,
+    /// Explicit four-byte OpenType shaping feature values.
+    pub features: BTreeMap<String, u32>,
     /// Bounded non-overlapping Unicode ranges with a preferred family.
     pub range_overrides: Vec<FontRangeOverride>,
     /// Enable font ligatures (for fonts like Fira Code, JetBrains Mono)
@@ -888,6 +911,7 @@ impl Default for FontConfig {
             size: 14.0,
             line_height: 1.2,
             fallback: vec![],
+            features: BTreeMap::new(),
             range_overrides: vec![],
             ligatures: true,
             bold_is_bright: false,
@@ -1445,6 +1469,48 @@ mod tests {
 
         config.font.fallback = vec!["x".repeat(MAX_FONT_FAMILY_BYTES + 1)];
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn font_features_are_typed_bounded_safe_and_deterministic() {
+        let config: Config = toml::from_str(
+            r#"
+                [font.features]
+                calt = 0
+                cv01 = 2
+                ss01 = 1
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.font.features["calt"], 0);
+        assert_eq!(config.font.features["cv01"], 2);
+        assert_eq!(config.font.features["ss01"], 1);
+
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.font.features, config.font.features);
+        assert!(encoded.find("calt = 0").unwrap() < encoded.find("ss01 = 1").unwrap());
+
+        for tag in ["abc", "abcde", "SS01", "ab-c", "kern", "éééé"] {
+            let mut invalid = Config::default();
+            invalid.font.features.insert(tag.into(), 1);
+            assert!(invalid.validate().is_err(), "accepted feature tag {tag:?}");
+        }
+
+        let mut too_many = Config::default();
+        too_many.font.features = (0..=MAX_FONT_FEATURES)
+            .map(|index| (format!("x{index:03}"), index as u32))
+            .collect();
+        assert!(too_many.validate().is_err());
+
+        for invalid_toml in [
+            "[font.features]\nss01 = -1\n",
+            "[font.features]\nss01 = 4294967296\n",
+            "[font.features]\nss01 = 1\nss01 = 2\n",
+        ] {
+            assert!(toml::from_str::<Config>(invalid_toml).is_err());
+        }
     }
 
     #[test]

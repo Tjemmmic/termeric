@@ -407,6 +407,7 @@ impl App {
         self.set_padding(self.config.window.padding);
         if let Some(renderer) = &mut self.renderer {
             renderer.set_ligatures(self.config.font.ligatures);
+            renderer.set_font_features(&self.config.font.features);
             renderer.set_bold_is_bright(self.config.font.bold_is_bright);
             renderer.set_opacity(self.config.window.opacity);
         }
@@ -698,6 +699,10 @@ impl App {
             }
             SettingsAction::ManageFontRangeOverrides => {
                 self.open_font_range_manager();
+                return;
+            }
+            SettingsAction::ManageFontFeatures => {
+                self.open_font_feature_manager();
                 return;
             }
             SettingsAction::SetFontLigatures(enabled) => {

@@ -49,6 +49,7 @@ use crate::terminal::search::{Search, SearchBarInfo};
 use crate::terminal::url::UrlCache;
 use crate::ui::settings::SettingsPanelInfo;
 use anyhow::Result;
+use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -591,6 +592,7 @@ impl Renderer {
         theme: &Theme,
         high_contrast: bool,
         ligatures: bool,
+        font_features: &BTreeMap<String, u32>,
         backend_preference: RendererBackend,
         failure_callback: Option<RendererFailureCallback>,
     ) -> Result<Self> {
@@ -699,7 +701,7 @@ impl Renderer {
 
         // Create glyph cache
         let scaled_font_size = (font_size * scale_factor).max(1.0);
-        let glyph_cache = GlyphCache::new(
+        let mut glyph_cache = GlyphCache::new(
             &device,
             &queue,
             scaled_font_size,
@@ -709,6 +711,7 @@ impl Renderer {
             line_height_multiplier,
             ligatures,
         )?;
+        glyph_cache.set_font_features(font_features);
         let (cell_width, cell_height) = glyph_cache.cell_size();
 
         // Create pipelines
@@ -917,6 +920,13 @@ impl Renderer {
         if self.glyph_cache.ligatures_enabled() != enabled {
             self.invalidate_terminal_rows();
             self.glyph_cache.set_ligatures(enabled);
+        }
+    }
+
+    /// Replace explicit OpenType shaping feature values.
+    pub fn set_font_features(&mut self, features: &BTreeMap<String, u32>) {
+        if self.glyph_cache.set_font_features(features) {
+            self.invalidate_terminal_rows();
         }
     }
 
@@ -3168,6 +3178,28 @@ pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> 
     );
     let toggled_metrics = glyph_cache.shaping_cache_metrics();
     anyhow::ensure!(toggled_metrics.misses == 2 && toggled_metrics.entries == 1);
+
+    glyph_cache.set_ligatures(true);
+    let explicit_disabled = ["liga", "clig", "calt", "dlig"]
+        .into_iter()
+        .map(|tag| (tag.to_string(), 0))
+        .collect::<BTreeMap<_, _>>();
+    anyhow::ensure!(glyph_cache.set_font_features(&explicit_disabled));
+    anyhow::ensure!(
+        glyph_cache.shaping_cache_metrics().entries == 0,
+        "OpenType feature change retained stale shaping entries"
+    );
+    let overridden = render_text_snapshot(device, queue, &mut text, &mut glyph_cache, "ffi")?;
+    anyhow::ensure!(
+        overridden == disabled,
+        "explicit OpenType values did not override the ligature preset"
+    );
+    anyhow::ensure!(!glyph_cache.set_font_features(&explicit_disabled));
+    anyhow::ensure!(
+        glyph_cache.shaping_cache_metrics().entries == 1,
+        "assigning identical OpenType features invalidated a warm run"
+    );
+    glyph_cache.set_font_features(&BTreeMap::new());
 
     let mixed_snapshot =
         |text: &mut TextPipeline, glyph_cache: &mut GlyphCache| -> Result<Vec<u8>> {

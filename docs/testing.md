@@ -231,6 +231,15 @@ text-input accessibility route. Platform fallback is a real cosmic-text shaping
 probe over only the deterministic in-memory database; no host font, GPU,
 compositor, external process, or provider is involved.
 
+OpenType-feature tests deserialize and deterministically round-trip the bounded
+typed map; reject malformed tags, `kern`, excessive entries, negative/overflow
+values, and duplicate TOML keys; and prove explicit values override both states
+of the Ligatures preset in deterministic Fira Mono shaping. Cache-key tests
+include the effective feature sequence. Headless Settings and accessibility
+tests cover list/add/edit/confirmed-delete, decimal/hex input, preserved
+validation errors, stale tag/value refusal, atomic reload, and the shared
+request-scoped input path without a host font, GPU, or compositor.
+
 Keyboard cases cover every named legacy key, xterm modifier parameters 2-8,
 DECCKM/DECKPAM transitions, physical keypad identity, Control and Alt, AltGr,
 Unicode text, shortcut precedence, and focused-pane mode selection. Xterm

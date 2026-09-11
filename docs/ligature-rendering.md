@@ -7,6 +7,21 @@ The `font.ligatures` setting explicitly enables or disables `liga`, `clig`,
 script shaping do not depend on an optional programming-font preference.
 Kerning is disabled because the terminal remains a fixed-column grid.
 
+An optional `font.features` mapping supplies at most 32 explicit OpenType
+values after that preset:
+
+```toml
+[font.features]
+ss01 = 1
+cv01 = 2
+calt = 0
+```
+
+Tags are exactly four lowercase ASCII letters or digits, values span the
+shaping API's `u32` range, and `kern` is rejected. Explicit values win when a
+tag also belongs to the Ligatures preset. Unsupported tags are safely forwarded
+and may have no visible effect in a particular font.
+
 ## Run boundaries and grid semantics
 
 A run contains adjacent, visible, one-column character cells with identical
@@ -26,23 +41,25 @@ move surrounding cells.
 ## Caching and invalidation
 
 The shaping cache key includes run content, font size and line height,
-bold/italic request, ligature feature state, primary family, ordered fallback
-families, and fallback resolution. Unicode-range policy changes synchronously
-clear this cache and persistent row geometry before another frame can reuse a
-run. Rasterized shaped glyphs are separately
+bold/italic request, the effective ordered feature values, primary family,
+ordered fallback families, and fallback resolution. Unicode-range or OpenType
+feature policy changes synchronously clear this cache and persistent row
+geometry before another frame can reuse a run. Rasterized shaped glyphs are separately
 reused by their resolved face/glyph/size/subpixel identity. The run cache is
 bounded to 4,096 entries; reaching the bound clears the run map and records an
 eviction count rather than allowing unbounded growth.
 
-Font, size, line-height, scale, atlas, and ligature changes invalidate the
-relevant glyph/run state. Changing `font.ligatures` also invalidates cached
-terminal rows, but assigning the already-active value is a no-op.
+Font, size, line-height, scale, atlas, ligature, and explicit feature changes
+invalidate the relevant glyph/run state. Assigning an already-active feature
+map is a no-op.
 
 ## Verification
 
 The normal unit lane checks feature toggling against the deterministic Fira
-Mono fixture shipped by the locked `cosmic-text` source and verifies row-run
-boundaries. The opt-in headless GPU lane renders enabled and disabled snapshots,
+Mono fixture shipped by the locked `cosmic-text` source. It proves explicit
+zero/one values override both Ligatures preset states, participate in cache
+identity, and reach advanced shaping without host fonts. It also verifies
+row-run boundaries. The opt-in headless GPU lane renders enabled and disabled snapshots,
 requires their pixels to differ, requires a repeated enabled snapshot to be
 identical, and checks warm shaping-cache reuse. A second comparison covers
 adjacent regular, bold/color, and italic/color runs under a shared pane clip so
@@ -59,6 +76,7 @@ The release benchmark emits `renderer.ligature.code_run_build` and
 For release acceptance, install a programming font with the relevant OpenType
 features (for example Fira Code or JetBrains Mono), place `->`, `=>`, `!=`, and
 `===` beside mixed bold/italic/color cells and pane edges, and toggle ligatures
-in settings. The operators must visibly change without a restart; cell
+in settings. Then configure a feature implemented by that font and verify both
+the enabled and disabled value. The operators must visibly change without a restart; cell
 alignment, selection, cursor placement, search highlights, copying, and pane
 clipping must not.

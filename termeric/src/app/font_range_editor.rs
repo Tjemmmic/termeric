@@ -50,6 +50,7 @@ impl App {
         self.settings_panel.close();
         self.pending_profile_selection = None;
         self.pending_runtime_plugin_management = None;
+        self.pending_font_feature_management = None;
         self.pending_file_upload = None;
         self.show_font_range_list(0);
     }

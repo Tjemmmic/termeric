@@ -5175,6 +5175,23 @@ fn headless_config_reload_preserves_valid_font_range_overrides_atomically() {
 }
 
 #[test]
+fn headless_config_reload_preserves_valid_font_features_atomically() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut config = app.config.clone();
+    config.font.features.insert("ss01".into(), 1);
+    config.font.features.insert("cv01".into(), 2);
+    app.apply_config(config).unwrap();
+    assert_eq!(app.config.font.features.get("ss01"), Some(&1));
+    assert_eq!(app.config.font.features.get("cv01"), Some(&2));
+
+    let retained = app.config.font.features.clone();
+    let mut invalid = app.config.clone();
+    invalid.font.features.insert("kern".into(), 1);
+    assert!(app.apply_config(invalid).is_err());
+    assert_eq!(app.config.font.features, retained);
+}
+
+#[test]
 fn headless_window_level_setting_updates_persistent_policy() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.apply_settings_action(SettingsAction::SetWindowLevel(

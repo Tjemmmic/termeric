@@ -85,6 +85,10 @@ fallback = ["Noto Sans Mono", "Noto Color Emoji"] # ordered, up to 16
 ligatures = true
 bold_is_bright = false
 
+[font.features]
+ss01 = 1 # explicit values override the ligatures preset
+calt = 0
+
 [[font.range_overrides]]
 start = 0xE000
 end = 0xF8FF
@@ -125,6 +129,9 @@ rules with `U+START-U+END | FAMILY`; changes apply live and use the normal
 Settings Save action for persistence. Its **Inspect Glyph Coverage** action
 explains range/primary/fallback attempts and the resolved platform shaping face
 for literal text or an exact `U+` / `0x` scalar without changing configuration.
+Font → OpenType Features manages at most 32 explicit four-byte tags such as
+`ss01 = 1`; these apply live after the Ligatures preset and persist with the
+normal Settings Save action. `kern` remains disabled to protect the cell grid.
 Line and memory limits are both enforced per terminal and pane; see the
 [scrollback memory model](docs/scrollback-memory.md).
 Copy mode entry and quick select are configurable in Keyboard Shortcuts; modal

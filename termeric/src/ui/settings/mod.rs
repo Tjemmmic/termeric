@@ -358,6 +358,8 @@ pub enum SettingsAction {
     },
     /// Open the bounded Unicode-range font override manager.
     ManageFontRangeOverrides,
+    /// Open the bounded explicit OpenType feature manager.
+    ManageFontFeatures,
     /// Change font line height
     SetLineHeight(f32),
     /// Enable or disable programming ligatures.
@@ -688,6 +690,18 @@ impl SettingsPanel {
                 },
                 kind: SettingKind::Action {
                     action: SettingsAction::ManageFontRangeOverrides,
+                },
+            });
+
+            items.push(SettingItem {
+                label: "OpenType Features",
+                value: match config.font.features.len() {
+                    0 => "Manage · none configured".into(),
+                    1 => "Manage · 1 configured".into(),
+                    count => format!("Manage · {count} configured"),
+                },
+                kind: SettingKind::Action {
+                    action: SettingsAction::ManageFontFeatures,
                 },
             });
 
@@ -2327,6 +2341,7 @@ mod tests {
             end: 0xF8FF,
             family: "Symbols Nerd Font Mono".into(),
         }];
+        config.font.features.insert("ss01".into(), 1);
         let entries = panel.build_entries(&config, &default_registry());
 
         let first = entries
@@ -2348,6 +2363,17 @@ mod tests {
             ranges.kind,
             SettingKind::Action {
                 action: SettingsAction::ManageFontRangeOverrides
+            }
+        ));
+        let features = entries
+            .iter()
+            .find(|entry| entry.label == "OpenType Features")
+            .expect("OpenType feature summary");
+        assert_eq!(features.value, "Manage · 1 configured");
+        assert!(matches!(
+            features.kind,
+            SettingKind::Action {
+                action: SettingsAction::ManageFontFeatures
             }
         ));
         assert!(matches!(
@@ -2577,6 +2603,52 @@ mod tests {
     }
 
     #[test]
+    fn font_feature_manager_action_has_shared_keyboard_pointer_and_semantic_routing() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        let config = Config::default();
+        let registry = default_registry();
+        for character in "opentype features".chars() {
+            panel.handle_key(SettingsKey::FilterChar(character), &config, &registry);
+        }
+        assert!(matches!(
+            panel.handle_key(SettingsKey::Enter, &config, &registry),
+            SettingsAction::ManageFontFeatures
+        ));
+        assert!(matches!(
+            panel.accessibility_activate_setting(
+                SettingsSection::Font,
+                "OpenType Features",
+                &config,
+                &registry,
+            ),
+            SettingsAction::ManageFontFeatures
+        ));
+
+        let entries = panel.build_entries(&config, &registry);
+        assert_eq!(entries.len(), 2, "filtered list contains header and action");
+        let layout = SettingsModalLayout::calculate(
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+            panel.animation_progress(),
+            entries.len(),
+        );
+        let action = panel.handle_click(
+            layout.panel_x + layout.padding,
+            layout.list_y + layout.row_height * 1.5,
+            &config,
+            &registry,
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+        );
+        assert!(matches!(action, SettingsAction::ManageFontFeatures));
+    }
+
+    #[test]
     fn test_theme_dropdown() {
         let mut panel = SettingsPanel::new();
         panel.open();
@@ -2588,10 +2660,10 @@ mod tests {
         let themes = Theme::list_available();
         let expected_next = themes.get(1).expect("at least 2 themes");
 
-        // Default font rows are Size, Family, one empty fallback slot, the
-        // range-override summary, Line Height, Ligatures, and Bold Is Bright
-        // before Theme.
-        panel.selected = 7;
+        // Default font rows are Size, Family, one empty fallback slot, range
+        // overrides, OpenType features, Line Height, Ligatures, and Bold Is
+        // Bright before Theme.
+        panel.selected = 8;
 
         // Right opens the dropdown for Dropdown kind
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);

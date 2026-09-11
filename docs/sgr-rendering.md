@@ -69,6 +69,22 @@ bold_is_bright = true
 The promotion happens before inverse. Default, 256-color, and truecolor
 foregrounds are never promoted.
 
+## OpenType feature overrides
+
+`font.features` is a deterministic map of at most 32 four-byte lowercase ASCII
+tags to `u32` values. The normal `font.ligatures` Boolean first supplies
+`liga`, `clig`, `calt`, and `dlig`; explicit map values are applied afterward
+and therefore win. `kern` is rejected because pair kerning conflicts with the
+fixed cell grid. Every advanced run and complete-grapheme span receives the
+same effective values, including text routed through range or fallback fonts.
+
+Settings → Font → OpenType Features provides bounded canonical list, add, edit,
+and confirmed-delete flows. Full tag/value identity and request IDs prevent
+stale actions from retargeting changed entries. Edits apply live through shared
+configuration validation, invalidate shaped runs and persistent terminal rows,
+and persist only through Settings Save. Forwarding a value does not prove the
+active font implements that feature; variable-font axes remain separate.
+
 ## Unicode-range font overrides
 
 `font.range_overrides` can prefer an installed family for an inclusive Unicode

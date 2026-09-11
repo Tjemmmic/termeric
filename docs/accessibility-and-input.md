@@ -158,6 +158,12 @@ visible truncation plus the distinction between configured-family and platform
 shaping evidence. The shared overlay describes inputs generically rather than
 mislabeling non-plugin forms as plugin settings.
 
+Font → OpenType Features is likewise a named button with its active count. Its
+bounded overlay exposes canonical feature entries, paging, Add, Edit, Delete,
+confirmation, and Back as named actions. The `Feature` text input accepts one
+`tag = value` pair. Request IDs plus the complete prior tag/value identity keep
+keyboard, pointer, and accessibility mutation on the same stale-safe path.
+
 The custom-command panel is likewise isolated as a modal dialog. It exposes
 named New and Close buttons, each command as separate Run and Delete actions,
 an empty-state announcement, and the inline editor's Name and Shell Command

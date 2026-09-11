@@ -52,6 +52,11 @@ requested size and bold/italic style; shaped entries use cosmic-text's resolved
 face, glyph, size, subpixel position, and synthetic-bold identity. Incompatible
 rasters are therefore never reused across those changes.
 
+The shaped-run key also includes the effective ordered OpenType feature values.
+Changing `font.features` clears normal and deferred shaped runs and invalidates
+persistent row geometry; resolved glyph atlas entries remain safely reusable by
+their independent face/glyph/size/subpixel identity.
+
 The Font Range Overrides manager can inspect this selection policy on demand.
 Its bounded report uses the same compiled range lookup and complete-grapheme
 family predicate, then performs one diagnostic normal-style cosmic-text shaping

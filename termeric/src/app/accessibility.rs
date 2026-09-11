@@ -6633,6 +6633,95 @@ mod tests {
     }
 
     #[test]
+    fn font_feature_manager_is_accessible_and_uses_the_shared_mutation_path() {
+        use crate::ui::settings::SettingsSection;
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        assert!(app.settings_panel.accessibility_focus_setting(
+            SettingsSection::Font,
+            "OpenType Features",
+            &app.config,
+            &app.shortcut_registry,
+        ));
+        let snapshot = app.accessibility_snapshot();
+        let manager = *app
+            .accessibility
+            .settings_nodes
+            .get(&SettingsSemanticTarget::Setting {
+                section: SettingsSection::Font,
+                label: "OpenType Features",
+            })
+            .unwrap();
+        let node = &snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == manager)
+            .unwrap()
+            .1;
+        assert_eq!(node.role(), Role::Button);
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: manager,
+            data: None,
+        });
+        assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
+
+        let manager_request = app.info_overlay.request_id();
+        app.accessibility_snapshot();
+        let add = *app
+            .accessibility
+            .info_nodes
+            .get(&InfoSemanticTarget::Choice {
+                request_id: manager_request,
+                id: "add".into(),
+            })
+            .unwrap();
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: add,
+            data: None,
+        });
+
+        let input_request = app.info_overlay.request_id();
+        let snapshot = app.accessibility_snapshot();
+        let input = *app
+            .accessibility
+            .info_nodes
+            .get(&InfoSemanticTarget::Input(input_request))
+            .unwrap();
+        let submit = *app
+            .accessibility
+            .info_nodes
+            .get(&InfoSemanticTarget::Dismiss(input_request))
+            .unwrap();
+        let input_node = &snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == input)
+            .unwrap()
+            .1;
+        assert_eq!(input_node.role(), Role::TextInput);
+        assert_eq!(input_node.label(), Some("Feature"));
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: input,
+            data: Some(ActionData::Value("ss01 = 1".into())),
+        });
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: submit,
+            data: None,
+        });
+        assert_eq!(app.config.font.features.get("ss01"), Some(&1));
+        assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
+    }
+
+    #[test]
     fn settings_filter_reports_utf8_cursor_and_empty_results() {
         use crate::ui::settings::SettingsKey;
 

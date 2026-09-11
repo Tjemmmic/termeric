@@ -7,6 +7,7 @@ mod copy_mode;
 mod desktop_io;
 mod domain_picker;
 mod event_loop;
+mod font_feature_editor;
 mod font_range_editor;
 mod ime;
 mod mouse;
@@ -1187,6 +1188,9 @@ pub struct App {
     /// Request-scoped navigation and mutation authority for Unicode-range
     /// font overrides managed through the shared information overlay.
     pending_font_range_management: Option<font_range_editor::PendingFontRangeManagement>,
+    /// Request-scoped navigation and mutation authority for OpenType feature
+    /// overrides managed through the shared information overlay.
+    pending_font_feature_management: Option<font_feature_editor::PendingFontFeatureManagement>,
     /// Temporary registry and installation roots used only by hermetic tests.
     #[cfg(test)]
     runtime_plugin_test_paths: Option<(PathBuf, PathBuf)>,
@@ -1406,6 +1410,7 @@ impl App {
             pending_profile_selection: None,
             pending_runtime_plugin_management: None,
             pending_font_range_management: None,
+            pending_font_feature_management: None,
             #[cfg(test)]
             runtime_plugin_test_paths: None,
             pending_file_upload: None,
@@ -1495,6 +1500,7 @@ impl App {
             &self.theme,
             self.high_contrast_enabled(),
             self.config.font.ligatures,
+            &self.config.font.features,
             self.config.renderer.backend,
             failure_callback,
         )?;

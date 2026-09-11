@@ -53,6 +53,15 @@ ligatures = true
 # Disabled by default because font weight and color intensity are independent.
 bold_is_bright = false
 
+# Optional explicit OpenType values override the Ligatures preset. Tags must be
+# four lowercase ASCII letters/digits; at most 32. `kern` is rejected because
+# proportional pair kerning would move glyph origins off the terminal grid.
+# Settings > Font > OpenType Features provides a bounded live editor.
+# [font.features]
+# ss01 = 1
+# cv01 = 2
+# calt = 0
+
 # Optional inclusive Unicode-scalar ranges prefer one family before the global
 # fallback chain. Rules cannot overlap or cross the surrogate range; at most 64.
 # The primary font still owns terminal cell metrics. Settings > Font > Range

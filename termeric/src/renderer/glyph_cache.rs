@@ -13,7 +13,7 @@ use cosmic_text::{
     Attrs, Buffer, CacheKey, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, Style,
     SwashCache, SwashContent, Weight,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use wgpu::*;
@@ -110,6 +110,8 @@ pub struct LigatureKey {
     pub line_height_bits: u32,
     /// Whether programming-ligature OpenType features are enabled.
     pub ligatures: bool,
+    /// Effective ordered shaping features, including explicit overrides.
+    pub font_features: FontFeatures,
     /// Resolved primary font family.
     pub family: String,
     /// Ordered configured fallback identity.
@@ -126,6 +128,7 @@ impl LigatureKey {
         line_height: f32,
         style: FontStyle,
         ligatures: bool,
+        font_features: FontFeatures,
         family: &str,
         fallbacks: &[String],
         monospace_fallback: bool,
@@ -136,6 +139,7 @@ impl LigatureKey {
             style,
             line_height_bits: line_height.to_bits(),
             ligatures,
+            font_features,
             family: family.to_string(),
             fallbacks: fallbacks.to_vec(),
             monospace_fallback,
@@ -473,6 +477,8 @@ pub struct GlyphCache {
     use_monospace_fallback: bool,
     /// Whether ligatures are enabled
     ligatures_enabled: bool,
+    /// Validated explicit OpenType values applied after the ligature preset.
+    font_feature_overrides: FontFeatures,
     /// Avoid repeating synthetic-face diagnostics for every glyph.
     reported_synthetic_styles: HashSet<SyntheticStyle>,
 }
@@ -673,6 +679,7 @@ impl GlyphCache {
             configured_range_overrides,
             use_monospace_fallback,
             ligatures_enabled: ligatures,
+            font_feature_overrides: FontFeatures::new(),
             reported_synthetic_styles: HashSet::new(),
         })
     }
@@ -1050,8 +1057,23 @@ impl GlyphCache {
         if self.ligatures_enabled != enabled {
             self.ligatures_enabled = enabled;
             self.ligature_cache.clear();
+            self.deferred_ligature_cache.clear();
             self.shaping_cache_metrics.entries = 0;
         }
+    }
+
+    /// Replace the bounded validated OpenType overrides. Returns whether the
+    /// effective shaping configuration changed.
+    pub fn set_font_features(&mut self, overrides: &BTreeMap<String, u32>) -> bool {
+        let overrides = compile_font_feature_overrides(overrides);
+        if self.font_feature_overrides == overrides {
+            return false;
+        }
+        self.font_feature_overrides = overrides;
+        self.ligature_cache.clear();
+        self.deferred_ligature_cache.clear();
+        self.shaping_cache_metrics.entries = 0;
+        true
     }
 
     /// Shape a text run with ligatures
@@ -1084,12 +1106,15 @@ impl GlyphCache {
         if text.is_empty() {
             return None;
         }
+        let font_features =
+            terminal_font_features(self.ligatures_enabled, &self.font_feature_overrides);
         let key = LigatureKey::new(
             text,
             self.font_size,
             self.metrics.line_height,
             style,
             self.ligatures_enabled,
+            font_features,
             &self.font_family,
             &self.fallback_families,
             self.use_monospace_fallback,
@@ -1179,13 +1204,14 @@ impl GlyphCache {
                 text,
                 &default_family,
             );
-            let attrs = font_attrs(family_for(&default_family), style)
-                .font_features(terminal_font_features(self.ligatures_enabled));
+            let font_features =
+                terminal_font_features(self.ligatures_enabled, &self.font_feature_overrides);
+            let attrs =
+                font_attrs(family_for(&default_family), style).font_features(font_features.clone());
             let spans = span_specs.iter().map(|(range, family)| {
                 (
                     &text[range.clone()],
-                    font_attrs(family_for(family), style)
-                        .font_features(terminal_font_features(self.ligatures_enabled)),
+                    font_attrs(family_for(family), style).font_features(font_features.clone()),
                 )
             });
             buffer.set_rich_text(
@@ -1636,7 +1662,7 @@ fn font_attrs(family: Family<'_>, style: FontStyle) -> Attrs<'_> {
         })
 }
 
-fn terminal_font_features(ligatures: bool) -> FontFeatures {
+fn terminal_font_features(ligatures: bool, overrides: &FontFeatures) -> FontFeatures {
     let mut features = FontFeatures::new();
     for feature in [
         FeatureTag::STANDARD_LIGATURES,
@@ -1653,6 +1679,19 @@ fn terminal_font_features(ligatures: bool) -> FontFeatures {
     // Terminal advances are a fixed grid; proportional pair kerning must not
     // shift later cell origins.
     features.disable(FeatureTag::KERNING);
+    features.features.extend_from_slice(&overrides.features);
+    features
+}
+
+fn compile_font_feature_overrides(overrides: &BTreeMap<String, u32>) -> FontFeatures {
+    let mut features = FontFeatures::new();
+    for (tag, value) in overrides {
+        let bytes = tag.as_bytes();
+        debug_assert_eq!(bytes.len(), 4, "font feature tags are validated by Config");
+        if let [first, second, third, fourth] = bytes {
+            features.set(FeatureTag::new(&[*first, *second, *third, *fourth]), *value);
+        }
+    }
     features
 }
 
@@ -2319,12 +2358,22 @@ mod tests {
         text: &str,
         ligatures: bool,
     ) -> Vec<(u16, usize, usize)> {
+        shape_signature_with_overrides(font_data, text, ligatures, &BTreeMap::new())
+    }
+
+    fn shape_signature_with_overrides(
+        font_data: Vec<u8>,
+        text: &str,
+        ligatures: bool,
+        overrides: &BTreeMap<String, u32>,
+    ) -> Vec<(u16, usize, usize)> {
         let source = cosmic_text::fontdb::Source::Binary(Arc::new(font_data));
         let mut font_system = FontSystem::new_with_fonts([source]);
         let mut buffer = Buffer::new(&mut font_system, Metrics::new(16.0, 20.0));
+        let overrides = compile_font_feature_overrides(overrides);
         let attrs = Attrs::new()
             .family(Family::Name("Fira Mono"))
-            .font_features(terminal_font_features(ligatures));
+            .font_features(terminal_font_features(ligatures, &overrides));
         buffer.set_text(&mut font_system, text, &attrs, Shaping::Advanced, None);
         buffer
             .layout_runs()
@@ -2741,13 +2790,24 @@ mod tests {
             GlyphKey::new('x', 14.0, bold_italic)
         );
         assert_ne!(
-            LigatureKey::new("e\u{301}", 14.0, 16.8, regular, true, "Mono", &[], false),
+            LigatureKey::new(
+                "e\u{301}",
+                14.0,
+                16.8,
+                regular,
+                true,
+                FontFeatures::new(),
+                "Mono",
+                &[],
+                false,
+            ),
             LigatureKey::new(
                 "e\u{301}",
                 14.0,
                 16.8,
                 bold_italic,
                 true,
+                FontFeatures::new(),
                 "Mono",
                 &[],
                 false,
@@ -2876,5 +2936,60 @@ mod tests {
             !changed.is_empty(),
             "test font did not expose any OpenType ligature difference"
         );
+    }
+
+    #[test]
+    fn explicit_font_features_follow_the_ligature_preset_and_enter_cache_identity() {
+        let disabled = ["liga", "clig", "calt", "dlig"]
+            .into_iter()
+            .map(|tag| (tag.to_string(), 0))
+            .collect::<BTreeMap<_, _>>();
+        let enabled = ["liga", "clig", "calt", "dlig"]
+            .into_iter()
+            .map(|tag| (tag.to_string(), 1))
+            .collect::<BTreeMap<_, _>>();
+        let data = deterministic_test_font_data();
+        let text = ["fi", "ffi"]
+            .into_iter()
+            .find(|text| {
+                shape_signature(data.clone(), text, true)
+                    != shape_signature(data.clone(), text, false)
+            })
+            .expect("test font should expose a ligature difference");
+        assert_eq!(
+            shape_signature_with_overrides(data.clone(), text, true, &disabled),
+            shape_signature(data.clone(), text, false),
+            "explicit zero values must override the enabled preset"
+        );
+        assert_eq!(
+            shape_signature_with_overrides(data.clone(), text, false, &enabled),
+            shape_signature(data, text, true),
+            "explicit one values must override the disabled preset"
+        );
+
+        let default_key = LigatureKey::new(
+            text,
+            14.0,
+            16.8,
+            FontStyle::default(),
+            true,
+            terminal_font_features(true, &FontFeatures::new()),
+            "Fira Mono",
+            &[],
+            false,
+        );
+        let custom = compile_font_feature_overrides(&enabled);
+        let custom_key = LigatureKey::new(
+            text,
+            14.0,
+            16.8,
+            FontStyle::default(),
+            true,
+            terminal_font_features(true, &custom),
+            "Fira Mono",
+            &[],
+            false,
+        );
+        assert_ne!(default_key, custom_key);
     }
 }

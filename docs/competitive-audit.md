@@ -262,10 +262,12 @@ awaiting evidence:
   Unicode code space. Settings now supplies a bounded request-scoped range
   editor with atomic shared validation and stale-rule protection plus an
   on-demand inspector that explains complete-grapheme range/primary/fallback
-  attempts and resolved platform shaping faces. Variable-font axes/arbitrary
-  OpenType features and exhaustive or localized Unicode-name search still trail
-  kitty/WezTerm's broader power-user font and character tooling; exhaustive
-  system-font recommendation remains deliberately out of scope.
+  attempts and resolved platform shaping faces. A bounded OpenType feature map
+  now layers deterministic tag/value overrides over the simple Ligatures preset
+  without permitting grid-breaking kerning. Variable-font axes and exhaustive
+  or localized Unicode-name search still trail kitty/WezTerm's broader
+  power-user font and character tooling; exhaustive system-font recommendation
+  remains deliberately out of scope.
 - **More window policies.** Ordinary windows now expose live and persisted
   normal/always-on-top/always-on-bottom requests, and quick access has a
   dedicated topmost placement policy. A transient pane-local read-only lock now
