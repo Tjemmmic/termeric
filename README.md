@@ -196,6 +196,11 @@ transfer preserves live PTYs, panes, plugin-tab state, title, history, launch
 state, and pinning while returning a fresh destination-local tab ID without
 native activation. Cross-window movement refuses the source window's final
 non-closing tab so this grant cannot implicitly close a window.
+API v28 adds separately granted closure of one exact ordinary pane in any live
+process-owned window. It reuses the local close path, preserves the containing
+tab and window, refuses the final pane plus stale, closing, live-domain, serial,
+and uninitialized targets, and returns the remaining pane count and focused
+pane ID without selecting a tab or activating a native window.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

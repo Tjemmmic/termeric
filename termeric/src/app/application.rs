@@ -767,6 +767,58 @@ impl Application {
                     }
                 }
             }
+            crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                action_id,
+                window_id,
+                tab_id,
+                pane_id,
+            } => {
+                let result = self
+                    .close_control_pane(&action_id, window_id, tab_id, pane_id)
+                    .and_then(|response| match response {
+                        crate::control::protocol::Response::PaneClosed {
+                            remaining_panes,
+                            focused_pane_id,
+                            ..
+                        } => Ok((remaining_panes, focused_pane_id)),
+                        _ => Err("process pane closure returned an unexpected result".into()),
+                    });
+                match result {
+                    Ok((remaining_panes, focused_pane_id)) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "close-process-pane",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "remaining_panes": remaining_panes,
+                        "focused_pane_id": focused_pane_id,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "close-process-pane",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "window_id": window_id,
+                            "tab_id": tab_id,
+                            "pane_id": pane_id,
+                            "remaining_panes": null,
+                            "focused_pane_id": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
             _ => return Err("structured response did not contain a process action".into()),
         };
         let envelope = serde_json::json!({
@@ -1066,6 +1118,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                            ..
+                        }
                 )
             })
         });
@@ -1126,6 +1181,9 @@ impl Application {
                     crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
                         ..
                     } => continuation.allow_process_tab_move,
+                    crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                        ..
+                    } => continuation.allow_process_pane_close,
                     _ => false,
                 });
         if !has_continuation_authority {
@@ -1251,6 +1309,14 @@ impl Application {
                     process_operation.clone(),
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::CloseProcessPane { .. } => (
+                "pane-close",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -1283,6 +1349,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                            ..
+                        }
                 )
             });
         }
@@ -1310,6 +1379,9 @@ impl Application {
                 crate::plugin::structured::StructuredResponseAction::MoveProcessTab { .. } => {
                     window.continue_structured_process_action(event_json, continuation)
                 }
+                crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                    ..
+                } => window.continue_structured_process_action(event_json, continuation),
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                     ..
                 } => window.continue_structured_process_terminal_query(event_json, continuation),
@@ -6426,6 +6498,134 @@ mod tests {
         );
         assert!(
             moved.to_string().len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_pane_closure_targets_exact_same_or_sibling_window_and_preserves_tab() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let (target, origin, _) = pane_transfer_fixture();
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let target_native = WindowId::from(505_u64);
+        let origin_native = WindowId::from(606_u64);
+        application.windows.insert(target_native, target);
+        application.windows.insert(origin_native, origin);
+        application.window_order = vec![target_native, origin_native];
+        application.control_window_ids.insert(target_native, 8);
+        application.control_window_ids.insert(origin_native, 7);
+
+        let target_tab_id = application.windows[&target_native]
+            .tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .id as u64;
+        let target_pane_id = application.windows[&target_native]
+            .tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .focused_id()
+            .0;
+        let stale = application
+            .plugin_process_action_event(
+                "process-pane-pruner",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                    action_id: "stale-pane".into(),
+                    window_id: 8,
+                    tab_id: target_tab_id,
+                    pane_id: u32::MAX,
+                },
+            )
+            .unwrap();
+        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        assert_eq!(stale["event"]["ok"], false);
+        assert!(
+            stale["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist")
+        );
+
+        let closed = application
+            .plugin_process_action_event(
+                "process-pane-pruner",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                    action_id: "close-sibling-pane".into(),
+                    window_id: 8,
+                    tab_id: target_tab_id,
+                    pane_id: target_pane_id,
+                },
+            )
+            .unwrap();
+        let closed: serde_json::Value = serde_json::from_str(&closed).unwrap();
+        assert_eq!(closed["plugin_id"], "process-pane-pruner");
+        assert_eq!(closed["event"]["action"], "close-process-pane");
+        assert_eq!(closed["event"]["ok"], true);
+        assert_eq!(closed["event"]["origin_window_id"], 7);
+        assert_eq!(closed["event"]["window_id"], 8);
+        assert_eq!(closed["event"]["tab_id"], target_tab_id);
+        assert_eq!(closed["event"]["pane_id"], target_pane_id);
+        assert_eq!(closed["event"]["remaining_panes"], 1);
+        assert!(!closed["event"]["focused_pane_id"].is_null());
+        let target_tabs = application.windows[&target_native].tabs.as_ref().unwrap();
+        assert_eq!(target_tabs.count(), 1);
+        assert_eq!(target_tabs.active_tab().unwrap().id as u64, target_tab_id);
+        assert!(!application.windows[&target_native].should_exit);
+        assert!(!application.windows[&origin_native].should_exit);
+
+        let sole_pane_id = closed["event"]["focused_pane_id"].as_u64().unwrap() as u32;
+        let refused = application
+            .plugin_process_action_event(
+                "process-pane-pruner",
+                8,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                    action_id: "refuse-final-pane".into(),
+                    window_id: 8,
+                    tab_id: target_tab_id,
+                    pane_id: sole_pane_id,
+                },
+            )
+            .unwrap();
+        let refused: serde_json::Value = serde_json::from_str(&refused).unwrap();
+        assert_eq!(refused["event"]["ok"], false);
+        assert_eq!(refused["event"]["origin_window_id"], 8);
+        assert!(refused["event"]["remaining_panes"].is_null());
+        assert!(
+            refused["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("sole pane")
+        );
+        let target_tab = application.windows[&target_native]
+            .tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap();
+        assert_eq!(
+            target_tab
+                .pane_manager
+                .as_ref()
+                .map_or(1, crate::panes::PaneManager::pane_count),
+            1
+        );
+
+        assert!(
+            refused.to_string().len()
+                <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
         );
     }
 

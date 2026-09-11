@@ -195,8 +195,11 @@ awaiting evidence:
   API v27 adds separately granted exact ordinary-tab movement between live
   process-owned windows and exact same-window reorder while refusing implicit
   source-window closure.
+  API v28 adds separately granted closure of one exact ordinary pane in any
+  live process-owned window while preserving its containing tab/window and
+  refusing final-pane or unsupported targets.
   There are still no native activation, implicit final-source-tab/window
-  closure, or broader cross-window topology or closure,
+  closure, or broader cross-window topology or tab/window closure,
   raw terminal-output events, kernel-sandboxed runtimes, raw-byte input,
   arbitrary layout trees, broader destructive actions, or render decorations.
   This remains a
@@ -272,11 +275,11 @@ awaiting evidence:
    #31/#32/#33/#35; do not add more default-on surface area before this gate.
 2. Preserve #29's implemented request-correlated live-domain mutation and
    resumable-transfer authority while gathering native remote-host evidence.
-3. Continue #34/#36/#37/#39/#40/#41/#42/#43/#44/#47/#48/#49/#50/#51/#52/#53/#54 from the bounded API v27
+3. Continue #34/#36/#37/#39/#40/#41/#42/#43/#44/#47/#48/#49/#50/#51/#52/#53/#54/#55 from the bounded API v28
    current-window query/navigation/topology/handler-command/configuration/
    presented-text, process-wide inventory, and non-activating cross-window
    navigation, terminal-text, guarded terminal-input, ordinary tab/pane creation,
-   and exact ordinary-pane/tab movement surfaces toward only
+   exact ordinary-pane/tab movement, and exact ordinary-pane closure surfaces toward only
    demonstrably useful, separately permissioned actions.
    Keep external processes isolated;
    evaluate WASM only after permissions and resource accounting are proven.

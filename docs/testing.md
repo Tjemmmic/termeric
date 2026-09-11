@@ -1134,6 +1134,13 @@ non-activation, bounded correlated results, process-query authority reduction,
 complete result-authority removal, retained-grant updates, and a checked-in
 process tab mover. All fixtures are local and inert; no AI provider process or
 tokens are involved.
+API v28 adds exact process-pane-close version/mode/grant denial, strict stable-
+ID parsing, one-operation enforcement, same- and sibling-window routing,
+final-pane and stale-target refusal, safe two-pane collapse, containing-tab/
+window preservation, non-selection/non-activation, bounded correlated results,
+process-query authority reduction, complete result-authority removal, retained-
+grant updates, and a checked-in process pane pruner. All fixtures are local and
+inert; no AI provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

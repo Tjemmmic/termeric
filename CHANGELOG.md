@@ -8,6 +8,16 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v28 adds an independent `process-pane-close` grant for
+  closing one exact ordinary pane in an exact live process-owned window. The
+  existing close path safely collapses two-pane layouts while preserving the
+  containing tab and window; final-pane, stale, closing, live-domain, serial,
+  and uninitialized targets fail without retargeting. Results report remaining
+  and focused pane identity without tab selection, native activation, lifecycle
+  feedback, or retained host authority. Strict parsing, routing, refusal,
+  grant/install behavior, and the checked-in process-pane-pruner example are
+  hermetically tested without provider execution or AI-token use.
+
 - Declarative plugin API v27 adds an independent `process-tab-move` grant for
   exact same-window tab reordering and cross-window ordinary-tab movement.
   Source/destination identities and insertion index are revalidated before the

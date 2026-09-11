@@ -91,6 +91,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -205,6 +208,9 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::MoveProcessTab { .. } => {
                     "move-process-tab"
                 }
+                crate::plugin::structured::StructuredResponseAction::CloseProcessPane {
+                    ..
+                } => "close-process-pane",
                 crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
                     "terminal-query"
                 }
@@ -301,6 +307,11 @@ impl App {
                 );
             }
             crate::plugin::structured::StructuredResponseAction::MoveProcessTab { .. } => {
+                return Err(
+                    "process actions require the process-owned Application window registry".into(),
+                );
+            }
+            crate::plugin::structured::StructuredResponseAction::CloseProcessPane { .. } => {
                 return Err(
                     "process actions require the process-owned Application window registry".into(),
                 );
@@ -2283,6 +2294,7 @@ pub(super) fn clear_structured_host_authority(
     invocation.allow_process_pane_create = false;
     invocation.allow_process_pane_move = false;
     invocation.allow_process_tab_move = false;
+    invocation.allow_process_pane_close = false;
 }
 
 pub(super) fn reduce_structured_process_query_authority(
@@ -2295,6 +2307,7 @@ pub(super) fn reduce_structured_process_query_authority(
     let retain_process_pane_create = invocation.allow_process_pane_create;
     let retain_process_pane_move = invocation.allow_process_pane_move;
     let retain_process_tab_move = invocation.allow_process_tab_move;
+    let retain_process_pane_close = invocation.allow_process_pane_close;
     clear_structured_host_authority(invocation);
     invocation.allow_process_actions = retain_process_actions;
     invocation.allow_process_terminal_text = retain_process_terminal_text;
@@ -2303,4 +2316,5 @@ pub(super) fn reduce_structured_process_query_authority(
     invocation.allow_process_pane_create = retain_process_pane_create;
     invocation.allow_process_pane_move = retain_process_pane_move;
     invocation.allow_process_tab_move = retain_process_tab_move;
+    invocation.allow_process_pane_close = retain_process_pane_close;
 }

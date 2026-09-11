@@ -27,6 +27,7 @@
 //! API v25 adds exact cross-window ordinary-pane creation.
 //! API v26 adds exact cross-window ordinary-pane movement.
 //! API v27 adds exact cross-window ordinary-tab movement.
+//! API v28 adds exact cross-window ordinary-pane closure.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -39,7 +40,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 27;
+pub const PLUGIN_API_VERSION: u32 = 28;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -93,6 +94,7 @@ pub enum PluginPermission {
     ProcessPaneCreate,
     ProcessPaneMove,
     ProcessTabMove,
+    ProcessPaneClose,
     Secrets,
 }
 
@@ -127,6 +129,7 @@ impl std::fmt::Display for PluginPermission {
             Self::ProcessPaneCreate => "process-pane-create",
             Self::ProcessPaneMove => "process-pane-move",
             Self::ProcessTabMove => "process-tab-move",
+            Self::ProcessPaneClose => "process-pane-close",
             Self::Secrets => "secrets",
         })
     }
@@ -165,6 +168,7 @@ impl std::str::FromStr for PluginPermission {
             "process-pane-create" => Ok(Self::ProcessPaneCreate),
             "process-pane-move" => Ok(Self::ProcessPaneMove),
             "process-tab-move" => Ok(Self::ProcessTabMove),
+            "process-pane-close" => Ok(Self::ProcessPaneClose),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -730,6 +734,17 @@ impl PluginManifest {
         {
             bail!("process-tab-move requires an API v27 persistent event handler");
         }
+        if self
+            .permissions
+            .contains(&PluginPermission::ProcessPaneClose)
+            && (self.api_version < 28
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("process-pane-close requires an API v28 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -868,6 +883,7 @@ impl PluginRegistry {
                         | PluginPermission::ProcessPaneCreate
                         | PluginPermission::ProcessPaneMove
                         | PluginPermission::ProcessTabMove
+                        | PluginPermission::ProcessPaneClose
                 )
             }) {
                 bail!(
@@ -1344,6 +1360,9 @@ impl DeclarativePlugin {
                     allow_process_tab_move: self.manifest.api_version >= 27
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && self.grants.contains(&PluginPermission::ProcessTabMove),
+                    allow_process_pane_close: self.manifest.api_version >= 28
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::ProcessPaneClose),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -2315,6 +2334,34 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::ProcessPaneMove
                 | PluginPermission::ProcessTabMove
         ),
+        28 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+                | PluginPermission::PaneMove
+                | PluginPermission::TerminalInput
+                | PluginPermission::PaneLayout
+                | PluginPermission::WindowClose
+                | PluginPermission::ProcessQuery
+                | PluginPermission::ProcessActions
+                | PluginPermission::ProcessTerminalText
+                | PluginPermission::ProcessTerminalInput
+                | PluginPermission::ProcessTabCreate
+                | PluginPermission::ProcessPaneCreate
+                | PluginPermission::ProcessPaneMove
+                | PluginPermission::ProcessTabMove
+                | PluginPermission::ProcessPaneClose
+        ),
         _ => false,
     }
 }
@@ -3166,6 +3213,24 @@ events = ["command-completed"]
         manifest
     }
 
+    fn process_pane_close_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = process_query_grants();
+        grants.insert(PluginPermission::ProcessPaneClose);
+        grants
+    }
+
+    fn process_pane_close_manifest() -> PluginManifest {
+        let mut manifest = process_query_manifest();
+        manifest.api_version = 28;
+        manifest.id = "process-pane-pruner".into();
+        manifest
+            .permissions
+            .insert(PluginPermission::ProcessPaneClose);
+        manifest.commands[0].id = "close-pane-in-sibling-window".into();
+        manifest.commands[0].name = "Close Pane in Another Window".into();
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -3483,7 +3548,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 28");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 29");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -4214,6 +4279,36 @@ events = ["command-invoked"]
                 source,
                 source_fingerprint: "fnv1a64:0123456789abcdef".into(),
                 grants: process_tab_move_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn checked_in_api_v28_process_pane_pruner_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-pane-pruner");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 28);
+        assert_eq!(manifest.id, "process-pane-pruner");
+        assert_eq!(manifest.commands[0].id, "close-pane-in-sibling-window");
+        assert_eq!(manifest.permissions, process_pane_close_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "process-pane-pruner".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: process_pane_close_grants(),
                 default_profile: None,
                 settings: BTreeMap::new(),
             }],
@@ -5029,6 +5124,70 @@ events = ["command-invoked"]
         assert_eq!(installed.grants, process_tab_move_grants());
         let (installed_manifest, _, _) =
             PluginManifest::from_directory(&root.join("process-tab-mover")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
+    fn api_v28_process_pane_close_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-pane-pruner")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let mut missing = process_pane_close_grants();
+        missing.remove(&PluginPermission::ProcessPaneClose);
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: missing,
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("process-pane-close"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_pane_close_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "process-pane-pruner".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "process-pane-pruner")
+            .unwrap();
+        assert_eq!(installed.grants, process_pane_close_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("process-pane-pruner")).unwrap();
         assert_eq!(installed_manifest.version, "1.1.0");
     }
 
@@ -6520,6 +6679,77 @@ events = ["command-invoked"]
             panic!("ungranted process tab movement fixture did not create an invocation")
         };
         assert!(!invocation.allow_process_tab_move);
+    }
+
+    #[test]
+    fn api_v28_process_pane_closure_requires_persistent_mode_and_exact_grant() {
+        let manifest = process_pane_close_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &process_pane_close_grants()).unwrap();
+        assert_eq!(
+            PluginPermission::ProcessPaneClose.to_string(),
+            "process-pane-close"
+        );
+        assert_eq!(
+            "process-pane-close".parse::<PluginPermission>().unwrap(),
+            PluginPermission::ProcessPaneClose
+        );
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 2,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin =
+            DeclarativePlugin::new(manifest.clone(), None, process_pane_close_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-pane-pruner.close-pane-in-sibling-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v28 process pane closure command did not create an invocation")
+        };
+        assert!(invocation.allow_process_query);
+        assert!(!invocation.allow_process_tab_move);
+        assert!(invocation.allow_process_pane_close);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v27 = manifest.clone();
+        v27.api_version = 27;
+        assert!(v27.validate().unwrap_err().to_string().contains("API v28"));
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+        let mut grants = process_pane_close_grants();
+        grants.remove(&PluginPermission::ProcessPaneClose);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: process-pane-close")
+        );
+        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-pane-pruner.close-pane-in-sibling-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted process pane closure fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_process_pane_close);
     }
 
     #[test]
