@@ -62,6 +62,37 @@ fn validate_process_pane_creation_capacity(total_panes: usize) -> std::result::R
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeWindowFocusDisposition {
+    AlreadyFocused,
+    Request,
+}
+
+fn native_window_focus_disposition(
+    window_id: u64,
+    already_focused: bool,
+    wayland: bool,
+    visible: Option<bool>,
+    minimized: Option<bool>,
+) -> std::result::Result<NativeWindowFocusDisposition, String> {
+    if already_focused {
+        return Ok(NativeWindowFocusDisposition::AlreadyFocused);
+    }
+    if wayland {
+        return Err(
+            "The Wayland compositor controls native window focus; activate this window through the compositor"
+                .into(),
+        );
+    }
+    if visible == Some(false) {
+        return Err(format!("GUI window {window_id} is not visible"));
+    }
+    if minimized == Some(true) {
+        return Err(format!("GUI window {window_id} is minimized"));
+    }
+    Ok(NativeWindowFocusDisposition::Request)
+}
+
 type ControlResponder =
     std::sync::mpsc::SyncSender<std::result::Result<crate::control::protocol::Response, String>>;
 
@@ -1084,6 +1115,51 @@ impl Application {
                     }
                 }
             }
+            crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
+                action_id,
+                window_id,
+            } => {
+                let result =
+                    self.focus_control_window(&action_id, window_id)
+                        .and_then(|response| match response {
+                            crate::control::protocol::Response::WindowFocusRequested {
+                                already_focused,
+                                ..
+                            } => Ok(already_focused),
+                            _ => Err("native window focus returned an unexpected response".into()),
+                        });
+                match result {
+                    Ok(already_focused) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "focus-process-window",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "already_focused": already_focused,
+                        "requested": !already_focused,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "focus-process-window",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "window_id": window_id,
+                            "already_focused": null,
+                            "requested": false,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
             _ => return Err("structured response did not contain a process action".into()),
         };
         let envelope = serde_json::json!({
@@ -1454,6 +1530,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
+                            ..
+                        }
                 )
             })
         });
@@ -1533,6 +1612,9 @@ impl Application {
                     crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
                         ..
                     } => continuation.allow_process_window_close,
+                    crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
+                        ..
+                    } => continuation.allow_process_window_focus,
                     _ => false,
                 }
                 });
@@ -1709,6 +1791,14 @@ impl Application {
                     process_operation.clone(),
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::FocusProcessWindow { .. } => (
+                "window-focus",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -1759,6 +1849,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
+                            ..
+                        }
                 )
             });
         }
@@ -1803,6 +1896,9 @@ impl Application {
                     ..
                 } => window.continue_structured_process_action(event_json, continuation),
                 crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    ..
+                } => window.continue_structured_process_action(event_json, continuation),
+                crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
                     ..
                 } => window.continue_structured_process_action(event_json, continuation),
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
@@ -2721,7 +2817,9 @@ impl Application {
             .as_ref()
             .ok_or_else(|| format!("GUI window {window_id} has no native window"))?;
         let already_focused = native.has_focus();
-        if already_focused {
+        if native_window_focus_disposition(window_id, already_focused, false, None, None)?
+            == NativeWindowFocusDisposition::AlreadyFocused
+        {
             return Ok(crate::control::protocol::Response::WindowFocusRequested {
                 process_id: std::process::id(),
                 request_id: request_id.to_string(),
@@ -2732,18 +2830,14 @@ impl Application {
         let handle = native
             .window_handle()
             .map_err(|error| format!("Could not inspect GUI window {window_id}: {error}"))?;
-        if matches!(handle.as_raw(), RawWindowHandle::Wayland(_)) {
-            return Err(
-                "The Wayland compositor controls native window focus; activate this window through the compositor"
-                    .into(),
-            );
-        }
-        if native.is_visible() == Some(false) {
-            return Err(format!("GUI window {window_id} is not visible"));
-        }
-        if native.is_minimized() == Some(true) {
-            return Err(format!("GUI window {window_id} is minimized"));
-        }
+        let disposition = native_window_focus_disposition(
+            window_id,
+            false,
+            matches!(handle.as_raw(), RawWindowHandle::Wayland(_)),
+            native.is_visible(),
+            native.is_minimized(),
+        )?;
+        debug_assert_eq!(disposition, NativeWindowFocusDisposition::Request);
         native.focus_window();
         Ok(crate::control::protocol::Response::WindowFocusRequested {
             process_id: std::process::id(),
@@ -3893,6 +3987,31 @@ impl ApplicationHandler<AppEvent> for Application {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_window_focus_policy_is_truthful_and_non_restoring() {
+        assert_eq!(
+            native_window_focus_disposition(7, true, true, Some(false), Some(true)).unwrap(),
+            NativeWindowFocusDisposition::AlreadyFocused
+        );
+        assert_eq!(
+            native_window_focus_disposition(7, false, false, Some(true), Some(false)).unwrap(),
+            NativeWindowFocusDisposition::Request
+        );
+        assert!(
+            native_window_focus_disposition(7, false, true, Some(true), Some(false))
+                .unwrap_err()
+                .contains("Wayland compositor")
+        );
+        assert_eq!(
+            native_window_focus_disposition(7, false, false, Some(false), Some(false)).unwrap_err(),
+            "GUI window 7 is not visible"
+        );
+        assert_eq!(
+            native_window_focus_disposition(7, false, false, Some(true), Some(true)).unwrap_err(),
+            "GUI window 7 is minimized"
+        );
+    }
 
     #[test]
     fn quick_access_launch_is_excluded_from_automatic_workspace_persistence() {
@@ -7533,6 +7652,94 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("final live")
+        );
+        assert!(!application.windows[&origin_native].should_exit);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_window_focus_is_exact_bounded_and_reuses_native_policy() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let (target, origin, _) = pane_transfer_fixture();
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let target_native = WindowId::from(1_313_u64);
+        let origin_native = WindowId::from(1_414_u64);
+        application.windows.insert(target_native, target);
+        application.windows.insert(origin_native, origin);
+        application.window_order = vec![target_native, origin_native];
+        application.control_window_ids.insert(target_native, 8);
+        application.control_window_ids.insert(origin_native, 7);
+
+        let stale = application
+            .plugin_process_action_event(
+                "process-window-focuser",
+                7,
+                crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
+                    action_id: "stale-window".into(),
+                    window_id: 99,
+                },
+            )
+            .unwrap();
+        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        assert_eq!(stale["event"]["action"], "focus-process-window");
+        assert_eq!(stale["event"]["ok"], false);
+        assert_eq!(stale["event"]["origin_window_id"], 7);
+        assert_eq!(stale["event"]["window_id"], 99);
+        assert_eq!(stale["event"]["requested"], false);
+        assert!(stale["event"]["already_focused"].is_null());
+        assert!(stale["event"]["error"].as_str().unwrap().contains("99"));
+
+        let native_less = application
+            .plugin_process_action_event(
+                "process-window-focuser",
+                7,
+                crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
+                    action_id: "exact-sibling".into(),
+                    window_id: 8,
+                },
+            )
+            .unwrap();
+        let native_less: serde_json::Value = serde_json::from_str(&native_less).unwrap();
+        assert_eq!(native_less["event"]["ok"], false);
+        assert_eq!(native_less["event"]["window_id"], 8);
+        assert_eq!(native_less["event"]["requested"], false);
+        assert!(
+            native_less["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("has no native window")
+        );
+
+        application
+            .windows
+            .get_mut(&target_native)
+            .unwrap()
+            .should_exit = true;
+        let closing = application
+            .plugin_process_action_event(
+                "process-window-focuser",
+                7,
+                crate::plugin::structured::StructuredResponseAction::FocusProcessWindow {
+                    action_id: "closing-sibling".into(),
+                    window_id: 8,
+                },
+            )
+            .unwrap();
+        let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+        assert_eq!(closing["event"]["ok"], false);
+        assert!(
+            closing["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("closing")
+        );
+        assert!(
+            closing.to_string().len()
+                <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
         );
         assert!(!application.windows[&origin_native].should_exit);
     }

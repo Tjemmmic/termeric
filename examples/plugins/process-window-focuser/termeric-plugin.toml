@@ -1,0 +1,60 @@
+api_version = 32
+id = "process-window-focuser"
+name = "Process Window Focuser"
+version = "1.0.0"
+description = "Demonstrates an exact native focus request for a process-owned window"
+permissions = ["process-spawn", "process-query", "process-window-focus", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "focus-sibling-window"
+name = "Focus Another Window"
+description = "Request native focus for the first available sibling window"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+def notice(message):
+    return [{
+        "type": "show-notice",
+        "title": "Process Window Focuser",
+        "lines": [message[:400]],
+    }]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{"type": "query-process", "query_id": "window-focus-targets"}]
+    elif event["type"] == "process-query-result":
+        origin = event["origin_window_id"]
+        target = next(
+            (window for window in event["windows"] if window["id"] != origin),
+            None,
+        )
+        if target is None:
+            actions = notice("No sibling window is available to focus.")
+        else:
+            actions = [{
+                "type": "focus-process-window",
+                "action_id": "focus-sibling-window",
+                "window_id": target["id"],
+            }]
+    elif event["type"] == "process-action-result" and event["action"] == "focus-process-window":
+        if event["ok"]:
+            disposition = "was already focused" if event["already_focused"] else "received a focus request"
+            actions = notice(f"Window {event['window_id']} {disposition}.")
+        else:
+            actions = notice("Window focus failed: " + event["error"])
+    else:
+        actions = []
+    print(json.dumps({
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

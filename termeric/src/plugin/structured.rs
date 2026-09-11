@@ -138,6 +138,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit closure of one exact non-final process-owned window.
     /// Its result clears every host operation authority.
     pub allow_process_window_close: bool,
+    /// Permit one native focus request for an exact process-owned window.
+    /// Its result clears every host operation authority.
+    pub allow_process_window_focus: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -243,6 +246,10 @@ pub enum StructuredResponseAction {
         preset: PluginPaneLayoutPreset,
     },
     CloseProcessWindow {
+        action_id: String,
+        window_id: u64,
+    },
+    FocusProcessWindow {
         action_id: String,
         window_id: u64,
     },
@@ -657,6 +664,7 @@ fn run_handler(
         invocation.allow_process_tab_close,
         invocation.allow_process_pane_layout,
         invocation.allow_process_window_close,
+        invocation.allow_process_window_focus,
     )
 }
 
@@ -796,6 +804,7 @@ impl PersistentHandler {
         allow_process_tab_close: bool,
         allow_process_pane_layout: bool,
         allow_process_window_close: bool,
+        allow_process_window_focus: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -851,7 +860,7 @@ impl PersistentHandler {
                 "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
             ));
         }
-        let actions = parse_persistent_response_with_window_close(
+        let actions = parse_persistent_response_with_window_focus(
             &bytes,
             self.allow_ui_actions,
             allow_workspace_query,
@@ -878,6 +887,7 @@ impl PersistentHandler {
             allow_process_tab_close,
             allow_process_pane_layout,
             allow_process_window_close,
+            allow_process_window_focus,
             request_id,
         )?;
         if let Some(status) = self
@@ -968,6 +978,7 @@ fn run_persistent_handler(
                 invocation.allow_process_tab_close,
                 invocation.allow_process_pane_layout,
                 invocation.allow_process_window_close,
+                invocation.allow_process_window_focus,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -1168,6 +1179,7 @@ fn parse_response_with_host_creation(
         false,
         false,
         false,
+        false,
     )
 }
 
@@ -1199,6 +1211,7 @@ fn parse_response_with_host_mutation(
     allow_process_tab_close: bool,
     allow_process_pane_layout: bool,
     allow_process_window_close: bool,
+    allow_process_window_focus: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -1235,6 +1248,7 @@ fn parse_response_with_host_mutation(
         allow_process_tab_close,
         allow_process_pane_layout,
         allow_process_window_close,
+        allow_process_window_focus,
     )
 }
 
@@ -1344,6 +1358,7 @@ fn parse_persistent_response_with_host_mutation(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn parse_persistent_response_with_window_close(
     bytes: &[u8],
@@ -1372,6 +1387,69 @@ fn parse_persistent_response_with_window_close(
     allow_process_tab_close: bool,
     allow_process_pane_layout: bool,
     allow_process_window_close: bool,
+    expected_request_id: u64,
+) -> Result<Vec<StructuredResponseAction>, String> {
+    parse_persistent_response_with_window_focus(
+        bytes,
+        allow_ui_actions,
+        allow_workspace_query,
+        allow_workspace_actions,
+        allow_workspace_topology,
+        allow_terminal_query,
+        allow_pane_create,
+        allow_tab_create,
+        allow_pane_close,
+        allow_tab_close,
+        allow_pane_move,
+        allow_terminal_input,
+        allow_pane_layout,
+        allow_window_close,
+        allow_process_query,
+        allow_process_actions,
+        allow_process_terminal_text,
+        allow_process_terminal_input,
+        allow_process_tab_create,
+        allow_process_pane_create,
+        allow_process_pane_move,
+        allow_process_tab_move,
+        allow_process_pane_close,
+        allow_process_tab_close,
+        allow_process_pane_layout,
+        allow_process_window_close,
+        false,
+        expected_request_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_persistent_response_with_window_focus(
+    bytes: &[u8],
+    allow_ui_actions: bool,
+    allow_workspace_query: bool,
+    allow_workspace_actions: bool,
+    allow_workspace_topology: bool,
+    allow_terminal_query: bool,
+    allow_pane_create: bool,
+    allow_tab_create: bool,
+    allow_pane_close: bool,
+    allow_tab_close: bool,
+    allow_pane_move: bool,
+    allow_terminal_input: bool,
+    allow_pane_layout: bool,
+    allow_window_close: bool,
+    allow_process_query: bool,
+    allow_process_actions: bool,
+    allow_process_terminal_text: bool,
+    allow_process_terminal_input: bool,
+    allow_process_tab_create: bool,
+    allow_process_pane_create: bool,
+    allow_process_pane_move: bool,
+    allow_process_tab_move: bool,
+    allow_process_pane_close: bool,
+    allow_process_tab_close: bool,
+    allow_process_pane_layout: bool,
+    allow_process_window_close: bool,
+    allow_process_window_focus: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1415,6 +1493,7 @@ fn parse_persistent_response_with_window_close(
         allow_process_tab_close,
         allow_process_pane_layout,
         allow_process_window_close,
+        allow_process_window_focus,
     )
 }
 
@@ -1445,6 +1524,7 @@ fn validate_response_actions(
     allow_process_tab_close: bool,
     allow_process_pane_layout: bool,
     allow_process_window_close: bool,
+    allow_process_window_focus: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1677,6 +1757,20 @@ fn validate_response_actions(
                 host_operations += 1;
                 validate_text(
                     "process window closure action id",
+                    action_id,
+                    MAX_ACTION_ID_BYTES,
+                )?;
+            }
+            StructuredResponseAction::FocusProcessWindow { action_id, .. } => {
+                if !allow_process_window_focus {
+                    return Err(
+                        "handler requested process window focus without API v32 persistent process-window-focus authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text(
+                    "process window focus action id",
                     action_id,
                     MAX_ACTION_ID_BYTES,
                 )?;
@@ -1968,6 +2062,7 @@ mod tests {
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -2504,6 +2599,43 @@ mod tests {
             false, // process tab close
             false, // process pane layout
             allow_process_window_close,
+            9,
+        )
+    }
+
+    fn parse_process_window_focus_response(
+        bytes: &[u8],
+        allow_process_query: bool,
+        allow_process_window_focus: bool,
+    ) -> Result<Vec<StructuredResponseAction>, String> {
+        parse_persistent_response_with_window_focus(
+            bytes,
+            false, // ui actions
+            false, // workspace query
+            false, // workspace actions
+            false, // workspace topology
+            false, // terminal query
+            false, // pane create
+            false, // tab create
+            false, // pane close
+            false, // tab close
+            false, // pane move
+            false, // terminal input
+            false, // pane layout
+            false, // window close
+            allow_process_query,
+            false, // process actions
+            false, // process terminal text
+            false, // process terminal input
+            false, // process tab create
+            false, // process pane create
+            false, // process pane move
+            false, // process tab move
+            false, // process pane close
+            false, // process tab close
+            false, // process pane layout
+            false, // process window close
+            allow_process_window_focus,
             9,
         )
     }
@@ -3146,6 +3278,67 @@ mod tests {
         let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"one","window_id":7},{"type":"close-process-window","action_id":"two","window_id":8}]}"#;
         assert!(
             parse_process_window_close_response(duplicate, false, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
+    }
+
+    #[test]
+    fn process_window_focus_requires_v32_authority_and_strict_bounded_shape() {
+        let focus = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"focus-sibling-window","window_id":7}]}"#;
+        assert_eq!(
+            parse_process_window_focus_response(focus, false, true).unwrap(),
+            vec![StructuredResponseAction::FocusProcessWindow {
+                action_id: "focus-sibling-window".into(),
+                window_id: 7,
+            }]
+        );
+        assert!(
+            parse_process_window_focus_response(focus, true, false)
+                .unwrap_err()
+                .contains("API v32")
+        );
+        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"focus","window_id":7,"raise":true}]}"#;
+        assert!(
+            parse_process_window_focus_response(unknown, false, true)
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"focus","window_id":"7"}]}"#;
+        assert!(parse_process_window_focus_response(malformed, false, true).is_err());
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"two\nlines","window_id":7}]}"#;
+        assert!(
+            parse_process_window_focus_response(unsafe_id, false, true)
+                .unwrap_err()
+                .contains("control-safe")
+        );
+        let oversized = serde_json::json!({
+            "schema_version": 2,
+            "request_id": 9,
+            "actions": [{
+                "type": "focus-process-window",
+                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
+                "window_id": 7,
+            }],
+        });
+        assert!(
+            parse_process_window_focus_response(
+                &serde_json::to_vec(&oversized).unwrap(),
+                false,
+                true,
+            )
+            .unwrap_err()
+            .contains("within 64 bytes")
+        );
+        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"focus-process-window","action_id":"focus","window_id":7}]}"#;
+        assert!(
+            parse_process_window_focus_response(mixed, true, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
+        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"focus-process-window","action_id":"one","window_id":7},{"type":"focus-process-window","action_id":"two","window_id":8}]}"#;
+        assert!(
+            parse_process_window_focus_response(duplicate, false, true)
                 .unwrap_err()
                 .contains("more than one host operation")
         );
@@ -4794,6 +4987,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -4884,6 +5078,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -4970,6 +5165,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5051,6 +5247,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5139,6 +5336,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5230,6 +5428,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5315,6 +5514,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5516,6 +5716,58 @@ done"#,
             vec![StructuredResponseAction::ShowNotice {
                 title: "Process Window Closer".into(),
                 lines: vec!["Closing window 7; remaining windows: 1".into()],
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_in_process_window_focuser_completes_a_hermetic_three_event_conversation() {
+        if !std::path::Path::new("/usr/bin/python3").is_file()
+            && !std::path::Path::new("/bin/python3").is_file()
+        {
+            return;
+        }
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-window-focuser");
+        let (manifest, _, _) =
+            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
+        let handler = manifest.event_handler.unwrap();
+        let mut invocation = persistent_fixture(&manifest.id, "exit 1");
+        invocation.program = handler.program;
+        invocation.args = handler.args;
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into();
+        invocation.allow_process_query = true;
+        invocation.allow_process_window_focus = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::QueryProcess {
+                query_id: "window-focus-targets".into(),
+            }]
+        );
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2},{"id":7}]}}"#.into();
+        invocation.allow_process_query = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::FocusProcessWindow {
+                action_id: "focus-sibling-window".into(),
+                window_id: 7,
+            }]
+        );
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"focus-process-window","ok":true,"window_id":7,"already_focused":false,"requested":true}}"#.into();
+        invocation.allow_process_window_focus = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowNotice {
+                title: "Process Window Focuser".into(),
+                lines: vec!["Window 7 received a focus request.".into()],
             }]
         );
         assert_eq!(handlers.len(), 1);
@@ -5831,6 +6083,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -5885,6 +6138,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -5926,6 +6180,7 @@ done"#,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
             allow_process_window_close: false,
+            allow_process_window_focus: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

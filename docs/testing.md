@@ -1164,6 +1164,15 @@ isolation, non-activation, bounded correlated results, process-query authority
 reduction, complete result-authority removal, retained-grant updates, and a
 checked-in process window closer. All fixtures are local and inert; no AI
 provider process or tokens are involved.
+API v32 adds exact process-window-focus version/mode/grant denial, strict stable-
+window/action parsing, one-operation enforcement, exact same-/sibling-window
+routing, stale/closing/native-less refusal, shared already-focused/Wayland/
+hidden/minimized backend policy, truthful requested-versus-confirmed results,
+bounded correlated results, process-query authority reduction, complete result-
+authority removal, retained-grant updates, and a checked-in process window
+focuser. All fixtures are local and inert; no AI provider process or tokens are
+involved. Real compositor focus transfer remains operator acceptance because a
+successful native request cannot prove the window manager honored it.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

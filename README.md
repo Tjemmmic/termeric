@@ -216,6 +216,10 @@ The bounded correlated result is submitted before teardown; originating-window
 targets wait for its exact callback, sibling targets close independently, and
 the final live process window remains protected without native activation or
 identity fallback.
+API v32 adds a separately granted native focus request for one exact live
+process-owned window. It reuses authenticated GUI control policy, succeeds
+without another request when already focused, refuses hidden/minimized and
+Wayland targets explicitly, and never claims compositor-confirmed activation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

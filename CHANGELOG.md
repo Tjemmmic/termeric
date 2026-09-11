@@ -8,6 +8,16 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v32 adds an independent `process-window-focus` grant
+  for requesting native focus on one exact live process-owned window. It reuses
+  the authenticated GUI control policy, reports already-focused and requested
+  outcomes separately, refuses stale/closing/native-less/hidden/minimized
+  targets and Wayland explicitly, and never falls back to another identity or
+  claims compositor-confirmed activation. Strict parsing, one-operation
+  enforcement, retained/result authority, exact routing, backend decisions,
+  install/update behavior, and the checked-in process-window-focuser example
+  are hermetically tested without provider execution or AI-token use.
+
 - Declarative plugin API v31 adds an independent `process-window-close` grant
   for scheduling closure of one exact live process-owned window. Stable window
   identity, initialized ownership, non-closing state, pending-close state, and

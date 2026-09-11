@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v31 are constrained local extension formats.
+Termeric plugin APIs v1 through v32 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -87,6 +87,9 @@ exact live process-owned window while preserving terminal identity and focus.
 API v31 adds an independent `process-window-close` grant for exact process-owned
 window closure after correlated result submission while protecting the final
 live process window.
+API v32 adds an independent `process-window-focus` grant for requesting native
+focus on one exact live process-owned window through the authenticated control
+policy without claiming compositor-confirmed activation.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -152,6 +155,8 @@ The API v30 cross-window pane-layout sample is
 [`examples/plugins/process-pane-arranger/termeric-plugin.toml`](../examples/plugins/process-pane-arranger/termeric-plugin.toml).
 The API v31 process-window closure sample is
 [`examples/plugins/process-window-closer/termeric-plugin.toml`](../examples/plugins/process-window-closer/termeric-plugin.toml).
+The API v32 process-window focus sample is
+[`examples/plugins/process-window-focuser/termeric-plugin.toml`](../examples/plugins/process-window-focuser/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -1555,11 +1560,11 @@ and every mutation authority before delivery. An API v21+ handler may retain
 only separately granted `process-actions`, `process-terminal-text`,
 `process-terminal-input`, `process-tab-create`, `process-pane-create`,
 `process-pane-move`, `process-tab-move`, `process-pane-close`,
-`process-tab-close`, `process-pane-layout`, and (for API v31)
-`process-window-close` authorities for the single bounded query-to-navigation,
+`process-tab-close`, `process-pane-layout`, `process-window-close`, and (for API
+v32) `process-window-focus` authorities for the single bounded query-to-navigation,
 query-to-text, query-to-input, query-to-tab-creation, or
 query-to-pane-creation/movement/closure/layout, query-to-tab-movement/closure,
-or query-to-window-closure sequences documented below. Those remain separate
+or query-to-window-closure/focus sequences documented below. Those remain separate
 grants; process inventory itself authorizes no native activation, input,
 topology, movement, creation, or closure.
 
@@ -1708,11 +1713,12 @@ At most one host operation is accepted per response. An API v22+ process-query
 result may retain only separately granted `process-actions`,
 `process-terminal-text`, `process-terminal-input`, `process-tab-create`,
 `process-pane-create`, `process-pane-move`, `process-tab-move`,
-`process-pane-close`, `process-tab-close`, `process-pane-layout`, and (for API
-v31) `process-window-close` authority, allowing one
+`process-pane-close`, `process-tab-close`, `process-pane-layout`,
+`process-window-close`, and (for API v32) `process-window-focus` authority,
+allowing one
 inventory-to-navigation, inventory-to-text, inventory-to-input,
 inventory-to-tab-creation, inventory-to-pane-creation/movement, or
-inventory-to-tab-movement, inventory-to-pane/tab/window-closure, or
+inventory-to-tab-movement, inventory-to-pane/tab/window-closure, window-focus, or
 inventory-to-pane-layout sequence. A
 process-terminal-query result clears every host
 query and mutation authority before delivery, so it cannot read a second pane,
@@ -2228,6 +2234,51 @@ navigation, native activation, arbitrary lifecycle control, or implicit final-
 window termination. API v19 `window-close` remains unchanged and current-
 window command-scoped.
 
+## Manifest API v32 exact process-window focus requests
+
+API v32 adds the independent `process-window-focus` mutation grant. Review and
+install the sample with:
+
+```bash
+termeric plugin validate examples/plugins/process-window-focuser
+termeric plugin install examples/plugins/process-window-focuser \
+  --allow process-spawn --allow process-query \
+  --allow process-window-focus --allow event-subscribe \
+  --allow ui-actions --enable
+```
+
+After a bounded process inventory, a persistent handler may emit exactly one
+operation:
+
+```json
+{"type":"focus-process-window","action_id":"focus-sibling-window","window_id":7}
+```
+
+Only an API v32 persistent handler with retained `process-window-focus`
+authority may emit it. Termeric resolves only the supplied process-lifetime
+window ID and revalidates plugin generation, continuation authority, target
+existence, non-closing state, and native-window ownership. It never substitutes
+the originating, currently focused, newest, or only window.
+
+The operation reuses authenticated `control focus-window` policy. An already-
+focused target succeeds without another native request. A supported backend
+receives one native focus request; hidden and minimized targets fail rather
+than being restored. Wayland fails explicitly because the compositor controls
+activation. A successful request means only that Termeric submitted it—not
+that the desktop transferred focus. Scripts may use a later process inventory
+to observe the reported focus state.
+
+A success result reports `action: "focus-process-window"`, exact origin and
+target IDs, `already_focused`, and `requested`. Failure reports
+`requested: false`, null `already_focused`, and a bounded control-safe `error`
+plus `error_truncated`, without fallback or unrelated mutation. Every result
+clears all host authority and emits no derived lifecycle event.
+
+This grant does not select tabs or panes, unhide or unminimize windows, send an
+attention request, close or resize anything, reorder desktop windows, or grant
+arbitrary desktop control. Process tab/pane selection and window focus remain
+separate host operations and therefore cannot be combined in one response.
+
 ## Permissions and isolation
 
 | Capability | Public API status |
@@ -2263,6 +2314,7 @@ window command-scoped.
 | `process-tab-close` | API v29+, after `--allow process-tab-close`; permits scheduled closure of one exact ordinary tab in an exact live process-owned window while preserving the window and refusing the final non-closing tab, without native activation or lifecycle feedback. |
 | `process-pane-layout` | API v30+, after `--allow process-pane-layout`; permits exact pane swap, divider balancing, or columns/rows/grid presets in one exact ordinary split tab in an exact live process-owned window, preserving terminal identity, focus, and active-tab selection without native activation. |
 | `process-window-close` | API v31+, after `--allow process-window-close`; permits result-gated closure of one exact non-final live process-owned window through a persistent handler, without identity fallback, native activation, or implicit application termination. |
+| `process-window-focus` | API v32+, after `--allow process-window-focus`; permits one truthful native focus request for an exact live process-owned window through the existing authenticated control policy, without identity fallback, restoration, or compositor-confirmation claims. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -2270,7 +2322,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v31 may also request `terminal-text` for
+`ui-actions`; API v4 through v32 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -2353,6 +2405,11 @@ API v31 adds only `process-window-close`, independently of process/current-
 window inventory, navigation, terminal text/input, native activation, pane/tab
 mutation, final-window termination, arbitrary lifecycle control, UI,
 filesystem, network, clipboard, or secret access.
+API v32 adds only `process-window-focus`, independently of process/current-
+window inventory, tab/pane navigation, terminal text/input, window restoration,
+attention requests, lifecycle/topology mutation, UI, filesystem, network,
+clipboard, or secret access. Backend acceptance is a native focus request, not
+proof of compositor focus transfer.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -2555,6 +2612,13 @@ Before distributing a local directory:
     non-activation, bounded correlated results, process-query authority
     reduction, complete result-authority removal, retained-grant updates, and
     the checked-in process window closer.
+36. For API v32, test exact grant/version/mode denial, strict action/ID shape,
+    duplicate and mixed host-operation rejection, exact same-/sibling-window
+    routing, stale/closing/native-less refusal, already-focused behavior,
+    Wayland/hidden/minimized policy, one native request on supported backends,
+    truthful request-versus-confirmation reporting, bounded correlated results,
+    process-query authority reduction, complete result-authority removal,
+    retained-grant updates, and the checked-in process window focuser.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -2730,6 +2794,16 @@ authority reduction, one-operation enforcement, complete result-authority
 removal, retained-grant install/update behavior, and a checked-in process
 window closer. Its tests use only inert local shell/Python fixtures; no
 provider runs or AI tokens are consumed.
+API v32 adds exact permission/version/mode gating, strict stable-window/action
+parsing, same- and sibling-window exact routing, stale/closing/native-less
+refusal, shared authenticated-control focus policy, already-focused and
+Wayland/hidden/minimized decisions, truthful requested-versus-confirmed result
+semantics, bounded correlated results, query-to-window-focus authority
+reduction, one-operation enforcement, complete result-authority removal,
+retained-grant install/update behavior, and a checked-in process window
+focuser. Its tests use only inert local shell/Python fixtures; no provider runs
+or AI tokens are consumed. Native compositor observation remains separate
+operator acceptance.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -2747,7 +2821,7 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v31's public surface includes current-window inventory,
+and secrets. API v32's public surface includes current-window inventory,
 navigation, topology, exact presented-text reads, ordinary pane/tab lifecycle,
 pane movement, bounded terminal input, same-tab pane layouts, command-scoped
 exact-window closure, process-wide read-only inventory, persistent handlers,
@@ -2761,6 +2835,7 @@ cross-window exact ordinary pane closure,
 cross-window exact ordinary tab closure,
 cross-window exact ordinary pane layout operations,
 exact non-final process-window closure,
+exact process-window native focus requests,
 namespaced commands,
 non-secret settings, and narrowly granted completed-region snapshots. Those
 capabilities are not enough to represent the privileged
@@ -2783,7 +2858,7 @@ after that PTY write and remains outside automated acceptance.
 `api_version = 21`, `api_version = 22`, `api_version = 23`,
 `api_version = 24`, `api_version = 25`, `api_version = 26`,
 `api_version = 27`, `api_version = 28`, `api_version = 29`,
-`api_version = 30`, and `api_version = 31`
+`api_version = 30`, `api_version = 31`, and `api_version = 32`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -2883,6 +2958,13 @@ result is submitted before teardown; origin closure waits for its exact
 callback, sibling closure remains independent, stale or pending targets fail,
 and the operation never activates a native window or terminates the final live
 process window.
+API v32 adds a separately granted native focus request for one exact live
+process-owned window. Process-query results may retain that independently
+granted authority, while focus results remove every host authority. The
+operation shares authenticated GUI control policy: already-focused windows do
+not receive another request; stale, closing, native-less, hidden, minimized,
+and Wayland targets fail explicitly; and a successful request never claims the
+compositor confirmed activation.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit
