@@ -583,6 +583,7 @@ impl Renderer {
         font_size: f32,
         font_family: &str,
         fallback_families: &[String],
+        range_overrides: &[crate::config::FontRangeOverride],
         line_height_multiplier: f32,
         padding: f32,
         scale_factor: f32,
@@ -703,6 +704,7 @@ impl Renderer {
             scaled_font_size,
             font_family,
             fallback_families,
+            range_overrides,
             line_height_multiplier,
             ligatures,
         )?;
@@ -860,10 +862,15 @@ impl Renderer {
     }
 
     /// Apply a primary font and ordered configured fallbacks.
-    pub fn set_font_families(&mut self, primary: String, fallbacks: &[String]) {
+    pub fn set_font_families(
+        &mut self,
+        primary: String,
+        fallbacks: &[String],
+        range_overrides: &[crate::config::FontRangeOverride],
+    ) {
         self.invalidate_terminal_rows();
         self.glyph_cache
-            .set_font_families(primary, fallbacks, &self.queue);
+            .set_font_families(primary, fallbacks, range_overrides, &self.queue);
         let (cell_width, cell_height) = self.glyph_cache.cell_size();
         self.cell_width = cell_width;
         self.cell_height = cell_height;
@@ -2602,7 +2609,7 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
     const WIDTH: u32 = 512;
     const HEIGHT: u32 = 96;
-    let mut glyph_cache = GlyphCache::new(device, queue, 14.0, "monospace", &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(device, queue, 14.0, "monospace", &[], &[], 1.2, false)?;
     let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
     text.resize(queue, WIDTH, HEIGHT);
     let cases = [
@@ -2744,7 +2751,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
     .find(|path| path.is_file())
     .ok_or_else(|| anyhow::anyhow!("Noto Color Emoji is required for GPU acceptance"))?;
     let font_data = std::fs::read(font_path)?;
-    let mut glyph_cache = GlyphCache::new(device, queue, 32.0, "monospace", &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(device, queue, 32.0, "monospace", &[], &[], 1.2, false)?;
     glyph_cache.install_test_font(font_data, "Noto Color Emoji", queue);
     glyph_cache.begin_frame();
 
@@ -2774,7 +2781,7 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
 pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
     const GLYPHS: usize = 2_048;
-    let mut glyph_cache = GlyphCache::new(device, queue, 18.0, "monospace", &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(device, queue, 18.0, "monospace", &[], &[], 1.2, false)?;
     glyph_cache.use_tiny_test_atlas(64, 3, queue);
     glyph_cache.begin_frame();
 
@@ -3100,7 +3107,7 @@ pub(crate) fn headless_gui_visual_snapshot(
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 64;
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
-    let mut glyph_cache = GlyphCache::new(device, queue, 16.0, "monospace", &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(device, queue, 16.0, "monospace", &[], &[], 1.2, false)?;
     glyph_cache.install_test_font(
         glyph_cache::deterministic_test_font_data(),
         "Fira Mono",
@@ -3123,7 +3130,7 @@ pub(crate) fn headless_gui_visual_snapshot(
 #[cfg(test)]
 pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
-    let mut glyph_cache = GlyphCache::new(device, queue, 16.0, "monospace", &[], 1.2, true)?;
+    let mut glyph_cache = GlyphCache::new(device, queue, 16.0, "monospace", &[], &[], 1.2, true)?;
     glyph_cache.install_test_font(
         glyph_cache::deterministic_test_font_data(),
         "Fira Mono",
@@ -3211,6 +3218,32 @@ pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> 
         mixed_enabled != mixed_disabled,
         "mixed-style ligature snapshot did not change when features were disabled"
     );
+
+    let metrics_before_ranges = glyph_cache.cell_size();
+    anyhow::ensure!(glyph_cache.shaping_cache_metrics().entries > 0);
+    glyph_cache.set_font_families(
+        "Fira Mono".into(),
+        &[],
+        &[crate::config::FontRangeOverride {
+            start: u32::from('0'),
+            end: u32::from('9'),
+            family: "Fira Mono".into(),
+        }],
+        queue,
+    );
+    anyhow::ensure!(
+        glyph_cache.shaping_cache_metrics().entries == 0,
+        "font-range policy change retained stale shaping entries"
+    );
+    anyhow::ensure!(
+        glyph_cache.cell_size() == metrics_before_ranges,
+        "font-range policy changed primary cell metrics"
+    );
+    let ranged = render_text_snapshot(device, queue, &mut text, &mut glyph_cache, "012")?;
+    anyhow::ensure!(
+        ranged.iter().any(|pixel| *pixel != 0),
+        "font-range scalar/run path produced no pixels"
+    );
     Ok(())
 }
 
@@ -3226,7 +3259,7 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
     let theme = Theme::load_builtin("turmeric")?;
     let palette = TerminalPalette::from_theme(&theme);
     let dynamic_colors = termeric_core::DynamicColors::default();
-    let mut glyph_cache = GlyphCache::new(device, queue, 14.0, "monospace", &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(device, queue, 14.0, "monospace", &[], &[], 1.2, false)?;
     let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
     let mut rects = RectPipeline::new(device, FORMAT)?;
     text.resize(queue, WIDTH, HEIGHT);
@@ -3486,7 +3519,8 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
         view_formats: &[],
     });
     let view = texture.create_view(&TextureViewDescriptor::default());
-    let mut glyph_cache = GlyphCache::new(&device, &queue, 14.0, "monospace", &[], 1.2, false)?;
+    let mut glyph_cache =
+        GlyphCache::new(&device, &queue, 14.0, "monospace", &[], &[], 1.2, false)?;
     let mut text = TextPipeline::new(&device, FORMAT, &glyph_cache)?;
     let mut rect = RectPipeline::new(&device, FORMAT)?;
     text.resize(&queue, WIDTH, HEIGHT);

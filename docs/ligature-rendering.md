@@ -27,7 +27,9 @@ move surrounding cells.
 
 The shaping cache key includes run content, font size and line height,
 bold/italic request, ligature feature state, primary family, ordered fallback
-families, and fallback resolution. Rasterized shaped glyphs are separately
+families, and fallback resolution. Unicode-range policy changes synchronously
+clear this cache and persistent row geometry before another frame can reuse a
+run. Rasterized shaped glyphs are separately
 reused by their resolved face/glyph/size/subpixel identity. The run cache is
 bounded to 4,096 entries; reaching the bound clears the run map and records an
 eviction count rather than allowing unbounded growth.

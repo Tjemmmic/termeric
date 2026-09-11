@@ -37,14 +37,17 @@ applied. Mask and subpixel-mask glyphs remain compact R8 data and continue to
 use the theme/SGR foreground. Synthetic bold is not applied to authored color
 artwork.
 
-Font family, ordered fallback list, font size/display scale, line height, and
-explicit cache resets clear raster and shaped-run entries. For every extended
-grapheme, the renderer chooses the first configured family whose character map
-covers all substantive scalars; joiners, variation selectors, and tag scalars
-stay with that grapheme. Adjacent graphemes resolved to the same family remain
-one shaping span, so fallback selection does not unnecessarily break
-ligatures. Cosmic-text's platform fallback is retained only when none of the
-configured families covers the grapheme. Character entries include the
+Font family, ordered fallback list, bounded Unicode-range overrides, font
+size/display scale, line height, and explicit cache resets clear raster and
+shaped-run entries. For every extended grapheme, a matching range family is
+tried first, followed by the first configured family whose character map covers
+all substantive scalars; joiners, variation selectors, and tag scalars stay
+with that grapheme. Range rules are compiled with installed-face metadata and
+binary-searched rather than rescanning the system font database per cell.
+Adjacent graphemes resolved to the same family remain one shaping span, so
+fallback selection does not unnecessarily break ligatures. Cosmic-text's
+platform fallback is retained only when no explicit family covers the
+grapheme. Character entries include the
 requested size and bold/italic style; shaped entries use cosmic-text's resolved
 face, glyph, size, subpixel position, and synthetic-bold identity. Incompatible
 rasters are therefore never reused across those changes.

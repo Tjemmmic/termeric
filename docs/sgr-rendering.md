@@ -69,6 +69,41 @@ bold_is_bright = true
 The promotion happens before inverse. Default, 256-color, and truecolor
 foregrounds are never promoted.
 
+## Unicode-range font overrides
+
+`font.range_overrides` can prefer an installed family for an inclusive Unicode
+scalar interval before the primary and ordered fallback chain:
+
+```toml
+[font]
+family = "Fira Mono"
+fallback = ["Noto Sans Mono", "Noto Color Emoji"]
+
+[[font.range_overrides]]
+start = 0xE000
+end = 0xF8FF
+family = "Symbols Nerd Font Mono"
+```
+
+At most 64 rules are accepted. Shared configuration validation rejects unsafe
+family names, reversed ranges, values beyond `U+10FFFF`, intervals that touch
+the surrogate block, and inclusive overlap. Adjacent rules are valid. Rules
+are compiled once in start-code-point order and selected with bounded binary
+search.
+
+The first non-default-ignorable scalar in a grapheme selects a rule. Joiners,
+variation selectors, tags, and all other substantive scalars remain in the
+same complete-grapheme coverage check. The mapped installed family is used
+only if one of its faces covers that entire content; otherwise normal ordered
+fallback continues. This applies identically to scalar rasterization and
+advanced run/grapheme shaping. The primary family alone still defines cell
+metrics, and terminal width remains governed by the Unicode width policy.
+
+Startup and live reload apply the rules. A changed rule list invalidates
+persistent terminal rows plus scalar, shaped-run, mask-atlas, and color-atlas
+state. Settings shows how many rules are active; structured rule editing remains
+configuration-file-only.
+
 ## Blink scheduling
 
 Blink uses `Instant`-based phase boundaries. After each frame, the renderer

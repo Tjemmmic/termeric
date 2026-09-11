@@ -85,6 +85,11 @@ fallback = ["Noto Sans Mono", "Noto Color Emoji"] # ordered, up to 16
 ligatures = true
 bold_is_bright = false
 
+[[font.range_overrides]]
+start = 0xE000
+end = 0xF8FF
+family = "Symbols Nerd Font Mono"
+
 [theme]
 name = "turmeric"
 

@@ -677,6 +677,16 @@ impl SettingsPanel {
                 });
             }
 
+            items.push(SettingItem {
+                label: "Range Overrides",
+                value: match config.font.range_overrides.len() {
+                    0 => "None (configure in config.toml)".into(),
+                    1 => "1 configured in config.toml".into(),
+                    count => format!("{count} configured in config.toml"),
+                },
+                kind: SettingKind::ReadOnly,
+            });
+
             items.extend([
                 SettingItem {
                     label: "Line Height",
@@ -2308,6 +2318,11 @@ mod tests {
         let mut config = Config::default();
         config.font.family = "Fira Mono".into();
         config.font.fallback = vec!["Noto Sans Mono".into()];
+        config.font.range_overrides = vec![crate::config::FontRangeOverride {
+            start: 0xE000,
+            end: 0xF8FF,
+            family: "Symbols Nerd Font Mono".into(),
+        }];
         let entries = panel.build_entries(&config, &default_registry());
 
         let first = entries
@@ -2320,6 +2335,12 @@ mod tests {
             .find(|entry| entry.label == "Fallback 2")
             .expect("empty append slot");
         assert_eq!(next.value, NO_FONT_FALLBACK);
+        let ranges = entries
+            .iter()
+            .find(|entry| entry.label == "Range Overrides")
+            .expect("range override summary");
+        assert_eq!(ranges.value, "1 configured in config.toml");
+        assert!(matches!(ranges.kind, SettingKind::ReadOnly));
         assert!(matches!(
             panel.map_dropdown_action(first.section, first.label, &first.kind, 0),
             SettingsAction::SetFontFallback {
@@ -2512,9 +2533,10 @@ mod tests {
         let themes = Theme::list_available();
         let expected_next = themes.get(1).expect("at least 2 themes");
 
-        // Default font selectables are Size, Family, one empty fallback slot,
-        // Line Height, Ligatures, and Bold Is Bright before Theme.
-        panel.selected = 6;
+        // Default font rows are Size, Family, one empty fallback slot, the
+        // range-override summary, Line Height, Ligatures, and Bold Is Bright
+        // before Theme.
+        panel.selected = 7;
 
         // Right opens the dropdown for Dropdown kind
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);

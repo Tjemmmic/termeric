@@ -55,7 +55,11 @@ impl App {
             return;
         };
 
-        renderer.set_font_families(family, &self.config.font.fallback);
+        renderer.set_font_families(
+            family,
+            &self.config.font.fallback,
+            &self.config.font.range_overrides,
+        );
         // Sync ligature setting and log resolved font info
         renderer.set_ligatures(self.config.font.ligatures);
         log::debug!(
@@ -113,7 +117,11 @@ impl App {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        renderer.set_font_families(self.config.font.family.clone(), &self.config.font.fallback);
+        renderer.set_font_families(
+            self.config.font.family.clone(),
+            &self.config.font.fallback,
+            &self.config.font.range_overrides,
+        );
         if let Some(window) = self.window.clone() {
             let size = window.inner_size();
             self.sync_terminal_geometry(size.width, size.height);

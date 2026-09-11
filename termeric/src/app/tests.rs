@@ -5149,6 +5149,32 @@ fn headless_font_settings_preserve_order_and_apply_without_a_window() {
 }
 
 #[test]
+fn headless_config_reload_preserves_valid_font_range_overrides_atomically() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut config = app.config.clone();
+    config.font.range_overrides = vec![crate::config::FontRangeOverride {
+        start: 0xE000,
+        end: 0xF8FF,
+        family: "Symbols Nerd Font Mono".into(),
+    }];
+    app.apply_config(config).unwrap();
+    assert_eq!(app.config.font.range_overrides[0].start, 0xE000);
+
+    let retained = app.config.font.range_overrides.clone();
+    let mut invalid = app.config.clone();
+    invalid
+        .font
+        .range_overrides
+        .push(crate::config::FontRangeOverride {
+            start: 0xF000,
+            end: 0xFFFF,
+            family: "Overlapping Symbols".into(),
+        });
+    assert!(app.apply_config(invalid).is_err());
+    assert_eq!(app.config.font.range_overrides, retained);
+}
+
+#[test]
 fn headless_window_level_setting_updates_persistent_policy() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.apply_settings_action(SettingsAction::SetWindowLevel(

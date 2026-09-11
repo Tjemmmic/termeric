@@ -3,6 +3,7 @@
 //! This module handles font loading, glyph rasterization, and texture atlas management.
 //! Supports font ligatures through cosmic-text's advanced shaping.
 
+use crate::config::FontRangeOverride;
 use anyhow::Result;
 use cosmic_text::{
     Attrs, Buffer, CacheKey, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, Style,
@@ -144,6 +145,13 @@ struct ShapedGlyphKey {
 struct ConfiguredFamily {
     name: String,
     faces: Vec<(cosmic_text::fontdb::ID, Weight)>,
+}
+
+#[derive(Clone, Debug)]
+struct ConfiguredRangeOverride {
+    start: u32,
+    end: u32,
+    family: ConfiguredFamily,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -450,6 +458,9 @@ pub struct GlyphCache {
     /// Installed faces for the primary and configured fallback families in
     /// exact preference order.
     configured_families: Vec<ConfiguredFamily>,
+    /// Validated range preferences and their installed face metadata.
+    range_overrides: Vec<FontRangeOverride>,
+    configured_range_overrides: Vec<ConfiguredRangeOverride>,
     /// Whether to use system monospace fallback (when requested font not found/not monospace)
     use_monospace_fallback: bool,
     /// Whether ligatures are enabled
@@ -466,6 +477,7 @@ impl GlyphCache {
         font_size: f32,
         font_family: &str,
         fallback_families: &[String],
+        range_overrides: &[FontRangeOverride],
         line_height_multiplier: f32,
         ligatures: bool,
     ) -> Result<Self> {
@@ -475,6 +487,8 @@ impl GlyphCache {
         let font_family = resolve_configured_family(&font_system, font_family, &fallback_families);
         let configured_families =
             collect_configured_families(&font_system, &font_family, &fallback_families);
+        let configured_range_overrides =
+            collect_configured_range_overrides(&font_system, range_overrides);
 
         // Calculate metrics
         let line_height = font_size * line_height_multiplier;
@@ -647,6 +661,8 @@ impl GlyphCache {
             font_family,
             fallback_families,
             configured_families,
+            range_overrides: range_overrides.to_vec(),
+            configured_range_overrides,
             use_monospace_fallback,
             ligatures_enabled: ligatures,
             reported_synthetic_styles: HashSet::new(),
@@ -823,12 +839,19 @@ impl GlyphCache {
     /// Rasterize a character
     fn rasterize_char(&mut self, c: char, style: FontStyle) -> Option<RasterizedGlyph> {
         let text = c.to_string();
-        let family = first_configured_family_with_coverage(
+        let family = range_override_family_with_coverage(
             &mut self.font_system,
-            &self.configured_families,
+            &self.configured_range_overrides,
             &text,
         )
-        .map(|index| self.configured_families[index].name.clone())
+        .or_else(|| {
+            first_configured_family_with_coverage(
+                &mut self.font_system,
+                &self.configured_families,
+                &text,
+            )
+            .map(|index| self.configured_families[index].name.clone())
+        })
         .unwrap_or_else(|| self.font_family.clone());
 
         if let Some(glyph) = self.rasterize_char_with_family(c, family_for(&family), style) {
@@ -1104,6 +1127,8 @@ impl GlyphCache {
         self.font_system.db_mut().load_font_data(data);
         self.font_family = family.to_string();
         self.fallback_families.clear();
+        self.range_overrides.clear();
+        self.configured_range_overrides.clear();
         self.configured_families =
             collect_configured_families(&self.font_system, family, &self.fallback_families);
         self.use_monospace_fallback = false;
@@ -1142,6 +1167,7 @@ impl GlyphCache {
             let span_specs = configured_family_spans(
                 &mut self.font_system,
                 &self.configured_families,
+                &self.configured_range_overrides,
                 text,
                 &default_family,
             );
@@ -1415,14 +1441,24 @@ impl GlyphCache {
     /// Apply primary/fallback family selection. The first installed configured
     /// primary wins for cell metrics, while the complete ordered chain is used
     /// for each scalar or grapheme before platform fallback.
-    pub fn set_font_families(&mut self, primary: String, fallbacks: &[String], queue: &Queue) {
+    pub fn set_font_families(
+        &mut self,
+        primary: String,
+        fallbacks: &[String],
+        range_overrides: &[FontRangeOverride],
+        queue: &Queue,
+    ) {
         let fallbacks_changed = self.fallback_families != fallbacks;
+        let ranges_changed = self.range_overrides != range_overrides;
         self.fallback_families = fallbacks.to_vec();
+        self.range_overrides = range_overrides.to_vec();
         let resolved = resolve_configured_family(&self.font_system, &primary, fallbacks);
         self.configured_families =
             collect_configured_families(&self.font_system, &resolved, fallbacks);
+        self.configured_range_overrides =
+            collect_configured_range_overrides(&self.font_system, range_overrides);
         if self.font_family == resolved {
-            if fallbacks_changed {
+            if fallbacks_changed || ranges_changed {
                 self.clear_atlas(queue);
             }
         } else {
@@ -1719,6 +1755,25 @@ fn collect_configured_families(
         .collect()
 }
 
+fn collect_configured_range_overrides(
+    font_system: &FontSystem,
+    rules: &[FontRangeOverride],
+) -> Vec<ConfiguredRangeOverride> {
+    let mut configured = rules
+        .iter()
+        .map(|rule| ConfiguredRangeOverride {
+            start: rule.start,
+            end: rule.end,
+            family: ConfiguredFamily {
+                name: rule.family.clone(),
+                faces: configured_family_faces(font_system, &rule.family),
+            },
+        })
+        .collect::<Vec<_>>();
+    configured.sort_unstable_by_key(|rule| (rule.start, rule.end));
+    configured
+}
+
 fn configured_family_faces(
     font_system: &FontSystem,
     family: &str,
@@ -1757,36 +1812,63 @@ fn first_configured_family_with_coverage(
     families: &[ConfiguredFamily],
     text: &str,
 ) -> Option<usize> {
-    let coverage_text: String = text
+    if !text
         .chars()
-        .filter(|character| !is_font_default_ignorable(*character))
-        .collect();
-    if coverage_text.is_empty() {
+        .any(|character| !is_font_default_ignorable(character))
+    {
         return (!families.is_empty()).then_some(0);
     }
-    families.iter().position(|family| {
-        family.faces.iter().any(|&(id, weight)| {
-            font_system.get_font(id, weight).is_some_and(|font| {
-                let charmap = font.as_swash().charmap();
-                coverage_text
-                    .chars()
-                    .all(|character| charmap.map(character) != 0)
-            })
+    families
+        .iter()
+        .position(|family| configured_family_covers(font_system, family, text))
+}
+
+fn configured_family_covers(
+    font_system: &mut FontSystem,
+    family: &ConfiguredFamily,
+    text: &str,
+) -> bool {
+    family.faces.iter().any(|&(id, weight)| {
+        font_system.get_font(id, weight).is_some_and(|font| {
+            let charmap = font.as_swash().charmap();
+            text.chars()
+                .filter(|character| !is_font_default_ignorable(*character))
+                .all(|character| charmap.map(character) != 0)
         })
     })
+}
+
+fn range_override_family_with_coverage(
+    font_system: &mut FontSystem,
+    rules: &[ConfiguredRangeOverride],
+    grapheme: &str,
+) -> Option<String> {
+    let codepoint = grapheme
+        .chars()
+        .find(|character| !is_font_default_ignorable(*character))? as u32;
+    let candidate = rules.partition_point(|rule| rule.start <= codepoint);
+    let rule = rules.get(candidate.checked_sub(1)?)?;
+    if codepoint > rule.end {
+        return None;
+    }
+    configured_family_covers(font_system, &rule.family, grapheme).then(|| rule.family.name.clone())
 }
 
 fn configured_family_spans(
     font_system: &mut FontSystem,
     families: &[ConfiguredFamily],
+    range_overrides: &[ConfiguredRangeOverride],
     text: &str,
     default_family: &str,
 ) -> Vec<(Range<usize>, String)> {
     let mut spans: Vec<(Range<usize>, String)> = Vec::new();
     for (start, grapheme) in text.grapheme_indices(true) {
         let end = start + grapheme.len();
-        let family = first_configured_family_with_coverage(font_system, families, grapheme)
-            .map(|index| families[index].name.clone())
+        let family = range_override_family_with_coverage(font_system, range_overrides, grapheme)
+            .or_else(|| {
+                first_configured_family_with_coverage(font_system, families, grapheme)
+                    .map(|index| families[index].name.clone())
+            })
             .unwrap_or_else(|| default_family.to_string());
         if let Some((range, previous)) = spans.last_mut()
             && previous == &family
@@ -2038,11 +2120,103 @@ mod tests {
         assert_eq!(families[arabic].name, "Noto Sans Arabic");
 
         assert_eq!(
-            configured_family_spans(&mut font_system, &families, "abcش", "Fira Mono"),
+            configured_family_spans(&mut font_system, &families, &[], "abcش", "Fira Mono"),
             vec![
                 (0..3, "Fira Mono".to_string()),
                 (3..5, "Noto Sans Arabic".to_string())
             ]
+        );
+    }
+
+    #[test]
+    fn range_overrides_precede_global_fallback_without_splitting_graphemes() {
+        let sources = [
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "FiraMono-Medium.ttf",
+            ))),
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "NotoSansArabic.ttf",
+            ))),
+        ];
+        let mut font_system = FontSystem::new_with_fonts(sources);
+        let fallbacks = vec!["Noto Sans Arabic".to_string()];
+        let families = collect_configured_families(&font_system, "Fira Mono", &fallbacks);
+        let rules = collect_configured_range_overrides(
+            &font_system,
+            &[
+                FontRangeOverride {
+                    start: 0x0600,
+                    end: 0x06FF,
+                    family: "Noto Sans Arabic".into(),
+                },
+                // Deliberately supplied out of interval order; validated app
+                // config guarantees no overlap, while compilation sorts once.
+                FontRangeOverride {
+                    start: 0x0030,
+                    end: 0x0039,
+                    family: "Noto Sans Arabic".into(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            range_override_family_with_coverage(&mut font_system, &rules, "0"),
+            Some("Noto Sans Arabic".into())
+        );
+        assert_eq!(
+            range_override_family_with_coverage(&mut font_system, &rules, "\u{FE0F}ش"),
+            Some("Noto Sans Arabic".into()),
+            "default-ignorable selectors must not own range lookup"
+        );
+        assert_eq!(
+            configured_family_spans(&mut font_system, &families, &rules, "01ش", "Fira Mono"),
+            vec![(0..4, "Noto Sans Arabic".to_string())]
+        );
+        assert_eq!(
+            range_override_family_with_coverage(&mut font_system, &rules, "0🧡"),
+            None,
+            "a mapped family that lacks part of the grapheme must fall through"
+        );
+
+        let incomplete = collect_configured_range_overrides(
+            &font_system,
+            &[FontRangeOverride {
+                start: 0x0600,
+                end: 0x06FF,
+                family: "Fira Mono".into(),
+            }],
+        );
+        assert_eq!(
+            configured_family_spans(&mut font_system, &families, &incomplete, "ش", "Fira Mono"),
+            vec![(0..2, "Noto Sans Arabic".to_string())],
+            "incomplete mapped faces must retain the proven global fallback chain"
+        );
+    }
+
+    #[test]
+    fn missing_range_family_and_unmatched_boundaries_fall_through() {
+        let mut font_system = FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(
+            Arc::new(deterministic_test_font_data_named("FiraMono-Medium.ttf")),
+        )]);
+        let rules = collect_configured_range_overrides(
+            &font_system,
+            &[FontRangeOverride {
+                start: 0xE000,
+                end: 0xF8FF,
+                family: "Definitely Missing".into(),
+            }],
+        );
+        assert_eq!(
+            range_override_family_with_coverage(&mut font_system, &rules, "\u{E000}"),
+            None
+        );
+        assert_eq!(
+            range_override_family_with_coverage(&mut font_system, &rules, "\u{D7FF}"),
+            None
+        );
+        assert_eq!(
+            range_override_family_with_coverage(&mut font_system, &rules, "\u{F900}"),
+            None
         );
     }
 

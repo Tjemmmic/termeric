@@ -1483,6 +1483,7 @@ impl App {
             self.config.font.size,
             &self.config.font.family,
             &self.config.font.fallback,
+            &self.config.font.range_overrides,
             self.config.font.line_height,
             self.config.window.padding as f32,
             scale_factor,

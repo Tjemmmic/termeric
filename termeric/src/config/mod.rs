@@ -304,6 +304,36 @@ impl Config {
                 bail!("font.fallback contains duplicate family {family:?}");
             }
         }
+        if self.font.range_overrides.len() > MAX_FONT_RANGE_OVERRIDES {
+            bail!("font.range_overrides must contain at most {MAX_FONT_RANGE_OVERRIDES} rules");
+        }
+        let mut ranges = Vec::with_capacity(self.font.range_overrides.len());
+        for (index, rule) in self.font.range_overrides.iter().enumerate() {
+            validate_font_family(
+                &format!("font.range_overrides[{index}].family"),
+                &rule.family,
+            )?;
+            if rule.start > rule.end {
+                bail!("font.range_overrides[{index}] start must not exceed end");
+            }
+            if rule.end > 0x10_FFFF {
+                bail!("font.range_overrides[{index}] exceeds U+10FFFF");
+            }
+            if rule.start <= 0xDFFF && rule.end >= 0xD800 {
+                bail!("font.range_overrides[{index}] intersects the surrogate range");
+            }
+            ranges.push((rule.start, rule.end, index));
+        }
+        ranges.sort_unstable_by_key(|&(start, end, _)| (start, end));
+        for pair in ranges.windows(2) {
+            let (_, previous_end, previous_index) = pair[0];
+            let (next_start, _, next_index) = pair[1];
+            if next_start <= previous_end {
+                bail!(
+                    "font.range_overrides[{previous_index}] overlaps font.range_overrides[{next_index}]"
+                );
+            }
+        }
         if !(8.0..=72.0).contains(&self.font.size) || !self.font.size.is_finite() {
             bail!("font.size must be between 8 and 72");
         }
@@ -819,6 +849,18 @@ fn validate_font_family(owner: &str, family: &str) -> Result<()> {
 /// Font configuration
 pub const MAX_FONT_FALLBACKS: usize = 16;
 pub const MAX_FONT_FAMILY_BYTES: usize = 256;
+pub const MAX_FONT_RANGE_OVERRIDES: usize = 64;
+
+/// Inclusive Unicode-scalar interval routed to one preferred font family.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct FontRangeOverride {
+    /// First included Unicode scalar value.
+    pub start: u32,
+    /// Last included Unicode scalar value.
+    pub end: u32,
+    /// Preferred installed font family for matching graphemes.
+    pub family: String,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -831,6 +873,8 @@ pub struct FontConfig {
     pub line_height: f32,
     /// Fallback font families
     pub fallback: Vec<String>,
+    /// Bounded non-overlapping Unicode ranges with a preferred family.
+    pub range_overrides: Vec<FontRangeOverride>,
     /// Enable font ligatures (for fonts like Fira Code, JetBrains Mono)
     pub ligatures: bool,
     /// Treat bold ANSI colors 0-7 as their bright 8-15 counterparts.
@@ -844,6 +888,7 @@ impl Default for FontConfig {
             size: 14.0,
             line_height: 1.2,
             fallback: vec![],
+            range_overrides: vec![],
             ligatures: true,
             bold_is_bright: false,
         }
@@ -1400,6 +1445,73 @@ mod tests {
 
         config.font.fallback = vec!["x".repeat(MAX_FONT_FAMILY_BYTES + 1)];
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn font_range_overrides_are_typed_bounded_non_overlapping_scalars() {
+        let config: Config = toml::from_str(
+            r#"
+                [font]
+                family = "Fira Mono"
+
+                [[font.range_overrides]]
+                start = 0xE000
+                end = 0xF8FF
+                family = "Symbols Nerd Font Mono"
+
+                [[font.range_overrides]]
+                start = 0x1F300
+                end = 0x1FAFF
+                family = "Noto Color Emoji"
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.font.range_overrides.len(), 2);
+        assert_eq!(config.font.range_overrides[0].start, 0xE000);
+        assert_eq!(config.font.range_overrides[1].end, 0x1FAFF);
+
+        let encoded = toml::to_string(&config).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.font.range_overrides, config.font.range_overrides);
+        decoded.validate().unwrap();
+    }
+
+    #[test]
+    fn font_range_override_validation_rejects_ambiguous_or_invalid_rules() {
+        let rule = |start, end, family: &str| FontRangeOverride {
+            start,
+            end,
+            family: family.into(),
+        };
+        let rejects = |rules: Vec<FontRangeOverride>| {
+            let mut config = Config::default();
+            config.font.range_overrides = rules;
+            config.validate().is_err()
+        };
+
+        assert!(rejects(vec![rule(0x2000, 0x1000, "Symbols")]));
+        assert!(rejects(vec![rule(0x10_FFFF, 0x11_0000, "Symbols")]));
+        assert!(rejects(vec![rule(0xD7FF, 0xE000, "Symbols")]));
+        assert!(rejects(vec![rule(0xD800, 0xD800, "Symbols")]));
+        assert!(rejects(vec![rule(0xE000, 0xE100, "Bad\nFamily")]));
+        assert!(rejects(vec![
+            rule(0xE000, 0xE100, "Symbols A"),
+            rule(0xE100, 0xE200, "Symbols B"),
+        ]));
+        assert!(rejects(
+            (0..=MAX_FONT_RANGE_OVERRIDES)
+                .map(|index| rule(index as u32, index as u32, "Symbols"))
+                .collect()
+        ));
+
+        let mut adjacent = Config::default();
+        adjacent.font.range_overrides = vec![
+            rule(0xE000, 0xE0FF, "Symbols A"),
+            rule(0xE100, 0xE1FF, "Symbols B"),
+            rule(0x1F300, 0x1FAFF, "Emoji"),
+        ];
+        adjacent.validate().unwrap();
     }
 
     #[test]

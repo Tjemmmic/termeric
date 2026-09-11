@@ -254,12 +254,15 @@ awaiting evidence:
 - **Deeper font and exhaustive character controls.** Termeric now provides a
   validated 16-family ordered fallback chain, complete-grapheme coverage
   selection, settings controls for that chain, line height, ligatures, and
-  bold-as-bright, plus a bounded Unicode picker. The picker searches a curated
-  common-character index and reaches every non-control scalar by exact code
-  point without materializing the Unicode code space. Per-range family
-  selection, variable-font axes/arbitrary OpenType features, exhaustive or
-  localized Unicode-name search, and glyph-coverage feedback still trail
-  kitty/WezTerm's broader power-user font and character tooling.
+  bold-as-bright, bounded non-overlapping Unicode-range family maps, plus a
+  bounded Unicode picker. Range maps preserve complete graphemes and grid
+  metrics while falling through safely when the mapped face is absent or
+  incomplete. The picker searches a curated common-character index and reaches
+  every non-control scalar by exact code point without materializing the
+  Unicode code space. A graphical range editor, variable-font axes/arbitrary
+  OpenType features, exhaustive or localized Unicode-name search, and
+  glyph-coverage feedback still trail kitty/WezTerm's broader power-user font
+  and character tooling.
 - **More window policies.** Ordinary windows now expose live and persisted
   normal/always-on-top/always-on-bottom requests, and quick access has a
   dedicated topmost placement policy. A transient pane-local read-only lock now

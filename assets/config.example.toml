@@ -53,6 +53,15 @@ ligatures = true
 # Disabled by default because font weight and color intensity are independent.
 bold_is_bright = false
 
+# Optional inclusive Unicode-scalar ranges prefer one family before the global
+# fallback chain. Rules cannot overlap or cross the surrogate range; at most 64.
+# The primary font still owns terminal cell metrics. Edit these in config.toml;
+# Settings reports the active count but does not yet provide a range editor.
+# [[font.range_overrides]]
+# start = 0xE000
+# end = 0xF8FF
+# family = "Symbols Nerd Font Mono"
+
 # Scrollback configuration
 [scrollback]
 # Maximum number of lines to keep in scrollback buffer

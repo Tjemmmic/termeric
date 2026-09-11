@@ -207,6 +207,15 @@ changes font size, and submits the texture-array shader. Allocator unit tests
 independently cover deterministic LRU and current-frame pinning. See
 [`glyph-atlas.md`](glyph-atlas.md).
 
+Font-range policy tests deserialize and round-trip hexadecimal intervals,
+enforce the 64-rule/scalar/surrogate/overlap/family-name boundaries, and prove
+adjacency plus non-BMP ranges. Deterministic Fira Mono and Noto Sans Arabic
+fixtures prove mapped-family precedence, binary-search boundaries, first-
+substantive-scalar ownership, complete-grapheme refusal, and missing-family
+fallback without depending on host fonts. Headless application tests prove a
+valid live reload retains the policy and an invalid overlapping replacement is
+atomic. No native compositor, downloaded font, or provider process is used.
+
 Keyboard cases cover every named legacy key, xterm modifier parameters 2-8,
 DECCKM/DECKPAM transitions, physical keypad identity, Control and Alt, AltGr,
 Unicode text, shortcut precedence, and focused-pane mode selection. Xterm
