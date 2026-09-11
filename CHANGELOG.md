@@ -8,6 +8,18 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v17 adds an independent `terminal-input` grant for
+  sending at most 8 KiB of printable UTF-8, tab, and newline input to one exact
+  current-window pane. The existing external-input policy remains disabled by
+  default; stable-ID, closing, terminal, and read-only checks run before the
+  live target's bracketed-paste encoding. Destructive plugin-originated input
+  is captured behind the visible exact-destination guardrail even for ordinary
+  shell tabs. Correlated results report exact input/wire bytes and sent versus
+  pending-confirmation disposition before clearing every host-operation
+  authority. A checked-in non-executing command-drafting example and hermetic
+  parser, registry, persistent-process, App, and exact-PTY tests use no AI
+  provider.
+
 - Declarative plugin API v16 adds an independent `pane-move` grant for moving
   one exact ordinary pane between distinct tabs in the originating window.
   Complete stable-ID source and destination validation happens before the live

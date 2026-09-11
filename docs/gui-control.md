@@ -182,7 +182,9 @@ is intentionally a fresh read rather than a replay-cached mutation.
 
 `send-text` is the only GUI input action and is disabled by default. The user
 must set `security.allow_gui_control_input = true` before authenticated control
-clients can use it. It accepts at most 64 KiB of UTF-8 text and permits
+clients can use it. The same global policy also gates separately granted API
+v17 plugin terminal input, so every external writer shares one explicit opt-in.
+The control action accepts at most 64 KiB of UTF-8 text and permits
 printable characters, tab, and newline—not arbitrary bytes, carriage returns,
 escape sequences, or other controls. `--paste` applies the exact target
 terminal's live bracketed-paste mode; `--enter` appends one carriage return

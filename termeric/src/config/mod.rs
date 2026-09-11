@@ -483,9 +483,10 @@ pub struct SecurityConfig {
     /// Kitty's `t=f` graphics medium. Disabled by default because the path is
     /// supplied by the application running inside the terminal.
     pub allow_kitty_file_transfers: bool,
-    /// Permit the authenticated running-GUI control socket to write bounded
-    /// UTF-8 text to an exact terminal. Disabled by default because same-user
-    /// clients holding the process token can otherwise execute commands.
+    /// Permit authenticated running-GUI control and separately granted
+    /// declarative plugins to write bounded UTF-8 text to an exact terminal.
+    /// Disabled by default because external actors can otherwise execute
+    /// commands in a live session.
     pub allow_gui_control_input: bool,
     pub osc52: Osc52Config,
 }

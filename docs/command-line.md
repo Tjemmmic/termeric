@@ -147,7 +147,8 @@ environment, clipboard, or provider data. See the complete
 
 `termeric control send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter]
 [--request-id ID] [--json]` requires the disabled-by-default
-`security.allow_gui_control_input` policy. It accepts printable UTF-8, tab, and
+`security.allow_gui_control_input` policy, shared with separately granted API
+v17 plugin terminal input. It accepts printable UTF-8, tab, and
 newline within 64 KiB, never arbitrary control bytes. `--paste` honors the
 exact pane's bracketed-paste mode and `--enter` appends one carriage return.
 Successful and failed request IDs are replay-stable so an ambiguous or partial

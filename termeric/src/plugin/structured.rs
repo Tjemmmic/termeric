@@ -21,6 +21,7 @@ pub(crate) const MAX_STRUCTURED_EVENT_BYTES: usize = 16 * 1024;
 pub(crate) const MAX_PERSISTENT_SOURCE_EVENT_BYTES: usize =
     MAX_STRUCTURED_EVENT_BYTES - PERSISTENT_PROTOCOL_RESERVE_BYTES;
 pub(crate) const MAX_TERMINAL_QUERY_BYTES: u32 = 8 * 1024;
+pub(crate) const MAX_TERMINAL_INPUT_BYTES: usize = 8 * 1024;
 const PERSISTENT_PROTOCOL_RESERVE_BYTES: usize = 64;
 const HANDLER_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
@@ -79,6 +80,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit moving one exact ordinary pane between current-window tabs.
     /// Its result clears every host-operation authority.
     pub allow_pane_move: bool,
+    /// Permit sending bounded text to one exact current-window terminal. Its
+    /// result clears every host-operation authority.
+    pub allow_terminal_input: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -147,6 +151,14 @@ pub enum StructuredResponseAction {
         destination_tab_id: u64,
         target_pane_id: u32,
         direction: crate::control::protocol::SplitDirection,
+    },
+    SendText {
+        action_id: String,
+        tab_id: u64,
+        pane_id: u32,
+        text: String,
+        paste: bool,
+        enter: bool,
     },
 }
 
@@ -465,6 +477,7 @@ fn run_handler(
         invocation.allow_pane_close,
         invocation.allow_tab_close,
         invocation.allow_pane_move,
+        invocation.allow_terminal_input,
     )
 }
 
@@ -589,6 +602,7 @@ impl PersistentHandler {
         allow_pane_close: bool,
         allow_tab_close: bool,
         allow_pane_move: bool,
+        allow_terminal_input: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -656,6 +670,7 @@ impl PersistentHandler {
             allow_pane_close,
             allow_tab_close,
             allow_pane_move,
+            allow_terminal_input,
             request_id,
         )?;
         if let Some(status) = self
@@ -731,6 +746,7 @@ fn run_persistent_handler(
                 invocation.allow_pane_close,
                 invocation.allow_tab_close,
                 invocation.allow_pane_move,
+                invocation.allow_terminal_input,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -916,6 +932,7 @@ fn parse_response_with_host_creation(
         allow_pane_close,
         allow_tab_close,
         false,
+        false,
     )
 }
 
@@ -932,6 +949,7 @@ fn parse_response_with_host_mutation(
     allow_pane_close: bool,
     allow_tab_close: bool,
     allow_pane_move: bool,
+    allow_terminal_input: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -953,6 +971,7 @@ fn parse_response_with_host_mutation(
         allow_pane_close,
         allow_tab_close,
         allow_pane_move,
+        allow_terminal_input,
     )
 }
 
@@ -1007,6 +1026,7 @@ fn parse_persistent_response_with_host_creation(
         allow_pane_close,
         allow_tab_close,
         false,
+        false,
         expected_request_id,
     )
 }
@@ -1024,6 +1044,7 @@ fn parse_persistent_response_with_host_mutation(
     allow_pane_close: bool,
     allow_tab_close: bool,
     allow_pane_move: bool,
+    allow_terminal_input: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1052,6 +1073,7 @@ fn parse_persistent_response_with_host_mutation(
         allow_pane_close,
         allow_tab_close,
         allow_pane_move,
+        allow_terminal_input,
     )
 }
 
@@ -1067,6 +1089,7 @@ fn validate_response_actions(
     allow_pane_close: bool,
     allow_tab_close: bool,
     allow_pane_move: bool,
+    allow_terminal_input: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1233,6 +1256,35 @@ fn validate_response_actions(
                 host_operations += 1;
                 validate_text("pane movement action id", action_id, MAX_ACTION_ID_BYTES)?;
             }
+            StructuredResponseAction::SendText {
+                action_id,
+                text,
+                enter,
+                ..
+            } => {
+                if !allow_terminal_input {
+                    return Err(
+                        "handler requested terminal input without API v17 persistent terminal-input authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("terminal input action id", action_id, MAX_ACTION_ID_BYTES)?;
+                if text.len() > MAX_TERMINAL_INPUT_BYTES {
+                    return Err(format!(
+                        "plugin terminal input is limited to {MAX_TERMINAL_INPUT_BYTES} UTF-8 bytes"
+                    ));
+                }
+                if text.is_empty() && !enter {
+                    return Err("plugin terminal input must include text or enter".into());
+                }
+                if !crate::control::protocol::valid_control_input_text(text) {
+                    return Err(
+                        "plugin terminal input permits printable UTF-8, tab, and newline only"
+                            .into(),
+                    );
+                }
+            }
         }
     }
     if host_operations > 1 {
@@ -1297,6 +1349,7 @@ mod tests {
             allow_pane_close: false,
             allow_tab_close: false,
             allow_pane_move: false,
+            allow_terminal_input: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1892,7 +1945,8 @@ mod tests {
         let move_pane = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"relocate-1","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"horizontal"}]}"#;
         assert_eq!(
             parse_persistent_response_with_host_mutation(
-                move_pane, false, false, false, false, false, false, false, false, false, true, 9,
+                move_pane, false, false, false, false, false, false, false, false, false, true,
+                false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::MovePane {
@@ -1924,6 +1978,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 9,
             )
             .unwrap_err()
@@ -1943,6 +1998,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 9,
             )
             .unwrap_err()
@@ -1951,7 +2007,8 @@ mod tests {
         let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"move-pane","action_id":"bad\naction","source_tab_id":42,"pane_id":7,"destination_tab_id":43,"target_pane_id":2,"direction":"vertical"}]}"#;
         assert!(
             parse_persistent_response_with_host_mutation(
-                unsafe_id, false, false, false, false, false, false, false, false, false, true, 9,
+                unsafe_id, false, false, false, false, false, false, false, false, false, true,
+                false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -1982,6 +2039,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 9,
             )
             .unwrap_err()
@@ -1993,6 +2051,137 @@ mod tests {
                 query_and_move,
                 false,
                 true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+    }
+
+    #[test]
+    fn terminal_input_is_bounded_independently_gated_strict_and_single_operation() {
+        let send_text = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"draft-command","tab_id":42,"pane_id":7,"text":"cargo test\n--workspace","paste":true,"enter":false}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_host_mutation(
+                send_text, false, false, false, false, false, false, false, false, false, false,
+                true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::SendText {
+                action_id: "draft-command".into(),
+                tab_id: 42,
+                pane_id: 7,
+                text: "cargo test\n--workspace".into(),
+                paste: true,
+                enter: false,
+            }]
+        );
+        assert!(
+            parse_persistent_response(send_text, false, false, false, false, false, 9)
+                .unwrap_err()
+                .contains("terminal-input authority")
+        );
+
+        let unknown_field = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"draft-command","tab_id":42,"pane_id":7,"text":"cargo test","paste":false,"enter":false,"window_id":3}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                unknown_field,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("unknown field")
+        );
+
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"bad\naction","tab_id":42,"pane_id":7,"text":"cargo test","paste":false,"enter":false}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                unsafe_id, false, false, false, false, false, false, false, false, false, false,
+                true, 9,
+            )
+            .unwrap_err()
+            .contains("control-safe")
+        );
+
+        let escape = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"bad-input","tab_id":42,"pane_id":7,"text":"\u001b[31m","paste":false,"enter":false}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                escape, false, false, false, false, false, false, false, false, false, false, true,
+                9,
+            )
+            .unwrap_err()
+            .contains("printable UTF-8")
+        );
+
+        let empty = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"send-text","action_id":"empty","tab_id":42,"pane_id":7,"text":"","paste":false,"enter":false}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                empty, false, false, false, false, false, false, false, false, false, false, true,
+                9,
+            )
+            .unwrap_err()
+            .contains("include text or enter")
+        );
+
+        let oversized = serde_json::json!({
+            "schema_version": 2,
+            "request_id": 9,
+            "actions": [{
+                "type": "send-text",
+                "action_id": "oversized",
+                "tab_id": 42,
+                "pane_id": 7,
+                "text": "x".repeat(MAX_TERMINAL_INPUT_BYTES + 1),
+                "paste": false,
+                "enter": false,
+            }],
+        });
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                &serde_json::to_vec(&oversized).unwrap(),
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("limited to 8192")
+        );
+
+        let query_and_send = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"send-text","action_id":"draft-command","tab_id":42,"pane_id":7,"text":"cargo test","paste":false,"enter":false}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                query_and_send,
+                false,
+                true,
+                false,
                 false,
                 false,
                 false,
@@ -2280,6 +2469,54 @@ done"#,
                 .unwrap(),
             vec![StructuredResponseAction::ShowMessage {
                 message: "move-result-received".into(),
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_query_then_terminal_input_then_result_is_bounded() {
+        let mut invocation = persistent_fixture(
+            "terminal-input-fixture",
+            r#"count=0
+while IFS= read -r event; do
+  count=$((count + 1))
+  if [ "$count" -eq 1 ]; then
+    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
+  elif [ "$count" -eq 2 ]; then
+    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"send-text","action_id":"draft","tab_id":7,"pane_id":3,"text":"cargo test","paste":false,"enter":false}]}\n'
+  else
+    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"input-result-received"}]}\n'
+  fi
+done"#,
+        );
+        invocation.allow_workspace_query = true;
+        invocation.allow_terminal_input = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::QueryWorkspace { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
+        invocation.allow_workspace_query = false;
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::SendText { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"send-text","ok":true,"disposition":"sent"}}"#.into();
+        invocation.allow_terminal_input = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowMessage {
+                message: "input-result-received".into(),
             }]
         );
         assert_eq!(handlers.len(), 1);
@@ -2631,6 +2868,7 @@ done"#,
             allow_pane_close: false,
             allow_tab_close: false,
             allow_pane_move: false,
+            allow_terminal_input: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -2670,6 +2908,7 @@ done"#,
             allow_pane_close: false,
             allow_tab_close: false,
             allow_pane_move: false,
+            allow_terminal_input: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -2696,6 +2935,7 @@ done"#,
             allow_pane_close: false,
             allow_tab_close: false,
             allow_pane_move: false,
+            allow_terminal_input: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

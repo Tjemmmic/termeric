@@ -83,6 +83,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::MovePane {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::SendText {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -133,6 +136,7 @@ impl App {
                 }
                 crate::plugin::structured::StructuredResponseAction::CloseTab { .. } => "close-tab",
                 crate::plugin::structured::StructuredResponseAction::MovePane { .. } => "move-pane",
+                crate::plugin::structured::StructuredResponseAction::SendText { .. } => "send-text",
                 _ => unreachable!("only workspace operations are retained"),
             };
             let result = self.continue_structured_workspace_operation(
@@ -201,6 +205,7 @@ impl App {
                 invocation.allow_pane_close = false;
                 invocation.allow_tab_close = false;
                 invocation.allow_pane_move = false;
+                invocation.allow_terminal_input = false;
             }
             action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
             | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
@@ -214,7 +219,8 @@ impl App {
             | crate::plugin::structured::StructuredResponseAction::CreateTab { .. }
             | crate::plugin::structured::StructuredResponseAction::ClosePane { .. }
             | crate::plugin::structured::StructuredResponseAction::CloseTab { .. }
-            | crate::plugin::structured::StructuredResponseAction::MovePane { .. }) => {
+            | crate::plugin::structured::StructuredResponseAction::MovePane { .. }
+            | crate::plugin::structured::StructuredResponseAction::SendText { .. }) => {
                 invocation.event_json =
                     self.structured_workspace_action_event(plugin_id, action)?;
                 // A mutation result is terminal for host operations.
@@ -227,6 +233,7 @@ impl App {
                 invocation.allow_pane_close = false;
                 invocation.allow_tab_close = false;
                 invocation.allow_pane_move = false;
+                invocation.allow_terminal_input = false;
             }
             _ => return Err("structured response did not contain a workspace operation".into()),
         }
@@ -664,6 +671,52 @@ impl App {
                     }
                 }
             }
+            crate::plugin::structured::StructuredResponseAction::SendText {
+                action_id,
+                tab_id,
+                pane_id,
+                text,
+                paste,
+                enter,
+            } => match self.send_plugin_text(tab_id, pane_id, &text, paste, enter) {
+                Ok((input_bytes, wire_bytes, disposition, confirmation_id)) => {
+                    serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "send-text",
+                        "ok": true,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "input_bytes": input_bytes,
+                        "wire_bytes": wire_bytes,
+                        "paste": paste,
+                        "enter": enter,
+                        "disposition": disposition,
+                        "confirmation_id": confirmation_id,
+                        "error": null,
+                    })
+                }
+                Err(error) => {
+                    let mut budget = MAX_ACTION_ERROR_BYTES;
+                    let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                    serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "send-text",
+                        "ok": false,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "input_bytes": null,
+                        "wire_bytes": null,
+                        "paste": paste,
+                        "enter": enter,
+                        "disposition": null,
+                        "confirmation_id": null,
+                        "error": error,
+                        "error_truncated": error_truncated,
+                    })
+                }
+            },
             _ => return Err("structured response did not contain a workspace action".into()),
         };
         let envelope = serde_json::json!({

@@ -1012,6 +1012,14 @@ local IDs, correlated source/focus state, copy-mode and broadcast cleanup,
 same-process query-to-move reuse, one-operation enforcement, authority removal,
 and a checked-in pane mover. Only inert local shell/Python fixtures are used;
 no AI provider process or tokens are involved.
+API v17 adds exact terminal-input version/mode/grant and global-policy denial,
+strict action/control/8-KiB bounds, stable-ID success/failure routing, live
+bracketed-paste encoding, read-only refusal, focus preservation, destructive
+input confirmation for ordinary shell destinations, exact confirmation
+ownership/cancellation, correlated byte/disposition results, same-process
+query-to-input reuse, one-operation enforcement, authority removal, and a
+checked-in non-executing terminal writer. Only inert local shell/Python
+fixtures are used; no AI provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

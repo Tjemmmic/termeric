@@ -1,7 +1,8 @@
-//! Guardrails — detect and intercept destructive commands in plugin tabs
+//! Guardrails — detect and intercept destructive terminal commands
 //!
-//! Scans PTY input for dangerous patterns (rm -rf, sudo, dd, mkfs, etc.)
-//! and triggers a confirmation prompt before allowing the command through.
+//! Scans guarded plugin-tab and externally initiated PTY input for dangerous
+//! patterns (rm -rf, sudo, dd, mkfs, etc.) and triggers a confirmation prompt
+//! before allowing the command through.
 
 /// Get the current username
 fn whoami() -> String {

@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v16 are constrained local extension formats.
+Termeric plugin APIs v1 through v17 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -36,6 +36,10 @@ exact ordinary local tab while protecting the window's final non-closing tab.
 API v16 adds an independent `pane-move` grant for transferring one exact
 ordinary pane between tabs in the originating window without recreating its
 PTY.
+API v17 adds an independent `terminal-input` grant for bounded UTF-8 text sent
+to one exact current-window terminal. It additionally requires the user's
+disabled-by-default external-input policy, and destructive matches retain a
+visible exact-destination confirmation.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -71,6 +75,8 @@ The API v15 tab-closure sample is
 [`examples/plugins/tab-pruner/termeric-plugin.toml`](../examples/plugins/tab-pruner/termeric-plugin.toml).
 The API v16 pane-movement sample is
 [`examples/plugins/pane-mover/termeric-plugin.toml`](../examples/plugins/pane-mover/termeric-plugin.toml).
+The API v17 terminal-input sample is
+[`examples/plugins/terminal-writer/termeric-plugin.toml`](../examples/plugins/terminal-writer/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -855,10 +861,10 @@ the text budget and reports `truncated = true`; the complete source event still
 fits below 16 KiB.
 
 One response may contain at most one host operation across workspace query,
-terminal query, navigation, topology, pane/tab creation, pane/tab closure, and
-pane movement, though bounded UI notices may coexist. A workspace-query result
+terminal query/input, navigation, topology, pane/tab creation, pane/tab closure,
+and pane movement, though bounded UI notices may coexist. A workspace-query result
 retains separately granted terminal-query, pane-create, tab-create, pane-close,
-tab-close, and pane-move authority so one external command can discover current
+tab-close, pane-move, and terminal-input authority so one external command can discover current
 state and then perform one granted operation.
 After a terminal-query result, all query and workspace-mutation authority is
 cleared. A later external subscribed event may start another independently
@@ -989,8 +995,8 @@ Success returns the new stable window-local tab ID; failure returns it as
 ```
 
 Creation counts as the response's sole host operation. Its result clears query,
-navigation, topology, terminal-query, pane-create, tab-create, pane-close, and
-tab-close and pane-move authority.
+navigation, topology, terminal-query/input, pane-create, tab-create, pane-close,
+tab-close, and pane-move authority.
 Termeric deliberately suppresses the derived `tab-created` hook for this
 plugin-originated action, so neither the requester nor another plugin can turn
 one creation into a lifecycle feedback loop. A later independent external
@@ -1058,8 +1064,8 @@ those fields `null` and returns a bounded, sanitized error:
 ```
 
 Pane closure is the response's sole host operation. Its result clears query,
-navigation, topology, terminal-query, pane-create, tab-create, pane-close, and
-tab-close and pane-move authority. A later external event may begin another
+navigation, topology, terminal-query/input, pane-create, tab-create, pane-close,
+tab-close, and pane-move authority. A later external event may begin another
 bounded request. API v14 does not itself grant tab closure, live-domain
 mutation, terminal input, cross-window targeting, arbitrary process signaling,
 or a force/confirmation bypass. Tab closure requires the separate API v15
@@ -1130,8 +1136,8 @@ already completed:
 
 Failures return `scheduled: false`, null remaining/active fields, and a bounded
 sanitized error. Tab closure is the response's sole host operation, and its
-result clears query, navigation, topology, terminal-query, creation, and both
-closure authorities, plus pane-move authority. Termeric suppresses the derived
+result clears query, navigation, topology, terminal-query/input, creation, both
+closure authorities, and pane-move authority. Termeric suppresses the derived
 `tab-closed` hook for a plugin-originated close, making the correlated result
 the only follow-up and preventing lifecycle-driven close loops. A later
 independent external event may begin another bounded request. API v15 does not
@@ -1219,7 +1225,7 @@ reports that exact state:
 Failure keeps the destination/state fields `null` and returns a bounded,
 sanitized error without detaching the source. Pane movement is the response's
 sole host operation. Its result clears query, navigation, topology,
-terminal-query, pane/tab creation, pane/tab closure, and pane-move authority.
+terminal-query/input, pane/tab creation, pane/tab closure, and pane-move authority.
 The correlated result is the only follow-up; plugin-originated movement does
 not synthesize tab lifecycle hooks. A later independent external event may
 begin another bounded request.
@@ -1228,6 +1234,93 @@ API v16 does not grant same-tab layout-tree rearrangement, cross-window
 movement, live-domain mutation, movement of a tab-owned plugin process, window
 or final-tab closure, terminal input, arbitrary launch selection, or access to
 another window's inventory.
+
+## Manifest API v17 terminal input
+
+API v17 preserves every earlier contract and adds the independent
+`terminal-input` permission. Only a persistent handler may use it. This is a
+powerful capability: review both the ordinary Python handler and its grants,
+then explicitly opt into external terminal input before installing the sample:
+
+```toml
+[security]
+allow_gui_control_input = true
+```
+
+```bash
+termeric plugin validate examples/plugins/terminal-writer
+termeric plugin install examples/plugins/terminal-writer \
+  --allow process-spawn --allow workspace-query \
+  --allow terminal-input --allow event-subscribe --allow ui-actions --enable
+```
+
+The historical setting name also covers plugin-originated input so one global,
+disabled-by-default policy controls all external terminal writes. A manifest
+grant alone never overrides it. The sample contributes **Terminal Writer:
+Draft Cargo Test** to the command palette. It queries the bounded current-window
+inventory, selects the exact focused pane in the active tab, and requests:
+
+```json
+{
+  "schema_version": 2,
+  "request_id": 17,
+  "actions": [{
+    "type": "send-text",
+    "action_id": "draft-cargo-test",
+    "tab_id": 4,
+    "pane_id": 1,
+    "text": "cargo test",
+    "paste": false,
+    "enter": false
+  }]
+}
+```
+
+`text` is limited to 8 KiB and may contain printable UTF-8, tab, and newline,
+but never NUL, carriage return, escape, or arbitrary control bytes. Empty text
+is valid only with `enter: true`. `paste: true` consults the exact target
+terminal's live bracketed-paste mode; `enter: true` appends exactly one carriage
+return after the text or completed paste frame. The action does not change the
+active tab, focus, selection, copy mode, broadcast targets, or clipboard.
+
+Execution revalidates the exact current-window tab and stable pane ID. Missing,
+closed, closing, terminal-less, read-only, and already-pending-confirmation
+targets fail without writing. Destructive-command matching is based on the
+plugin origin, not the destination kind: even an ordinary shell tab captures
+the exact encoded bytes and origin behind Termeric's visible guardrail. Focus
+changes cannot retarget that confirmation, cancellation revokes the bytes
+immediately, and no input is written unless the user confirms.
+
+A successful request returns either `sent` or `pending_confirmation`:
+
+```json
+{
+  "schema_version": 1,
+  "plugin_id": "terminal-writer",
+  "event": {
+    "type": "workspace-action-result",
+    "action_id": "draft-cargo-test",
+    "action": "send-text",
+    "ok": true,
+    "tab_id": 4,
+    "pane_id": 1,
+    "input_bytes": 10,
+    "wire_bytes": 10,
+    "paste": false,
+    "enter": false,
+    "disposition": "sent",
+    "confirmation_id": null,
+    "error": null
+  }
+}
+```
+
+The response is the request's sole host operation. Its result clears query,
+navigation, topology, terminal-query/input, creation, closure, and movement
+authority. A later independent external event may begin another bounded
+request. API v17 does not grant raw byte input, raw terminal-output events,
+process-global or cross-window targets, focus changes, arbitrary process
+signals, filesystem/clipboard/network access, or confirmation bypass.
 
 ## Permissions and isolation
 
@@ -1249,6 +1342,7 @@ another window's inventory.
 | `pane-close` | API v14+, after `--allow pane-close`; permits closure of one exact ordinary current-window pane through a persistent handler, refuses unsupported or last-pane targets, and returns a correlated bounded result. |
 | `tab-close` | API v15+, after `--allow tab-close`; permits scheduling closure of one exact ordinary local current-window tab through a persistent handler, protects the final non-closing tab, and returns correlated selection state. |
 | `pane-move` | API v16+, after `--allow pane-move`; permits moving one exact ordinary pane between distinct tabs in the originating window through a persistent handler, preserves its live PTY, and returns the fresh destination-local identity. |
+| `terminal-input` | API v17+, after `--allow terminal-input`; permits at most 8 KiB of bounded UTF-8 text to one exact current-window terminal through a persistent handler, additionally requires `security.allow_gui_control_input = true`, and preserves destructive-command confirmation. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -1256,7 +1350,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v16 may also request `terminal-text` for
+`ui-actions`; API v4 through v17 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -1281,6 +1375,9 @@ or secret access.
 API v16 adds only `pane-move`, independently of creation, closure, query,
 navigation, topology, terminal text, UI, filesystem, network, clipboard, or
 secret access.
+API v17 adds only `terminal-input`, independently of query, navigation,
+topology, terminal text, creation, closure, movement, UI, filesystem, network,
+clipboard, or secret access.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -1300,7 +1397,7 @@ described above, never in Termeric's UI/PTY/render threads. A handler executable
 is still ordinary native code with the user's OS authority despite its cleared
 environment; the API permission model is disclosure/action gating, not a kernel
 sandbox. WASM/in-process modules, network hooks supplied by Termeric,
-process-global terminal queries, raw terminal-output subscriptions, terminal
+process-global terminal queries, raw terminal-output subscriptions, raw-byte
 input, and render actions remain unsupported. API v5+'s persistent newline protocol is deliberately narrower
 than a bidirectional JSON-RPC service.
 
@@ -1378,6 +1475,13 @@ Before distributing a local directory:
     plugin-owned-source, invalid-anchor, and capacity refusal, live PTY and
     launch-identity preservation, fresh destination-local identity, focus and
     mode cleanup, one-host-operation rejection, and complete authority removal.
+21. For API v17, test exact grant/version/mode and global-policy denial, strict
+    action shape, UTF-8/control/8-KiB bounds, exact current-window stable-ID
+    routing, missing/closed/closing/terminal-less/read-only refusal, live
+    bracketed-paste encoding, no focus change, destructive input confirmation
+    for ordinary destinations, exact confirmation cancellation/ownership,
+    correlated byte/disposition fields, one-host-operation rejection, and
+    complete authority removal.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -1440,6 +1544,13 @@ live PTY identity preservation, fresh destination-local identity, correlated
 source/focus state, copy-mode and broadcast cleanup, same-process query-to-move
 correlation, one-operation enforcement, authority removal, and a checked-in
 pane mover. Its PTYs run only inert local shell fixtures; no provider runs.
+API v17 adds exact permission/version/mode and disabled-by-default policy
+gating, strict control-safe input parsing and bounds, stable-ID success/failure
+routing, live bracketed-paste encoding, ordinary-tab destructive confirmation,
+focus preservation, correlated byte/disposition results, same-process
+query-to-input correlation, one-operation enforcement, authority removal, and
+a checked-in non-executing terminal writer. Its PTYs run only inert local shell
+fixtures; no provider runs or AI tokens are consumed.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -1457,9 +1568,9 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v16's current-window inventory/navigation/topology, exact
+and secrets. API v17's current-window inventory/navigation/topology, exact
 presented-text, separately granted ordinary pane/tab creation and closure,
-separately granted pane movement, persistent lifetime, namespaced handler
+separately granted pane movement and bounded terminal input, persistent lifetime, namespaced handler
 commands, and non-secret settings, plus
 the narrowly granted completed-region snapshot, are not
 enough to represent those privileged workflows; broader migration waits for a
@@ -1477,7 +1588,7 @@ after that PTY write and remains outside automated acceptance.
 `api_version = 5`, `api_version = 6`, `api_version = 7`, `api_version = 8`,
 `api_version = 9`, `api_version = 10`, `api_version = 11`,
 `api_version = 12`, `api_version = 13`, `api_version = 14`,
-`api_version = 15`, and `api_version = 16`
+`api_version = 15`, `api_version = 16`, and `api_version = 17`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -1509,8 +1620,12 @@ API v16 adds separately granted exact ordinary-pane movement between distinct
 current-window tabs, preserves the live PTY, returns the fresh destination-local
 pane identity and resulting focus state, and removes every host-operation
 authority from the result.
+API v17 adds separately granted bounded terminal input to one exact
+current-window pane, requires the global disabled-by-default external-input
+policy, preserves target-mode encoding and destructive-command confirmation,
+and removes every host-operation authority from the result.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit
 migration tool. Termeric does not guess at forward compatibility because
-permissions, argv, and disclosed context are security boundaries.
+permissions, argv, input, and disclosed context are security boundaries.

@@ -704,7 +704,123 @@ fn control_selection_validates_complete_stable_paths_before_changing_focus() {
             < u64::from(crate::plugin::structured::MAX_TERMINAL_QUERY_BYTES)
     );
 
+    let disabled_input = app
+        .structured_workspace_action_event(
+            "terminal-writer",
+            crate::plugin::structured::StructuredResponseAction::SendText {
+                action_id: "policy-disabled".into(),
+                tab_id: first as u64,
+                pane_id: 0,
+                text: "x".into(),
+                paste: false,
+                enter: false,
+            },
+        )
+        .unwrap();
+    let disabled_input: serde_json::Value = serde_json::from_str(&disabled_input).unwrap();
+    assert_eq!(disabled_input["event"]["action"], "send-text");
+    assert_eq!(disabled_input["event"]["ok"], false);
+    assert!(
+        disabled_input["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("disabled"))
+    );
+
     app.config.security.allow_gui_control_input = true;
+    let sent_input = app
+        .structured_workspace_action_event(
+            "terminal-writer",
+            crate::plugin::structured::StructuredResponseAction::SendText {
+                action_id: "safe-input".into(),
+                tab_id: first as u64,
+                pane_id: 0,
+                text: "x".into(),
+                paste: false,
+                enter: false,
+            },
+        )
+        .unwrap();
+    let sent_input: serde_json::Value = serde_json::from_str(&sent_input).unwrap();
+    assert_eq!(sent_input["event"]["ok"], true);
+    assert_eq!(sent_input["event"]["disposition"], "sent");
+    assert_eq!(sent_input["event"]["input_bytes"], 1);
+    assert_eq!(sent_input["event"]["wire_bytes"], 1);
+    assert_eq!(
+        sent_input["event"]["confirmation_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
+
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(first)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(PaneId(0))
+        .unwrap()
+        .closed = true;
+    let closed_input = app
+        .structured_workspace_action_event(
+            "terminal-writer",
+            crate::plugin::structured::StructuredResponseAction::SendText {
+                action_id: "closed-input".into(),
+                tab_id: first as u64,
+                pane_id: 0,
+                text: "x".into(),
+                paste: false,
+                enter: false,
+            },
+        )
+        .unwrap();
+    let closed_input: serde_json::Value = serde_json::from_str(&closed_input).unwrap();
+    assert_eq!(closed_input["event"]["ok"], false);
+    assert!(
+        closed_input["event"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("closed"))
+    );
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(first)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(PaneId(0))
+        .unwrap()
+        .closed = false;
+
+    let guarded_input = app
+        .structured_workspace_action_event(
+            "terminal-writer",
+            crate::plugin::structured::StructuredResponseAction::SendText {
+                action_id: "guarded-input".into(),
+                tab_id: first as u64,
+                pane_id: 0,
+                text: "rm -rf /".into(),
+                paste: false,
+                enter: true,
+            },
+        )
+        .unwrap();
+    let guarded_input: serde_json::Value = serde_json::from_str(&guarded_input).unwrap();
+    assert_eq!(guarded_input["event"]["ok"], true);
+    assert_eq!(
+        guarded_input["event"]["disposition"],
+        "pending_confirmation"
+    );
+    let confirmation_id = guarded_input["event"]["confirmation_id"].as_u64().unwrap();
+    assert!(app.guardrail.is_awaiting(confirmation_id));
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second));
+    app.apply_guardrail_action(crate::terminal::guardrails::GuardrailAction::Cancel {
+        request_id: confirmation_id,
+    });
+    assert!(!app.guardrail.is_awaiting_current());
+
     assert!(matches!(
         app.send_control_text(first as u64, 0, "x", false, false),
         Ok((1, 1, crate::control::protocol::InputDisposition::Sent, None))
@@ -2193,7 +2309,7 @@ fn control_input_is_opt_in_exact_paste_aware_and_guarded_without_provider_execut
         std::thread::sleep(Duration::from_millis(2));
     }
     assert_eq!(
-        app.send_control_text(tab_id as u64, 0, "safe", true, true),
+        app.send_plugin_text(tab_id as u64, 0, "safe", true, true),
         Ok((
             5,
             17,
@@ -3899,6 +4015,10 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
     assert!(!app.guardrail.is_awaiting_current());
     let error = app
         .send_control_text(tab_id, pane_id, "rm -rf /", false, true)
+        .unwrap_err();
+    assert!(error.contains("read-only"), "{error}");
+    let error = app
+        .send_plugin_text(tab_id, pane_id, "cargo test", false, false)
         .unwrap_err();
     assert!(error.contains("read-only"), "{error}");
     assert!(!app.guardrail.is_awaiting_current());

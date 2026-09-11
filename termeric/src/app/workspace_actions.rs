@@ -3104,9 +3104,50 @@ impl App {
         ),
         String,
     > {
+        self.send_external_text(tab_id, pane_id, text, paste, enter, false)
+    }
+
+    pub(super) fn send_plugin_text(
+        &mut self,
+        tab_id: u64,
+        pane_id: u32,
+        text: &str,
+        paste: bool,
+        enter: bool,
+    ) -> std::result::Result<
+        (
+            u32,
+            u32,
+            crate::control::protocol::InputDisposition,
+            Option<u64>,
+        ),
+        String,
+    > {
+        self.send_external_text(tab_id, pane_id, text, paste, enter, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_external_text(
+        &mut self,
+        tab_id: u64,
+        pane_id: u32,
+        text: &str,
+        paste: bool,
+        enter: bool,
+        always_guard_destructive: bool,
+    ) -> std::result::Result<
+        (
+            u32,
+            u32,
+            crate::control::protocol::InputDisposition,
+            Option<u64>,
+        ),
+        String,
+    > {
         if !self.config.security.allow_gui_control_input {
             return Err(
-                "Running-GUI input is disabled; set security.allow_gui_control_input = true".into(),
+                "External terminal input is disabled; set security.allow_gui_control_input = true"
+                    .into(),
             );
         }
         if self.guardrail.is_awaiting_current() {
@@ -3129,6 +3170,9 @@ impl App {
                 let pane = manager
                     .get_pane(PaneId(pane_id))
                     .ok_or_else(|| format!("GUI pane {pane_id} does not exist in tab {tab_id}"))?;
+                if pane.closed {
+                    return Err(format!("GUI pane {pane_id} is closed in tab {tab_id}"));
+                }
                 (
                     crate::tabs::TerminalEventOrigin::Pane {
                         tab_id,
@@ -3155,7 +3199,8 @@ impl App {
             (
                 origin.0,
                 origin.1,
-                matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }),
+                always_guard_destructive
+                    || matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }),
                 origin.2,
             )
         };
