@@ -1102,6 +1102,14 @@ confirmation/cancellation, bounded correlated results, process-query authority
 reduction, complete input-result authority removal, retained-grant updates,
 and a checked-in process terminal writer. All fixtures are local and inert; no
 AI provider process, destructive command, or tokens are involved.
+API v24 adds exact process-tab-create version/mode/grant denial, strict action
+and identifier parsing, same- and sibling-window stable-ID routing,
+stale/closing/live-domain target refusal, ordinary local-shell creation and
+in-window selection without native activation, lifecycle-hook suppression,
+bounded correlated results, process-query authority reduction, complete
+process-action result authority removal, retained-grant updates, and a
+checked-in process tab builder. All fixtures are local and inert; no AI
+provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

@@ -170,6 +170,12 @@ process-owned pane can receive at most 8 KiB of validated UTF-8 using its own
 paste mode, only when the destination window has explicitly enabled external
 input. Destructive matches remain pending in that exact window until confirmed;
 the action never activates or retargets by focus, and its result cannot chain.
+API v24 adds separately granted cross-window ordinary-tab creation. A
+persistent handler can create and select one local shell tab in one exact live
+process-owned window using the stable identity returned by API v20. The action
+does not activate the native window or dispatch a derived `tab-created` hook,
+and stale, closing, live-domain, uninitialized, or capacity-limited targets fail
+without fallback; the correlated result cannot chain another host operation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

@@ -23,6 +23,7 @@
 //! API v21 adds exact non-activating cross-window workspace navigation.
 //! API v22 adds bounded cross-window presented-terminal-text queries.
 //! API v23 adds guarded exact cross-window terminal input.
+//! API v24 adds exact cross-window ordinary-tab creation.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -35,7 +36,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 23;
+pub const PLUGIN_API_VERSION: u32 = 24;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -85,6 +86,7 @@ pub enum PluginPermission {
     ProcessActions,
     ProcessTerminalText,
     ProcessTerminalInput,
+    ProcessTabCreate,
     Secrets,
 }
 
@@ -115,6 +117,7 @@ impl std::fmt::Display for PluginPermission {
             Self::ProcessActions => "process-actions",
             Self::ProcessTerminalText => "process-terminal-text",
             Self::ProcessTerminalInput => "process-terminal-input",
+            Self::ProcessTabCreate => "process-tab-create",
             Self::Secrets => "secrets",
         })
     }
@@ -149,6 +152,7 @@ impl std::str::FromStr for PluginPermission {
             "process-actions" => Ok(Self::ProcessActions),
             "process-terminal-text" => Ok(Self::ProcessTerminalText),
             "process-terminal-input" => Ok(Self::ProcessTerminalInput),
+            "process-tab-create" => Ok(Self::ProcessTabCreate),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -672,6 +676,17 @@ impl PluginManifest {
         {
             bail!("process-terminal-input requires an API v23 persistent event handler");
         }
+        if self
+            .permissions
+            .contains(&PluginPermission::ProcessTabCreate)
+            && (self.api_version < 24
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("process-tab-create requires an API v24 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -806,6 +821,7 @@ impl PluginRegistry {
                         | PluginPermission::ProcessActions
                         | PluginPermission::ProcessTerminalText
                         | PluginPermission::ProcessTerminalInput
+                        | PluginPermission::ProcessTabCreate
                 )
             }) {
                 bail!(
@@ -1270,6 +1286,9 @@ impl DeclarativePlugin {
                         && self
                             .grants
                             .contains(&PluginPermission::ProcessTerminalInput),
+                    allow_process_tab_create: self.manifest.api_version >= 24
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::ProcessTabCreate),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -2139,6 +2158,30 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::ProcessTerminalText
                 | PluginPermission::ProcessTerminalInput
         ),
+        24 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+                | PluginPermission::PaneMove
+                | PluginPermission::TerminalInput
+                | PluginPermission::PaneLayout
+                | PluginPermission::WindowClose
+                | PluginPermission::ProcessQuery
+                | PluginPermission::ProcessActions
+                | PluginPermission::ProcessTerminalText
+                | PluginPermission::ProcessTerminalInput
+                | PluginPermission::ProcessTabCreate
+        ),
         _ => false,
     }
 }
@@ -2918,6 +2961,24 @@ events = ["command-completed"]
         manifest
     }
 
+    fn process_tab_create_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = process_query_grants();
+        grants.insert(PluginPermission::ProcessTabCreate);
+        grants
+    }
+
+    fn process_tab_create_manifest() -> PluginManifest {
+        let mut manifest = process_query_manifest();
+        manifest.api_version = 24;
+        manifest.id = "process-tab-builder".into();
+        manifest
+            .permissions
+            .insert(PluginPermission::ProcessTabCreate);
+        manifest.commands[0].id = "new-tab-in-sibling-window".into();
+        manifest.commands[0].name = "New Tab in Another Window".into();
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -3235,7 +3296,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 24");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 25");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -3855,6 +3916,36 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn checked_in_api_v24_process_tab_builder_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-tab-builder");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 24);
+        assert_eq!(manifest.id, "process-tab-builder");
+        assert_eq!(manifest.commands.len(), 1);
+        assert_eq!(manifest.commands[0].id, "new-tab-in-sibling-window");
+        assert_eq!(manifest.permissions, process_tab_create_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        let registry = PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "process-tab-builder".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: process_tab_create_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        };
+        registry.validate().unwrap();
+    }
+
+    #[test]
     fn checked_in_api_v15_tab_pruner_example_is_a_valid_manifest() {
         let directory =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/tab-pruner");
@@ -4399,6 +4490,72 @@ events = ["command-invoked"]
         assert_eq!(installed.grants, process_terminal_input_grants());
         let (installed_manifest, _, _) =
             PluginManifest::from_directory(&root.join("process-terminal-writer")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
+    fn api_v24_process_tab_create_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-tab-builder")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let mut missing_tab_create = process_tab_create_grants();
+        missing_tab_create.remove(&PluginPermission::ProcessTabCreate);
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: missing_tab_create,
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("process-tab-create"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_tab_create_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "process-tab-builder".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "process-tab-builder")
+            .unwrap();
+        assert!(installed.enabled);
+        assert_eq!(installed.grants, process_tab_create_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("process-tab-builder")).unwrap();
         assert_eq!(installed_manifest.version, "1.1.0");
     }
 
@@ -5587,6 +5744,83 @@ events = ["command-invoked"]
         };
         assert!(invocation.allow_process_query);
         assert!(!invocation.allow_process_terminal_input);
+    }
+
+    #[test]
+    fn api_v24_process_tab_creation_requires_persistent_mode_and_exact_grant() {
+        let manifest = process_tab_create_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &process_tab_create_grants()).unwrap();
+        assert_eq!(
+            PluginPermission::ProcessTabCreate.to_string(),
+            "process-tab-create"
+        );
+        assert_eq!(
+            "process-tab-create".parse::<PluginPermission>().unwrap(),
+            PluginPermission::ProcessTabCreate
+        );
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 2,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin =
+            DeclarativePlugin::new(manifest.clone(), None, process_tab_create_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-tab-builder.new-tab-in-sibling-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v24 process tab creation command did not create an invocation")
+        };
+        assert!(invocation.allow_process_query);
+        assert!(!invocation.allow_process_actions);
+        assert!(!invocation.allow_process_terminal_text);
+        assert!(!invocation.allow_process_terminal_input);
+        assert!(invocation.allow_process_tab_create);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v23 = manifest.clone();
+        v23.api_version = 23;
+        assert!(v23.validate().unwrap_err().to_string().contains("API v24"));
+
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+
+        let mut grants = process_tab_create_grants();
+        grants.remove(&PluginPermission::ProcessTabCreate);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: process-tab-create")
+        );
+
+        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-tab-builder.new-tab-in-sibling-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted process tab creation fixture did not create an invocation")
+        };
+        assert!(invocation.allow_process_query);
+        assert!(!invocation.allow_process_tab_create);
     }
 
     #[test]

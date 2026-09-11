@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v23 are constrained local extension formats.
+Termeric plugin APIs v1 through v24 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -60,6 +60,10 @@ API v23 adds an independent `process-terminal-input` grant for one guarded,
 bounded UTF-8 write to an exact pane in any live process-owned window. The
 destination window's disabled-by-default external-input policy and destructive
 confirmation remain mandatory.
+API v24 adds an independent `process-tab-create` grant for creating and
+selecting one ordinary local shell tab in an exact live process-owned window.
+It does not activate the native window, inherit an active-window target, or
+grant broader cross-window lifecycle control.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -109,6 +113,8 @@ The API v22 cross-window terminal-text sample is
 [`examples/plugins/process-terminal-reader/termeric-plugin.toml`](../examples/plugins/process-terminal-reader/termeric-plugin.toml).
 The API v23 cross-window terminal-input sample is
 [`examples/plugins/process-terminal-writer/termeric-plugin.toml`](../examples/plugins/process-terminal-writer/termeric-plugin.toml).
+The API v24 cross-window tab-creation sample is
+[`examples/plugins/process-tab-builder/termeric-plugin.toml`](../examples/plugins/process-tab-builder/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -1509,11 +1515,12 @@ selection, environment, clipboard, filesystem contents, or secrets. The
 `process-query` grant does not broaden `workspace-query` for existing plugins.
 For API v20, the result clears process/current-window/terminal query authority
 and every mutation authority before delivery. An API v21+ handler may retain
-only separately granted `process-actions`, `process-terminal-text`, and (for
-API v23) `process-terminal-input` authorities for the single bounded
-query-to-navigation, query-to-text, or query-to-input sequences documented
-below. Those remain separate grants; process inventory itself authorizes no
-native activation, input, topology, movement, creation, or closure.
+only separately granted `process-actions`, `process-terminal-text`,
+`process-terminal-input`, and (for API v24) `process-tab-create` authorities
+for the single bounded query-to-navigation, query-to-text, query-to-input, or
+query-to-tab-creation sequences documented below. Those remain separate grants;
+process inventory itself authorizes no native activation, input, topology,
+movement, creation, or closure.
 
 ## Manifest API v21 cross-window workspace navigation
 
@@ -1658,9 +1665,10 @@ or dispatches navigation hooks.
 
 At most one host operation is accepted per response. An API v22+ process-query
 result may retain only separately granted `process-actions`,
-`process-terminal-text`, and (for API v23) `process-terminal-input` authority,
-allowing one inventory-to-navigation, inventory-to-text, or inventory-to-input
-sequence. A process-terminal-query result clears every host
+`process-terminal-text`, `process-terminal-input`, and (for API v24)
+`process-tab-create` authority, allowing one inventory-to-navigation,
+inventory-to-text, inventory-to-input, or inventory-to-tab-creation sequence.
+A process-terminal-query result clears every host
 query and mutation authority before delivery, so it cannot read a second pane,
 navigate, send input, or otherwise chain. Existing API v11 `terminal-query`
 remains exact-current-window-only and unchanged.
@@ -1752,6 +1760,74 @@ mutation authority, so it cannot write, read, navigate, or query again.
 Existing API v17 `terminal-input` remains exact-current-window-only and
 unchanged.
 
+## Manifest API v24 cross-window ordinary-tab creation
+
+API v24 preserves every earlier contract and adds the independent
+`process-tab-create` mutation grant. Review and install the sample with:
+
+```bash
+termeric plugin validate examples/plugins/process-tab-builder
+termeric plugin install examples/plugins/process-tab-builder \
+  --allow process-spawn --allow process-query \
+  --allow process-tab-create --allow event-subscribe \
+  --allow ui-actions --enable
+```
+
+The sample contributes **Process Tab Builder: New Tab in Another Window**.
+After requesting the API v20 inventory and choosing one exact sibling window,
+it emits:
+
+```json
+{"type":"create-process-tab","action_id":"new-sibling-task","window_id":7}
+```
+
+Only an API v24 persistent handler with the retained `process-tab-create`
+grant may emit this action. `window_id` is the process-lifetime stable identity
+returned by API v20. Termeric revalidates the originating plugin, generation,
+continuation, exact authority, and target window immediately before creation.
+It never substitutes the focused, active, originating, or most recently used
+window when the ID is stale, missing, closing, or uninitialized.
+
+The operation uses the same ordinary local-shell tab path as current-window
+API v13 creation. It enforces the per-window tab cap and refuses creation while
+the target window's selected tab belongs to daemon-authoritative live-domain
+topology. On success the new tab is selected inside the target window, but the
+native window is not raised, shown, restored, or activated. The derived
+`tab-created` lifecycle hook is suppressed so a plugin cannot create a
+feedback loop from its own mutation.
+
+Success returns a bounded correlated result to the originating handler:
+
+```json
+{
+  "schema_version": 2,
+  "request_id": 47,
+  "plugin_id": "process-tab-builder",
+  "event": {
+    "type": "process-action-result",
+    "action_id": "new-sibling-task",
+    "action": "create-process-tab",
+    "ok": true,
+    "process_id": 12345,
+    "origin_window_id": 2,
+    "window_id": 7,
+    "tab_id": 12,
+    "selected": true,
+    "error": null
+  }
+}
+```
+
+A failure returns `ok: false`, the same action and window correlation, null
+`tab_id`/`selected` fields, and a control-safe bounded error with
+`error_truncated`. At most one host operation is accepted per response. An API
+v24 process-query result may retain the separately granted tab-creation
+authority; the process-action result clears every query and mutation authority,
+so it cannot create a second tab or initiate another host operation. API v13
+`tab-create` remains exact-originating-window-only and unchanged. API v24 does
+not grant pane creation, custom launch commands, cross-window closure or
+topology, native activation, or live-domain tab mutation.
+
 ## Permissions and isolation
 
 | Capability | Public API status |
@@ -1779,6 +1855,7 @@ unchanged.
 | `process-actions` | API v21+, after `--allow process-actions`; permits one exact non-activating tab selection or pane focus in any live process-owned window through a persistent handler, with atomic full-path validation and a correlated non-chainable result. |
 | `process-terminal-text` | API v22+, after `--allow process-terminal-text`; permits one exact, non-activating read of at most 256 history lines and 8 KiB of presentation-safe UTF-8 text from any live process-owned pane through a persistent handler, with a correlated non-chainable result. |
 | `process-terminal-input` | API v23+, after `--allow process-terminal-input`; permits one exact, non-activating write of at most 8 KiB of validated UTF-8 to any live process-owned pane through a persistent handler, additionally requiring the destination window's disabled-by-default external-input policy and preserving destructive confirmation. |
+| `process-tab-create` | API v24+, after `--allow process-tab-create`; permits creation and in-window selection of one ordinary local shell tab in one exact live process-owned window through a persistent handler, without native activation or lifecycle redispatch. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -1786,7 +1863,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v23 may also request `terminal-text` for
+`ui-actions`; API v4 through v24 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -1837,6 +1914,10 @@ window inventory, navigation, terminal text, native activation, topology,
 lifecycle, movement, layout, creation, closure, UI, filesystem, network,
 clipboard, or secret access. Runtime execution additionally requires the
 destination window's external-input policy and destructive confirmation.
+API v24 adds only `process-tab-create`, independently of process/current-window
+inventory, navigation, terminal text/input, native activation, pane creation,
+custom launches, topology, closure, movement, layout, UI, filesystem, network,
+clipboard, or secret access.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -1979,6 +2060,13 @@ Before distributing a local directory:
     non-activation/focus preservation, bounded correlated results,
     process-query authority reduction, and complete input-result authority
     removal. Use inert destinations and never execute destructive fixtures.
+28. For API v24, test exact grant/version/mode denial, strict action shape and
+    action-ID bounds, malformed window IDs, duplicate and mixed host-operation
+    rejection, same- and sibling-window exact routing, stale/closing/
+    uninitialized/live-domain/capacity/launch refusal, ordinary local-shell
+    identity, in-window selection without native activation, lifecycle-hook
+    suppression, bounded correlated results, process-query authority reduction,
+    and complete process-action result authority removal.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -2090,6 +2178,14 @@ enforcement, complete result-authority removal, retained-grant install/update
 behavior, and a checked-in process terminal writer. Its tests use only inert
 local terminals and shell/Python fixtures; no provider runs, destructive
 command executes, or AI tokens are consumed.
+API v24 adds exact permission/version/mode gating, strict bounded action
+parsing, exact stable-window routing, stale/closing/live-domain target refusal,
+ordinary local-shell creation and in-window selection without native
+activation, lifecycle-hook suppression, bounded correlated results,
+query-to-tab-creation authority reduction, one-operation enforcement, complete
+result-authority removal, retained-grant install/update behavior, and a
+checked-in process tab builder. Its tests use only inert local shell/Python
+fixtures; no provider runs or AI tokens are consumed.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -2107,12 +2203,13 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v23's public surface includes current-window inventory,
+and secrets. API v24's public surface includes current-window inventory,
 navigation, topology, exact presented-text reads, ordinary pane/tab lifecycle,
 pane movement, bounded terminal input, same-tab pane layouts, command-scoped
 exact-window closure, process-wide read-only inventory, persistent handlers,
 non-activating cross-window tab/pane navigation, bounded cross-window
 presentation-safe terminal reads, guarded cross-window UTF-8 terminal input,
+cross-window ordinary local-tab creation,
 namespaced commands,
 non-secret settings, and narrowly granted completed-region snapshots. Those
 capabilities are not enough to represent the privileged
@@ -2132,7 +2229,8 @@ after that PTY write and remains outside automated acceptance.
 `api_version = 12`, `api_version = 13`, `api_version = 14`,
 `api_version = 15`, `api_version = 16`, `api_version = 17`,
 `api_version = 18`, `api_version = 19`, `api_version = 20`,
-`api_version = 21`, `api_version = 22`, and `api_version = 23`
+`api_version = 21`, `api_version = 22`, `api_version = 23`, and
+`api_version = 24`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -2191,6 +2289,10 @@ remove every host authority.
 API v23 adds separately granted exact guarded terminal input in any live
 process-owned window. Process-query results may retain that independently
 granted mutation authority, while input results remove every host authority.
+API v24 adds separately granted ordinary local-tab creation in any exact live
+process-owned window. Process-query results may retain that independently
+granted mutation authority, while process-action results remove every host
+authority.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit

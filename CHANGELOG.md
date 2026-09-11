@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v24 adds an independent `process-tab-create` grant
+  for creating and selecting one ordinary local shell tab in one exact live
+  process-owned window. The process-lifetime window identity is revalidated at
+  execution without focus fallback or native activation; closing, stale,
+  capacity-limited, uninitialized, and live-domain destinations fail with a
+  bounded correlated result. The existing non-recursive tab creation path
+  suppresses derived lifecycle hooks, and every result removes all host
+  authority. Strict parsing, routing, grant retention, install/update behavior,
+  and the checked-in process-tab-builder sample are tested hermetically without
+  provider execution or AI-token use.
+
 - Declarative plugin API v23 adds an independent `process-terminal-input`
   grant for one exact, non-activating write of at most 8 KiB of validated UTF-8
   to any live process-owned pane. The destination window's disabled-by-default

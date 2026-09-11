@@ -466,6 +466,51 @@ impl Application {
                     }
                 }
             }
+            crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                action_id,
+                window_id,
+            } => {
+                let result = self
+                    .control_native_window_id(window_id)
+                    .and_then(|native_id| {
+                        self.windows
+                            .get_mut(&native_id)
+                            .filter(|window| !window.should_exit)
+                            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                            .create_plugin_tab()
+                    });
+                match result {
+                    Ok(tab_id) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "create-process-tab",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "tab_id": tab_id,
+                        "selected": true,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "create-process-tab",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "window_id": window_id,
+                            "tab_id": null,
+                            "selected": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
             _ => return Err("structured response did not contain a process action".into()),
         };
         let envelope = serde_json::json!({
@@ -717,6 +762,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::SendProcessText {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                            ..
+                        }
                 )
             })
         });
@@ -765,6 +813,9 @@ impl Application {
                     crate::plugin::structured::StructuredResponseAction::SendProcessText {
                         ..
                     } => continuation.allow_process_terminal_input,
+                    crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                        ..
+                    } => continuation.allow_process_tab_create,
                     _ => false,
                 });
         if !has_continuation_authority {
@@ -858,6 +909,14 @@ impl Application {
                     *enter,
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::CreateProcessTab { .. } => (
+                "tab-create",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -878,6 +937,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::SendProcessText {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                            ..
+                        }
                 )
             });
         }
@@ -891,6 +953,9 @@ impl Application {
                     ..
                 }
                 | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                    ..
+                }
+                | crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
                     ..
                 } => window.continue_structured_process_action(event_json, continuation),
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
@@ -4171,6 +4236,229 @@ mod tests {
         );
         assert!(
             selected.to_string().len()
+                <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_tab_creation_is_exact_non_activating_and_hook_suppressed() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+
+        #[derive(Debug)]
+        struct TabCreatedObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+        impl crate::plugin::hooks::Plugin for TabCreatedObserver {
+            fn id(&self) -> &str {
+                "process-tab-builder"
+            }
+
+            fn name(&self) -> &str {
+                "Process Tab Builder Observer"
+            }
+
+            fn on_hook(
+                &mut self,
+                hook: &crate::plugin::Hook,
+                _context: &crate::plugin::PluginContext,
+            ) -> crate::plugin::hooks::HookResponse {
+                if matches!(hook, crate::plugin::Hook::TabCreated { .. }) {
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                crate::plugin::hooks::HookResponse::Ignored
+            }
+        }
+
+        let shell = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "exit 0".into()],
+            env: Default::default(),
+        };
+        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let initial = tabs.new_tab().unwrap();
+        let observed_creations = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut target = App::new_headless(Config::default()).unwrap();
+        target.tabs = Some(tabs);
+        let context = target.build_plugin_context();
+        target
+            .plugin_manager
+            .register(
+                Box::new(TabCreatedObserver(std::sync::Arc::clone(
+                    &observed_creations,
+                ))),
+                &context,
+            )
+            .unwrap();
+
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        application.windows.insert(native_id, target);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let created = application
+            .plugin_process_action_event(
+                "process-tab-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                    action_id: "new-sibling-task".into(),
+                    window_id: 7,
+                },
+            )
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+        assert_eq!(created["plugin_id"], "process-tab-builder");
+        assert_eq!(created["event"]["type"], "process-action-result");
+        assert_eq!(created["event"]["action"], "create-process-tab");
+        assert_eq!(created["event"]["action_id"], "new-sibling-task");
+        assert_eq!(created["event"]["ok"], true);
+        assert_eq!(created["event"]["origin_window_id"], 9);
+        assert_eq!(created["event"]["window_id"], 7);
+        assert_eq!(created["event"]["selected"], true);
+        let created_tab = created["event"]["tab_id"].as_u64().unwrap() as usize;
+        assert_ne!(created_tab, initial);
+        let target = &application.windows[&native_id];
+        assert!(target.window.is_none());
+        assert_eq!(target.tabs.as_ref().unwrap().count(), 2);
+        assert_eq!(
+            target.tabs.as_ref().unwrap().active_tab_id(),
+            Some(created_tab)
+        );
+        assert_eq!(
+            observed_creations.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        let created_same_window = application
+            .plugin_process_action_event(
+                "process-tab-builder",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                    action_id: "new-current-task".into(),
+                    window_id: 7,
+                },
+            )
+            .unwrap();
+        let created_same_window: serde_json::Value =
+            serde_json::from_str(&created_same_window).unwrap();
+        assert_eq!(created_same_window["event"]["ok"], true);
+        assert_eq!(created_same_window["event"]["origin_window_id"], 7);
+        assert_eq!(created_same_window["event"]["window_id"], 7);
+        let same_window_tab = created_same_window["event"]["tab_id"].as_u64().unwrap() as usize;
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab_id(),
+            Some(same_window_tab)
+        );
+        assert_eq!(
+            observed_creations.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        let stale = application
+            .plugin_process_action_event(
+                "process-tab-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                    action_id: "stale-window".into(),
+                    window_id: 8,
+                },
+            )
+            .unwrap();
+        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        assert_eq!(stale["event"]["ok"], false);
+        assert!(stale["event"]["tab_id"].is_null());
+        assert!(
+            stale["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist")
+        );
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            3
+        );
+
+        application.windows.get_mut(&native_id).unwrap().should_exit = true;
+        let closing = application
+            .plugin_process_action_event(
+                "process-tab-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                    action_id: "closing-window".into(),
+                    window_id: 7,
+                },
+            )
+            .unwrap();
+        let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+        assert_eq!(closing["event"]["ok"], false);
+        assert!(
+            closing["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("closing")
+        );
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            3
+        );
+
+        let target = application.windows.get_mut(&native_id).unwrap();
+        target.should_exit = false;
+        target
+            .tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .live_domain = Some(crate::tabs::LiveDomainTab {
+            domain_id: "fake-domain".into(),
+            tab_id: 12,
+            pane_ids: HashMap::new(),
+        });
+        let live_domain = application
+            .plugin_process_action_event(
+                "process-tab-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                    action_id: "live-domain-window".into(),
+                    window_id: 7,
+                },
+            )
+            .unwrap();
+        let live_domain: serde_json::Value = serde_json::from_str(&live_domain).unwrap();
+        assert_eq!(live_domain["event"]["ok"], false);
+        assert!(
+            live_domain["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("live domain")
+        );
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            3
+        );
+        assert!(
+            created.to_string().len()
                 <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
         );
     }
