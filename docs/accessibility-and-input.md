@@ -112,7 +112,10 @@ an isolated command registry, modal semantic tree, and stable node namespace.
 Its editable search exposes the exact UTF-8 value and cursor, the selected
 visible character is the active descendant, and every option announces its
 character/name plus category, aliases, and code point. Dynamic code-point
-results retire their previous semantic identities immediately. Focus and click
+results and Unicode 17.0 canonical-name searches retire their previous semantic
+identities immediately. A query materializes no more than 256 ranked options,
+so complete name discovery cannot expand the accessibility tree to the full
+Unicode database. Focus and click
 actions must resolve to a currently visible stable ID, so filtered or stale
 screen-reader actions cannot insert text or fall through to background
 controls. Keyboard, pointer, wheel, IME commit, AccessKit replacement, and

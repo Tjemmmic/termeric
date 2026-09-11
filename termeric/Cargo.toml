@@ -33,6 +33,7 @@ bytemuck = { version = "1.21", features = ["derive"] }
 # Text rendering (0.18+ for FontFeatures support)
 cosmic-text = "0.18"
 unicode-segmentation = "1.12"
+unicode_names2 = "=4.0.0"
 
 # Image loading for window icon
 image = "0.25"

@@ -2,6 +2,18 @@
 
 use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
 use crate::ui::command_palette::{CommandPalette, PaletteInfo, PaletteLayout, PaletteResult};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
+use std::sync::{Once, OnceLock};
+
+const UNICODE_DATA_VERSION: &str = "17.0";
+const UNICODE_SEARCH_RESULT_LIMIT: usize = 256;
+const UNICODE_SEARCH_MEMORY_BUDGET: usize = 8 * 1024 * 1024;
+const UNICODE_NAME_BYTES_CAPACITY: usize = 4_000_000;
+const UNICODE_RECORD_CAPACITY: usize = 160_000;
+
+static UNICODE_NAME_INDEX: OnceLock<UnicodeNameIndex> = OnceLock::new();
+static UNICODE_PREWARM: Once = Once::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicodePickerSelection {
@@ -20,7 +32,68 @@ struct CuratedCharacter {
 pub struct UnicodePicker {
     palette: CommandPalette,
     actions: Vec<UnicodePickerSelection>,
-    exact_mode: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UnicodeNameRecord {
+    scalar: u32,
+    name_start: u32,
+}
+
+struct UnicodeNameIndex {
+    names: String,
+    records: Vec<UnicodeNameRecord>,
+}
+
+impl UnicodeNameIndex {
+    fn build() -> Self {
+        let mut names = String::with_capacity(UNICODE_NAME_BYTES_CAPACITY);
+        let mut records = Vec::with_capacity(UNICODE_RECORD_CAPACITY);
+        for scalar in 0..=char::MAX as u32 {
+            let Some(character) = char::from_u32(scalar) else {
+                continue;
+            };
+            if character.is_control() {
+                continue;
+            }
+            let Some(name) = unicode_names2::name(character) else {
+                continue;
+            };
+            let name = name.to_string();
+            let name_start =
+                u32::try_from(names.len()).expect("Unicode name index exceeded four GiB");
+            names.push_str(&name);
+            records.push(UnicodeNameRecord { scalar, name_start });
+        }
+        assert!(names.len() <= UNICODE_NAME_BYTES_CAPACITY);
+        assert!(records.len() <= UNICODE_RECORD_CAPACITY);
+        names.shrink_to_fit();
+        records.shrink_to_fit();
+        let index = Self { names, records };
+        assert!(index.retained_bytes() <= UNICODE_SEARCH_MEMORY_BUDGET);
+        index
+    }
+
+    fn name(&self, position: usize) -> &str {
+        let start = self.records[position].name_start as usize;
+        let end = self
+            .records
+            .get(position + 1)
+            .map_or(self.names.len(), |record| record.name_start as usize);
+        &self.names[start..end]
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.names.capacity() + self.records.capacity() * std::mem::size_of::<UnicodeNameRecord>()
+    }
+}
+
+#[derive(Debug)]
+struct RankedCharacter {
+    score: u32,
+    tie_break: String,
+    selection: UnicodePickerSelection,
+    command: RegisteredCommand,
 }
 
 impl UnicodePicker {
@@ -30,13 +103,13 @@ impl UnicodePicker {
         Self {
             palette,
             actions: Vec::new(),
-            exact_mode: false,
         }
     }
 
     pub fn open(&mut self) {
         self.rebuild_registry();
         self.palette.open();
+        prewarm_unicode_name_index();
     }
 
     pub fn close(&mut self) {
@@ -132,17 +205,17 @@ impl UnicodePicker {
             if let Some(character) = parse_scalar_query(&input) {
                 self.rebuild_exact_registry(character);
             } else {
-                self.exact_mode = true;
                 self.actions.clear();
                 self.palette.replace_all_commands(Vec::new());
             }
-        } else if self.exact_mode {
+        } else if input.trim().is_empty() {
             self.rebuild_registry();
+        } else {
+            self.rebuild_search_registry(&input);
         }
     }
 
     fn rebuild_registry(&mut self) {
-        self.exact_mode = false;
         self.actions.clear();
         let mut commands = Vec::with_capacity(CURATED_CHARACTERS.len());
         for entry in CURATED_CHARACTERS {
@@ -170,7 +243,6 @@ impl UnicodePicker {
     }
 
     fn rebuild_exact_registry(&mut self, character: char) {
-        self.exact_mode = true;
         self.actions.clear();
         let text = character.to_string();
         let curated = CURATED_CHARACTERS.iter().find(|entry| entry.text == text);
@@ -211,6 +283,16 @@ impl UnicodePicker {
         }]);
     }
 
+    fn rebuild_search_registry(&mut self, query: &str) {
+        let results = search_unicode_characters(query);
+        self.actions = results
+            .iter()
+            .map(|result| result.selection.clone())
+            .collect();
+        self.palette
+            .replace_ranked_results(results.into_iter().map(|result| result.command).collect());
+    }
+
     fn resolve(&mut self, result: PaletteResult) -> Option<UnicodePickerSelection> {
         let PaletteResult::RunAction(id) = result else {
             if matches!(result, PaletteResult::Cancelled) {
@@ -223,6 +305,215 @@ impl UnicodePicker {
             self.close();
         }
         selection
+    }
+}
+
+fn prewarm_unicode_name_index() {
+    UNICODE_PREWARM.call_once(|| {
+        std::thread::spawn(|| {
+            UNICODE_NAME_INDEX.get_or_init(UnicodeNameIndex::build);
+        });
+    });
+}
+
+fn unicode_name_index() -> &'static UnicodeNameIndex {
+    UNICODE_NAME_INDEX.get_or_init(UnicodeNameIndex::build)
+}
+
+fn search_unicode_characters(query: &str) -> Vec<RankedCharacter> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let normalized = normalize_name_query(query);
+    let terms = normalized.split_whitespace().collect::<Vec<_>>();
+    let exact_scalar = (!normalized.is_empty())
+        .then(|| unicode_names2::character(query))
+        .flatten()
+        .filter(|character| !character.is_control())
+        .map(|character| character as u32);
+
+    // The heap retains only the best scalar candidates. Its natural rank is
+    // `(score, lower-code-point-first)`, wrapped in Reverse so peek() is the
+    // current worst result.
+    let mut best = BinaryHeap::<Reverse<(u32, Reverse<u32>)>>::new();
+    let mut exact_matched = false;
+    if !terms.is_empty() {
+        let index = unicode_name_index();
+        for (position, record) in index.records.iter().enumerate() {
+            let name = index.name(position);
+            let Some(mut score) = score_unicode_name(name, &terms) else {
+                continue;
+            };
+            if exact_scalar == Some(record.scalar) {
+                score = score.max(4_000_000);
+                exact_matched = true;
+            }
+            let rank = (score, Reverse(record.scalar));
+            retain_rank(&mut best, rank);
+        }
+    }
+
+    // Some aliases share no words with the canonical name (for example,
+    // BYTE ORDER MARK -> ZERO WIDTH NO-BREAK SPACE), so inject a safe exact
+    // alias/name resolution independently of partial canonical-name matching.
+    if let Some(scalar) = exact_scalar.filter(|_| !exact_matched) {
+        retain_rank(&mut best, (4_000_000, Reverse(scalar)));
+    }
+
+    let index = unicode_name_index();
+    let mut ranked = best
+        .into_iter()
+        .filter_map(|Reverse((score, Reverse(scalar)))| {
+            let character = char::from_u32(scalar)?;
+            let position = index
+                .records
+                .binary_search_by_key(&scalar, |record| record.scalar)
+                .ok()?;
+            let name = index.name(position);
+            Some(named_result(character, name, score))
+        })
+        .collect::<Vec<_>>();
+
+    for (position, entry) in CURATED_CHARACTERS.iter().enumerate() {
+        if let Some(score) = score_curated_character(entry, query, &terms) {
+            ranked.push(curated_result(entry, score, position));
+        }
+    }
+
+    ranked.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.tie_break.cmp(&b.tie_break))
+    });
+    let mut seen = HashSet::with_capacity(UNICODE_SEARCH_RESULT_LIMIT);
+    ranked.retain(|result| seen.insert(result.selection.text.clone()));
+    ranked.truncate(UNICODE_SEARCH_RESULT_LIMIT);
+    ranked
+}
+
+fn retain_rank(best: &mut BinaryHeap<Reverse<(u32, Reverse<u32>)>>, rank: (u32, Reverse<u32>)) {
+    if best.len() < UNICODE_SEARCH_RESULT_LIMIT {
+        best.push(Reverse(rank));
+    } else if best.peek().is_some_and(|worst| rank > worst.0) {
+        best.pop();
+        best.push(Reverse(rank));
+    }
+}
+
+fn normalize_name_query(query: &str) -> String {
+    let mut normalized = String::with_capacity(query.len());
+    let mut separator = false;
+    for byte in query.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            if separator && !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.push((byte as char).to_ascii_uppercase());
+            separator = false;
+        } else if byte.is_ascii() {
+            separator = true;
+        }
+    }
+    normalized
+}
+
+fn score_unicode_name(name: &str, terms: &[&str]) -> Option<u32> {
+    let all_whole = terms.iter().all(|term| name_has_term(name, term, true));
+    let compact_query_len = terms.iter().map(|term| term.len()).sum::<usize>() as u32;
+    let length_bonus = 10_000u32.saturating_sub(name.len() as u32);
+    let score = if all_whole {
+        2_000_000
+    } else if terms.iter().all(|term| name_has_term(name, term, false)) {
+        1_500_000
+    } else if terms.iter().all(|term| name.contains(term)) {
+        1_000_000
+    } else {
+        return None;
+    };
+    Some(score + compact_query_len * 100 + length_bonus)
+}
+
+fn name_has_term(name: &str, term: &str, require_right_boundary: bool) -> bool {
+    name.match_indices(term).any(|(start, _)| {
+        let left_boundary = start == 0 || !name.as_bytes()[start - 1].is_ascii_alphanumeric();
+        let end = start + term.len();
+        let right_boundary = end == name.len() || !name.as_bytes()[end].is_ascii_alphanumeric();
+        left_boundary && (!require_right_boundary || right_boundary)
+    })
+}
+
+fn score_curated_character(entry: &CuratedCharacter, query: &str, terms: &[&str]) -> Option<u32> {
+    if entry.text == query || entry.name.eq_ignore_ascii_case(query) {
+        return Some(4_500_000);
+    }
+    let searchable = format!(
+        "{} {} {} {} {}",
+        entry.name,
+        entry.category,
+        entry.aliases,
+        display_codepoints(entry.text),
+        entry.text
+    )
+    .to_ascii_uppercase();
+    if terms.is_empty() {
+        return searchable.contains(query).then_some(3_000_000);
+    }
+    terms
+        .iter()
+        .all(|term| searchable.contains(term))
+        .then_some(2_500_000 + terms.iter().map(|term| term.len()).sum::<usize>() as u32 * 100)
+}
+
+fn named_result(character: char, name: &str, score: u32) -> RankedCharacter {
+    let text = character.to_string();
+    let id = stable_character_id("named", &text);
+    RankedCharacter {
+        score,
+        tie_break: format!("{:06X}", character as u32),
+        selection: UnicodePickerSelection {
+            id: id.clone(),
+            text: text.clone(),
+        },
+        command: RegisteredCommand {
+            id,
+            title: format!("{text}  {name}"),
+            category: format!(
+                "Unicode {UNICODE_DATA_VERSION} · {}",
+                display_codepoints(&text)
+            ),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+    }
+}
+
+fn curated_result(entry: &CuratedCharacter, score: u32, position: usize) -> RankedCharacter {
+    let id = stable_character_id("curated", entry.text);
+    RankedCharacter {
+        score,
+        tie_break: format!("curated-{position:03}"),
+        selection: UnicodePickerSelection {
+            id: id.clone(),
+            text: entry.text.into(),
+        },
+        command: RegisteredCommand {
+            id,
+            title: format!("{}  {}", entry.text, entry.name),
+            category: format!(
+                "{} · {} · {}",
+                entry.category,
+                display_codepoints(entry.text),
+                entry.aliases
+            ),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
     }
 }
 
@@ -960,6 +1251,7 @@ const CURATED_CHARACTERS: &[CuratedCharacter] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn filter(picker: &mut UnicodePicker, value: &str) -> PaletteInfo {
         assert!(picker.accessibility_set_filter(value));
@@ -987,6 +1279,90 @@ mod tests {
         }
         assert!(filter(&mut picker, "reload").entries[0].title.contains('↻'));
         assert!(filter(&mut picker, "U+2192").entries[0].title.contains('→'));
+    }
+
+    #[test]
+    fn canonical_names_cover_non_curated_and_algorithmic_characters() {
+        let mut picker = UnicodePicker::new();
+        picker.open();
+
+        let info = filter(&mut picker, "latin letter ezh");
+        assert!(info.entries.iter().any(|entry| entry.title.contains('ʒ')));
+
+        let info = filter(&mut picker, "hangul syllable gag");
+        assert_eq!(info.entries[0].id, "unicode-picker.named.ac01");
+        assert!(info.entries[0].title.contains('각'));
+
+        let info = filter(&mut picker, "cjk unified ideograph 4e00");
+        assert_eq!(info.entries[0].id, "unicode-picker.named.4e00");
+        assert!(info.entries[0].title.contains('一'));
+    }
+
+    #[test]
+    fn exact_aliases_use_loose_matching_but_never_expose_controls() {
+        let mut picker = UnicodePicker::new();
+        picker.open();
+        let info = filter(&mut picker, "byte_order-mark");
+        assert_eq!(info.entries[0].id, "unicode-picker.named.feff");
+        assert_eq!(picker.activate().unwrap().text, "\u{feff}");
+
+        let mut picker = UnicodePicker::new();
+        picker.open();
+        filter(&mut picker, "new line");
+        assert!(picker.actions.iter().all(|selection| {
+            !selection.text.is_empty() && !selection.text.chars().any(char::is_control)
+        }));
+    }
+
+    #[test]
+    fn exhaustive_search_has_explicit_result_memory_and_latency_bounds() {
+        let index = unicode_name_index();
+        assert_eq!(index.records.len(), 153_626);
+        assert!(index.retained_bytes() <= UNICODE_SEARCH_MEMORY_BUDGET);
+
+        let started = Instant::now();
+        for query in [
+            "letter",
+            "black",
+            "arabic letter",
+            "mathematical symbol",
+            "cjk unified",
+        ] {
+            let query_started = Instant::now();
+            let results = search_unicode_characters(query);
+            assert!(!results.is_empty(), "{query}");
+            assert!(results.len() <= UNICODE_SEARCH_RESULT_LIMIT, "{query}");
+            if query == "letter" {
+                assert_eq!(results.len(), UNICODE_SEARCH_RESULT_LIMIT);
+            }
+            eprintln!("unicode-query {query:?} took {:?}", query_started.elapsed());
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "five warm bounded queries took {:?}",
+            started.elapsed()
+        );
+        eprintln!(
+            "unicode-index records={} retained_bytes={} five_queries={:?}",
+            index.records.len(),
+            index.retained_bytes(),
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn empty_query_restores_only_the_curated_catalog() {
+        let mut picker = UnicodePicker::new();
+        picker.open();
+        assert!(
+            filter(&mut picker, "snowman")
+                .entries
+                .iter()
+                .any(|entry| entry.id == "unicode-picker.named.2603")
+        );
+        let info = filter(&mut picker, "");
+        assert_eq!(info.total_count, CURATED_CHARACTERS.len());
+        assert!(info.total_count <= UNICODE_SEARCH_RESULT_LIMIT);
     }
 
     #[test]
@@ -1056,6 +1432,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(selection.text, "€");
+
+        let mut picker = UnicodePicker::new();
+        picker.open();
+        let info = filter(&mut picker, "snowman");
+        let layout = PaletteLayout::calculate(900.0, 700.0, 10.0, 20.0, info.animation, 1);
+        let selection = picker
+            .handle_click(
+                layout.panel_x + layout.padding,
+                layout.list_y + layout.row_height * 0.5,
+                &layout,
+            )
+            .unwrap();
+        assert_eq!(selection.id, "unicode-picker.named.2603");
+        assert_eq!(selection.text, "☃");
     }
 
     #[test]

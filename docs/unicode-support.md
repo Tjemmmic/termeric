@@ -38,12 +38,28 @@ terminal grapheme-width policy.
 
 ## Character discovery and insertion
 
-The **Insert Unicode Character...** command opens a bounded in-app picker. Its
-curated index covers common punctuation, currencies, arrows, mathematics,
-technical symbols, box drawing, shapes, and emoji. Search includes displayed
-characters, names, aliases, categories, and code points. Exact `U+XXXX`,
-`0xXXXX`, and four-to-six-digit bare hexadecimal queries address any valid
-non-control Unicode scalar without enumerating the Unicode code space.
+The **Insert Unicode Character...** command opens a bounded in-app picker. Empty
+input shows a curated index of common punctuation, currencies, arrows,
+mathematics, technical symbols, box drawing, shapes, and emoji. Non-empty name
+queries search all 153,626 non-control scalars with canonical names in the
+Unicode 17.0 database supplied by `unicode_names2` 4.0.0. Whole-name, token
+prefix, and token-substring matches have deterministic ranking; exact canonical
+names and Unicode name aliases follow UAX #44 loose matching. Curated names,
+displayed graphemes, friendly aliases, categories, and code points participate
+in that same search. Exact `U+XXXX`, `0xXXXX`, and four-to-six-digit bare
+hexadecimal queries address any valid non-control Unicode scalar.
+
+The canonical-name index is built once after the picker opens and retains
+5,226,122 bytes in its compact name/offset representation on Unicode 17.0.
+Construction preallocates and hard-caps the backing name bytes at 4,000,000 and
+the fixed-size record table at 160,000 entries, avoiding growth overshoot.
+Queries scan that immutable index without reconstructing Unicode names and keep
+only the best 256 scalar candidates; after curated results are merged and
+deduplicated, no more than 256 executable rows enter the shared palette or its
+accessibility tree. The deterministic warm-query rail covers five broad and
+algorithmic queries under a 250 ms aggregate ceiling (48.8 ms observed on the
+September 2026 development host). This is a regression guard, not a universal
+hardware latency guarantee.
 
 The picker preserves complete curated grapheme sequences, including variation
 selectors and joiners, and inserts their exact UTF-8 once through the normal
@@ -51,10 +67,12 @@ terminal-input path. It captures the opening tab/pane and refuses insertion if
 focus, writability, or broadcast state changes. Controls, surrogates, malformed
 hexadecimal, and values beyond `U+10FFFF` produce no executable result.
 
-This is deliberately not a complete Unicode-name database. Characters outside
-the curated index remain reachable by code point, but arbitrary full-name or
-localized-name search is not claimed. The picker does not guarantee that the
-configured fonts contain a glyph for the selected scalar.
+Canonical names are English Unicode identifiers, not localized character
+descriptions or CLDR emoji annotations. Unassigned/private-use scalars and other
+values without canonical names remain reachable only by exact code point when
+they pass the non-control safety policy. Alias resolution never makes a control
+character executable. The picker does not guarantee that the configured fonts
+contain a glyph for the selected scalar.
 
 Font choice can be refined with bounded inclusive `font.range_overrides`.
 Lookup uses the grapheme's first non-default-ignorable scalar, but the selected
@@ -80,7 +98,7 @@ at every byte boundary, a real PTY emits representative clusters, and the
 headless WGPU lane shapes and submits the full strings without scalar
 truncation.
 
-Bidirectional reordering, exhaustive system-font recommendations, and exhaustive
-Unicode-name search remain outside this policy. IME/preedit, color emoji, and
-accessibility semantics are covered
+Bidirectional reordering, exhaustive system-font recommendations, localized
+character descriptions, and CLDR emoji keyword search remain outside this
+policy. IME/preedit, color emoji, and accessibility semantics are covered
 by [modern text input and accessibility](accessibility-and-input.md).

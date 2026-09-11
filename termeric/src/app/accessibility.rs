@@ -7532,6 +7532,41 @@ mod tests {
     }
 
     #[test]
+    fn unicode_name_search_keeps_the_semantic_registry_bounded() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.unicode_picker.open();
+        app.accessibility_snapshot();
+        let stale = *app
+            .accessibility
+            .unicode_nodes
+            .get("unicode-picker.curated.2192")
+            .unwrap();
+
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: UNICODE_INPUT,
+            data: Some(ActionData::Value("snowman".into())),
+        });
+        let snapshot = app.accessibility_snapshot();
+        let info = app.unicode_picker.build_info();
+        assert!(info.total_count <= 256);
+        assert!(
+            info.entries
+                .iter()
+                .any(|entry| entry.id == "unicode-picker.named.2603")
+        );
+        assert!(!app.accessibility.unicode_commands.contains_key(&stale));
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == UNICODE_LIST)
+                .is_some_and(|(_, list)| list.children().len() <= info.entries.len())
+        );
+    }
+
+    #[test]
     fn pending_domain_picker_exposes_read_only_live_status() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.domain_picker.open(&app.config.domains);

@@ -274,6 +274,25 @@ impl CommandPalette {
         }
     }
 
+    /// Replace the registry with an already-ranked, bounded result set.
+    ///
+    /// Dedicated picker workflows can perform domain-specific searching
+    /// without forcing the general command palette to retain their complete
+    /// backing catalog. The supplied order is authoritative and every command
+    /// is exposed as a current match.
+    pub fn replace_ranked_results(&mut self, commands: Vec<RegisteredCommand>) {
+        self.registry = commands;
+        self.entries = (0..self.registry.len())
+            .map(|registry_index| PaletteEntry {
+                registry_index,
+                score: (self.registry.len() - registry_index) as i64,
+                match_positions: Vec::new(),
+            })
+            .collect();
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
     /// Replace every plugin-owned command while preserving core/theme entries.
     pub fn replace_plugin_commands(&mut self, commands: Vec<RegisteredCommand>) {
         self.registry

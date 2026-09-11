@@ -379,11 +379,19 @@ through RIS. This lane is also entirely local.
 
 IME state tests prove preedit is not inserted early, UTF-8 cursor ranges are
 validated, and a commit reaches an editable surface exactly once. Unicode
-picker fixtures additionally cover its bounded curated categories, name/alias/
-code-point filtering, exact scalar syntaxes, invalid/control/surrogate refusal,
-complete grapheme bytes, configurable unbound shortcut, IME editing,
-reduced-motion state, exact PTY UTF-8, changed/read-only/broadcast destination
-refusal, pointer geometry, and retired semantic actions. AccessKit
+picker fixtures additionally cover its bounded curated categories, Unicode
+17.0 canonical names, UAX #44 exact aliases, algorithmic Hangul/CJK names,
+name/alias/code-point filtering, exact scalar syntaxes,
+invalid/control/surrogate refusal, complete grapheme bytes, configurable
+unbound shortcut, IME editing, reduced-motion state, exact PTY UTF-8,
+changed/read-only/broadcast destination refusal, pointer geometry, and retired
+semantic actions. The exhaustive-name resource rail fixes the retained compact
+index ceiling at 8 MiB, asserts exactly 153,626 named non-control scalars, caps
+construction at 4,000,000 name bytes and 160,000 fixed records, limits every
+query to 256 result objects, and runs five warm broad/algorithmic queries under
+250 ms aggregate (48.8 ms observed in the isolated rail on the September 2026
+development host).
+AccessKit
 tests prove hidden-cell redaction, incremental tree updates, modal isolation,
 UTF-8 editor state, shared render/hit-test bounds, stable palette/setting/custom
 command/workspace/shortcut identities, exact activation, bounded list exposure,
