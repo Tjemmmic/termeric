@@ -152,8 +152,13 @@ targets, duplicate requests, and cross-window IDs cannot initiate closure.
 API v20 adds a separate read-only process query that returns bounded,
 creation-ordered inventories for up to eight live Termeric windows, with the
 originating stable window ID and explicit truncation. It discloses no terminal
-text or raw PTY data, cannot chain another host operation, and grants no
-cross-window mutation.
+text or raw PTY data and grants no cross-window mutation to API v20 handlers.
+API v21 adds separately granted, non-activating cross-window workspace
+navigation. A persistent handler can select one exact tab or focus one exact
+pane using the process/window/tab/pane identities returned by API v20; the
+complete path is revalidated atomically and the result cannot chain another
+host operation. Native window activation and every broader mutation remain
+outside this grant.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

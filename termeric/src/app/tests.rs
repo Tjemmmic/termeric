@@ -4653,7 +4653,7 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
 }
 
 #[test]
-fn process_query_results_revoke_every_query_and_mutation_authority() {
+fn process_query_retains_only_process_actions_and_action_results_revoke_every_authority() {
     let mut invocation = crate::plugin::structured::StructuredHandlerInvocation {
         plugin_id: "process-inspector".into(),
         program: "fixture".into(),
@@ -4673,8 +4673,27 @@ fn process_query_results_revoke_every_query_and_mutation_authority() {
         allow_pane_layout: true,
         allow_window_close: true,
         allow_process_query: true,
+        allow_process_actions: true,
         mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
     };
+
+    let mut process_query_result = invocation.clone();
+    super::plugin_actions::reduce_structured_process_query_authority(&mut process_query_result);
+    assert!(process_query_result.allow_ui_actions);
+    assert!(process_query_result.allow_process_actions);
+    assert!(!process_query_result.allow_workspace_query);
+    assert!(!process_query_result.allow_workspace_actions);
+    assert!(!process_query_result.allow_workspace_topology);
+    assert!(!process_query_result.allow_terminal_query);
+    assert!(!process_query_result.allow_pane_create);
+    assert!(!process_query_result.allow_tab_create);
+    assert!(!process_query_result.allow_pane_close);
+    assert!(!process_query_result.allow_tab_close);
+    assert!(!process_query_result.allow_pane_move);
+    assert!(!process_query_result.allow_terminal_input);
+    assert!(!process_query_result.allow_pane_layout);
+    assert!(!process_query_result.allow_window_close);
+    assert!(!process_query_result.allow_process_query);
 
     super::plugin_actions::clear_structured_host_authority(&mut invocation);
 
@@ -4692,6 +4711,7 @@ fn process_query_results_revoke_every_query_and_mutation_authority() {
     assert!(!invocation.allow_pane_layout);
     assert!(!invocation.allow_window_close);
     assert!(!invocation.allow_process_query);
+    assert!(!invocation.allow_process_actions);
 }
 
 #[cfg(unix)]
@@ -4761,6 +4781,7 @@ fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
                 allow_pane_layout: false,
                 allow_window_close: true,
                 allow_process_query: false,
+                allow_process_actions: false,
                 mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
             }),
         )

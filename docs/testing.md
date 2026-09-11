@@ -1077,6 +1077,13 @@ ceilings, control-safe UTF-8 clipping, retained-grant install/update behavior,
 one-operation enforcement, complete result-authority removal, and a checked-in
 process inspector. All fixtures are local and hermetic; no AI provider process
 or tokens are involved.
+API v21 adds exact process-action version/mode/grant denial, strict typed action
+parsing, same- and sibling-window stable-ID routing, atomic tab/pane validation,
+stale/closed/closing/uninitialized refusal, non-activation, lifecycle-hook
+suppression, bounded correlated results, process-query authority reduction,
+complete process-action result authority removal, retained-grant updates, and a
+checked-in process navigator. All fixtures are local and hermetic; no AI
+provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

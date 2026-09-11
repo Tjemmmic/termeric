@@ -68,6 +68,15 @@ impl App {
                         );
                         None
                     }
+                    action @ (crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                        ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                        ..
+                    }) => {
+                        workspace_operation = Some(action);
+                        None
+                    }
                     crate::plugin::structured::StructuredResponseAction::QueryTerminal {
                         query_id,
                         tab_id,
@@ -154,6 +163,12 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::QueryProcess { .. } => {
                     "process-query"
                 }
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    ..
+                } => "select-process-tab",
+                crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                    ..
+                } => "focus-process-pane",
                 crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
                     "terminal-query"
                 }
@@ -240,6 +255,12 @@ impl App {
                     "process queries require the process-owned Application window registry".into(),
                 );
             }
+            crate::plugin::structured::StructuredResponseAction::SelectProcessTab { .. }
+            | crate::plugin::structured::StructuredResponseAction::FocusProcessPane { .. } => {
+                return Err(
+                    "process actions require the process-owned Application window registry".into(),
+                );
+            }
             crate::plugin::structured::StructuredResponseAction::QueryTerminal {
                 query_id,
                 tab_id,
@@ -311,6 +332,20 @@ impl App {
     ) -> Result<(), String> {
         let mut invocation = continuation.ok_or_else(|| {
             "process queries require a live persistent handler continuation".to_string()
+        })?;
+        invocation.event_json = event_json;
+        reduce_structured_process_query_authority(&mut invocation);
+        self.submit_structured_handler(invocation)?;
+        Ok(())
+    }
+
+    pub(super) fn continue_structured_process_action(
+        &mut self,
+        event_json: String,
+        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
+    ) -> Result<(), String> {
+        let mut invocation = continuation.ok_or_else(|| {
+            "process actions require a live persistent handler continuation".to_string()
         })?;
         invocation.event_json = event_json;
         clear_structured_host_authority(&mut invocation);
@@ -2169,4 +2204,13 @@ pub(super) fn clear_structured_host_authority(
     invocation.allow_pane_layout = false;
     invocation.allow_window_close = false;
     invocation.allow_process_query = false;
+    invocation.allow_process_actions = false;
+}
+
+pub(super) fn reduce_structured_process_query_authority(
+    invocation: &mut crate::plugin::structured::StructuredHandlerInvocation,
+) {
+    let retain_process_actions = invocation.allow_process_actions;
+    clear_structured_host_authority(invocation);
+    invocation.allow_process_actions = retain_process_actions;
 }

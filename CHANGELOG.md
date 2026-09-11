@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v21 adds an independent `process-actions` grant for
+  exact, non-activating tab selection and pane focus in any live window owned
+  by the current Termeric process. Complete stable window/tab/pane paths are
+  atomically revalidated before mutation; stale, closed, closing, missing, or
+  uninitialized targets return bounded correlated errors without fallback.
+  API v21 can retain this one grant after a process query, then removes every
+  host authority from the process-action result. Native window activation,
+  terminal access, topology, input, creation, and closure are excluded. The
+  checked-in process-navigator sample and all validation/routing coverage are
+  hermetic and use no AI provider.
+
 - Declarative plugin API v20 adds an independent `process-query` grant for a
   bounded read-only inventory of the live windows owned by the current
   Termeric process. Results identify the exact originating stable window ID,

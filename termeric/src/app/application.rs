@@ -360,19 +360,149 @@ impl Application {
         inventory
     }
 
+    fn plugin_process_action_event(
+        &mut self,
+        plugin_id: &str,
+        origin_window_id: u64,
+        action: crate::plugin::structured::StructuredResponseAction,
+    ) -> Result<String, String> {
+        const MAX_ACTION_ERROR_BYTES: usize = 1024;
+
+        let event = match action {
+            crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                action_id,
+                window_id,
+                tab_id,
+            } => {
+                let result = self
+                    .control_native_window_id(window_id)
+                    .and_then(|native_id| {
+                        self.windows
+                            .get_mut(&native_id)
+                            .filter(|window| !window.should_exit)
+                            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                            .select_plugin_tab(tab_id)
+                    });
+                match result {
+                    Ok(changed) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "select-process-tab",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "tab_id": tab_id,
+                        "changed": changed,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "select-process-tab",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "window_id": window_id,
+                            "tab_id": tab_id,
+                            "changed": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
+            crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                action_id,
+                window_id,
+                tab_id,
+                pane_id,
+            } => {
+                let result = self
+                    .control_native_window_id(window_id)
+                    .and_then(|native_id| {
+                        self.windows
+                            .get_mut(&native_id)
+                            .filter(|window| !window.should_exit)
+                            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                            .focus_plugin_pane(tab_id, pane_id)
+                    });
+                match result {
+                    Ok((tab_changed, pane_changed)) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "focus-process-pane",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "tab_changed": tab_changed,
+                        "pane_changed": pane_changed,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "focus-process-pane",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "window_id": window_id,
+                            "tab_id": tab_id,
+                            "pane_id": pane_id,
+                            "tab_changed": null,
+                            "pane_changed": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
+            _ => return Err("structured response did not contain a process action".into()),
+        };
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "plugin_id": plugin_id,
+            "event": event,
+        });
+        let encoded = serde_json::to_string(&envelope)
+            .map_err(|error| format!("could not encode process action result: {error}"))?;
+        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
+            return Err(format!(
+                "process action result exceeds {} bytes",
+                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+            ));
+        }
+        Ok(encoded)
+    }
+
     fn handle_structured_plugin_completed(
         &mut self,
         mut completion: crate::plugin::structured::StructuredHandlerCompletion,
     ) {
-        let process_query = completion.result.as_ref().ok().and_then(|actions| {
-            actions.iter().find_map(|action| match action {
-                crate::plugin::structured::StructuredResponseAction::QueryProcess { query_id } => {
-                    Some(query_id.clone())
-                }
-                _ => None,
+        let process_operation = completion.result.as_ref().ok().and_then(|actions| {
+            actions.iter().find(|action| {
+                matches!(
+                    action,
+                    crate::plugin::structured::StructuredResponseAction::QueryProcess { .. }
+                        | crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                            ..
+                        }
+                        | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                            ..
+                        }
+                )
             })
         });
-        let Some(query_id) = process_query else {
+        let Some(process_operation) = process_operation.cloned() else {
             if let Some(window) = self.windows.get_mut(&completion.window_id) {
                 window.handle_structured_plugin_completed(completion);
             }
@@ -384,7 +514,7 @@ impl Application {
         };
         if origin.should_exit {
             log::debug!(
-                "Discarding process query from plugin {:?}: originating window is closing",
+                "Discarding process operation from plugin {:?}: originating window is closing",
                 completion.plugin_id
             );
             return;
@@ -397,46 +527,112 @@ impl Application {
             }
             return;
         }
+        let has_continuation_authority =
+            completion
+                .continuation
+                .as_ref()
+                .is_some_and(|continuation| match &process_operation {
+                    crate::plugin::structured::StructuredResponseAction::QueryProcess {
+                        ..
+                    } => continuation.allow_process_query,
+                    crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                        ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                        ..
+                    } => continuation.allow_process_actions,
+                    _ => false,
+                });
+        if !has_continuation_authority {
+            log::warn!(
+                "Refusing process operation from plugin {:?}: persistent continuation authority is unavailable",
+                completion.plugin_id
+            );
+            if let Some(window) = self.windows.get_mut(&completion.window_id) {
+                window.handle_structured_plugin_completed(completion);
+            }
+            return;
+        }
         let Some(origin_window_id) = self.control_window_ids.get(&completion.window_id).copied()
         else {
             log::warn!(
-                "Discarding process query from plugin {:?}: originating window has no stable process ID",
+                "Discarding process operation from plugin {:?}: originating window has no stable process ID",
                 completion.plugin_id
             );
             return;
         };
 
-        let inventory = self.plugin_process_inventory();
         let plugin_id = completion.plugin_id.clone();
-        let event_json = App::structured_process_query_event(
-            &plugin_id,
-            &query_id,
-            origin_window_id,
-            &inventory,
-        );
+        let (operation_name, event_json) = match &process_operation {
+            crate::plugin::structured::StructuredResponseAction::QueryProcess { query_id } => {
+                let inventory = self.plugin_process_inventory();
+                (
+                    "query",
+                    App::structured_process_query_event(
+                        &plugin_id,
+                        query_id,
+                        origin_window_id,
+                        &inventory,
+                    ),
+                )
+            }
+            crate::plugin::structured::StructuredResponseAction::SelectProcessTab { .. } => (
+                "select-tab",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
+            crate::plugin::structured::StructuredResponseAction::FocusProcessPane { .. } => (
+                "focus-pane",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
+            _ => unreachable!("only process operations are intercepted"),
+        };
         let continuation = completion.continuation.take();
         if let Ok(actions) = &mut completion.result {
             actions.retain(|action| {
                 !matches!(
                     action,
                     crate::plugin::structured::StructuredResponseAction::QueryProcess { .. }
+                        | crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                            ..
+                        }
+                        | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                            ..
+                        }
                 )
             });
         }
         if let Some(window) = self.windows.get_mut(&completion.window_id) {
             window.handle_structured_plugin_completed(completion);
-            let result = event_json.and_then(|event_json| {
-                window.continue_structured_process_query(event_json, continuation)
+            let result = event_json.and_then(|event_json| match process_operation {
+                crate::plugin::structured::StructuredResponseAction::QueryProcess { .. } => {
+                    window.continue_structured_process_query(event_json, continuation)
+                }
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    ..
+                }
+                | crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                    ..
+                } => window.continue_structured_process_action(event_json, continuation),
+                _ => unreachable!("only process operations are intercepted"),
             });
             if let Err(error) = result {
                 log::error!(
-                    "Structured plugin {:?} process query failed: {}",
+                    "Structured plugin {:?} process {} failed: {}",
                     plugin_id,
+                    operation_name,
                     error
                 );
-                window
-                    .toasts
-                    .error(format!("Plugin {plugin_id} process query failed: {error}"));
+                window.toasts.error(format!(
+                    "Plugin {plugin_id} process {operation_name} failed: {error}"
+                ));
             }
         }
     }
@@ -3394,6 +3590,311 @@ mod tests {
         assert_eq!(value["event"]["windows"][0]["id"], 100);
         assert_eq!(value["event"]["windows"][1]["id"], 102);
         assert_eq!(value["event"]["truncated"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_navigation_is_exact_atomic_non_activating_and_hook_suppressed() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+
+        #[derive(Debug)]
+        struct TabSwitchObserver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+        impl crate::plugin::hooks::Plugin for TabSwitchObserver {
+            fn id(&self) -> &str {
+                "process-navigator"
+            }
+
+            fn name(&self) -> &str {
+                "Process Navigation Observer"
+            }
+
+            fn on_hook(
+                &mut self,
+                hook: &crate::plugin::Hook,
+                _context: &crate::plugin::PluginContext,
+            ) -> crate::plugin::hooks::HookResponse {
+                if matches!(hook, crate::plugin::Hook::TabSwitched { .. }) {
+                    self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                crate::plugin::hooks::HookResponse::Ignored
+            }
+        }
+
+        let shell = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "exit 0".into()],
+            env: Default::default(),
+        };
+        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let first = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "exit 0".into()],
+                None,
+                Some("first"),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        let second = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "exit 0".into()],
+                None,
+                Some("second"),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        let first_pane = tabs.tab_by_id(first).unwrap().single_pane_id().0;
+        assert_eq!(tabs.active_tab_id(), Some(second));
+
+        let observed_switches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut target = App::new_headless(Config::default()).unwrap();
+        target.tabs = Some(tabs);
+        let context = target.build_plugin_context();
+        target
+            .plugin_manager
+            .register(
+                Box::new(TabSwitchObserver(std::sync::Arc::clone(&observed_switches))),
+                &context,
+            )
+            .unwrap();
+
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        application.windows.insert(native_id, target);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let selected = application
+            .plugin_process_action_event(
+                "process-navigator",
+                9,
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    action_id: "select-sibling".into(),
+                    window_id: 7,
+                    tab_id: first as u64,
+                },
+            )
+            .unwrap();
+        let selected: serde_json::Value = serde_json::from_str(&selected).unwrap();
+        assert_eq!(selected["plugin_id"], "process-navigator");
+        assert_eq!(selected["event"]["type"], "process-action-result");
+        assert_eq!(selected["event"]["origin_window_id"], 9);
+        assert_eq!(selected["event"]["window_id"], 7);
+        assert_eq!(selected["event"]["tab_id"], first as u64);
+        assert_eq!(selected["event"]["changed"], true);
+        assert!(application.windows[&native_id].window.is_none());
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab_id(),
+            Some(first)
+        );
+        assert_eq!(
+            observed_switches.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        let selected_same_window = application
+            .plugin_process_action_event(
+                "process-navigator",
+                7,
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    action_id: "select-current".into(),
+                    window_id: 7,
+                    tab_id: second as u64,
+                },
+            )
+            .unwrap();
+        let selected_same_window: serde_json::Value =
+            serde_json::from_str(&selected_same_window).unwrap();
+        assert_eq!(selected_same_window["event"]["ok"], true);
+        assert_eq!(selected_same_window["event"]["origin_window_id"], 7);
+        assert_eq!(selected_same_window["event"]["changed"], true);
+
+        let generation = application.windows[&native_id].plugin_runtime_generation;
+        application.handle_structured_plugin_completed(
+            crate::plugin::structured::StructuredHandlerCompletion {
+                window_id: native_id,
+                plugin_generation: generation,
+                plugin_id: "process-navigator".into(),
+                request_id: 99,
+                continuation: None,
+                result: Ok(vec![
+                    crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                        action_id: "missing-continuation".into(),
+                        window_id: 7,
+                        tab_id: first as u64,
+                    },
+                ]),
+            },
+        );
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab_id(),
+            Some(second)
+        );
+
+        let missing_pane = application
+            .plugin_process_action_event(
+                "process-navigator",
+                7,
+                crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                    action_id: "missing-pane".into(),
+                    window_id: 7,
+                    tab_id: first as u64,
+                    pane_id: u32::MAX,
+                },
+            )
+            .unwrap();
+        let missing_pane: serde_json::Value = serde_json::from_str(&missing_pane).unwrap();
+        assert_eq!(missing_pane["event"]["ok"], false);
+        assert_eq!(
+            missing_pane["event"]["tab_changed"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab_id(),
+            Some(second)
+        );
+        let error = missing_pane["event"]["error"].as_str().unwrap();
+        assert!(!error.is_empty());
+        assert!(!error.chars().any(char::is_control));
+
+        let focused = application
+            .plugin_process_action_event(
+                "process-navigator",
+                9,
+                crate::plugin::structured::StructuredResponseAction::FocusProcessPane {
+                    action_id: "focus-sibling".into(),
+                    window_id: 7,
+                    tab_id: first as u64,
+                    pane_id: first_pane,
+                },
+            )
+            .unwrap();
+        let focused: serde_json::Value = serde_json::from_str(&focused).unwrap();
+        assert_eq!(focused["event"]["ok"], true);
+        assert_eq!(focused["event"]["tab_changed"], true);
+        assert_eq!(focused["event"]["pane_changed"], false);
+        assert_eq!(
+            observed_switches.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+
+        let stale = application
+            .plugin_process_action_event(
+                "process-navigator",
+                9,
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    action_id: "stale-window".into(),
+                    window_id: 8,
+                    tab_id: first as u64,
+                },
+            )
+            .unwrap();
+        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        assert_eq!(stale["event"]["ok"], false);
+        assert!(
+            stale["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist")
+        );
+
+        application
+            .windows
+            .get_mut(&native_id)
+            .unwrap()
+            .tabs
+            .as_mut()
+            .unwrap()
+            .tab_mut_by_id(second)
+            .unwrap()
+            .closed = true;
+        let closed = application
+            .plugin_process_action_event(
+                "process-navigator",
+                9,
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    action_id: "closed-tab".into(),
+                    window_id: 7,
+                    tab_id: second as u64,
+                },
+            )
+            .unwrap();
+        let closed: serde_json::Value = serde_json::from_str(&closed).unwrap();
+        assert_eq!(closed["event"]["ok"], false);
+        assert!(
+            closed["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("closing")
+        );
+
+        application.windows.get_mut(&native_id).unwrap().should_exit = true;
+        let closing = application
+            .plugin_process_action_event(
+                "process-navigator",
+                9,
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    action_id: "closing-window".into(),
+                    window_id: 7,
+                    tab_id: second as u64,
+                },
+            )
+            .unwrap();
+        let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+        assert_eq!(closing["event"]["ok"], false);
+        assert!(
+            closing["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("closing")
+        );
+
+        let target = application.windows.get_mut(&native_id).unwrap();
+        target.should_exit = false;
+        target.tabs = None;
+        let uninitialized = application
+            .plugin_process_action_event(
+                "process-navigator",
+                9,
+                crate::plugin::structured::StructuredResponseAction::SelectProcessTab {
+                    action_id: "uninitialized-window".into(),
+                    window_id: 7,
+                    tab_id: first as u64,
+                },
+            )
+            .unwrap();
+        let uninitialized: serde_json::Value = serde_json::from_str(&uninitialized).unwrap();
+        assert_eq!(uninitialized["event"]["ok"], false);
+        assert!(
+            uninitialized["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("no initialized tab manager")
+        );
+        assert!(
+            selected.to_string().len()
+                <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+        );
     }
 
     #[test]
