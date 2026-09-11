@@ -8,6 +8,16 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v29 adds an independent `process-tab-close` grant for
+  scheduling closure of one exact ordinary tab in an exact live process-owned
+  window. The plugin-safe close path protects the final non-closing tab and
+  refuses stale, closing, live-domain, and uninitialized targets while
+  preserving the containing window. Results report remaining/active tab state
+  without native activation, lifecycle feedback, or retained host authority.
+  Strict parsing, routing, refusal, grant/install behavior, and the checked-in
+  process-tab-pruner example are hermetically tested without provider execution
+  or AI-token use.
+
 - Declarative plugin API v28 adds an independent `process-pane-close` grant for
   closing one exact ordinary pane in an exact live process-owned window. The
   existing close path safely collapses two-pane layouts while preserving the

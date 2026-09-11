@@ -201,6 +201,11 @@ process-owned window. It reuses the local close path, preserves the containing
 tab and window, refuses the final pane plus stale, closing, live-domain, serial,
 and uninitialized targets, and returns the remaining pane count and focused
 pane ID without selecting a tab or activating a native window.
+API v29 adds separately granted scheduled closure of one exact ordinary tab in
+any live process-owned window. It preserves the containing window, refuses the
+final non-closing tab plus stale, closing, live-domain, and uninitialized
+targets, suppresses lifecycle feedback, and reports remaining/active tab state
+without native activation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI
