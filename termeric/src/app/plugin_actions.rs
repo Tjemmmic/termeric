@@ -106,6 +106,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -235,6 +238,9 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
                     ..
                 } => "apply-process-pane-layout",
+                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    ..
+                } => "close-process-window",
                 crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
                     "terminal-query"
                 }
@@ -349,7 +355,8 @@ impl App {
             | crate::plugin::structured::StructuredResponseAction::BalanceProcessPanes { .. }
             | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
                 ..
-            } => {
+            }
+            | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow { .. } => {
                 return Err(
                     "process actions require the process-owned Application window registry".into(),
                 );
@@ -422,56 +429,52 @@ impl App {
         &mut self,
         event_json: String,
         continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let mut invocation = continuation.ok_or_else(|| {
             "process queries require a live persistent handler continuation".to_string()
         })?;
         invocation.event_json = event_json;
         reduce_structured_process_query_authority(&mut invocation);
-        self.submit_structured_handler(invocation)?;
-        Ok(())
+        self.submit_structured_handler(invocation)
     }
 
     pub(super) fn continue_structured_process_action(
         &mut self,
         event_json: String,
         continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let mut invocation = continuation.ok_or_else(|| {
             "process actions require a live persistent handler continuation".to_string()
         })?;
         invocation.event_json = event_json;
         clear_structured_host_authority(&mut invocation);
-        self.submit_structured_handler(invocation)?;
-        Ok(())
+        self.submit_structured_handler(invocation)
     }
 
     pub(super) fn continue_structured_process_terminal_query(
         &mut self,
         event_json: String,
         continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let mut invocation = continuation.ok_or_else(|| {
             "process terminal queries require a live persistent handler continuation".to_string()
         })?;
         invocation.event_json = event_json;
         clear_structured_host_authority(&mut invocation);
-        self.submit_structured_handler(invocation)?;
-        Ok(())
+        self.submit_structured_handler(invocation)
     }
 
     pub(super) fn continue_structured_process_terminal_input(
         &mut self,
         event_json: String,
         continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let mut invocation = continuation.ok_or_else(|| {
             "process terminal input requires a live persistent handler continuation".to_string()
         })?;
         invocation.event_json = event_json;
         clear_structured_host_authority(&mut invocation);
-        self.submit_structured_handler(invocation)?;
-        Ok(())
+        self.submit_structured_handler(invocation)
     }
 
     fn submit_structured_handler(
@@ -1148,7 +1151,7 @@ impl App {
         Ok(encoded)
     }
 
-    fn validate_plugin_window_close(&self) -> Result<u16, String> {
+    pub(super) fn validate_plugin_window_close(&self) -> Result<u16, String> {
         if self.should_exit {
             return Err("current window is already closing".into());
         }
@@ -2335,6 +2338,7 @@ pub(super) fn clear_structured_host_authority(
     invocation.allow_process_pane_close = false;
     invocation.allow_process_tab_close = false;
     invocation.allow_process_pane_layout = false;
+    invocation.allow_process_window_close = false;
 }
 
 pub(super) fn reduce_structured_process_query_authority(
@@ -2350,6 +2354,7 @@ pub(super) fn reduce_structured_process_query_authority(
     let retain_process_pane_close = invocation.allow_process_pane_close;
     let retain_process_tab_close = invocation.allow_process_tab_close;
     let retain_process_pane_layout = invocation.allow_process_pane_layout;
+    let retain_process_window_close = invocation.allow_process_window_close;
     clear_structured_host_authority(invocation);
     invocation.allow_process_actions = retain_process_actions;
     invocation.allow_process_terminal_text = retain_process_terminal_text;
@@ -2361,4 +2366,5 @@ pub(super) fn reduce_structured_process_query_authority(
     invocation.allow_process_pane_close = retain_process_pane_close;
     invocation.allow_process_tab_close = retain_process_tab_close;
     invocation.allow_process_pane_layout = retain_process_pane_layout;
+    invocation.allow_process_window_close = retain_process_window_close;
 }

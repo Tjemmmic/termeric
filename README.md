@@ -211,6 +211,11 @@ layout presets for one exact ordinary split tab in any live process-owned
 window. It preserves live terminal owners, stable pane IDs, focus, and active
 tab selection; stale, closing, unsplit, live-domain, serial, and duplicate-pane
 targets fail without fallback or native activation.
+API v31 adds separately granted closure of one exact process-owned window.
+The bounded correlated result is submitted before teardown; originating-window
+targets wait for its exact callback, sibling targets close independently, and
+the final live process window remains protected without native activation or
+identity fallback.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

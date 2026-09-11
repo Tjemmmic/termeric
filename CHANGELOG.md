@@ -8,6 +8,19 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v31 adds an independent `process-window-close` grant
+  for scheduling closure of one exact live process-owned window. Stable window
+  identity, initialized ownership, non-closing state, pending-close state, and
+  a surviving process window are revalidated before the bounded correlated
+  result is submitted. Sibling teardown is armed only after successful result
+  submission; an originating-window target reuses the exact plugin/generation/
+  request callback gate so its persistent handler survives through delivery.
+  The final live window, stale targets, and duplicate pending closures fail
+  without fallback, native activation, or mutation. Strict parsing, routing,
+  lifecycle/refusal behavior, retained grant/install behavior, and the checked-
+  in process-window-closer example are hermetically tested without provider
+  execution or AI-token use.
+
 - Declarative plugin API v30 adds an independent `process-pane-layout` grant
   for swapping two exact panes, balancing dividers, or applying a columns,
   rows, or grid preset to one exact ordinary split tab in an exact live

@@ -1,0 +1,62 @@
+api_version = 31
+id = "process-window-closer"
+name = "Process Window Closer"
+version = "1.0.0"
+description = "Demonstrates exact non-final window closure across process-owned windows"
+permissions = ["process-spawn", "process-query", "process-window-close", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "close-sibling-window"
+name = "Close Another Window"
+description = "Close the first available sibling window while preserving the final process window"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+def notice(message):
+    return [{
+        "type": "show-notice",
+        "title": "Process Window Closer",
+        "lines": [message[:400]],
+    }]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{"type": "query-process", "query_id": "window-close-targets"}]
+    elif event["type"] == "process-query-result":
+        origin = event["origin_window_id"]
+        target = next(
+            (window for window in event["windows"] if window["id"] != origin),
+            None,
+        )
+        if target is None:
+            actions = notice("No sibling window is available; the final window is protected.")
+        else:
+            actions = [{
+                "type": "close-process-window",
+                "action_id": "close-sibling-window",
+                "window_id": target["id"],
+            }]
+    elif event["type"] == "process-action-result" and event["action"] == "close-process-window":
+        if event["ok"]:
+            actions = notice(
+                f"Closing window {event['window_id']}; "
+                f"remaining windows: {event['remaining_windows']}"
+            )
+        else:
+            actions = notice("Window closure failed: " + event["error"])
+    else:
+        actions = []
+    print(json.dumps({
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

@@ -1,7 +1,7 @@
 //! Process-level ownership for independent native windows.
 
 use super::{
-    App, AppEvent, clear_pty_wake_pending, clear_transcript_wake_pending,
+    App, AppEvent, PendingPluginWindowClose, clear_pty_wake_pending, clear_transcript_wake_pending,
     redraw_scheduler::RedrawReason,
 };
 use crate::cli::{LaunchPlan, WindowLaunch};
@@ -1043,6 +1043,47 @@ impl Application {
                     }
                 }
             }
+            crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                action_id,
+                window_id,
+            } => {
+                let result = self.validate_plugin_process_window_close(window_id);
+                match result {
+                    Ok((_, tab_count, remaining_windows)) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "close-process-window",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "target_is_origin": window_id == origin_window_id,
+                        "scheduled": true,
+                        "tab_count": tab_count,
+                        "remaining_windows": remaining_windows,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "close-process-window",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "window_id": window_id,
+                            "target_is_origin": window_id == origin_window_id,
+                            "scheduled": false,
+                            "tab_count": null,
+                            "remaining_windows": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
             _ => return Err("structured response did not contain a process action".into()),
         };
         let envelope = serde_json::json!({
@@ -1309,6 +1350,59 @@ impl Application {
         Ok(encoded)
     }
 
+    fn validate_plugin_process_window_close(
+        &self,
+        window_id: u64,
+    ) -> Result<(WindowId, u16, u16), String> {
+        let native_id = self.control_native_window_id(window_id)?;
+        let window = self
+            .windows
+            .get(&native_id)
+            .ok_or_else(|| format!("GUI window {window_id} does not exist"))?;
+        let tab_count = window.validate_plugin_window_close()?;
+        let live_windows = self
+            .windows
+            .values()
+            .filter(|candidate| {
+                !candidate.should_exit && candidate.pending_plugin_window_close.is_none()
+            })
+            .count();
+        if live_windows <= 1 {
+            return Err(
+                "Cannot close the final live process-owned window; use command-scoped window-close authority"
+                    .into(),
+            );
+        }
+        let remaining_windows = u16::try_from(live_windows - 1)
+            .map_err(|_| "live process-owned window count is unsupported".to_string())?;
+        Ok((native_id, tab_count, remaining_windows))
+    }
+
+    fn arm_plugin_process_window_close(
+        &mut self,
+        target_native_id: WindowId,
+        origin_native_id: WindowId,
+        plugin_id: &str,
+        plugin_generation: u64,
+        result_request_id: u64,
+    ) {
+        let target = self
+            .windows
+            .get_mut(&target_native_id)
+            .expect("validated process-window close target remains registered");
+        debug_assert!(!target.should_exit);
+        debug_assert!(target.pending_plugin_window_close.is_none());
+        if target_native_id == origin_native_id {
+            target.pending_plugin_window_close = Some(PendingPluginWindowClose {
+                plugin_id: plugin_id.to_string(),
+                plugin_generation,
+                result_request_id,
+            });
+        } else {
+            target.should_exit = true;
+        }
+    }
+
     fn handle_structured_plugin_completed(
         &mut self,
         mut completion: crate::plugin::structured::StructuredHandlerCompletion,
@@ -1355,6 +1449,9 @@ impl Application {
                             ..
                         }
                         | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
+                            ..
+                        }
+                        | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
                             ..
                         }
                 )
@@ -1433,6 +1530,9 @@ impl Application {
                     | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
                         ..
                     } => continuation.allow_process_pane_layout,
+                    crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                        ..
+                    } => continuation.allow_process_window_close,
                     _ => false,
                 }
                 });
@@ -1456,6 +1556,20 @@ impl Application {
         };
 
         let plugin_id = completion.plugin_id.clone();
+        let plugin_generation = completion.plugin_generation;
+        let origin_native_id = completion.window_id;
+        let process_window_close_target =
+            if let crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                window_id,
+                ..
+            } = &process_operation
+            {
+                self.validate_plugin_process_window_close(*window_id)
+                    .ok()
+                    .map(|(native_id, _, _)| native_id)
+            } else {
+                None
+            };
         let (operation_name, event_json) = match &process_operation {
             crate::plugin::structured::StructuredResponseAction::QueryProcess { query_id } => {
                 let inventory = self.plugin_process_inventory();
@@ -1587,6 +1701,14 @@ impl Application {
                     process_operation.clone(),
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::CloseProcessWindow { .. } => (
+                "window-close",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -1634,10 +1756,14 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                            ..
+                        }
                 )
             });
         }
-        if let Some(window) = self.windows.get_mut(&completion.window_id) {
+        let mut submitted_request_id = None;
+        if let Some(window) = self.windows.get_mut(&origin_native_id) {
             window.handle_structured_plugin_completed(completion);
             let result = event_json.and_then(|event_json| match process_operation {
                 crate::plugin::structured::StructuredResponseAction::QueryProcess { .. } => {
@@ -1676,6 +1802,9 @@ impl Application {
                 | crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
                     ..
                 } => window.continue_structured_process_action(event_json, continuation),
+                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    ..
+                } => window.continue_structured_process_action(event_json, continuation),
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                     ..
                 } => window.continue_structured_process_terminal_query(event_json, continuation),
@@ -1684,17 +1813,31 @@ impl Application {
                 }
                 _ => unreachable!("only process operations are intercepted"),
             });
-            if let Err(error) = result {
-                log::error!(
-                    "Structured plugin {:?} process {} failed: {}",
-                    plugin_id,
-                    operation_name,
-                    error
-                );
-                window.toasts.error(format!(
-                    "Plugin {plugin_id} process {operation_name} failed: {error}"
-                ));
+            match result {
+                Ok(request_id) => submitted_request_id = Some(request_id),
+                Err(error) => {
+                    log::error!(
+                        "Structured plugin {:?} process {} failed: {}",
+                        plugin_id,
+                        operation_name,
+                        error
+                    );
+                    window.toasts.error(format!(
+                        "Plugin {plugin_id} process {operation_name} failed: {error}"
+                    ));
+                }
             }
+        }
+        if let (Some(target_native_id), Some(result_request_id)) =
+            (process_window_close_target, submitted_request_id)
+        {
+            self.arm_plugin_process_window_close(
+                target_native_id,
+                origin_native_id,
+                &plugin_id,
+                plugin_generation,
+                result_request_id,
+            );
         }
     }
 
@@ -7197,6 +7340,201 @@ mod tests {
             unsplit.to_string().len()
                 <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_window_closure_is_exact_non_final_and_result_gated() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let (target, origin, _) = pane_transfer_fixture();
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let target_native = WindowId::from(1_111_u64);
+        let origin_native = WindowId::from(1_212_u64);
+        application.windows.insert(target_native, target);
+        application.windows.insert(origin_native, origin);
+        application.window_order = vec![target_native, origin_native];
+        application.control_window_ids.insert(target_native, 8);
+        application.control_window_ids.insert(origin_native, 7);
+
+        let stale = application
+            .plugin_process_action_event(
+                "process-window-closer",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    action_id: "stale-window".into(),
+                    window_id: 99,
+                },
+            )
+            .unwrap();
+        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        assert_eq!(stale["event"]["ok"], false);
+        assert_eq!(stale["event"]["scheduled"], false);
+        assert!(stale["event"]["error"].as_str().unwrap().contains("99"));
+
+        application
+            .windows
+            .get_mut(&target_native)
+            .unwrap()
+            .pending_plugin_window_close = Some(PendingPluginWindowClose {
+            plugin_id: "other-closer".into(),
+            plugin_generation: 3,
+            result_request_id: 9,
+        });
+        let already_pending = application
+            .plugin_process_action_event(
+                "process-window-closer",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    action_id: "duplicate-close".into(),
+                    window_id: 8,
+                },
+            )
+            .unwrap();
+        let already_pending: serde_json::Value = serde_json::from_str(&already_pending).unwrap();
+        assert_eq!(already_pending["event"]["ok"], false);
+        assert!(
+            already_pending["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("pending plugin closure")
+        );
+        application
+            .windows
+            .get_mut(&target_native)
+            .unwrap()
+            .pending_plugin_window_close = None;
+
+        let sibling = application
+            .plugin_process_action_event(
+                "process-window-closer",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    action_id: "close-sibling-window".into(),
+                    window_id: 8,
+                },
+            )
+            .unwrap();
+        let sibling: serde_json::Value = serde_json::from_str(&sibling).unwrap();
+        assert_eq!(sibling["plugin_id"], "process-window-closer");
+        assert_eq!(sibling["event"]["action"], "close-process-window");
+        assert_eq!(sibling["event"]["ok"], true);
+        assert_eq!(sibling["event"]["origin_window_id"], 7);
+        assert_eq!(sibling["event"]["window_id"], 8);
+        assert_eq!(sibling["event"]["target_is_origin"], false);
+        assert_eq!(sibling["event"]["scheduled"], true);
+        assert_eq!(sibling["event"]["tab_count"], 1);
+        assert_eq!(sibling["event"]["remaining_windows"], 1);
+        assert!(!application.windows[&target_native].should_exit);
+        application.arm_plugin_process_window_close(
+            target_native,
+            origin_native,
+            "process-window-closer",
+            4,
+            41,
+        );
+        assert!(application.windows[&target_native].should_exit);
+        assert!(!application.windows[&origin_native].should_exit);
+        assert!(
+            application.windows[&origin_native]
+                .pending_plugin_window_close
+                .is_none()
+        );
+
+        application
+            .windows
+            .get_mut(&target_native)
+            .unwrap()
+            .should_exit = false;
+        let origin_event = application
+            .plugin_process_action_event(
+                "process-window-closer",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    action_id: "close-origin-window".into(),
+                    window_id: 7,
+                },
+            )
+            .unwrap();
+        let origin_event: serde_json::Value = serde_json::from_str(&origin_event).unwrap();
+        assert_eq!(origin_event["event"]["ok"], true);
+        assert_eq!(origin_event["event"]["target_is_origin"], true);
+        let generation = application.windows[&origin_native].plugin_runtime_generation;
+        application.arm_plugin_process_window_close(
+            origin_native,
+            origin_native,
+            "process-window-closer",
+            generation,
+            42,
+        );
+        let completion = |request_id| crate::plugin::structured::StructuredHandlerCompletion {
+            window_id: origin_native,
+            plugin_generation: generation,
+            plugin_id: "process-window-closer".into(),
+            request_id,
+            continuation: None,
+            result: Ok(Vec::new()),
+        };
+        application
+            .windows
+            .get_mut(&origin_native)
+            .unwrap()
+            .handle_structured_plugin_completed(completion(41));
+        assert!(!application.windows[&origin_native].should_exit);
+        assert!(
+            application.windows[&origin_native]
+                .pending_plugin_window_close
+                .is_some()
+        );
+        application
+            .windows
+            .get_mut(&origin_native)
+            .unwrap()
+            .handle_structured_plugin_completed(completion(42));
+        assert!(application.windows[&origin_native].should_exit);
+        assert!(
+            application.windows[&origin_native]
+                .pending_plugin_window_close
+                .is_none()
+        );
+        assert!(
+            origin_event.to_string().len()
+                <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+        );
+
+        application
+            .windows
+            .get_mut(&origin_native)
+            .unwrap()
+            .should_exit = false;
+        application
+            .windows
+            .get_mut(&target_native)
+            .unwrap()
+            .should_exit = true;
+        let final_window = application
+            .plugin_process_action_event(
+                "process-window-closer",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CloseProcessWindow {
+                    action_id: "refuse-final-window".into(),
+                    window_id: 7,
+                },
+            )
+            .unwrap();
+        let final_window: serde_json::Value = serde_json::from_str(&final_window).unwrap();
+        assert_eq!(final_window["event"]["ok"], false);
+        assert_eq!(final_window["event"]["scheduled"], false);
+        assert!(
+            final_window["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("final live")
+        );
+        assert!(!application.windows[&origin_native].should_exit);
     }
 
     #[cfg(unix)]

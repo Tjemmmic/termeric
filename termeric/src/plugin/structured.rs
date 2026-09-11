@@ -135,6 +135,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit non-destructive pane layouts in one exact process-owned tab.
     /// Its result clears every host operation authority.
     pub allow_process_pane_layout: bool,
+    /// Permit closure of one exact non-final process-owned window.
+    /// Its result clears every host operation authority.
+    pub allow_process_window_close: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -238,6 +241,10 @@ pub enum StructuredResponseAction {
         window_id: u64,
         tab_id: u64,
         preset: PluginPaneLayoutPreset,
+    },
+    CloseProcessWindow {
+        action_id: String,
+        window_id: u64,
     },
     QueryTerminal {
         query_id: String,
@@ -649,6 +656,7 @@ fn run_handler(
         invocation.allow_process_pane_close,
         invocation.allow_process_tab_close,
         invocation.allow_process_pane_layout,
+        invocation.allow_process_window_close,
     )
 }
 
@@ -787,6 +795,7 @@ impl PersistentHandler {
         allow_process_pane_close: bool,
         allow_process_tab_close: bool,
         allow_process_pane_layout: bool,
+        allow_process_window_close: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -868,6 +877,7 @@ impl PersistentHandler {
             allow_process_pane_close,
             allow_process_tab_close,
             allow_process_pane_layout,
+            allow_process_window_close,
             request_id,
         )?;
         if let Some(status) = self
@@ -957,6 +967,7 @@ fn run_persistent_handler(
                 invocation.allow_process_pane_close,
                 invocation.allow_process_tab_close,
                 invocation.allow_process_pane_layout,
+                invocation.allow_process_window_close,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -1156,6 +1167,7 @@ fn parse_response_with_host_creation(
         false,
         false,
         false,
+        false,
     )
 }
 
@@ -1186,6 +1198,7 @@ fn parse_response_with_host_mutation(
     allow_process_pane_close: bool,
     allow_process_tab_close: bool,
     allow_process_pane_layout: bool,
+    allow_process_window_close: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -1221,6 +1234,7 @@ fn parse_response_with_host_mutation(
         allow_process_pane_close,
         allow_process_tab_close,
         allow_process_pane_layout,
+        allow_process_window_close,
     )
 }
 
@@ -1325,6 +1339,7 @@ fn parse_persistent_response_with_host_mutation(
         false,
         false,
         false,
+        false,
         expected_request_id,
     )
 }
@@ -1356,6 +1371,7 @@ fn parse_persistent_response_with_window_close(
     allow_process_pane_close: bool,
     allow_process_tab_close: bool,
     allow_process_pane_layout: bool,
+    allow_process_window_close: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1398,6 +1414,7 @@ fn parse_persistent_response_with_window_close(
         allow_process_pane_close,
         allow_process_tab_close,
         allow_process_pane_layout,
+        allow_process_window_close,
     )
 }
 
@@ -1427,6 +1444,7 @@ fn validate_response_actions(
     allow_process_pane_close: bool,
     allow_process_tab_close: bool,
     allow_process_pane_layout: bool,
+    allow_process_window_close: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1645,6 +1663,20 @@ fn validate_response_actions(
                 host_operations += 1;
                 validate_text(
                     "process pane layout action id",
+                    action_id,
+                    MAX_ACTION_ID_BYTES,
+                )?;
+            }
+            StructuredResponseAction::CloseProcessWindow { action_id, .. } => {
+                if !allow_process_window_close {
+                    return Err(
+                        "handler requested process window closure without API v31 persistent process-window-close authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text(
+                    "process window closure action id",
                     action_id,
                     MAX_ACTION_ID_BYTES,
                 )?;
@@ -1935,6 +1967,7 @@ mod tests {
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -2029,7 +2062,7 @@ mod tests {
             parse_persistent_response_with_window_close(
                 query, false, false, false, false, false, false, false, false, false, false, false,
                 false, false, true, false, false, false, false, false, false, false, false, false,
-                false, 9,
+                false, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::QueryProcess {
@@ -2047,7 +2080,7 @@ mod tests {
             parse_persistent_response_with_window_close(
                 duplicate, false, false, false, false, false, false, false, false, false, false,
                 false, false, false, true, false, false, false, false, false, false, false, false,
-                false, false, 9,
+                false, false, false, 9,
             )
             .unwrap_err()
             .contains("more than one host operation")
@@ -2058,7 +2091,7 @@ mod tests {
             parse_persistent_response_with_window_close(
                 mixed, false, true, false, false, false, false, false, false, false, false, false,
                 false, false, true, false, false, false, false, false, false, false, false, false,
-                false, 9,
+                false, false, 9,
             )
             .unwrap_err()
             .contains("more than one host operation")
@@ -2069,7 +2102,7 @@ mod tests {
             parse_persistent_response_with_window_close(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
                 false, false, false, true, false, false, false, false, false, false, false, false,
-                false, false, 9,
+                false, false, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -2107,6 +2140,7 @@ mod tests {
             false, // process pane close
             false, // process tab close
             false, // process pane layout
+            false, // process window close
             9,
         )
     }
@@ -2143,6 +2177,7 @@ mod tests {
             false, // process pane close
             false, // process tab close
             false, // process pane layout
+            false, // process window close
             9,
         )
     }
@@ -2180,6 +2215,7 @@ mod tests {
             false, // process pane close
             false, // process tab close
             false, // process pane layout
+            false, // process window close
             9,
         )
     }
@@ -2215,6 +2251,7 @@ mod tests {
             false, // process pane close
             false, // process tab close
             false, // process pane layout
+            false, // process window close
             9,
         )
     }
@@ -2250,6 +2287,7 @@ mod tests {
             false, // process pane close
             false, // process tab close
             false, // process pane layout
+            false, // process window close
             9,
         )
     }
@@ -2285,6 +2323,7 @@ mod tests {
             false, // process pane close
             false, // process tab close
             false, // process pane layout
+            false, // process window close
             9,
         )
     }
@@ -2317,6 +2356,7 @@ mod tests {
             false,
             false,
             allow_process_tab_move,
+            false,
             false,
             false,
             false,
@@ -2355,6 +2395,7 @@ mod tests {
             allow_process_pane_close,
             false,
             false,
+            false,
             9,
         )
     }
@@ -2389,6 +2430,7 @@ mod tests {
             false,
             false,
             allow_process_tab_close,
+            false,
             false,
             9,
         )
@@ -2425,6 +2467,43 @@ mod tests {
             false, // process pane close
             false, // process tab close
             allow_process_pane_layout,
+            false, // process window close
+            9,
+        )
+    }
+
+    fn parse_process_window_close_response(
+        bytes: &[u8],
+        allow_process_query: bool,
+        allow_process_window_close: bool,
+    ) -> Result<Vec<StructuredResponseAction>, String> {
+        parse_persistent_response_with_window_close(
+            bytes,
+            false, // ui actions
+            false, // workspace query
+            false, // workspace actions
+            false, // workspace topology
+            false, // terminal query
+            false, // pane create
+            false, // tab create
+            false, // pane close
+            false, // tab close
+            false, // pane move
+            false, // terminal input
+            false, // pane layout
+            false, // window close
+            allow_process_query,
+            false, // process actions
+            false, // process terminal text
+            false, // process terminal input
+            false, // process tab create
+            false, // process pane create
+            false, // process pane move
+            false, // process tab move
+            false, // process pane close
+            false, // process tab close
+            false, // process pane layout
+            allow_process_window_close,
             9,
         )
     }
@@ -3006,6 +3085,67 @@ mod tests {
         let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-process-panes","action_id":"balance","window_id":7,"tab_id":12},{"type":"apply-process-pane-layout","action_id":"grid","window_id":7,"tab_id":12,"preset":"grid"}]}"#;
         assert!(
             parse_process_pane_layout_response(duplicate, false, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
+    }
+
+    #[test]
+    fn process_window_closure_requires_v31_authority_and_strict_bounded_shape() {
+        let closure = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"close-sibling-window","window_id":7}]}"#;
+        assert_eq!(
+            parse_process_window_close_response(closure, false, true).unwrap(),
+            vec![StructuredResponseAction::CloseProcessWindow {
+                action_id: "close-sibling-window".into(),
+                window_id: 7,
+            }]
+        );
+        assert!(
+            parse_process_window_close_response(closure, true, false)
+                .unwrap_err()
+                .contains("API v31")
+        );
+        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"close","window_id":7,"force":true}]}"#;
+        assert!(
+            parse_process_window_close_response(unknown, false, true)
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"close","window_id":"7"}]}"#;
+        assert!(parse_process_window_close_response(malformed, false, true).is_err());
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"two\nlines","window_id":7}]}"#;
+        assert!(
+            parse_process_window_close_response(unsafe_id, false, true)
+                .unwrap_err()
+                .contains("control-safe")
+        );
+        let oversized = serde_json::json!({
+            "schema_version": 2,
+            "request_id": 9,
+            "actions": [{
+                "type": "close-process-window",
+                "action_id": "x".repeat(MAX_ACTION_ID_BYTES + 1),
+                "window_id": 7,
+            }],
+        });
+        assert!(
+            parse_process_window_close_response(
+                &serde_json::to_vec(&oversized).unwrap(),
+                false,
+                true,
+            )
+            .unwrap_err()
+            .contains("within 64 bytes")
+        );
+        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"close-process-window","action_id":"close","window_id":7}]}"#;
+        assert!(
+            parse_process_window_close_response(mixed, true, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
+        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-process-window","action_id":"one","window_id":7},{"type":"close-process-window","action_id":"two","window_id":8}]}"#;
+        assert!(
+            parse_process_window_close_response(duplicate, false, true)
                 .unwrap_err()
                 .contains("more than one host operation")
         );
@@ -3953,7 +4093,7 @@ mod tests {
             parse_persistent_response_with_window_close(
                 close, false, false, false, false, false, false, false, false, false, false, false,
                 false, true, false, false, false, false, false, false, false, false, false, false,
-                false, 9,
+                false, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::CloseWindow {
@@ -3971,7 +4111,7 @@ mod tests {
             parse_persistent_response_with_window_close(
                 unknown, false, false, false, false, false, false, false, false, false, false,
                 false, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, 9,
+                false, false, false, 9,
             )
             .unwrap_err()
             .contains("unknown field")
@@ -3982,7 +4122,7 @@ mod tests {
             parse_persistent_response_with_window_close(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
                 false, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, 9,
+                false, false, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -4005,6 +4145,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 false,
                 false,
                 false,
@@ -4652,6 +4793,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -4741,6 +4883,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -4826,6 +4969,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -4906,6 +5050,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -4993,6 +5138,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5083,6 +5229,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5167,6 +5314,7 @@ done"#,
             allow_process_pane_close: true,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -5316,6 +5464,58 @@ done"#,
                 lines: vec![
                     "Applied grid layout. Pane order: 3, 4; focused: 4; zoomed: None".into()
                 ],
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_in_process_window_closer_completes_a_hermetic_three_event_conversation() {
+        if !std::path::Path::new("/usr/bin/python3").is_file()
+            && !std::path::Path::new("/bin/python3").is_file()
+        {
+            return;
+        }
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-window-closer");
+        let (manifest, _, _) =
+            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
+        let handler = manifest.event_handler.unwrap();
+        let mut invocation = persistent_fixture(&manifest.id, "exit 1");
+        invocation.program = handler.program;
+        invocation.args = handler.args;
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into();
+        invocation.allow_process_query = true;
+        invocation.allow_process_window_close = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::QueryProcess {
+                query_id: "window-close-targets".into(),
+            }]
+        );
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2},{"id":7}]}}"#.into();
+        invocation.allow_process_query = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::CloseProcessWindow {
+                action_id: "close-sibling-window".into(),
+                window_id: 7,
+            }]
+        );
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"close-process-window","ok":true,"window_id":7,"remaining_windows":1}}"#.into();
+        invocation.allow_process_window_close = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowNotice {
+                title: "Process Window Closer".into(),
+                lines: vec!["Closing window 7; remaining windows: 1".into()],
             }]
         );
         assert_eq!(handlers.len(), 1);
@@ -5630,6 +5830,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -5683,6 +5884,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -5723,6 +5925,7 @@ done"#,
             allow_process_pane_close: false,
             allow_process_tab_close: false,
             allow_process_pane_layout: false,
+            allow_process_window_close: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

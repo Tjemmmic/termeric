@@ -1156,6 +1156,14 @@ correlated results, process-query authority reduction, complete result-
 authority removal, retained-grant updates, and a checked-in process pane
 arranger. All fixtures are local and inert; no AI provider process or tokens
 are involved.
+API v31 adds exact process-window-close version/mode/grant denial, strict stable-
+window/action parsing, one-operation enforcement, same- and sibling-window
+routing, stale/closing/pending/uninitialized and final-live-window refusal,
+result-before-teardown ordering, exact origin callback correlation, sibling
+isolation, non-activation, bounded correlated results, process-query authority
+reduction, complete result-authority removal, retained-grant updates, and a
+checked-in process window closer. All fixtures are local and inert; no AI
+provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

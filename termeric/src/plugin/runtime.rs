@@ -30,6 +30,7 @@
 //! API v28 adds exact cross-window ordinary-pane closure.
 //! API v29 adds exact cross-window ordinary-tab closure.
 //! API v30 adds exact cross-window ordinary-pane layouts.
+//! API v31 adds exact process-owned window closure with final-window protection.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -42,7 +43,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 30;
+pub const PLUGIN_API_VERSION: u32 = 31;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -99,6 +100,7 @@ pub enum PluginPermission {
     ProcessPaneClose,
     ProcessTabClose,
     ProcessPaneLayout,
+    ProcessWindowClose,
     Secrets,
 }
 
@@ -136,6 +138,7 @@ impl std::fmt::Display for PluginPermission {
             Self::ProcessPaneClose => "process-pane-close",
             Self::ProcessTabClose => "process-tab-close",
             Self::ProcessPaneLayout => "process-pane-layout",
+            Self::ProcessWindowClose => "process-window-close",
             Self::Secrets => "secrets",
         })
     }
@@ -177,6 +180,7 @@ impl std::str::FromStr for PluginPermission {
             "process-pane-close" => Ok(Self::ProcessPaneClose),
             "process-tab-close" => Ok(Self::ProcessTabClose),
             "process-pane-layout" => Ok(Self::ProcessPaneLayout),
+            "process-window-close" => Ok(Self::ProcessWindowClose),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -775,6 +779,17 @@ impl PluginManifest {
         {
             bail!("process-pane-layout requires an API v30 persistent event handler");
         }
+        if self
+            .permissions
+            .contains(&PluginPermission::ProcessWindowClose)
+            && (self.api_version < 31
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("process-window-close requires an API v31 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -916,6 +931,7 @@ impl PluginRegistry {
                         | PluginPermission::ProcessPaneClose
                         | PluginPermission::ProcessTabClose
                         | PluginPermission::ProcessPaneLayout
+                        | PluginPermission::ProcessWindowClose
                 )
             }) {
                 bail!(
@@ -1401,6 +1417,9 @@ impl DeclarativePlugin {
                     allow_process_pane_layout: self.manifest.api_version >= 30
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && self.grants.contains(&PluginPermission::ProcessPaneLayout),
+                    allow_process_window_close: self.manifest.api_version >= 31
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::ProcessWindowClose),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -2459,6 +2478,37 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::ProcessTabClose
                 | PluginPermission::ProcessPaneLayout
         ),
+        31 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+                | PluginPermission::PaneMove
+                | PluginPermission::TerminalInput
+                | PluginPermission::PaneLayout
+                | PluginPermission::WindowClose
+                | PluginPermission::ProcessQuery
+                | PluginPermission::ProcessActions
+                | PluginPermission::ProcessTerminalText
+                | PluginPermission::ProcessTerminalInput
+                | PluginPermission::ProcessTabCreate
+                | PluginPermission::ProcessPaneCreate
+                | PluginPermission::ProcessPaneMove
+                | PluginPermission::ProcessTabMove
+                | PluginPermission::ProcessPaneClose
+                | PluginPermission::ProcessTabClose
+                | PluginPermission::ProcessPaneLayout
+                | PluginPermission::ProcessWindowClose
+        ),
         _ => false,
     }
 }
@@ -3364,6 +3414,24 @@ events = ["command-completed"]
         manifest
     }
 
+    fn process_window_close_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = process_query_grants();
+        grants.insert(PluginPermission::ProcessWindowClose);
+        grants
+    }
+
+    fn process_window_close_manifest() -> PluginManifest {
+        let mut manifest = process_query_manifest();
+        manifest.api_version = 31;
+        manifest.id = "process-window-closer".into();
+        manifest
+            .permissions
+            .insert(PluginPermission::ProcessWindowClose);
+        manifest.commands[0].id = "close-sibling-window".into();
+        manifest.commands[0].name = "Close Another Window".into();
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -3681,7 +3749,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 31");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 32");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -4500,6 +4568,35 @@ events = ["command-invoked"]
                 source,
                 source_fingerprint: "fnv1a64:0123456789abcdef".into(),
                 grants: process_pane_layout_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn checked_in_api_v31_process_window_closer_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-window-closer");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 31);
+        assert_eq!(manifest.id, "process-window-closer");
+        assert_eq!(manifest.commands[0].id, "close-sibling-window");
+        assert_eq!(manifest.permissions, process_window_close_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "process-window-closer".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: process_window_close_grants(),
                 default_profile: None,
                 settings: BTreeMap::new(),
             }],
@@ -5503,6 +5600,68 @@ events = ["command-invoked"]
         assert_eq!(installed.grants, process_pane_layout_grants());
         let (installed_manifest, _, _) =
             PluginManifest::from_directory(&root.join("process-pane-arranger")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
+    fn api_v31_process_window_close_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-window-closer")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+        let mut missing = process_window_close_grants();
+        missing.remove(&PluginPermission::ProcessWindowClose);
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: missing,
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("process-window-close"));
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_window_close_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "process-window-closer".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "process-window-closer")
+            .unwrap();
+        assert_eq!(installed.grants, process_window_close_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("process-window-closer")).unwrap();
         assert_eq!(installed_manifest.version, "1.1.0");
     }
 
@@ -7205,6 +7364,77 @@ events = ["command-invoked"]
             panic!("ungranted process pane layout fixture did not create an invocation")
         };
         assert!(!invocation.allow_process_pane_layout);
+    }
+
+    #[test]
+    fn api_v31_process_window_closure_requires_persistent_mode_and_exact_grant() {
+        let manifest = process_window_close_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &process_window_close_grants()).unwrap();
+        assert_eq!(
+            PluginPermission::ProcessWindowClose.to_string(),
+            "process-window-close"
+        );
+        assert_eq!(
+            "process-window-close".parse::<PluginPermission>().unwrap(),
+            PluginPermission::ProcessWindowClose
+        );
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 2,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin =
+            DeclarativePlugin::new(manifest.clone(), None, process_window_close_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-window-closer.close-sibling-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v31 process window closure command did not create an invocation")
+        };
+        assert!(invocation.allow_process_query);
+        assert!(!invocation.allow_process_pane_layout);
+        assert!(invocation.allow_process_window_close);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v30 = manifest.clone();
+        v30.api_version = 30;
+        assert!(v30.validate().unwrap_err().to_string().contains("API v31"));
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+        let mut grants = process_window_close_grants();
+        grants.remove(&PluginPermission::ProcessWindowClose);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: process-window-close")
+        );
+        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-window-closer.close-sibling-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted process window closure fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_process_window_close);
     }
 
     #[test]
