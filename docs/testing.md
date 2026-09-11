@@ -360,11 +360,15 @@ The XTGETTCAP fixture exercises a fragmented multi-name request and one exact
 S8C1T response. Focused processor coverage verifies malformed/unknown names,
 termcap aliases, Fish extensions, and the 64-name/8-KiB response ceilings.
 
-The XTWINOPS fixture verifies exact fragmented `CSI 14 t`, `CSI 16 t`, and
-`CSI 18 t` reports under S8C1T. A focused resize test uses fractional source
+The XTWINOPS geometry fixture verifies exact fragmented `CSI 14 t`, `CSI 16 t`,
+and `CSI 18 t` reports under S8C1T. A focused resize test uses fractional source
 geometry to distinguish the exact represented text area from rounded-up cell
-dimensions and confirms that unsupported window/title/screen operations stay
-silent.
+dimensions and confirms that unsupported window/screen operations stay silent.
+The title-operations fixture fragments OSC 0/1/2 setters, S8C1T window/icon
+queries, push/pop, and the title-stack position report. Focused tests cover all
+target selectors, direct slots, the 10-slot wrap, partial-entry fallback,
+malformed bounds, alternate-screen and reset persistence, response bytes, and
+owner routing without a native window or external process.
 
 The OSC 7 fixture fragments BEL/ST and raw-C1 working-directory reports,
 reconstructs semicolons, decodes UTF-8 paths, rejects a non-file replacement,

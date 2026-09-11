@@ -64,9 +64,11 @@ window operations (`XTWINOPS`):
 - `CSI 18 t` returns `CSI 8 ; rows ; columns t` using the current grid.
 
 Replies use the terminal's selected S7C1T or S8C1T framing. Requests with
-additional parameters and all other `CSI ... t` operations are ignored. In
+additional parameters and unsupported `CSI ... t` operations are ignored. In
 particular, Termeric does not expose outer-window or screen geometry, window
-position or state, title reads or stacks, or any window mutation. The legacy
+position or state, or any window mutation. Application-owned title reads and
+the fixed title stack are the separate bounded
+[OSC integration contract](osc-integration.md). The legacy
 DECSLPP, DECSCPP, and DECSNLS settings have read-only DECRQSS replies, but their
 mutation controls remain ignored. Those operations need explicit
 application/window policy and are not implied by the terminal-local PTY pixel
@@ -82,7 +84,7 @@ and a nested split, then requires renderer-derived cell dimensions, terminal
 grids, and every kernel PTY size to agree. A daemon-pane test verifies nonzero
 bootstrap pixels, an exact pixel-only renderer update, duplicate suppression,
 and proportional preservation for a zero-pixel external relay. Deterministic
-parser and conformance tests verify the three read-only `XTWINOPS` replies,
+parser and conformance tests verify the three read-only geometry replies,
 both reply framings, exact versus rounded geometry, resize updates, and
 rejection of unsupported forms.
 

@@ -134,6 +134,30 @@ mod tests {
     }
 
     #[test]
+    fn title_changes_are_forwarded_but_title_queries_stay_with_the_owner() {
+        let mut terminal = Terminal::new(80, 24);
+        terminal.process(b"\x1b]0;application-title\x1b\\\x1b[20t\x1b[21t\x1b[#S");
+        let mut forwarded = Vec::new();
+        let mut replies = Vec::new();
+
+        let result = drain_terminal_events(&mut terminal, &mut forwarded, 8, |data| {
+            replies.extend_from_slice(data);
+            Ok(())
+        });
+
+        assert_eq!(
+            forwarded,
+            vec![TerminalEvent::TitleChanged("application-title".into())]
+        );
+        assert_eq!(
+            replies,
+            b"\x1b]Lapplication-title\x1b\\\x1b]lapplication-title\x1b\\\x1b[0;10#S"
+        );
+        assert_eq!(result.protocol_replies, 3);
+        assert_eq!(result.dropped_app_events, 0);
+    }
+
+    #[test]
     fn repeated_app_events_are_fully_drained_into_a_bounded_batch() {
         let mut terminal = Terminal::new(80, 24);
         let mut stream = Vec::new();

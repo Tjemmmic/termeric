@@ -8,6 +8,7 @@ mod keyboard;
 mod mode;
 mod pointer;
 mod selection;
+mod title;
 
 pub use cursor::{SavedCursor, TerminalCursorShape, TerminalCursorStyle};
 pub use keyboard::{
@@ -22,6 +23,9 @@ pub use mode::TerminalMode;
 pub(crate) use pointer::MAX_POINTER_SHAPE_PAYLOAD_BYTES;
 pub use pointer::{POINTER_SHAPE_STACK_DEPTH, PointerShape};
 pub use selection::{Point, Selection, SelectionType};
+pub(crate) use title::MAX_TITLE_BYTES;
+pub use title::XTERM_TITLE_STACK_DEPTH;
+use title::{ApplicationTitles, TitleTarget};
 
 use crate::ansi::Processor;
 use crate::event::TerminalEvent;
@@ -734,6 +738,9 @@ pub struct Terminal {
     /// Last valid OSC 7 directory report. This is shell/application metadata,
     /// not presentation state, so DECSTR/RIS and screen changes preserve it.
     reported_working_directory: Option<ReportedWorkingDirectory>,
+    /// Application-authored window/icon labels and xterm's global title ring.
+    /// This excludes user/native title metadata by construction.
+    application_titles: ApplicationTitles,
     /// Physical cell extent used to normalize pixel-addressed image protocols.
     grid_pixel_width: u32,
     grid_pixel_height: u32,
@@ -835,6 +842,7 @@ impl Terminal {
             cols,
             rows,
             reported_working_directory: None,
+            application_titles: ApplicationTitles::default(),
             grid_pixel_width: u32::try_from(cols)
                 .unwrap_or(u32::MAX)
                 .saturating_mul(8)
@@ -879,6 +887,38 @@ impl Terminal {
 
     pub(crate) fn set_reported_working_directory(&mut self, directory: ReportedWorkingDirectory) {
         self.reported_working_directory = Some(directory);
+    }
+
+    /// Last application-authored OSC 1 icon label. This never reflects UI or
+    /// native-window metadata.
+    pub fn application_icon_name(&self) -> &str {
+        self.application_titles.icon()
+    }
+
+    /// Last application-authored OSC 0/2 window label. This never reflects a
+    /// user-renamed tab, process-derived label, or working directory.
+    pub fn application_window_title(&self) -> &str {
+        self.application_titles.window()
+    }
+
+    pub(crate) fn set_application_icon_name(&mut self, icon: String) {
+        self.application_titles.set_icon(icon);
+    }
+
+    pub(crate) fn set_application_window_title(&mut self, window: String) {
+        if self.application_titles.set_window(window) {
+            self.pending_events.push(TerminalEvent::TitleChanged(
+                self.application_titles.window().to_string(),
+            ));
+        }
+    }
+
+    pub(crate) fn set_application_title_and_icon(&mut self, title: String) {
+        if self.application_titles.set_both(title) {
+            self.pending_events.push(TerminalEvent::TitleChanged(
+                self.application_titles.window().to_string(),
+            ));
+        }
     }
 
     /// Get the active grid
@@ -1919,8 +1959,9 @@ impl Terminal {
     }
 
     /// Emit one of the safe, terminal-local XTWINOPS geometry reports.
-    /// Screen, outer-window, title, and mutation operations require app/window
-    /// policy and are deliberately not handled here.
+    /// Screen, outer-window, and mutation operations require app/window policy
+    /// and are deliberately not handled here. Bounded application-label
+    /// operations are implemented separately below.
     pub(crate) fn report_text_area_geometry(&mut self, operation: u16) {
         let response = match operation {
             14 => format!(
@@ -1934,6 +1975,52 @@ impl Terminal {
             18 => format!("\x1b[8;{};{}t", self.rows, self.cols),
             _ => return,
         };
+        self.push_event(TerminalEvent::PtyWrite(response.into_bytes()));
+    }
+
+    /// Report application-authored labels for xterm XTWINOPS 20/21.
+    pub(crate) fn report_application_title(&mut self, operation: u16) {
+        let response = match operation {
+            20 => format!("\x1b]L{}\x1b\\", self.application_titles.icon()),
+            21 => format!("\x1b]l{}\x1b\\", self.application_titles.window()),
+            _ => return,
+        };
+        self.push_event(TerminalEvent::PtyWrite(response.into_bytes()));
+    }
+
+    /// Save or restore xterm's global window/icon title ring.
+    pub(crate) fn update_title_stack(&mut self, save: bool, target_parameter: u16, slot: u16) {
+        let Some(target) = TitleTarget::from_parameter(target_parameter) else {
+            return;
+        };
+        if slot > XTERM_TITLE_STACK_DEPTH as u16 {
+            return;
+        }
+        if save {
+            self.application_titles.save(target, slot);
+            return;
+        }
+
+        let restored = self.application_titles.restore(target, slot);
+        if let Some(icon) = restored.icon {
+            self.application_titles.set_icon(icon);
+        }
+        if let Some(window) = restored.window
+            && self.application_titles.set_window(window)
+        {
+            self.pending_events.push(TerminalEvent::TitleChanged(
+                self.application_titles.window().to_string(),
+            ));
+        }
+    }
+
+    /// Report xterm's title-stack position and fixed capacity (CSI # S).
+    pub(crate) fn report_title_stack_position(&mut self) {
+        let response = format!(
+            "\x1b[{};{}#S",
+            self.application_titles.used(),
+            XTERM_TITLE_STACK_DEPTH
+        );
         self.push_event(TerminalEvent::PtyWrite(response.into_bytes()));
     }
 

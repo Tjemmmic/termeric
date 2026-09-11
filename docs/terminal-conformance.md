@@ -101,10 +101,13 @@ boundary. It proves one bounded response for native identity, color count,
 direct-color depth, and special keys; first-unknown termination; exact hex
 encoding; and S8C1T DCS framing. Processor tests also cover negative malformed
 requests, termcap aliases, the 64-name ceiling, and the Fish extensions.
-The adjacent XTWINOPS fixture fragments text-area pixel, character-cell pixel,
-and row/column queries at every boundary and verifies exact S8C1T replies.
-Malformed variants, outer-window/screen/title queries, and window mutations
-produce no misleading reply or app event.
+The XTWINOPS fixtures fragment text-area pixel, character-cell pixel,
+row/column, application icon/window-label, title-stack position, and title
+save/restore operations at every boundary and verify exact S8C1T replies.
+Focused tests cover all title selectors and direct slots, the fixed ring and
+partial-entry fallback, terminal-global reset lifecycle, owner routing, and
+malformed bounds. Outer-window/screen queries and window mutations produce no
+misleading reply or app event.
 The xterm keyboard fixtures fragment resource-zero modifyKeyboard/formatKeyboard,
 the mutually exclusive legacy/VT220 keyboard-type modes 1060/1061,
 their shared DEC private-mode save/restore lifecycle and configured startup/RIS type,

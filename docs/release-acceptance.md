@@ -43,7 +43,8 @@ legacy application-keyboard blockers under the documented
 [keyboard policy](keyboard-input.md), [ligature policy](ligature-rendering.md),
 and terminal-controlled mouse/focus/paste
 paths under the [input protocol policy](terminal-input-protocols.md), while
-bounded OSC title/clipboard/color/pointer-shape paths follow the
+bounded OSC title/icon queries and save/restore, clipboard/color, and
+pointer-shape paths follow the
 [OSC policy](osc-integration.md). Visual font/fallback quality and native
 desktop interaction, including OSC 22 cursor-theme appearance, remain manual
 rows.
@@ -52,8 +53,8 @@ Those findings supersede the earlier release decision below.
 ## Current automated core-conformance baseline
 
 The working tree derived from `8c127fc` adds a machine-readable VT support
-manifest and deterministic core-conformance lane. It replays 44 focused state
-fixtures, mirrors all 28 tests currently declared in `ansi/processor.rs`,
+manifest and deterministic core-conformance lane. It replays 45 focused state
+fixtures, mirrors all 30 tests currently declared in `ansi/processor.rs`,
 and includes raw traces from Vim 9.2, less 704, and tmux 3.7c. Vim and less
 screen state is compared byte for byte with pinned 80×24 tmux 3.7c
 `capture-pane` snapshots. The tmux trace is invariant-tested but is not treated

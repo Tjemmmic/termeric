@@ -211,6 +211,14 @@ chunks = [1, 2, 5, 3]
 expected_events = ["pty:9b343b33323b363474", "pty:9b363b31363b3874", "pty:9b383b323b3874"]
 
 [[case]]
+id = "xtwinops-title-operations"
+cols = 8
+rows = 2
+input_hex = "1b 20 47 1b 5d 30 3b 61 6c 70 68 61 1b 5c 1b 5b 32 32 74 1b 5d 31 3b 62 65 74 61 2d 69 63 6f 6e 1b 5c 1b 5d 32 3b 62 65 74 61 2d 77 69 6e 64 6f 77 1b 5c 1b 5b 32 30 74 1b 5b 32 31 74 1b 5b 23 53 1b 5b 32 33 74 1b 5b 32 30 74 1b 5b 32 31 74 1b 5b 23 53"
+chunks = [1, 2, 5, 3]
+expected_events = ["title:alpha", "title:beta-window", "pty:9d4c626574612d69636f6e9c", "pty:9d6c626574612d77696e646f779c", "pty:9b313b31302353", "title:alpha", "pty:9d4c616c7068619c", "pty:9d6c616c7068619c", "pty:9b303b31302353"]
+
+[[case]]
 id = "decrqss-legacy-geometry"
 cols = 132
 rows = 40

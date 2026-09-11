@@ -5,11 +5,10 @@ use crate::event::{
     ClipboardRequest, DynamicColorOperation, DynamicColorTarget, NotificationRequest, TerminalEvent,
 };
 use crate::grid::{CellAttrs, Color, ColorSpec};
-use crate::term::{ReportedWorkingDirectory, Terminal, TerminalMode};
+use crate::term::{MAX_TITLE_BYTES, ReportedWorkingDirectory, Terminal, TerminalMode};
 use base64::Engine as _;
 use vte::{Params, Perform};
 
-const MAX_OSC_TITLE_BYTES: usize = 4_096;
 const MAX_OSC_DIRECTORY_BYTES: usize = 4_096;
 pub const MAX_OSC52_DECODED_BYTES: usize = 1024 * 1024;
 const MAX_OSC52_ENCODED_BYTES: usize = MAX_OSC52_DECODED_BYTES.div_ceil(3) * 4;
@@ -25,11 +24,17 @@ const XTVERSION: &[u8] = b"\x1bP>|Termeric(1)\x1b\\";
 fn parse_osc_title(params: &[&[u8]]) -> Option<String> {
     let mut bytes = Vec::new();
     for (index, param) in params.iter().enumerate() {
+        let separator = usize::from(index > 0);
+        if bytes
+            .len()
+            .saturating_add(separator)
+            .saturating_add(param.len())
+            > MAX_TITLE_BYTES
+        {
+            return None;
+        }
         if index > 0 {
             bytes.push(b';');
-        }
-        if bytes.len().saturating_add(param.len()) > MAX_OSC_TITLE_BYTES {
-            return None;
         }
         bytes.extend_from_slice(param);
     }
@@ -763,12 +768,29 @@ impl Perform for Handler<'_> {
             't' if !ignore
                 && intermediates.is_empty()
                 && scalar_params
-                && params.len() == 1
-                && matches!(params[0], 14 | 16 | 18) =>
+                && !params.is_empty()
+                && params.len() <= 3 =>
             {
-                // Safe read-only XTWINOPS geometry reports. Other window,
-                // screen, title, and mutation operations are not claimed.
-                self.terminal.report_text_area_geometry(params[0]);
+                match params {
+                    [operation @ (14 | 16 | 18)] => {
+                        self.terminal.report_text_area_geometry(*operation);
+                    }
+                    [operation @ (20 | 21)] => {
+                        self.terminal.report_application_title(*operation);
+                    }
+                    [operation @ (22 | 23)] => {
+                        self.terminal.update_title_stack(*operation == 22, 0, 0);
+                    }
+                    [operation @ (22 | 23), target] => {
+                        self.terminal
+                            .update_title_stack(*operation == 22, *target, 0);
+                    }
+                    [operation @ (22 | 23), target, slot] => {
+                        self.terminal
+                            .update_title_stack(*operation == 22, *target, *slot);
+                    }
+                    _ => {}
+                }
             }
             'y' if !ignore && intermediates == [b'*'] && scalar_params && params.len() <= 6 => {
                 // DECRQCRA - Request Checksum of Rectangular Area.
@@ -787,13 +809,22 @@ impl Perform for Handler<'_> {
                     .request_presentation_state(params.first().copied().unwrap_or(0));
             }
 
+            // Xterm title-stack position report. Keep this ahead of SU.
+            'S' if !ignore
+                && intermediates == [b'#']
+                && scalar_params
+                && matches!(params, [] | [0]) =>
+            {
+                self.terminal.report_title_stack_position();
+            }
+
             // Scrolling
-            'S' => {
+            'S' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
                 // SU - Scroll Up
                 let n = param!(0, 1) as usize;
                 self.terminal.scroll_up(n);
             }
-            'T' => {
+            'T' if intermediates.is_empty() && scalar_params && params.len() <= 1 => {
                 // SD - Scroll Down
                 let n = param!(0, 1) as usize;
                 self.terminal.scroll_down(n);
@@ -1274,19 +1305,24 @@ impl Perform for Handler<'_> {
         };
 
         match command {
-            // Set window title
-            0 | 2 => {
+            // Set both icon and window labels.
+            0 => {
                 if let Some(title) = parse_osc_title(&params[1..]) {
-                    self.terminal.push_event(TerminalEvent::TitleChanged(title));
+                    self.terminal.set_application_title_and_icon(title);
                 }
             }
 
-            // Set icon name
+            // Set icon label.
             1 => {
-                if params.len() > 1
-                    && let Ok(name) = std::str::from_utf8(params[1])
-                {
-                    log::trace!("Set icon name: {}", name);
+                if let Some(icon) = parse_osc_title(&params[1..]) {
+                    self.terminal.set_application_icon_name(icon);
+                }
+            }
+
+            // Set window title.
+            2 => {
+                if let Some(title) = parse_osc_title(&params[1..]) {
+                    self.terminal.set_application_window_title(title);
                 }
             }
 
@@ -1937,12 +1973,41 @@ mod osc_tests {
         assert_eq!(events(b"\x1b]not-a-command;title\x07"), Vec::new());
 
         let mut oversized = b"\x1b]2;".to_vec();
-        oversized.extend(std::iter::repeat_n(b'x', MAX_OSC_TITLE_BYTES + 1));
+        oversized.extend(std::iter::repeat_n(b'x', MAX_TITLE_BYTES + 1));
         oversized.push(7);
         let oversized_events = events(&oversized);
         assert!(
             oversized_events.is_empty(),
             "oversized title emitted {oversized_events:?}"
+        );
+
+        let first = vec![b'a'; MAX_TITLE_BYTES / 2];
+        let second = vec![b'b'; MAX_TITLE_BYTES - first.len()];
+        assert!(parse_osc_title(&[&first, &second]).is_none());
+    }
+
+    #[test]
+    fn osc_zero_and_one_retain_separate_bounded_application_labels() {
+        let mut terminal = Terminal::new(20, 4);
+        terminal.process(b"\x1b]0;shared;label\x1b\\");
+        assert_eq!(terminal.application_icon_name(), "shared;label");
+        assert_eq!(terminal.application_window_title(), "shared;label");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![TerminalEvent::TitleChanged("shared;label".into())]
+        );
+
+        terminal.process(b"\x1b]1;icon;only\x07");
+        assert_eq!(terminal.application_icon_name(), "icon;only");
+        assert_eq!(terminal.application_window_title(), "shared;label");
+        assert!(terminal.drain_events().is_empty());
+
+        terminal.process(b"\x1b]2;window;only\x07");
+        assert_eq!(terminal.application_icon_name(), "icon;only");
+        assert_eq!(terminal.application_window_title(), "window;only");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![TerminalEvent::TitleChanged("window;only".into())]
         );
     }
 

@@ -26,21 +26,50 @@ extensions are not enabled.
 
 ## Titles
 
-OSC 0 and OSC 2 set the visible tab title. The active tab title is also
+OSC 0 sets both the application window label and application icon label, OSC 1
+sets only the icon label, and OSC 2 sets only the window label. The application
+window label drives the visible tab title. The active tab title is also
 reflected in the native window title as `<tab> — Termeric` (or the quick-access
 variant); inactive-pane/tab updates cannot retitle the current window.
 Semicolons inside the title are
 preserved, invalid UTF-8 is rejected, control characters are removed, and the
-raw title limit is 4,096 bytes. An explicit non-empty OSC title takes precedence
-over working-directory and foreground-process discovery across subsequent
-output. An empty OSC 0/2 title clears that precedence and immediately returns to
-the normal shell-derived title (or the stable `Tab N` fallback).
+raw limit is 4,096 bytes per label. An explicit non-empty OSC window label
+takes precedence over working-directory and foreground-process discovery
+across subsequent output. An empty OSC 0/2 title clears that precedence and
+immediately returns to the normal shell-derived title (or the stable `Tab N`
+fallback).
 
 For pane-owned terminals, the latest valid OSC title from that tab is the tab's
 visible title. The stable pane origin is still retained while routing, so an
 inactive tab can update its own title but never another tab's. A stale or
 unknown pane origin is rejected without changing the tab, and an empty title
 also clears pane-local title metadata so an explicit empty value is not saved.
+
+The application-owned labels—not the displayed tab or native-window title—are
+also the complete data source for these xterm-compatible operations:
+
+- `CSI 20 t` reports the icon label as `OSC L label ST`;
+- `CSI 21 t` reports the window label as `OSC l label ST`;
+- `CSI 22 ; target ; slot t` saves and `CSI 23 ; target ; slot t` restores,
+  where target 0 selects both labels, 1 selects the icon, and 2 selects the
+  window;
+- omitted slot 0 pushes or pops the xterm ring, while slots 1 through 10
+  directly store or retrieve without moving its position; and
+- `CSI # S` reports `CSI position ; 10 # S`.
+
+The fixed 10-slot ring preserves xterm's partial-entry fallback: restoring both
+labels from a slot that saved only one searches older slots for the other. A
+push replaces the next ring entry, a pop clears its entry, and a direct
+retrieval does not. Current labels and saved entries are global to the terminal
+owner and survive alternate-screen changes, DECSTR, and RIS. At the 4 KiB
+per-label limit, current and saved strings retain at most 90,112 payload bytes.
+
+Every reply uses the requesting terminal's S7C1T/S8C1T mode and stays with that
+terminal's PTY. A query cannot reveal a user-renamed tab, derived process name,
+working directory, native title, or another pane. Unsupported targets, slots,
+extra query parameters, and other window/title mutations are ignored. This
+behavior follows xterm's
+[control-sequence contract](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html).
 
 ## Working directories
 

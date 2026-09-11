@@ -1120,6 +1120,84 @@ mod tests {
     }
 
     #[test]
+    fn xterm_title_queries_and_stack_are_global_bounded_and_byte_exact() {
+        let mut processor = Processor::new();
+        let mut terminal = Terminal::new(8, 2);
+
+        processor.process(
+            &mut terminal,
+            b"\x1b]1;old-icon\x1b\\\x1b]2;old-window\x1b\\\x1b[22t\
+              \x1b]2;new-window\x1b\\\x1b[22;2t\
+              \x1b]1;current-icon\x1b\\\x1b]2;current-window\x1b\\",
+        );
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                crate::event::TerminalEvent::TitleChanged("old-window".into()),
+                crate::event::TerminalEvent::TitleChanged("new-window".into()),
+                crate::event::TerminalEvent::TitleChanged("current-window".into()),
+            ]
+        );
+
+        processor.process(
+            &mut terminal,
+            b"\x1b[#S\x1b[20t\x1b[21t\x1b[23t\x1b[20t\x1b[21t\x1b[#S",
+        );
+        assert_eq!(terminal.application_icon_name(), "old-icon");
+        assert_eq!(terminal.application_window_title(), "new-window");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                crate::event::TerminalEvent::PtyWrite(b"\x1b[2;10#S".to_vec()),
+                crate::event::TerminalEvent::PtyWrite(b"\x1b]Lcurrent-icon\x1b\\".to_vec()),
+                crate::event::TerminalEvent::PtyWrite(b"\x1b]lcurrent-window\x1b\\".to_vec()),
+                crate::event::TerminalEvent::TitleChanged("new-window".into()),
+                crate::event::TerminalEvent::PtyWrite(b"\x1b]Lold-icon\x1b\\".to_vec()),
+                crate::event::TerminalEvent::PtyWrite(b"\x1b]lnew-window\x1b\\".to_vec()),
+                crate::event::TerminalEvent::PtyWrite(b"\x1b[1;10#S".to_vec()),
+            ]
+        );
+
+        // A direct slot neither changes the push/pop position nor clears on
+        // retrieval. Invalid targets, slots, extra query parameters, and
+        // parameterized position reports fail closed.
+        processor.process(
+            &mut terminal,
+            b"\x1b]0;direct\x1b\\\x1b[22;0;3t\x1b]0;other\x1b\\\
+              \x1b[23;0;3t\x1b[23;0;3t\x1b[22;3t\x1b[22;0;11t\
+              \x1b[20;1t\x1b[1#S\x1b[#S",
+        );
+        assert_eq!(terminal.application_icon_name(), "direct");
+        assert_eq!(terminal.application_window_title(), "direct");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                crate::event::TerminalEvent::TitleChanged("direct".into()),
+                crate::event::TerminalEvent::TitleChanged("other".into()),
+                crate::event::TerminalEvent::TitleChanged("direct".into()),
+                crate::event::TerminalEvent::PtyWrite(b"\x1b[1;10#S".to_vec()),
+            ]
+        );
+
+        // Title metadata and saved slots are terminal-global across alternate
+        // screens and are preserved by DECSTR/RIS. Replies follow S8C1T.
+        processor.process(
+            &mut terminal,
+            b"\x1b[?1049h\x1b[!p\x1bc\x1b G\x1b[20t\x1b[21t\x1b[#S",
+        );
+        assert_eq!(terminal.application_icon_name(), "direct");
+        assert_eq!(terminal.application_window_title(), "direct");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                crate::event::TerminalEvent::PtyWrite(b"\x9dLdirect\x9c".to_vec()),
+                crate::event::TerminalEvent::PtyWrite(b"\x9dldirect\x9c".to_vec()),
+                crate::event::TerminalEvent::PtyWrite(b"\x9b1;10#S".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
     fn kitty_keyboard_negotiation_is_screen_local_stack_based_and_resettable() {
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);

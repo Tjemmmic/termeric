@@ -39,7 +39,8 @@ Platform IME, color-font, keyboard-chrome, and screen-reader behavior follows
 the [modern input and accessibility policy](docs/accessibility-and-input.md). See the
 [OSC integration policy](docs/osc-integration.md) for terminal-controlled
 titles, working directories, clipboard access, dynamic colors, and mouse
-pointer shapes. See the
+pointer shapes, including bounded application-owned title/icon queries and the
+xterm title stack. See the
 [feature-support matrix](docs/feature-support.md) for exact boundaries rather
 than inferring support from a parser, setting, or UI entry.
 

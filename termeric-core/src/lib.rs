@@ -52,5 +52,5 @@ pub use pty::Pty;
 pub use shell::{CommandRegion, PromptMark, ShellIntegration};
 pub use term::{
     DynamicColors, Point, PointerShape, ReportedWorkingDirectory, Selection, SelectionType,
-    Terminal, TerminalMemoryUsage,
+    Terminal, TerminalMemoryUsage, XTERM_TITLE_STACK_DEPTH,
 };

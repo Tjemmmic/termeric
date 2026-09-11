@@ -249,7 +249,17 @@ syntax = "XTWINOPS CSI 14 t, CSI 16 t, CSI 18 t"
 layer = "core"
 status = "supported"
 evidence = ["fixture:xtwinops-geometry-reports", "test:src/ansi/processor.rs#xtwinops_reports_exact_text_cell_and_character_geometry_only", "test:src/pty/mod.rs#kernel_winsize_preserves_nonzero_pixels_at_spawn_and_resize", "test:../termeric/src/tabs/mod.rs#tab_spawn_and_pixel_only_resize_reach_kernel_winsize"]
-notes = "Read-only reports return the terminal-local represented text-area pixels, rounded-up cell pixels used by graphics, and current rows/columns in the selected S7C1T/S8C1T framing. Malformed variants, outer-window/screen geometry, position/state/title reports, title stacks, and every window mutation are ignored. Legacy page/screen-size setting queries are covered separately by the DECRQSS claim."
+notes = "Read-only reports return the terminal-local represented text-area pixels, rounded-up cell pixels used by graphics, and current rows/columns in the selected S7C1T/S8C1T framing. Malformed variants, outer-window/screen geometry, position/state reports, and every window mutation are ignored. Title reports and title-stack operations are covered separately. Legacy page/screen-size setting queries are covered separately by the DECRQSS claim."
+
+[[sequence]]
+id = "csi-xtwinops-title-operations"
+family = "CSI/OSC"
+syntax = "XTWINOPS CSI 20 t, CSI 21 t, CSI 22 ; Ps ; Ps t, CSI 23 ; Ps ; Ps t, CSI # S; OSC 0/1/2"
+layer = "app"
+status = "supported"
+evidence = ["fixture:xtwinops-title-operations", "test:src/ansi/handler.rs#osc_zero_and_one_retain_separate_bounded_application_labels", "test:src/ansi/processor.rs#xterm_title_queries_and_stack_are_global_bounded_and_byte_exact", "test:../termeric/src/terminal/events.rs#title_changes_are_forwarded_but_title_queries_stay_with_the_owner", "test:../termeric/src/app/tests.rs#osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/70"
+notes = "Application-authored window/icon labels are bounded to 4 KiB, sanitized, terminal-global, preserved across alternate screens and DECSTR/RIS, and isolated from user/native/process/cwd metadata. Queries and the fixed 10-slot xterm ring use owner-routed S7C1T/S8C1T replies. Omitted slots push/pop; slots 1-10 directly store/retrieve without changing the stack position; partially populated entries use xterm's older-slot fallback. Other title/window mutation operations are not claimed."
 
 [[sequence]]
 id = "csi-presentation-state"
@@ -495,11 +505,11 @@ notes = "The terminal-local modifySpecialKeys resource accepts xterm's disabled 
 [[sequence]]
 id = "osc-title"
 family = "OSC"
-syntax = "OSC 0, OSC 2"
+syntax = "OSC 0, OSC 1, OSC 2"
 layer = "app"
 status = "supported"
-evidence = ["test:src/ansi/handler.rs#title_accepts_bel_and_st_preserves_semicolons_and_rejects_bad_input", "test:../termeric/src/app/tests.rs#osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins"]
-notes = "A bounded, sanitized title overrides the exact originating tab's derived title; an empty title restores the explicit-or-derived fallback. OSC 1 icon names are not claimed."
+evidence = ["fixture:xtwinops-title-operations", "test:src/ansi/handler.rs#title_accepts_bel_and_st_preserves_semicolons_and_rejects_bad_input", "test:src/ansi/handler.rs#osc_zero_and_one_retain_separate_bounded_application_labels", "test:../termeric/src/app/tests.rs#osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins"]
+notes = "Bounded, sanitized OSC 0/2 window titles override the exact originating tab's derived title; an empty title restores the explicit-or-derived fallback. OSC 0 also updates the retained icon label and OSC 1 updates only that icon label. Application-owned labels are queryable through the separately documented XTWINOPS contract."
 
 [[sequence]]
 id = "osc-current-directory"
