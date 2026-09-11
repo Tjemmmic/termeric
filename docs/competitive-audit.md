@@ -16,7 +16,7 @@ command history, declarative plugins, and explicit resource/evidence contracts.
 
 It is not yet the best general recommendation over established terminals. The
 current product is a Linux developer preview; accepted real-compositor,
-first-green Debian/Arch package-lifecycle, accessibility/IME, vendor-GPU, and
+hosted Debian/Arch package-lifecycle, accessibility/IME, vendor-GPU, and
 release-duration evidence is incomplete. Its automation and extension surface is also substantially less
 capable than kitty's remote control/kittens or WezTerm's Lua and multiplexer
 APIs. Established projects additionally have distribution reach, user history,
@@ -47,7 +47,7 @@ The practical position is therefore:
 | Shell/developer workflows | Accepted OSC 7/133 for Bash/Zsh/Fish, acceptance-pending native Nushell wiring, opt-in Elvish module, Git status/completion/diff, transcripts, guarded plugin input, Harvest command history | kitty and Ghostty use shell integration for prompt navigation, cwd inheritance, command-output selection, and SSH helpers | Differentiated combination, but Nushell/Elvish PTY evidence, automatic Elvish setup, and real-provider/manual acceptance are incomplete |
 | Accessibility and input | AccessKit semantics for terminal/chrome/modals plus IME/preedit routing and tests | Ghostty emphasizes native platform UI; mainstream projects vary in screen-reader coverage | Architecturally serious, but remains Partial until Orca/real IME and desktop bridge acceptance exists |
 | Performance/resources | Event-driven scheduler, incremental row cache, persistent GPU buffers, compact byte-bounded history, allocation/RSS/latency/soak contracts, and a fail-closed external comparison runner | kitty, Ghostty, and Alacritty explicitly market performance; kitty publishes its own throughput tool | Optimized in several measured subsystems; one local Termeric/Ghostty artifact permits startup and PTY-response comparison, while its pixel mismatch correctly rejects RSS/idle ranking. No clean release or vendor-GPU artifact supports a fastest/best claim |
-| Platforms/distribution | Linux developer preview; Debian and maintained Arch `termeric-git` artifact construction with guarded disposable lifecycle lanes; macOS/Windows build-and-unit CI only | kitty supports Linux/macOS/BSD; WezTerm and Alacritty support Linux/macOS/Windows/BSD; Ghostty supports Linux/macOS; Konsole is mature in KDE/Linux distribution channels | Arch coverage narrows the Linux installation gap, but absent published repositories/AUR release, first-green artifacts, broader runtime platforms, and adoption history remain major blockers |
+| Platforms/distribution | Linux developer preview; Debian and maintained Arch `termeric-git` artifact construction with guarded disposable lifecycle lanes; one exact Arch candidate passes locally in the pinned official CI container; macOS/Windows build-and-unit CI only | kitty supports Linux/macOS/BSD; WezTerm and Alacritty support Linux/macOS/Windows/BSD; Ghostty supports Linux/macOS; Konsole is mature in KDE/Linux distribution channels | Arch coverage narrows the Linux installation gap, but absent published repositories/AUR release, hosted artifact history, broader runtime platforms, and adoption history remain major blockers |
 
 Official comparison sources: [kitty overview](https://sw.kovidgoyal.net/kitty/overview/),
 [kitty extension catalog](https://sw.kovidgoyal.net/kitty/kittens_intro/),
@@ -97,10 +97,10 @@ These are release requirements, not optional competitive flourishes:
 1. **Finish Linux release evidence.** Obtain green revised X11 and Wayland
    native artifacts, then record real-compositor input/scale/visual checks,
    native IME and Orca, clipboard/portal/notification behavior, vendor-GPU
-   recovery/idle behavior, and the first accepted fresh-runner Debian and Arch
+   recovery/idle behavior, and accepted hosted Debian and Arch
    install/synthetic-upgrade/uninstall artifacts. A real prior-release upgrade
    remains later distribution evidence.
-   This is the unfinished acceptance work in issues #17, #23, #26, #31, #32,
+   This is the unfinished acceptance work in issues #17, #23, #26, #32,
    #33, and #35.
 2. **Accumulate stability and comparative evidence.** Retain the clean local
    ten-minute displayed-Sway result and obtain green scheduled core/displayed

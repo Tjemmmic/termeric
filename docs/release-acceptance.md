@@ -212,9 +212,9 @@ The uploaded schema-1 report binds the result to the artifact's SHA-256 digest,
 size, package metadata, candidate SHA, and UTC recording time.
 
 This Arch evidence host lacks `dpkg-deb`, so only the seven pure checker
-fixtures have been run locally. Linux packaging remains **Partial** until the
-new CI lane produces its first accepted green artifact; no pass is inferred
-from workflow configuration.
+fixtures have been run locally. The Debian lifecycle remains unaccepted until
+its CI lane produces a green artifact; no Debian pass is inferred from workflow
+configuration.
 
 ## Current Arch package-lifecycle gate
 
@@ -228,12 +228,17 @@ fixtures cover unsafe archive paths and types, duplicates, unexpected/missing
 members, metadata drift, and mode regressions.
 
 The separate lifecycle mode fails closed without explicit opt-in, root, an
-Arch-family host, and an initially absent `termeric-git`/`termeric` package. The
-official Arch-container CI lane will install a validated synthetic predecessor,
-upgrade to the unchanged candidate with Pacman, remove it, verify owned-file
-cleanup and user-state retention, and upload a digest-bound report. It has not
-been run against this developer host and remains unaccepted until CI produces
-its first green artifact.
+Arch-family host, and an initially absent `termeric-git`/`termeric` package.
+On 2026-09-11, exact commit `cbdc12c46cd1f99c32e4ca98a18f7a23b36035d0`
+was built as an unprivileged user in the pinned official
+`archlinux:base-devel-20260906.0.587075` container. The resulting
+`termeric-git-0.1.0.r164.gcbdc12c-1-x86_64.pkg.tar.zst` archive passed the
+read-only contract and guarded synthetic-predecessor install, candidate
+upgrade, non-GUI version probe, removal, owned-file cleanup, and user-state
+retention. Its 11,611,118-byte artifact has SHA-256
+`873e77129a9796281df90c0fc7479bbbbaf5ae6857086a4e01e45a0f0a72f3ab`.
+The configured hosted lane still needs its first uploaded green artifact, and
+this evidence does not claim migration from a real prior release.
 
 ## Candidate and environment
 
@@ -259,7 +264,7 @@ its first green artifact.
 | Shell semantics | Partial | Real Bash PTY/OSC 133/Harvest fixture passes. Zsh and Fish binaries are not installed on this host. |
 | Protocol/core behavior | Partial (automated) | ANSI parsing, Unicode-safe classic CSI editing/tabulation, DECLRMM/DECSLRM rectangular margins, VT400 DECCRA/DECFRA/DECERA/DECSERA and DECSACE/DECCARA/DECRARA operations, opt-in/default-deny DECRQCRA/DECCKSR checksums, DECRQPSR/DECRSPS cursor-and-tab round trips, G0-G3 single/locking shifts, protected DEC selective erase, complete supported DECSC/DECRC state, non-destructive DECSTR soft reset, OSC 8/133 parsing, reflow, alt-screen behavior, bounded static Kitty/Sixel/iTerm2 profiles, DECRQSS SGR/margin/cursor/protection/attribute-extent/legacy-geometry/XTFMTKEYS replies, DECRQM live-mode reports, application cursor shape/blink/visibility, search, pane layout, sessions, plugin quick-exit paths, left-to-right Unicode geometry, SGR attributes, legacy/xterm, exact xterm resource-zero negotiation and runtime/configured legacy/VT220 keyboard types with shared private-mode save/restore and bounded DECUDK dispatch plus bounded modifyCursorKeys/modifyFunctionKeys/modifyKeypadKeys, encoder-neutral reserved modifyStringKeys state, modifyModifierKeys/modifySpecialKeys/modifyOtherKeys with CSI-27/CSI-u formatting, Kitty progressive keyboard encoding, and focused-pane mouse/focus/paste byte streams have automated coverage. The native lane runs real `img2sixel` and `timg -pi`; the headless GPU lane submits image geometry and Unicode/SGR pixels. Visual quality for every installed font/fallback, native compositor mouse interaction, visible `kitten icat`, and native Kitty-keyboard client behavior are not established. |
 | Plugin executable contracts | Partial | Installed Codex parses open and `resume --last` vectors without authentication; Claude/Codex authenticated interactive GUI workflows were not executed. |
-| Packaging | Partial | Clean-index crate archives and Debian archive build remain CI-gated. A real local Arch package passes read-only inspection, while both disposable package-manager lifecycle lanes await first-green CI artifacts and no real prior-release migration has been exercised. |
+| Packaging | Partial | Clean-index crate archives and Debian lifecycle remain CI-gated. Exact Arch candidate `cbdc12c` passes package construction, read-only inspection, and the disposable Pacman lifecycle in the pinned official container; hosted artifact history, publication, and a real prior-release migration remain absent. |
 
 Candidate rows use four explicit dispositions so an absent environment cannot
 silently become a pass:
@@ -312,9 +317,11 @@ fresh candidate-bound artifacts before promotion:
   top/left tabs, panes/chrome/resize, replacement failure, renderer recovery,
   and memory ceilings.
 - The configured ten-minute core and private-Sway displayed-process soaks.
-- Fresh-host Debian and Arch installs, synthetic-predecessor upgrades, non-GUI
-  probes, uninstall cleanup, and user-state retention; Debian additionally
-  requires its generated dependency field verified by `dpkg-shlibdeps`.
+- Fresh-host Debian install, synthetic-predecessor upgrade, non-GUI probe,
+  uninstall cleanup, and user-state retention, including its generated
+  dependency field verified by `dpkg-shlibdeps`; the configured Arch lane also
+  still needs its first hosted artifact even though its exact local container
+  reproduction passes.
 
 ## Required manual rows still open
 
