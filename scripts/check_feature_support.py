@@ -41,6 +41,7 @@ HIGHLIGHT_CAPABILITIES = {
     "Keyboard copy mode and quick select": {
         "Keyboard copy mode and quick-select hints"
     },
+    "Unicode character picker": {"Unicode character picker"},
     "Modern input and accessibility": {
         "IME/preedit",
         "Color emoji",

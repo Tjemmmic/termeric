@@ -36,6 +36,26 @@ Native color-font glyphs retain RGBA pixels in a separate bounded atlas; mask
 glyphs remain theme-tinted R8 data. Bitmap dimensions never replace the
 terminal grapheme-width policy.
 
+## Character discovery and insertion
+
+The **Insert Unicode Character...** command opens a bounded in-app picker. Its
+curated index covers common punctuation, currencies, arrows, mathematics,
+technical symbols, box drawing, shapes, and emoji. Search includes displayed
+characters, names, aliases, categories, and code points. Exact `U+XXXX`,
+`0xXXXX`, and four-to-six-digit bare hexadecimal queries address any valid
+non-control Unicode scalar without enumerating the Unicode code space.
+
+The picker preserves complete curated grapheme sequences, including variation
+selectors and joiners, and inserts their exact UTF-8 once through the normal
+terminal-input path. It captures the opening tab/pane and refuses insertion if
+focus, writability, or broadcast state changes. Controls, surrogates, malformed
+hexadecimal, and values beyond `U+10FFFF` produce no executable result.
+
+This is deliberately not a complete Unicode-name database. Characters outside
+the curated index remain reachable by code point, but arbitrary full-name or
+localized-name search is not claimed. The picker does not guarantee that the
+configured fonts contain a glyph for the selected scalar.
+
 ## Evidence and exclusions
 
 Table-driven core tests cover combining marks, CJK, ambiguous width, VS15/VS16,
@@ -45,6 +65,7 @@ at every byte boundary, a real PTY emits representative clusters, and the
 headless WGPU lane shapes and submits the full strings without scalar
 truncation.
 
-Bidirectional reordering and exhaustive font-coverage guarantees remain outside
-this policy. IME/preedit, color emoji, and accessibility semantics are covered
+Bidirectional reordering, exhaustive font-coverage guarantees, and exhaustive
+Unicode-name search remain outside this policy. IME/preedit, color emoji, and
+accessibility semantics are covered
 by [modern text input and accessibility](accessibility-and-input.md).

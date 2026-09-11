@@ -18,6 +18,7 @@ pub mod state;
 mod system_accessibility;
 #[cfg(test)]
 mod tests;
+mod unicode_picker;
 mod workspace_actions;
 mod workspaces;
 
@@ -68,6 +69,7 @@ use crate::ui::domain_picker::DomainPicker;
 use crate::ui::info_overlay::InfoOverlay;
 use crate::ui::settings::{SettingsAction, SettingsPanel};
 use crate::ui::shortcuts_panel::{ShortcutsAction, ShortcutsPanel};
+use crate::ui::unicode_picker::UnicodePicker;
 
 pub use application::Application;
 
@@ -700,6 +702,11 @@ struct PendingProfileSelection {
     profiles: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingUnicodePicker {
+    origin: crate::tabs::TerminalEventOrigin,
+}
+
 #[derive(Debug, Clone)]
 struct PendingRuntimePluginManagement {
     request_id: u64,
@@ -1153,6 +1160,10 @@ pub struct App {
     pending_plugin_window_close: Option<PendingPluginWindowClose>,
     /// Command palette
     command_palette: CommandPalette,
+    /// Searchable common-character and exact-code-point selector.
+    unicode_picker: UnicodePicker,
+    /// Exact focused terminal captured when the Unicode picker opened.
+    pending_unicode_picker: Option<PendingUnicodePicker>,
     /// Local/saved-SSH live-domain discovery and attachment palette.
     domain_picker: DomainPicker,
     /// Shortcuts panel (standalone centered modal)
@@ -1378,6 +1389,8 @@ impl App {
             plugin_runtime_generation: 1,
             pending_plugin_window_close: None,
             command_palette: CommandPalette::new(),
+            unicode_picker: UnicodePicker::new(),
+            pending_unicode_picker: None,
             domain_picker: DomainPicker::new(),
             shortcuts_panel: ShortcutsPanel::new(),
             info_overlay: InfoOverlay::new(),
@@ -2136,7 +2149,14 @@ impl App {
                 window.request_redraw();
             }
         }
-        // Both workflows use the same proven palette renderer and geometry,
+        if self.unicode_picker.update_animation() {
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::Animation);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        // These workflows use the same proven palette renderer and geometry,
         // but only one modal can own input and rendering at a time.
         let palette_info = if self.domain_picker.is_active() {
             let (window_width, window_height) = renderer.window_size();
@@ -2150,6 +2170,18 @@ impl App {
             );
             self.domain_picker.set_max_visible(layout.rows_that_fit);
             Some(self.domain_picker.build_info())
+        } else if self.unicode_picker.is_active() {
+            let (window_width, window_height) = renderer.window_size();
+            let layout = crate::ui::command_palette::PaletteLayout::calculate(
+                window_width as f32,
+                window_height as f32,
+                renderer.cell_width(),
+                renderer.cell_height(),
+                1.0,
+                0,
+            );
+            self.unicode_picker.set_max_visible(layout.rows_that_fit);
+            Some(self.unicode_picker.build_info())
         } else if self.command_palette.is_active() {
             let (window_width, window_height) = renderer.window_size();
             let layout = crate::ui::command_palette::PaletteLayout::calculate(
@@ -3250,6 +3282,9 @@ impl App {
             Action::QuickSelect => {
                 self.begin_quick_select();
             }
+            Action::OpenUnicodePicker => {
+                self.open_unicode_picker();
+            }
             Action::ToggleSettings => {
                 self.toggle_settings_surface();
                 if let Some(window) = &self.window {
@@ -3404,6 +3439,7 @@ impl App {
                     "core.find" => Action::ToggleSearch,
                     "core.copy-mode" => Action::ToggleCopyMode,
                     "core.quick-select" => Action::QuickSelect,
+                    "core.unicode-picker" => Action::OpenUnicodePicker,
                     "core.settings" => Action::ToggleSettings,
                     "core.shortcuts" => {
                         self.shortcuts_panel.toggle();

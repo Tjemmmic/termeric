@@ -23,6 +23,7 @@ pub enum BindableAction {
     ToggleSearch,
     ToggleCopyMode,
     QuickSelect,
+    OpenUnicodePicker,
     ToggleCommandPalette,
     ToggleSettings,
     ToggleFullscreen,
@@ -92,13 +93,14 @@ impl BindableAction {
     /// Every variant, in display order.
     pub fn all() -> &'static [BindableAction] {
         use BindableAction::*;
-        static ALL: [BindableAction; 56] = [
+        static ALL: [BindableAction; 57] = [
             // General
             Copy,
             Paste,
             ToggleSearch,
             ToggleCopyMode,
             QuickSelect,
+            OpenUnicodePicker,
             ToggleCommandPalette,
             ToggleSettings,
             ToggleFullscreen,
@@ -196,6 +198,9 @@ impl BindableAction {
                 category: Navigation,
                 default_binding: Some(KeyChord::new("u", true, false, true, false)),
             },
+            OpenUnicodePicker => {
+                action_meta("open_unicode_picker", "Unicode Character Picker", General)
+            }
             ToggleCommandPalette => ActionMeta {
                 id: "toggle_command_palette",
                 label: "Command Palette",
@@ -458,6 +463,7 @@ impl BindableAction {
             Self::ToggleSearch => Action::ToggleSearch,
             Self::ToggleCopyMode => Action::ToggleCopyMode,
             Self::QuickSelect => Action::QuickSelect,
+            Self::OpenUnicodePicker => Action::OpenUnicodePicker,
             Self::ToggleCommandPalette => Action::ToggleCommandPalette,
             Self::ToggleSettings => Action::ToggleSettings,
             Self::ToggleFullscreen => Action::ToggleFullscreen,
@@ -1098,6 +1104,15 @@ mod tests {
                 chord.display_string()
             );
         }
+    }
+
+    #[test]
+    fn unicode_picker_is_discoverable_without_reserving_a_default_chord() {
+        let meta = BindableAction::OpenUnicodePicker.meta();
+        assert_eq!(meta.id, "open_unicode_picker");
+        assert_eq!(meta.label, "Unicode Character Picker");
+        assert!(meta.default_binding.is_none());
+        assert!(BindableAction::all().contains(&BindableAction::OpenUnicodePicker));
     }
 
     #[test]

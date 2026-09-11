@@ -579,6 +579,7 @@ impl App {
         self.commands_panel.set_reduced_motion(reduced_motion);
         self.command_palette.set_reduced_motion(reduced_motion);
         self.domain_picker.set_reduced_motion(reduced_motion);
+        self.unicode_picker.set_reduced_motion(reduced_motion);
         self.shortcuts_panel.set_reduced_motion(reduced_motion);
         self.info_overlay.set_reduced_motion(reduced_motion);
         self.diff_review.set_reduced_motion(reduced_motion);

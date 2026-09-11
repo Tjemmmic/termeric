@@ -785,6 +785,53 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
 
+                if self.unicode_picker.is_active() {
+                    if event.state == winit::event::ElementState::Pressed {
+                        use winit::keyboard::{Key, NamedKey};
+                        let selection = match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.close_unicode_picker();
+                                None
+                            }
+                            Key::Named(NamedKey::ArrowUp) => {
+                                self.unicode_picker.select_prev();
+                                None
+                            }
+                            Key::Named(NamedKey::ArrowDown) => {
+                                self.unicode_picker.select_next();
+                                None
+                            }
+                            Key::Named(NamedKey::Enter) => self.unicode_picker.activate(),
+                            Key::Named(NamedKey::Backspace) => {
+                                self.unicode_picker.handle_backspace();
+                                None
+                            }
+                            Key::Named(NamedKey::Space) => {
+                                self.unicode_picker.handle_char(' ');
+                                None
+                            }
+                            Key::Character(value)
+                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
+                            {
+                                for character in value.chars() {
+                                    self.unicode_picker.handle_char(character);
+                                }
+                                None
+                            }
+                            _ => None,
+                        };
+                        if let Some(selection) = selection {
+                            self.apply_unicode_picker_selection(selection);
+                        } else if !self.unicode_picker.is_active() {
+                            self.pending_unicode_picker = None;
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 // Handle command palette input first (highest priority when open)
                 if self.command_palette.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
@@ -1467,6 +1514,41 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     return;
                 }
+                if self.unicode_picker.is_active() {
+                    if state == winit::event::ElementState::Pressed
+                        && button == winit::event::MouseButton::Left
+                    {
+                        let selection = if let (Some(pos), Some(renderer)) =
+                            (self.last_cursor_pos, &self.renderer)
+                        {
+                            use crate::ui::command_palette::PaletteLayout;
+                            let (sw, sh) = renderer.window_size();
+                            let info = self.unicode_picker.build_info();
+                            let layout = PaletteLayout::calculate(
+                                sw as f32,
+                                sh as f32,
+                                renderer.cell_width(),
+                                renderer.cell_height(),
+                                info.animation,
+                                info.entries.len(),
+                            );
+                            self.unicode_picker
+                                .handle_click(pos.0 as f32, pos.1 as f32, &layout)
+                        } else {
+                            self.close_unicode_picker();
+                            None
+                        };
+                        if let Some(selection) = selection {
+                            self.apply_unicode_picker_selection(selection);
+                        } else if !self.unicode_picker.is_active() {
+                            self.pending_unicode_picker = None;
+                        }
+                        if let Some(window) = &self.window {
+                            window.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 // When palette is open, clicks route through the palette:
                 // inside an entry → select+execute, inside but not on an entry
                 // → absorb, outside → close.
@@ -1713,6 +1795,21 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     return;
                 }
+                if self.unicode_picker.is_active() {
+                    let lines = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(_, y) => y,
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if lines > 0.0 {
+                        self.unicode_picker.scroll_up(lines.ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.unicode_picker.scroll_down((-lines).ceil() as usize);
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 // Scroll palette list when palette is active
                 if self.command_palette.is_active() {
                     let lines = match delta {
@@ -1761,6 +1858,7 @@ impl ApplicationHandler<AppEvent> for App {
                     || self.diff_review.is_active()
                     || self.context_picker.is_active()
                     || self.domain_picker.is_active()
+                    || self.unicode_picker.is_active()
                     || self.guardrail.is_active()
                     || self
                         .harvest

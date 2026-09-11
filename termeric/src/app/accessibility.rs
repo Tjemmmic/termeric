@@ -82,6 +82,10 @@ const CELLAR_LIST: NodeId = NodeId(133);
 const CELLAR_CLOSE: NodeId = NodeId(134);
 const SPROUT_DIALOG: NodeId = NodeId(140);
 const SPROUT_MENU: NodeId = NodeId(141);
+const UNICODE_DIALOG: NodeId = NodeId(150);
+const UNICODE_INPUT: NodeId = NodeId(151);
+const UNICODE_LIST: NodeId = NodeId(152);
+const UNICODE_EMPTY: NodeId = NodeId(153);
 const SHORTCUT_CLEAR_ACTION: i32 = 1;
 const TAB_BASE: u64 = 1_000;
 const PANE_BASE: u64 = 10_000;
@@ -95,6 +99,7 @@ const DIFF_ACTION_BASE: u64 = 1 << 52;
 const CONTEXT_ACTION_BASE: u64 = 1 << 51;
 const TOAST_BASE: u64 = 1 << 50;
 const HARVEST_ACTION_BASE: u64 = 1 << 49;
+const UNICODE_ENTRY_BASE: u64 = 1 << 48;
 const COMMANDS_ENTRY_BASE: u64 = 1 << 58;
 const SETTINGS_ENTRY_BASE: u64 = 1 << 59;
 const PALETTE_ENTRY_BASE: u64 = 1 << 60;
@@ -215,6 +220,9 @@ pub(super) struct AccessibilityState {
     domain_nodes: HashMap<String, NodeId>,
     domain_commands: HashMap<NodeId, String>,
     next_domain_node: u64,
+    unicode_nodes: HashMap<String, NodeId>,
+    unicode_commands: HashMap<NodeId, String>,
+    next_unicode_node: u64,
     guardrail_nodes: HashMap<GuardrailSemanticTarget, NodeId>,
     guardrail_targets: HashMap<NodeId, GuardrailSemanticTarget>,
     next_guardrail_node: u64,
@@ -258,6 +266,9 @@ impl Default for AccessibilityState {
             domain_nodes: HashMap::new(),
             domain_commands: HashMap::new(),
             next_domain_node: DOMAIN_ENTRY_BASE,
+            unicode_nodes: HashMap::new(),
+            unicode_commands: HashMap::new(),
+            next_unicode_node: UNICODE_ENTRY_BASE,
             guardrail_nodes: HashMap::new(),
             guardrail_targets: HashMap::new(),
             next_guardrail_node: GUARDRAIL_ACTION_BASE,
@@ -484,6 +495,31 @@ impl AccessibilityState {
             node,
             DOMAIN_DIALOG | DOMAIN_INPUT | DOMAIN_LIST | DOMAIN_EMPTY
         ) || self.domain_commands.contains_key(&node)
+    }
+
+    fn unicode_node(&mut self, command: &str) -> NodeId {
+        if let Some(node) = self.unicode_nodes.get(command) {
+            return *node;
+        }
+        let node = NodeId(self.next_unicode_node);
+        self.next_unicode_node = self.next_unicode_node.saturating_add(1);
+        self.unicode_nodes.insert(command.to_string(), node);
+        self.unicode_commands.insert(node, command.to_string());
+        node
+    }
+
+    fn retain_unicode_commands(&mut self, commands: &HashSet<&str>) {
+        self.unicode_nodes
+            .retain(|command, _| commands.contains(command.as_str()));
+        self.unicode_commands
+            .retain(|_, command| commands.contains(command.as_str()));
+    }
+
+    fn is_unicode_node(&self, node: NodeId) -> bool {
+        matches!(
+            node,
+            UNICODE_DIALOG | UNICODE_INPUT | UNICODE_LIST | UNICODE_EMPTY
+        ) || self.unicode_commands.contains_key(&node)
     }
 
     fn guardrail_node(&mut self, target: GuardrailSemanticTarget) -> NodeId {
@@ -885,6 +921,13 @@ impl App {
         }
         if self.domain_picker.is_active() {
             self.handle_domain_picker_accessibility_action(request);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.unicode_picker.is_active() {
+            self.handle_unicode_picker_accessibility_action(request);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -1306,6 +1349,55 @@ impl App {
         }
     }
 
+    fn handle_unicode_picker_accessibility_action(&mut self, request: ActionRequest) {
+        if request.target_node == UNICODE_INPUT {
+            match request.action {
+                Action::Focus => self.accessibility.focus_override = Some(UNICODE_INPUT),
+                Action::SetValue => {
+                    let Some(ActionData::Value(value)) = request.data.as_ref() else {
+                        return;
+                    };
+                    if self.unicode_picker.accessibility_set_filter(value) {
+                        self.accessibility.focus_override = Some(UNICODE_INPUT);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if !matches!(request.action, Action::Click | Action::Focus) {
+            return;
+        }
+        let Some(command) = self
+            .accessibility
+            .unicode_commands
+            .get(&request.target_node)
+            .cloned()
+        else {
+            // The picker is modal. Hidden application controls and retired
+            // dynamic code-point results never receive stale actions.
+            return;
+        };
+        let info = self.unicode_picker.build_info();
+        let layout = self.unicode_picker_accessibility_layout(&info);
+        if !info
+            .entries
+            .iter()
+            .take(layout.visible_count)
+            .any(|entry| entry.id == command)
+        {
+            return;
+        }
+        if request.action == Action::Focus {
+            if self.unicode_picker.select_command(&command) {
+                self.accessibility.focus_override = Some(UNICODE_INPUT);
+            }
+        } else if let Some(selection) = self.unicode_picker.execute_command(&command) {
+            self.accessibility.focus_override = None;
+            self.apply_unicode_picker_selection(selection);
+        }
+    }
+
     fn handle_guardrail_accessibility_action(&mut self, request: ActionRequest) {
         let Some(target) = self
             .accessibility
@@ -1652,6 +1744,13 @@ impl App {
     }
 
     fn domain_picker_accessibility_layout(
+        &self,
+        info: &crate::ui::command_palette::PaletteInfo,
+    ) -> crate::ui::command_palette::PaletteLayout {
+        self.command_palette_accessibility_layout(info)
+    }
+
+    fn unicode_picker_accessibility_layout(
         &self,
         info: &crate::ui::command_palette::PaletteInfo,
     ) -> crate::ui::command_palette::PaletteLayout {
@@ -2365,6 +2464,16 @@ impl App {
             .accessibility
             .focus_override
             .is_some_and(|node| self.accessibility.is_domain_node(node))
+        {
+            self.accessibility.focus_override = None;
+        }
+        if self.unicode_picker.is_active() {
+            return self.unicode_picker_accessibility_snapshot(width, height);
+        }
+        if self
+            .accessibility
+            .focus_override
+            .is_some_and(|node| self.accessibility.is_unicode_node(node))
         {
             self.accessibility.focus_override = None;
         }
@@ -3392,6 +3501,138 @@ impl App {
         SemanticSnapshot {
             nodes,
             focus: DOMAIN_INPUT,
+        }
+    }
+
+    fn unicode_picker_accessibility_snapshot(
+        &mut self,
+        window_width: f32,
+        window_height: f32,
+    ) -> SemanticSnapshot {
+        let mut info = self.unicode_picker.build_info();
+        let mut layout = self.unicode_picker_accessibility_layout(&info);
+        self.unicode_picker.set_max_visible(layout.rows_that_fit);
+        info = self.unicode_picker.build_info();
+        layout = self.unicode_picker_accessibility_layout(&info);
+
+        let registered = self.unicode_picker.command_ids().collect::<HashSet<_>>();
+        self.accessibility.retain_unicode_commands(&registered);
+        let visible_entries = info
+            .entries
+            .iter()
+            .take(layout.visible_count)
+            .cloned()
+            .collect::<Vec<_>>();
+        let entry_nodes = visible_entries
+            .iter()
+            .map(|entry| self.accessibility.unicode_node(&entry.id))
+            .collect::<Vec<_>>();
+
+        let mut nodes = Vec::with_capacity(entry_nodes.len() + 5);
+        let mut root = Node::new(Role::Window);
+        root.set_label("Termeric terminal emulator");
+        root.set_bounds(rect(0.0, 0.0, window_width, window_height));
+        root.set_children([UNICODE_DIALOG]);
+
+        let input_x = layout.panel_x + layout.padding;
+        let input_y = layout.panel_y + layout.padding;
+        let input_width = layout.panel_width - layout.padding * 2.0;
+        let mut input = Node::new(Role::SearchInput);
+        input.set_label("Search Unicode characters or enter a code point");
+        input.set_placeholder(info.placeholder.clone());
+        input.set_value(info.input.clone());
+        input.set_character_lengths(
+            info.input
+                .chars()
+                .map(|character| character.len_utf8() as u8)
+                .collect::<Vec<_>>(),
+        );
+        let cursor = info
+            .input
+            .get(..info.cursor)
+            .map(str::chars)
+            .map(Iterator::count)
+            .unwrap_or_else(|| info.input.chars().count());
+        let position = TextPosition {
+            node: UNICODE_INPUT,
+            character_index: cursor,
+        };
+        input.set_text_selection(TextSelection {
+            anchor: position,
+            focus: position,
+        });
+        input.set_bounds(rect(input_x, input_y, input_width, layout.input_height));
+        input.set_controls([UNICODE_LIST]);
+        input.add_action(Action::Focus);
+        input.add_action(Action::SetValue);
+        if let Some(selected) = entry_nodes.get(info.selected).copied() {
+            input.set_active_descendant(selected);
+        }
+        nodes.push((UNICODE_INPUT, input));
+
+        for (row, (entry, node_id)) in visible_entries
+            .iter()
+            .zip(entry_nodes.iter().copied())
+            .enumerate()
+        {
+            let mut node = Node::new(Role::ListBoxOption);
+            node.set_label(entry.title.clone());
+            node.set_description(entry.category.clone());
+            node.set_selected(row == info.selected);
+            node.add_action(Action::Click);
+            node.add_action(Action::Focus);
+            node.set_bounds(rect(
+                layout.panel_x + layout.padding * 0.5,
+                layout.list_y + row as f32 * layout.row_height,
+                layout.panel_width - layout.padding,
+                layout.row_height,
+            ));
+            nodes.push((node_id, node));
+        }
+
+        let mut list = Node::new(Role::ListBox);
+        list.set_label("Unicode character results");
+        list.set_orientation(accesskit::Orientation::Vertical);
+        list.set_bounds(rect(
+            layout.panel_x + layout.padding * 0.5,
+            layout.list_y,
+            layout.panel_width - layout.padding,
+            layout.list_height,
+        ));
+        if let Some(selected) = entry_nodes.get(info.selected).copied() {
+            list.set_active_descendant(selected);
+        }
+        list.set_children(entry_nodes);
+        nodes.push((UNICODE_LIST, list));
+
+        let mut dialog_children = vec![UNICODE_INPUT, UNICODE_LIST];
+        if visible_entries.is_empty() {
+            let mut empty = Node::new(Role::Status);
+            empty.set_label("No matching Unicode character");
+            empty.set_live(Live::Polite);
+            nodes.push((UNICODE_EMPTY, empty));
+            dialog_children.push(UNICODE_EMPTY);
+        }
+        let mut dialog = Node::new(Role::Dialog);
+        dialog.set_label("Unicode character picker");
+        dialog.set_description(
+            "Search common characters or enter U+ followed by a non-control Unicode scalar",
+        );
+        dialog.set_modal();
+        dialog.set_bounds(rect(
+            layout.panel_x,
+            layout.panel_y,
+            layout.panel_width,
+            layout.panel_height,
+        ));
+        dialog.set_children(dialog_children);
+        nodes.push((UNICODE_DIALOG, dialog));
+        nodes.push((ROOT, root));
+
+        self.accessibility.focus_override = Some(UNICODE_INPUT);
+        SemanticSnapshot {
+            nodes,
+            focus: UNICODE_INPUT,
         }
     }
 
@@ -5521,6 +5762,24 @@ mod tests {
     }
 
     #[test]
+    fn replaced_unicode_results_release_their_semantic_identity() {
+        let mut state = AccessibilityState::default();
+        let removed = state.unicode_node("unicode-picker.curated.2192");
+        let retained = state.unicode_node("unicode-picker.codepoint.3bb");
+        state.retain_unicode_commands(&HashSet::from(["unicode-picker.codepoint.3bb"]));
+        assert!(!state.unicode_commands.contains_key(&removed));
+        assert!(
+            !state
+                .unicode_nodes
+                .contains_key("unicode-picker.curated.2192")
+        );
+        assert_eq!(
+            state.unicode_nodes.get("unicode-picker.codepoint.3bb"),
+            Some(&retained)
+        );
+    }
+
+    #[test]
     fn terminal_tree_exposes_visible_text_cursor_and_selection_without_hidden_text() {
         let mut terminal = termeric_core::Terminal::new(16, 2);
         terminal.process(b"visible\x1b[8msecret\x1b[28m");
@@ -6994,6 +7253,99 @@ mod tests {
             data: None,
         });
         assert!(app.domain_picker.is_active());
+        assert!(!app.settings_panel.is_active());
+    }
+
+    #[test]
+    fn unicode_picker_is_one_bounded_modal_tree_with_stable_actions() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.unicode_picker.open();
+        let preview = app.unicode_picker.build_info();
+        let layout = app.unicode_picker_accessibility_layout(&preview);
+        let snapshot = app.accessibility_snapshot();
+        let node = |id| {
+            &snapshot
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == id)
+                .unwrap()
+                .1
+        };
+        assert_eq!(node(ROOT).children(), &[UNICODE_DIALOG]);
+        assert_eq!(node(UNICODE_DIALOG).role(), Role::Dialog);
+        assert!(node(UNICODE_DIALOG).is_modal());
+        assert_eq!(node(UNICODE_INPUT).role(), Role::SearchInput);
+        assert_eq!(node(UNICODE_INPUT).controls(), &[UNICODE_LIST]);
+        assert!(node(UNICODE_INPUT).supports_action(Action::SetValue));
+        assert_eq!(node(UNICODE_LIST).role(), Role::ListBox);
+        assert!(node(UNICODE_LIST).children().len() <= layout.rows_that_fit);
+
+        let arrow = *app
+            .accessibility
+            .unicode_nodes
+            .get("unicode-picker.curated.2192")
+            .unwrap();
+        assert_eq!(node(arrow).role(), Role::ListBoxOption);
+        assert!(node(arrow).supports_action(Action::Click));
+        assert!(node(arrow).supports_action(Action::Focus));
+        let first = node(node(UNICODE_LIST).children()[0]).bounds().unwrap();
+        let dialog = node(UNICODE_DIALOG).bounds().unwrap();
+        assert!((first.x0 - (dialog.x0 + f64::from(layout.padding * 0.5))).abs() < 0.1);
+        assert!((first.y0 - (dialog.y0 + f64::from(layout.list_y - layout.panel_y))).abs() < 0.1);
+    }
+
+    #[test]
+    fn unicode_accessibility_filter_retires_stale_results_and_routes_exact_focus() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.unicode_picker.open();
+        app.accessibility_snapshot();
+        let stale = *app
+            .accessibility
+            .unicode_nodes
+            .get("unicode-picker.curated.2192")
+            .unwrap();
+
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: UNICODE_INPUT,
+            data: Some(ActionData::Value("U+03BB".into())),
+        });
+        let filtered = app.accessibility_snapshot();
+        let exact_id = "unicode-picker.codepoint.3bb";
+        let exact = *app.accessibility.unicode_nodes.get(exact_id).unwrap();
+        assert!(!app.accessibility.unicode_commands.contains_key(&stale));
+        let input = &filtered
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == UNICODE_INPUT)
+            .unwrap()
+            .1;
+        assert_eq!(input.active_descendant(), Some(exact));
+
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: stale,
+            data: None,
+        });
+        assert!(app.unicode_picker.is_active());
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: exact,
+            data: None,
+        });
+        assert_eq!(app.accessibility.focus_override, Some(UNICODE_INPUT));
+        assert_eq!(app.unicode_picker.build_info().entries[0].id, exact_id);
+
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: SETTINGS,
+            data: None,
+        });
+        assert!(app.unicode_picker.is_active());
         assert!(!app.settings_panel.is_active());
     }
 

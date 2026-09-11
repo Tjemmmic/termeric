@@ -88,7 +88,10 @@ impl App {
         {
             return false;
         }
-        if self.command_palette.is_active() || self.settings_panel.is_active() {
+        if self.command_palette.is_active()
+            || self.unicode_picker.is_active()
+            || self.settings_panel.is_active()
+        {
             return true;
         }
         if self.tab_rename.is_some() {
@@ -123,6 +126,10 @@ impl App {
         } else if self.command_palette.is_active() {
             for character in printable() {
                 self.command_palette.handle_char(character);
+            }
+        } else if self.unicode_picker.is_active() {
+            for character in printable() {
+                self.unicode_picker.handle_char(character);
             }
         } else if let Some(rename) = &mut self.tab_rename {
             for character in printable() {

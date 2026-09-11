@@ -20,3 +20,4 @@ pub mod settings;
 pub mod shortcuts_panel;
 pub mod text_input;
 pub mod toast;
+pub mod unicode_picker;

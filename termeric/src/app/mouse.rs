@@ -726,6 +726,7 @@ impl App {
             || self.diff_review.is_active()
             || self.context_picker.is_active()
             || self.domain_picker.is_active()
+            || self.unicode_picker.is_active()
             || self.guardrail.is_active()
             || self.command_palette.is_active()
             || self.shortcuts_panel.is_active()

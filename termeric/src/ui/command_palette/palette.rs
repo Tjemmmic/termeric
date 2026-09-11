@@ -751,6 +751,15 @@ pub fn core_commands(
             source: CommandSource::Core,
             destructive: false,
         },
+        RegisteredCommand {
+            id: "core.unicode-picker".into(),
+            title: "Insert Unicode Character...".into(),
+            category: "Search".into(),
+            shortcut: shortcut(BindableAction::OpenUnicodePicker),
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
         // ── Config ──
         RegisteredCommand {
             id: "core.settings".into(),

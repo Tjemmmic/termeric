@@ -3,7 +3,7 @@
 Termeric enables Winit's platform input-method path on every native window.
 `Ime::Preedit` is local UI state: it is drawn beside the focused pane cursor and
 is never sent to a PTY. Only `Ime::Commit` is routed, once, to the current text
-owner (terminal, search, settings filter, command palette, workspace rename,
+owner (terminal, search, settings filter, command palette, Unicode picker, workspace rename,
 command form, or typed plugin-setting dialog). Changing pane focus, losing
 window focus, or disabling the IME
 cancels stale preedit. Candidate geometry is reported in physical pixels from
@@ -106,6 +106,19 @@ bounded registry. A screen-reader click executes only the command that was
 announced and only while it remains visibly exposed; stale actions
 cannot fall through to terminal or tab controls behind the modal. Semantic row
 bounds come from the same `PaletteLayout` used by rendering and mouse hit tests.
+
+The Unicode character picker reuses the same bounded visual geometry but owns
+an isolated command registry, modal semantic tree, and stable node namespace.
+Its editable search exposes the exact UTF-8 value and cursor, the selected
+visible character is the active descendant, and every option announces its
+character/name plus category, aliases, and code point. Dynamic code-point
+results retire their previous semantic identities immediately. Focus and click
+actions must resolve to a currently visible stable ID, so filtered or stale
+screen-reader actions cannot insert text or fall through to background
+controls. Keyboard, pointer, wheel, IME commit, AccessKit replacement, and
+reduced-motion behavior all operate on the same picker state. Successful
+activation additionally revalidates the exact writable tab/pane captured when
+the picker opened.
 
 The staged live-domain picker reuses that exact palette geometry but owns a
 separate isolated modal tree and stable action namespace. Saved-host identities

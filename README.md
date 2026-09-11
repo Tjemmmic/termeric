@@ -10,6 +10,7 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 - **Safe file drops** — local quoted-path insertion plus confirmed, bounded file/directory, progress-visible, cancellable, authenticated cross-process-resumable, atomic no-overwrite live-domain upload; neither presses Enter
 - **Search** with regex and filter modes across scrollback
 - **Keyboard copy mode and quick select** for mouse-free history navigation, selection, links, paths, and configured matches
+- **Unicode character picker** — bounded fuzzy discovery for common symbols and emoji plus exact `U+`, `0x`, and bare-hex scalar entry
 - **Modern input and accessibility** — pane-positioned IME preedit, native color emoji, F6 keyboard chrome, and AccessKit screen-reader semantics
 - **Visual accessibility preferences** — live reduced-motion and high-contrast application chrome without rewriting terminal colors
 - **Modern terminal negotiation** — pane-local Kitty plus xterm keyboard/cursor/function/keypad/modifier/special/other-key resources with CSI-27/CSI-u formatting, DECRQSS/DECRQM status replies, UTF-8-safe C1 framing, and application-controlled cursor shape/blink
@@ -119,6 +120,11 @@ Line and memory limits are both enforced per terminal and pane; see the
 Copy mode entry and quick select are configurable in Keyboard Shortcuts; modal
 motions and semantic-pattern configuration are documented in the
 [keyboard copy-mode contract](docs/copy-mode.md).
+Run **Insert Unicode Character...** from the command palette to search the
+curated character index, or enter an exact non-control scalar such as `U+2192`,
+`0x20AC`, or `1F680`. The action is also configurable in Keyboard Shortcuts but
+has no default chord, avoiding conflicts with shell and desktop input methods.
+Selection remains bound to the writable tab or pane that opened the picker.
 Adapter selection, software fallback, diagnostics, and loss recovery are
 documented in the [renderer recovery contract](docs/renderer-recovery.md).
 Local declarative extensions can be installed without rebuilding. API v2 can

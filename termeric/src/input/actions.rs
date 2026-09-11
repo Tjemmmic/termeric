@@ -41,6 +41,8 @@ pub enum Action {
     ToggleCopyMode,
     /// Enter quick select for visible semantic matches.
     QuickSelect,
+    /// Open the searchable Unicode character picker.
+    OpenUnicodePicker,
     /// Toggle settings panel
     ToggleSettings,
     /// Navigate to previous prompt (shell integration)

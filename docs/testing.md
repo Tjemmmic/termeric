@@ -345,7 +345,12 @@ stable, report extent through DECRQSS, preserve it through DECSTR, and reset it
 through RIS. This lane is also entirely local.
 
 IME state tests prove preedit is not inserted early, UTF-8 cursor ranges are
-validated, and a commit reaches an editable surface exactly once. AccessKit
+validated, and a commit reaches an editable surface exactly once. Unicode
+picker fixtures additionally cover its bounded curated categories, name/alias/
+code-point filtering, exact scalar syntaxes, invalid/control/surrogate refusal,
+complete grapheme bytes, configurable unbound shortcut, IME editing,
+reduced-motion state, exact PTY UTF-8, changed/read-only/broadcast destination
+refusal, pointer geometry, and retired semantic actions. AccessKit
 tests prove hidden-cell redaction, incremental tree updates, modal isolation,
 UTF-8 editor state, shared render/hit-test bounds, stable palette/setting/custom
 command/workspace/shortcut identities, exact activation, bounded list exposure,
