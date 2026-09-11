@@ -85,14 +85,17 @@ pub struct GlyphKey {
     pub size_bits: u32,
     /// Requested SGR weight/slant.
     pub style: FontStyle,
+    /// Effective OpenType `wght` request.
+    pub weight: u16,
 }
 
 impl GlyphKey {
-    pub fn new(c: char, font_size: f32, style: FontStyle) -> Self {
+    pub fn new(c: char, font_size: f32, style: FontStyle, weight: u16) -> Self {
         Self {
             c,
             size_bits: font_size.to_bits(),
             style,
+            weight,
         }
     }
 }
@@ -118,6 +121,10 @@ pub struct LigatureKey {
     pub fallbacks: Vec<String>,
     /// Whether the generic monospace family replaced the requested family.
     pub monospace_fallback: bool,
+    /// Configured ordinary-text OpenType `wght` value.
+    pub normal_weight: u16,
+    /// Configured bold-text OpenType `wght` value.
+    pub bold_weight: u16,
 }
 
 impl LigatureKey {
@@ -132,6 +139,8 @@ impl LigatureKey {
         family: &str,
         fallbacks: &[String],
         monospace_fallback: bool,
+        normal_weight: u16,
+        bold_weight: u16,
     ) -> Self {
         Self {
             text: text.to_string(),
@@ -143,6 +152,8 @@ impl LigatureKey {
             family: family.to_string(),
             fallbacks: fallbacks.to_vec(),
             monospace_fallback,
+            normal_weight,
+            bold_weight,
         }
     }
 }
@@ -461,6 +472,10 @@ pub struct GlyphCache {
     cell_height: f32,
     /// Font size
     font_size: f32,
+    /// OpenType `wght` request for ordinary terminal text.
+    font_weight: Weight,
+    /// OpenType `wght` request for SGR bold terminal text.
+    bold_font_weight: Weight,
     /// Configured line-height multiplier
     line_height_multiplier: f32,
     /// Font family name (as requested by user)
@@ -481,6 +496,9 @@ pub struct GlyphCache {
     font_feature_overrides: FontFeatures,
     /// Avoid repeating synthetic-face diagnostics for every glyph.
     reported_synthetic_styles: HashSet<SyntheticStyle>,
+    /// Parsed `wght`-axis capability by resolved face. Variation axes are
+    /// intrinsic to a face, so this avoids reparsing `fvar` on glyph misses.
+    weight_axis_faces: HashMap<cosmic_text::fontdb::ID, bool>,
 }
 
 impl GlyphCache {
@@ -492,6 +510,8 @@ impl GlyphCache {
         font_family: &str,
         fallback_families: &[String],
         range_overrides: &[FontRangeOverride],
+        font_weight: u16,
+        bold_font_weight: u16,
         line_height_multiplier: f32,
         ligatures: bool,
     ) -> Result<Self> {
@@ -503,6 +523,8 @@ impl GlyphCache {
             collect_configured_families(&font_system, &font_family, &fallback_families);
         let configured_range_overrides =
             collect_configured_range_overrides(&font_system, range_overrides);
+        let font_weight = Weight(font_weight);
+        let bold_font_weight = Weight(bold_font_weight);
 
         // Calculate metrics
         let line_height = font_size * line_height_multiplier;
@@ -510,7 +532,7 @@ impl GlyphCache {
 
         // Measure a character to get cell dimensions and check if font was found
         let (cell_width, cell_height, use_monospace_fallback) =
-            measure_cell(&mut font_system, &metrics, &font_family);
+            measure_cell(&mut font_system, &metrics, &font_family, font_weight);
 
         // Create a fixed-capacity texture array. Logical pages are activated
         // lazily, but the bind group and texture lifetime stay frame-stable.
@@ -671,6 +693,8 @@ impl GlyphCache {
             cell_width,
             cell_height,
             font_size,
+            font_weight,
+            bold_font_weight,
             line_height_multiplier,
             font_family,
             fallback_families,
@@ -681,6 +705,7 @@ impl GlyphCache {
             ligatures_enabled: ligatures,
             font_feature_overrides: FontFeatures::new(),
             reported_synthetic_styles: HashSet::new(),
+            weight_axis_faces: HashMap::new(),
         })
     }
 
@@ -753,7 +778,7 @@ impl GlyphCache {
         style: FontStyle,
         queue: &Queue,
     ) -> Option<GlyphEntry> {
-        let key = GlyphKey::new(c, self.font_size, style);
+        let key = GlyphKey::new(c, self.font_size, style, self.effective_weight(style).0);
 
         // Check cache
         if let Some(entry) = self.entries.get(&key).copied() {
@@ -892,14 +917,14 @@ impl GlyphCache {
         style: FontStyle,
     ) -> Option<RasterizedGlyph> {
         let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
-        let attrs = font_attrs(family, style);
+        let attrs = font_attrs(family, style, self.font_weight, self.bold_font_weight);
         buffer.set_text(
-            &mut self.font_system,
             &c.to_string(),
             &attrs,
             Shaping::Basic,
             None, // No alignment needed for single chars
         );
+        buffer.shape_until_scroll(&mut self.font_system, false);
 
         let (cache_key, font_id) = buffer
             .layout_runs()
@@ -907,7 +932,7 @@ impl GlyphCache {
             .find(|glyph| glyph.glyph_id != 0)
             .map(|glyph| (glyph.physical((0.0, 0.0), 1.0).cache_key, glyph.font_id))?;
 
-        let synthesize_bold = self.needs_synthetic_bold(font_id, style);
+        let synthesize_bold = self.needs_synthetic_bold(font_id, cache_key.font_weight, style);
 
         let image = self
             .swash_cache
@@ -1142,6 +1167,8 @@ impl GlyphCache {
             &self.font_family,
             &self.fallback_families,
             self.use_monospace_fallback,
+            self.font_weight.0,
+            self.bold_font_weight.0,
         );
         if let Some(run) = self.ligature_cache.get(&key).cloned() {
             self.shaping_cache_metrics.hits += 1;
@@ -1182,6 +1209,7 @@ impl GlyphCache {
     #[cfg(test)]
     pub(crate) fn install_test_font(&mut self, data: Vec<u8>, family: &str, queue: &Queue) {
         self.font_system.db_mut().load_font_data(data);
+        self.weight_axis_faces.clear();
         self.font_family = family.to_string();
         self.fallback_families.clear();
         self.range_overrides.clear();
@@ -1189,7 +1217,12 @@ impl GlyphCache {
         self.configured_families =
             collect_configured_families(&self.font_system, family, &self.fallback_families);
         self.use_monospace_fallback = false;
-        let (width, height, _) = measure_cell(&mut self.font_system, &self.metrics, family);
+        let (width, height, _) = measure_cell(
+            &mut self.font_system,
+            &self.metrics,
+            family,
+            self.font_weight,
+        );
         self.cell_width = width;
         self.cell_height = height;
         self.clear_atlas(queue);
@@ -1231,21 +1264,27 @@ impl GlyphCache {
             );
             let font_features =
                 terminal_font_features(self.ligatures_enabled, &self.font_feature_overrides);
-            let attrs =
-                font_attrs(family_for(&default_family), style).font_features(font_features.clone());
+            let attrs = font_attrs(
+                family_for(&default_family),
+                style,
+                self.font_weight,
+                self.bold_font_weight,
+            )
+            .font_features(font_features.clone());
             let spans = span_specs.iter().map(|(range, family)| {
                 (
                     &text[range.clone()],
-                    font_attrs(family_for(family), style).font_features(font_features.clone()),
+                    font_attrs(
+                        family_for(family),
+                        style,
+                        self.font_weight,
+                        self.bold_font_weight,
+                    )
+                    .font_features(font_features.clone()),
                 )
             });
-            buffer.set_rich_text(
-                &mut self.font_system,
-                spans,
-                &attrs,
-                Shaping::Advanced,
-                None,
-            );
+            buffer.set_rich_text(spans, &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(&mut self.font_system, false);
 
             for run in buffer.layout_runs() {
                 for glyph in run.glyphs.iter() {
@@ -1275,7 +1314,8 @@ impl GlyphCache {
                 .cloned()
             {
                 self.atlas_misses += 1;
-                let synthesize_bold = self.needs_synthetic_bold(font_id, style);
+                let synthesize_bold =
+                    self.needs_synthetic_bold(font_id, cache_key.font_weight, style);
                 let source_width = image.placement.width;
                 let img_height = image.placement.height;
                 let img_left = image.placement.left;
@@ -1362,13 +1402,44 @@ impl GlyphCache {
         Some((LigatureRun { glyphs }, retry_next_frame))
     }
 
-    fn needs_synthetic_bold(&self, font_id: cosmic_text::fontdb::ID, style: FontStyle) -> bool {
-        style.bold
-            && self
-                .font_system
-                .db()
-                .face(font_id)
-                .is_some_and(|face| face.weight.0 < Weight::SEMIBOLD.0)
+    fn effective_weight(&self, style: FontStyle) -> Weight {
+        if style.bold {
+            self.bold_font_weight
+        } else {
+            self.font_weight
+        }
+    }
+
+    fn needs_synthetic_bold(
+        &mut self,
+        font_id: cosmic_text::fontdb::ID,
+        requested_weight: Weight,
+        style: FontStyle,
+    ) -> bool {
+        if !style.bold || requested_weight.0 < Weight::SEMIBOLD.0 {
+            return false;
+        }
+        let selected_face_is_light = self
+            .font_system
+            .db()
+            .face(font_id)
+            .is_some_and(|face| face.weight.0 < Weight::SEMIBOLD.0);
+        if !selected_face_is_light {
+            return false;
+        }
+        let has_weight_axis = if let Some(has_axis) = self.weight_axis_faces.get(&font_id) {
+            *has_axis
+        } else {
+            let has_axis = font_has_weight_axis(&mut self.font_system, font_id, requested_weight);
+            self.weight_axis_faces.insert(font_id, has_axis);
+            has_axis
+        };
+        should_synthesize_bold(
+            style,
+            requested_weight,
+            selected_face_is_light,
+            has_weight_axis,
+        )
     }
 
     fn report_synthetic_style(
@@ -1455,6 +1526,7 @@ impl GlyphCache {
         diagnose_font_coverage(
             &mut self.font_system,
             self.metrics,
+            self.font_weight,
             configured_primary,
             &self.fallback_families,
             &self.configured_range_overrides,
@@ -1476,8 +1548,12 @@ impl GlyphCache {
         self.metrics = Metrics::new(font_size, line_height);
 
         // Remeasure cell dimensions
-        let (cell_width, cell_height, use_fallback) =
-            measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        let (cell_width, cell_height, use_fallback) = measure_cell(
+            &mut self.font_system,
+            &self.metrics,
+            &self.font_family,
+            self.font_weight,
+        );
         self.cell_width = cell_width;
         self.cell_height = cell_height;
         self.use_monospace_fallback = use_fallback;
@@ -1505,8 +1581,12 @@ impl GlyphCache {
             &self.fallback_families,
         );
 
-        let (cell_width, cell_height, use_fallback) =
-            measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        let (cell_width, cell_height, use_fallback) = measure_cell(
+            &mut self.font_system,
+            &self.metrics,
+            &self.font_family,
+            self.font_weight,
+        );
         self.cell_width = cell_width;
         self.cell_height = cell_height;
         self.use_monospace_fallback = use_fallback;
@@ -1556,12 +1636,44 @@ impl GlyphCache {
         }
         self.line_height_multiplier = multiplier;
         self.metrics = Metrics::new(self.font_size, self.font_size * multiplier);
-        let (cell_width, cell_height, use_fallback) =
-            measure_cell(&mut self.font_system, &self.metrics, &self.font_family);
+        let (cell_width, cell_height, use_fallback) = measure_cell(
+            &mut self.font_system,
+            &self.metrics,
+            &self.font_family,
+            self.font_weight,
+        );
         self.cell_width = cell_width;
         self.cell_height = cell_height;
         self.use_monospace_fallback = use_fallback;
         self.clear_atlas(queue);
+    }
+
+    /// Change normal and bold OpenType `wght` requests, clearing all shaped
+    /// and rasterized data whose identity depends on those values.
+    pub fn set_font_weights(
+        &mut self,
+        font_weight: u16,
+        bold_font_weight: u16,
+        queue: &Queue,
+    ) -> bool {
+        let font_weight = Weight(font_weight);
+        let bold_font_weight = Weight(bold_font_weight);
+        if self.font_weight == font_weight && self.bold_font_weight == bold_font_weight {
+            return false;
+        }
+        self.font_weight = font_weight;
+        self.bold_font_weight = bold_font_weight;
+        let (cell_width, cell_height, use_fallback) = measure_cell(
+            &mut self.font_system,
+            &self.metrics,
+            &self.font_family,
+            self.font_weight,
+        );
+        self.cell_width = cell_width;
+        self.cell_height = cell_height;
+        self.use_monospace_fallback = use_fallback;
+        self.clear_atlas(queue);
+        true
     }
 
     /// Clear the glyph atlas, entry caches, and reset packing cursor.
@@ -1660,6 +1772,35 @@ impl GlyphCache {
     }
 }
 
+fn font_has_weight_axis(
+    font_system: &mut FontSystem,
+    font_id: cosmic_text::fontdb::ID,
+    requested_weight: Weight,
+) -> bool {
+    font_system
+        .get_font(font_id, requested_weight)
+        .is_some_and(|font| {
+            font.as_swash()
+                .variations()
+                .any(|axis| axis.tag().to_be_bytes() == *b"wght")
+        })
+}
+
+fn should_synthesize_bold(
+    style: FontStyle,
+    requested_weight: Weight,
+    selected_face_is_light: bool,
+    has_weight_axis: bool,
+) -> bool {
+    // Cosmic Text applies a `wght` coordinate while rasterizing variable
+    // fonts. Applying our static-face embolden fallback too would make
+    // variable bold text artificially heavier than requested.
+    style.bold
+        && requested_weight.0 >= Weight::SEMIBOLD.0
+        && selected_face_is_light
+        && !has_weight_axis
+}
+
 fn replacement_glyph_bitmap() -> Vec<u8> {
     let mut pixels = vec![0; 7 * 9];
     for y in 0..9 {
@@ -1672,13 +1813,18 @@ fn replacement_glyph_bitmap() -> Vec<u8> {
     pixels
 }
 
-fn font_attrs(family: Family<'_>, style: FontStyle) -> Attrs<'_> {
+fn font_attrs(
+    family: Family<'_>,
+    style: FontStyle,
+    font_weight: Weight,
+    bold_font_weight: Weight,
+) -> Attrs<'_> {
     Attrs::new()
         .family(family)
         .weight(if style.bold {
-            Weight::BOLD
+            bold_font_weight
         } else {
-            Weight::NORMAL
+            font_weight
         })
         .style(if style.italic {
             Style::Italic
@@ -1962,6 +2108,7 @@ fn matching_range_override<'a>(
 fn diagnose_font_coverage(
     font_system: &mut FontSystem,
     metrics: Metrics,
+    font_weight: Weight,
     configured_primary: &str,
     fallback_families: &[String],
     range_overrides: &[ConfiguredRangeOverride],
@@ -2067,7 +2214,7 @@ fn diagnose_font_coverage(
             }
         }
         let route = route.unwrap_or_else(|| {
-            platform_fallback_route(font_system, metrics, default_family, grapheme)
+            platform_fallback_route(font_system, metrics, font_weight, default_family, grapheme)
         });
         entries.push(FontCoverageEntry {
             grapheme: grapheme.into(),
@@ -2086,17 +2233,23 @@ fn diagnose_font_coverage(
 fn platform_fallback_route(
     font_system: &mut FontSystem,
     metrics: Metrics,
+    font_weight: Weight,
     default_family: &str,
     grapheme: &str,
 ) -> FontCoverageRoute {
     let mut buffer = Buffer::new(font_system, metrics);
     buffer.set_text(
-        font_system,
         grapheme,
-        &font_attrs(family_for(default_family), FontStyle::default()),
+        &font_attrs(
+            family_for(default_family),
+            FontStyle::default(),
+            font_weight,
+            font_weight,
+        ),
         Shaping::Advanced,
         None,
     );
+    buffer.shape_until_scroll(font_system, false);
     let glyphs = buffer
         .layout_runs()
         .flat_map(|run| run.glyphs.iter())
@@ -2220,13 +2373,15 @@ fn measure_cell(
     font_system: &mut FontSystem,
     metrics: &Metrics,
     font_family: &str,
+    font_weight: Weight,
 ) -> (f32, f32, bool) {
     let family = family_for(font_family);
-    let attrs = Attrs::new().family(family);
+    let attrs = Attrs::new().family(family).weight(font_weight);
 
     // Measure a single 'M' character to get the natural width
     let mut buffer = Buffer::new(font_system, *metrics);
-    buffer.set_text(font_system, "M", &attrs, Shaping::Basic, None);
+    buffer.set_text("M", &attrs, Shaping::Basic, None);
+    buffer.shape_until_scroll(font_system, false);
 
     let mut measured_width: f32 = 0.0;
     let mut font_id: Option<cosmic_text::fontdb::ID> = None;
@@ -2281,12 +2436,12 @@ fn measure_cell(
         // Font not found and got proportional fallback - measure system monospace
         let mut mono_buffer = Buffer::new(font_system, *metrics);
         mono_buffer.set_text(
-            font_system,
             "M",
-            &Attrs::new().family(Family::Monospace),
+            &Attrs::new().family(Family::Monospace).weight(font_weight),
             Shaping::Basic,
             None,
         );
+        mono_buffer.shape_until_scroll(font_system, false);
 
         let mut mono_width: f32 = 0.0;
         if let Some(run) = mono_buffer.layout_runs().next() {
@@ -2399,12 +2554,47 @@ mod tests {
         let attrs = Attrs::new()
             .family(Family::Name("Fira Mono"))
             .font_features(terminal_font_features(ligatures, &overrides));
-        buffer.set_text(&mut font_system, text, &attrs, Shaping::Advanced, None);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut font_system, false);
         buffer
             .layout_runs()
             .flat_map(|run| run.glyphs.iter())
             .map(|glyph| (glyph.glyph_id, glyph.start, glyph.end))
             .collect()
+    }
+
+    fn variable_weight_raster(weight: Weight) -> (CacheKey, Vec<u8>, bool) {
+        let source = cosmic_text::fontdb::Source::Binary(Arc::new(
+            deterministic_test_font_data_named("InterVariable.ttf"),
+        ));
+        let mut database = cosmic_text::fontdb::Database::new();
+        database.load_font_source(source);
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), database);
+        let mut buffer = Buffer::new(&mut font_system, Metrics::new(32.0, 38.4));
+        buffer.set_text(
+            "M",
+            &Attrs::new()
+                .family(Family::Name("Inter Variable"))
+                .weight(weight),
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut font_system, false);
+        let cache_key = buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter())
+            .find(|glyph| glyph.glyph_id != 0)
+            .expect("Inter Variable should shape M")
+            .physical((0.0, 0.0), 1.0)
+            .cache_key;
+        let has_weight_axis =
+            font_has_weight_axis(&mut font_system, cache_key.font_id, cache_key.font_weight);
+        let image = SwashCache::new()
+            .get_image(&mut font_system, cache_key)
+            .as_ref()
+            .expect("Inter Variable should rasterize M")
+            .clone();
+        (cache_key, image.data, has_weight_axis)
     }
 
     #[test]
@@ -2582,6 +2772,7 @@ mod tests {
         let report = diagnose_font_coverage(
             &mut font_system,
             Metrics::new(14.0, 16.8),
+            Weight::NORMAL,
             "Missing Primary",
             &fallbacks,
             &rules,
@@ -2642,6 +2833,7 @@ mod tests {
         let platform = diagnose_font_coverage(
             &mut font_system,
             metrics,
+            Weight::NORMAL,
             "Fira Mono",
             &[],
             &[],
@@ -2658,6 +2850,7 @@ mod tests {
         let missing = diagnose_font_coverage(
             &mut font_system,
             metrics,
+            Weight::NORMAL,
             "Fira Mono",
             &[],
             &[],
@@ -2670,6 +2863,7 @@ mod tests {
         let ignorable = diagnose_font_coverage(
             &mut font_system,
             metrics,
+            Weight::NORMAL,
             "Fira Mono",
             &[],
             &[],
@@ -2741,6 +2935,7 @@ mod tests {
         let report = diagnose_font_coverage(
             &mut font_system,
             Metrics::new(14.0, 16.8),
+            Weight::NORMAL,
             "Fira Mono",
             &[],
             &[],
@@ -2755,6 +2950,7 @@ mod tests {
             diagnose_font_coverage(
                 &mut font_system,
                 Metrics::new(14.0, 16.8),
+                Weight::NORMAL,
                 "Fira Mono",
                 &[],
                 &[],
@@ -2767,6 +2963,7 @@ mod tests {
             diagnose_font_coverage(
                 &mut font_system,
                 Metrics::new(14.0, 16.8),
+                Weight::NORMAL,
                 "Fira Mono",
                 &[],
                 &[],
@@ -2781,7 +2978,7 @@ mod tests {
     fn cell_height_uses_configured_line_height() {
         let mut font_system = FontSystem::new();
         let metrics = Metrics::new(14.0, 21.0);
-        let (_, height, _) = measure_cell(&mut font_system, &metrics, "monospace");
+        let (_, height, _) = measure_cell(&mut font_system, &metrics, "monospace", Weight::NORMAL);
         assert_eq!(height, 21.0);
     }
 
@@ -2811,8 +3008,8 @@ mod tests {
             italic: true,
         };
         assert_ne!(
-            GlyphKey::new('x', 14.0, regular),
-            GlyphKey::new('x', 14.0, bold_italic)
+            GlyphKey::new('x', 14.0, regular, 400),
+            GlyphKey::new('x', 14.0, bold_italic, 700)
         );
         assert_ne!(
             LigatureKey::new(
@@ -2825,6 +3022,8 @@ mod tests {
                 "Mono",
                 &[],
                 false,
+                400,
+                700,
             ),
             LigatureKey::new(
                 "e\u{301}",
@@ -2836,11 +3035,78 @@ mod tests {
                 "Mono",
                 &[],
                 false,
+                400,
+                700,
             )
         );
-        let attrs = font_attrs(Family::Monospace, bold_italic);
-        assert_eq!(attrs.weight, Weight::BOLD);
+        let attrs = font_attrs(Family::Monospace, bold_italic, Weight(350), Weight(775));
+        assert_eq!(attrs.weight, Weight(775));
         assert_eq!(attrs.style, Style::Italic);
+
+        assert_ne!(
+            GlyphKey::new('x', 14.0, regular, 350),
+            GlyphKey::new('x', 14.0, regular, 450),
+            "normal weight must participate in scalar cache identity"
+        );
+        assert_ne!(
+            LigatureKey::new(
+                "fi",
+                14.0,
+                16.8,
+                regular,
+                true,
+                FontFeatures::new(),
+                "Mono",
+                &[],
+                false,
+                350,
+                700,
+            ),
+            LigatureKey::new(
+                "fi",
+                14.0,
+                16.8,
+                regular,
+                true,
+                FontFeatures::new(),
+                "Mono",
+                &[],
+                false,
+                450,
+                800,
+            ),
+            "configured weight pair must participate in shaped-run identity"
+        );
+    }
+
+    #[test]
+    fn variable_font_weight_reaches_shaping_and_rasterization_without_double_bold() {
+        let (light_key, light_pixels, light_has_axis) = variable_weight_raster(Weight(300));
+        let (heavy_key, heavy_pixels, heavy_has_axis) = variable_weight_raster(Weight(800));
+
+        assert_eq!(light_key.font_weight, Weight(300));
+        assert_eq!(heavy_key.font_weight, Weight(800));
+        assert_ne!(light_key, heavy_key);
+        assert_ne!(light_pixels, heavy_pixels);
+        assert!(light_has_axis && heavy_has_axis);
+        assert!(!should_synthesize_bold(
+            FontStyle {
+                bold: true,
+                italic: false,
+            },
+            Weight(800),
+            true,
+            true,
+        ));
+        assert!(should_synthesize_bold(
+            FontStyle {
+                bold: true,
+                italic: false,
+            },
+            Weight(800),
+            true,
+            false,
+        ));
     }
 
     #[test]
@@ -3002,6 +3268,8 @@ mod tests {
             "Fira Mono",
             &[],
             false,
+            400,
+            700,
         );
         let custom = compile_font_feature_overrides(&enabled);
         let custom_key = LigatureKey::new(
@@ -3014,6 +3282,8 @@ mod tests {
             "Fira Mono",
             &[],
             false,
+            400,
+            700,
         );
         assert_ne!(default_key, custom_key);
     }

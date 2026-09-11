@@ -258,6 +258,16 @@ tests cover list/add/edit/confirmed-delete, decimal/hex input, preserved
 validation errors, stale tag/value refusal, atomic reload, and the shared
 request-scoped input path without a host font, GPU, or compositor.
 
+Variable-weight tests validate the 1–1000 ordered normal/bold pair and legacy
+defaults, Settings actions, atomic headless application, cache identity, and
+normal-weight cell measurement. A deterministic Inter Variable fixture proves
+that Cosmic Text keeps the requested family and weight in its physical glyph
+key, rasterizes different 300/800 outlines, detects the real `wght` axis, and
+does not layer Termeric's static-face embolden over that axis. The static-face
+decision remains unit-tested separately. These checks use no downloaded font,
+host font, compositor, external process, or provider. Subjective installed-font
+quality remains manual.
+
 Keyboard cases cover every named legacy key, xterm modifier parameters 2-8,
 DECCKM/DECKPAM transitions, physical keypad identity, Control and Alt, AltGr,
 Unicode text, shortcut precedence, and focused-pane mode selection. Xterm

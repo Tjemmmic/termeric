@@ -1488,10 +1488,10 @@ mod tests {
                     state = state
                         .wrapping_mul(6_364_136_223_846_793_005)
                         .wrapping_add(1);
-                    if state % 5 != 0 {
+                    if !state.is_multiple_of(5) {
                         let cell = row.get_mut(column).unwrap();
                         cell.set_char(char::from(b'a' + (state % 26) as u8));
-                        if state % 7 == 0 {
+                        if state.is_multiple_of(7) {
                             cell.attrs.insert(CellAttrs::ITALIC);
                             cell.fg_spec = ColorSpec::Indexed((state % 16) as u8);
                         }

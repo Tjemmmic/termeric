@@ -351,6 +351,10 @@ pub enum SettingsAction {
     SetFontSize(f32),
     /// Change font family to this value
     SetFontFamily(String),
+    /// Change the OpenType `wght` value for ordinary terminal text.
+    SetFontWeight(u16),
+    /// Change the OpenType `wght` value for SGR bold terminal text.
+    SetBoldFontWeight(u16),
     /// Set, append, or remove one position in the ordered fallback chain.
     SetFontFallback {
         index: usize,
@@ -626,6 +630,24 @@ impl SettingsPanel {
                     kind: SettingKind::Dropdown {
                         options: font_options.clone(),
                         selected: font_selected,
+                    },
+                },
+                SettingItem {
+                    label: "Normal Weight",
+                    value: config.font.weight.to_string(),
+                    kind: SettingKind::Numeric {
+                        min: crate::config::MIN_FONT_WEIGHT as f32,
+                        max: config.font.bold_weight as f32,
+                        step: 25.0,
+                    },
+                },
+                SettingItem {
+                    label: "Bold Weight",
+                    value: config.font.bold_weight.to_string(),
+                    kind: SettingKind::Numeric {
+                        min: config.font.weight as f32,
+                        max: crate::config::MAX_FONT_WEIGHT as f32,
+                        step: 25.0,
                     },
                 },
             ];
@@ -1770,6 +1792,12 @@ impl SettingsPanel {
 
                 match (entry.section, entry.label) {
                     (SettingsSection::Font, "Size") => SettingsAction::SetFontSize(new_val),
+                    (SettingsSection::Font, "Normal Weight") => {
+                        SettingsAction::SetFontWeight(new_val as u16)
+                    }
+                    (SettingsSection::Font, "Bold Weight") => {
+                        SettingsAction::SetBoldFontWeight(new_val as u16)
+                    }
                     (SettingsSection::Font, "Line Height") => {
                         SettingsAction::SetLineHeight(new_val)
                     }
@@ -2270,11 +2298,11 @@ mod tests {
         panel.handle_key(SettingsKey::Down, &config, &registry);
         assert_eq!(panel.selected, 1);
 
-        // Move down again (Font > Family -> Font > Fallback 1)
+        // Move down again (Font > Family -> Font > Normal Weight)
         panel.handle_key(SettingsKey::Down, &config, &registry);
         assert_eq!(panel.selected, 2);
 
-        // Move down again reaches Font > Line Height.
+        // Move down again reaches Font > Bold Weight.
         panel.handle_key(SettingsKey::Down, &config, &registry);
         assert_eq!(panel.selected, 3);
 
@@ -2395,6 +2423,21 @@ mod tests {
         assert!(matches!(
             panel.map_dropdown_action(SettingsSection::Font, "Bold Is Bright", &off, 1),
             SettingsAction::SetBoldIsBright(false)
+        ));
+
+        let normal = entries
+            .iter()
+            .find(|entry| entry.label == "Normal Weight")
+            .expect("normal weight row");
+        assert_eq!(normal.value, "400");
+        panel.selected = entries
+            .iter()
+            .filter(|entry| !entry.is_header)
+            .position(|entry| entry.label == "Normal Weight")
+            .expect("normal weight selectable index");
+        assert!(matches!(
+            panel.adjust_selected_value(&entries, 1),
+            SettingsAction::SetFontWeight(425)
         ));
     }
 
@@ -2660,10 +2703,10 @@ mod tests {
         let themes = Theme::list_available();
         let expected_next = themes.get(1).expect("at least 2 themes");
 
-        // Default font rows are Size, Family, one empty fallback slot, range
-        // overrides, OpenType features, Line Height, Ligatures, and Bold Is
-        // Bright before Theme.
-        panel.selected = 8;
+        // Default font rows are Size, Family, Normal Weight, Bold Weight, one
+        // empty fallback slot, range overrides, OpenType features, Line
+        // Height, Ligatures, and Bold Is Bright before Theme.
+        panel.selected = 10;
 
         // Right opens the dropdown for Dropdown kind
         let action = panel.handle_key(SettingsKey::Right, &config, &registry);

@@ -343,6 +343,15 @@ impl Config {
         if !(8.0..=72.0).contains(&self.font.size) || !self.font.size.is_finite() {
             bail!("font.size must be between 8 and 72");
         }
+        if !(MIN_FONT_WEIGHT..=MAX_FONT_WEIGHT).contains(&self.font.weight) {
+            bail!("font.weight must be between {MIN_FONT_WEIGHT} and {MAX_FONT_WEIGHT}");
+        }
+        if !(MIN_FONT_WEIGHT..=MAX_FONT_WEIGHT).contains(&self.font.bold_weight) {
+            bail!("font.bold_weight must be between {MIN_FONT_WEIGHT} and {MAX_FONT_WEIGHT}");
+        }
+        if self.font.bold_weight < self.font.weight {
+            bail!("font.bold_weight must be greater than or equal to font.weight");
+        }
         if !(0.8..=3.0).contains(&self.font.line_height) || !self.font.line_height.is_finite() {
             bail!("font.line_height must be between 0.8 and 3.0");
         }
@@ -871,6 +880,10 @@ pub const MAX_FONT_FALLBACKS: usize = 16;
 pub const MAX_FONT_FAMILY_BYTES: usize = 256;
 pub const MAX_FONT_FEATURES: usize = 32;
 pub const MAX_FONT_RANGE_OVERRIDES: usize = 64;
+pub const MIN_FONT_WEIGHT: u16 = 1;
+pub const MAX_FONT_WEIGHT: u16 = 1_000;
+pub const DEFAULT_FONT_WEIGHT: u16 = 400;
+pub const DEFAULT_BOLD_FONT_WEIGHT: u16 = 700;
 
 /// Inclusive Unicode-scalar interval routed to one preferred font family.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -890,6 +903,10 @@ pub struct FontConfig {
     pub family: String,
     /// Font size in points
     pub size: f32,
+    /// OpenType `wght` value used for ordinary terminal text.
+    pub weight: u16,
+    /// OpenType `wght` value used for SGR bold terminal text.
+    pub bold_weight: u16,
     /// Line height multiplier (e.g. 1.2 = 120%)
     pub line_height: f32,
     /// Fallback font families
@@ -909,6 +926,8 @@ impl Default for FontConfig {
         Self {
             family: "monospace".to_string(),
             size: 14.0,
+            weight: DEFAULT_FONT_WEIGHT,
+            bold_weight: DEFAULT_BOLD_FONT_WEIGHT,
             line_height: 1.2,
             fallback: vec![],
             features: BTreeMap::new(),
@@ -1511,6 +1530,41 @@ mod tests {
         ] {
             assert!(toml::from_str::<Config>(invalid_toml).is_err());
         }
+    }
+
+    #[test]
+    fn font_weights_are_typed_bounded_ordered_and_default_compatible() {
+        let defaults: Config = toml::from_str("[font]\n").unwrap();
+        assert_eq!(defaults.font.weight, DEFAULT_FONT_WEIGHT);
+        assert_eq!(defaults.font.bold_weight, DEFAULT_BOLD_FONT_WEIGHT);
+        defaults.validate().unwrap();
+
+        let configured: Config = toml::from_str(
+            r#"
+                [font]
+                weight = 325
+                bold_weight = 825
+            "#,
+        )
+        .unwrap();
+        configured.validate().unwrap();
+        assert_eq!(configured.font.weight, 325);
+        assert_eq!(configured.font.bold_weight, 825);
+
+        for (weight, bold_weight) in [(0, 700), (400, 0), (1_001, 1_001), (700, 699)] {
+            let mut invalid = Config::default();
+            invalid.font.weight = weight;
+            invalid.font.bold_weight = bold_weight;
+            assert!(
+                invalid.validate().is_err(),
+                "accepted weight pair {weight}/{bold_weight}"
+            );
+        }
+
+        let mut equal = Config::default();
+        equal.font.weight = 500;
+        equal.font.bold_weight = 500;
+        equal.validate().unwrap();
     }
 
     #[test]

@@ -35,7 +35,7 @@ rectangle.
 
 ## Update lifecycle
 
-Window resize, physical scale-factor changes, font size/family/line-height,
+Window resize, physical scale-factor changes, font size/family/weight/line-height,
 padding, pane split/close, and divider movement all synchronize the complete
 four-field geometry. Synchronization is not conditional on rows or columns
 changing, so a pixel-only scale or font change still reaches the PTY.

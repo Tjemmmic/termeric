@@ -983,12 +983,12 @@ impl App {
         if (TAB_BASE..PANE_BASE).contains(&id) {
             let offset = id - TAB_BASE;
             let index = (offset / 2) as usize;
-            self.accessibility.keyboard_focus = if offset % 2 == 0 {
+            self.accessibility.keyboard_focus = if offset.is_multiple_of(2) {
                 ChromeFocus::Tab(index)
             } else {
                 ChromeFocus::CloseTab(index)
             };
-            if offset % 2 == 0 {
+            if offset.is_multiple_of(2) {
                 let from = self
                     .tabs
                     .as_ref()
@@ -6413,6 +6413,18 @@ mod tests {
         assert_eq!(node(size).role(), Role::SpinButton);
         assert!(node(size).supports_action(Action::Increment));
         assert_eq!(node(SETTINGS_INPUT).active_descendant(), Some(size));
+        let normal_weight = app
+            .accessibility
+            .settings_nodes
+            .get(&SettingsSemanticTarget::Setting {
+                section: SettingsSection::Font,
+                label: "Normal Weight",
+            })
+            .copied()
+            .unwrap();
+        assert_eq!(node(normal_weight).role(), Role::SpinButton);
+        assert_eq!(node(normal_weight).numeric_value(), Some(400.0));
+        assert!(node(normal_weight).supports_action(Action::Increment));
         let actual = node(size).bounds().unwrap();
         let dialog = node(SETTINGS_DIALOG).bounds().unwrap();
         let expected = rect(
@@ -6460,6 +6472,30 @@ mod tests {
             data: None,
         });
         assert!((app.config.window.opacity - (before - 0.05)).abs() < f32::EPSILON);
+
+        app.settings_panel.open_to_section(SettingsSection::Font);
+        assert!(app.settings_panel.accessibility_focus_setting(
+            SettingsSection::Font,
+            "Normal Weight",
+            &app.config,
+            &app.shortcut_registry,
+        ));
+        app.accessibility_snapshot();
+        let weight = *app
+            .accessibility
+            .settings_nodes
+            .get(&SettingsSemanticTarget::Setting {
+                section: SettingsSection::Font,
+                label: "Normal Weight",
+            })
+            .unwrap();
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Increment,
+            target_tree: TreeId::ROOT,
+            target_node: weight,
+            data: None,
+        });
+        assert_eq!(app.config.font.weight, 425);
 
         app.settings_panel
             .open_to_section(SettingsSection::Sessions);

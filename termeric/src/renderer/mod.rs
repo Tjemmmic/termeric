@@ -586,6 +586,8 @@ impl Renderer {
         font_family: &str,
         fallback_families: &[String],
         range_overrides: &[crate::config::FontRangeOverride],
+        font_weight: u16,
+        bold_font_weight: u16,
         line_height_multiplier: f32,
         padding: f32,
         scale_factor: f32,
@@ -708,6 +710,8 @@ impl Renderer {
             font_family,
             fallback_families,
             range_overrides,
+            font_weight,
+            bold_font_weight,
             line_height_multiplier,
             ligatures,
         )?;
@@ -887,6 +891,19 @@ impl Renderer {
         let (cell_width, cell_height) = self.glyph_cache.cell_size();
         self.cell_width = cell_width;
         self.cell_height = cell_height;
+    }
+
+    /// Apply the normal and SGR-bold OpenType `wght` requests.
+    pub fn set_font_weights(&mut self, font_weight: u16, bold_font_weight: u16) {
+        if self
+            .glyph_cache
+            .set_font_weights(font_weight, bold_font_weight, &self.queue)
+        {
+            self.invalidate_terminal_rows();
+            let (cell_width, cell_height) = self.glyph_cache.cell_size();
+            self.cell_width = cell_width;
+            self.cell_height = cell_height;
+        }
     }
 
     /// Get all installed monospace font families
@@ -2690,7 +2707,18 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
     const WIDTH: u32 = 512;
     const HEIGHT: u32 = 96;
-    let mut glyph_cache = GlyphCache::new(device, queue, 14.0, "monospace", &[], &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(
+        device,
+        queue,
+        14.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
     let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
     text.resize(queue, WIDTH, HEIGHT);
     let cases = [
@@ -2835,7 +2863,18 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
     .find(|path| path.is_file())
     .ok_or_else(|| anyhow::anyhow!("Noto Color Emoji is required for GPU acceptance"))?;
     let font_data = std::fs::read(font_path)?;
-    let mut glyph_cache = GlyphCache::new(device, queue, 32.0, "monospace", &[], &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(
+        device,
+        queue,
+        32.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
     glyph_cache.install_test_font(font_data, "Noto Color Emoji", queue);
     glyph_cache.begin_frame();
 
@@ -2865,7 +2904,18 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
 pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
     const GLYPHS: usize = 2_048;
-    let mut glyph_cache = GlyphCache::new(device, queue, 18.0, "monospace", &[], &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(
+        device,
+        queue,
+        18.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
     glyph_cache.use_tiny_test_atlas(64, 3, queue);
     glyph_cache.begin_frame();
 
@@ -3191,7 +3241,18 @@ pub(crate) fn headless_gui_visual_snapshot(
     const WIDTH: u32 = 256;
     const HEIGHT: u32 = 64;
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
-    let mut glyph_cache = GlyphCache::new(device, queue, 16.0, "monospace", &[], &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(
+        device,
+        queue,
+        16.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
     glyph_cache.install_test_font(
         glyph_cache::deterministic_test_font_data(),
         "Fira Mono",
@@ -3214,7 +3275,18 @@ pub(crate) fn headless_gui_visual_snapshot(
 #[cfg(test)]
 pub(crate) fn headless_ligature_render_smoke(device: &Device, queue: &Queue) -> Result<()> {
     const FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
-    let mut glyph_cache = GlyphCache::new(device, queue, 16.0, "monospace", &[], &[], 1.2, true)?;
+    let mut glyph_cache = GlyphCache::new(
+        device,
+        queue,
+        16.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        true,
+    )?;
     glyph_cache.install_test_font(
         glyph_cache::deterministic_test_font_data(),
         "Fira Mono",
@@ -3365,7 +3437,18 @@ pub(crate) fn headless_sgr_render_smoke(device: &Device, queue: &Queue) -> Resul
     let theme = Theme::load_builtin("turmeric")?;
     let palette = TerminalPalette::from_theme(&theme);
     let dynamic_colors = termeric_core::DynamicColors::default();
-    let mut glyph_cache = GlyphCache::new(device, queue, 14.0, "monospace", &[], &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(
+        device,
+        queue,
+        14.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
     let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
     let mut rects = RectPipeline::new(device, FORMAT)?;
     text.resize(queue, WIDTH, HEIGHT);
@@ -3625,8 +3708,18 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
         view_formats: &[],
     });
     let view = texture.create_view(&TextureViewDescriptor::default());
-    let mut glyph_cache =
-        GlyphCache::new(&device, &queue, 14.0, "monospace", &[], &[], 1.2, false)?;
+    let mut glyph_cache = GlyphCache::new(
+        &device,
+        &queue,
+        14.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
     let mut text = TextPipeline::new(&device, FORMAT, &glyph_cache)?;
     let mut rect = RectPipeline::new(&device, FORMAT)?;
     text.resize(&queue, WIDTH, HEIGHT);
@@ -3761,7 +3854,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
                 row as f32 * cell_height,
                 [0.92, 0.88, 0.78, 1.0],
             );
-            if (row + col + variant) % 23 == 0 {
+            if (row + col + variant).is_multiple_of(23) {
                 rect.push_rect(
                     col as f32 * cell_width,
                     row as f32 * cell_height,

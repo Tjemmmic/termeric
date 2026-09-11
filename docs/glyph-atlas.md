@@ -37,8 +37,8 @@ applied. Mask and subpixel-mask glyphs remain compact R8 data and continue to
 use the theme/SGR foreground. Synthetic bold is not applied to authored color
 artwork.
 
-Font family, ordered fallback list, bounded Unicode-range overrides, font
-size/display scale, line height, and explicit cache resets clear raster and
+Font family, ordered fallback list, bounded Unicode-range overrides, normal or
+bold `wght` value, font size/display scale, line height, and explicit cache resets clear raster and
 shaped-run entries. For every extended grapheme, a matching range family is
 tried first, followed by the first configured family whose character map covers
 all substantive scalars; joiners, variation selectors, and tag scalars stay
@@ -48,9 +48,10 @@ Adjacent graphemes resolved to the same family remain one shaping span, so
 fallback selection does not unnecessarily break ligatures. Cosmic-text's
 platform fallback is retained only when no explicit family covers the
 grapheme. Character entries include the
-requested size and bold/italic style; shaped entries use cosmic-text's resolved
-face, glyph, size, subpixel position, and synthetic-bold identity. Incompatible
-rasters are therefore never reused across those changes.
+requested size, effective weight, and bold/italic style; shaped entries use
+cosmic-text's resolved face, glyph, size, weight, subpixel position, and
+synthetic-bold identity. Shaped-run identity contains both configured weights.
+Incompatible rasters are therefore never reused across those changes.
 
 The shaped-run key also includes the effective ordered OpenType feature values.
 Changing `font.features` clears normal and deferred shaped runs and invalidates

@@ -51,7 +51,7 @@ The renderer clears all cached rows when any global rasterization or geometry
 input changes:
 
 - surface dimensions or display scale;
-- font size, family, fallback list, line height, or ligature setting;
+- font size, family, fallback list, normal/bold weight, line height, or ligature setting;
 - explicit glyph-cache reset;
 - terminal padding; or
 - theme and terminal palette.

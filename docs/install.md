@@ -6,7 +6,7 @@ tracked separately for each display stack.
 
 ## Build and install from source
 
-Install a stable Rust toolchain (Rust 1.85 or newer) and the platform packages
+Install a stable Rust toolchain (Rust 1.89 or newer) and the platform packages
 needed by Winit, Wayland/X11, fontconfig, Vulkan, OpenSSL, and libgit2. On
 Debian or Ubuntu:
 

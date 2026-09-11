@@ -57,9 +57,29 @@ presentation seen by the renderer until the batch is released.
 
 ## Bold and bright colors
 
-Font weight and ANSI color intensity are independent by default. Set the
-following compatibility option to promote indexed foreground colors 0-7 to
-their bright 8-15 counterparts when bold is active:
+Font weight and ANSI color intensity are independent by default. Normal and SGR
+bold text use configurable OpenType `wght` values:
+
+```toml
+[font]
+weight = 400
+bold_weight = 700
+```
+
+Both values are integers from 1 through 1000, and `bold_weight` must be greater
+than or equal to `weight`. Settings → Font exposes the same validated controls.
+The normal value owns terminal cell measurement; both values apply to scalar,
+grapheme, ligature, configured-fallback, range-override, and OSC 66 scaled-text
+shaping. A variable font with a `wght` axis receives that real coordinate and
+does not also receive Termeric's one-pixel synthetic embolden. A static light
+face can still use that bounded fallback for a semibold-or-heavier request.
+
+Other variable axes such as `wdth`, `slnt`, `ital`, `opsz`, and custom axes are
+not configurable. Native visual comparison across installed fonts remains a
+manual release-acceptance item.
+
+Set the following compatibility option to promote indexed foreground colors
+0-7 to their bright 8-15 counterparts when bold is active:
 
 ```toml
 [font]
@@ -83,7 +103,8 @@ and confirmed-delete flows. Full tag/value identity and request IDs prevent
 stale actions from retargeting changed entries. Edits apply live through shared
 configuration validation, invalidate shaped runs and persistent terminal rows,
 and persist only through Settings Save. Forwarding a value does not prove the
-active font implements that feature; variable-font axes remain separate.
+active font implements that feature; arbitrary variable-font axes remain
+separate from the dedicated `wght` controls.
 
 ## Unicode-range font overrides
 

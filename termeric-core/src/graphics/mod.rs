@@ -2162,14 +2162,13 @@ impl GraphicsManager {
                     || existing.placement_id != Some(placement_id)
             });
         }
-        if self.virtual_placements.len() >= MAX_VIRTUAL_IMAGE_PLACEMENTS {
-            if let Some(uid) = self
+        if self.virtual_placements.len() >= MAX_VIRTUAL_IMAGE_PLACEMENTS
+            && let Some(uid) = self
                 .virtual_placements
                 .front()
                 .map(|placement| placement.uid)
-            {
-                self.remove_placement_groups([uid], false);
-            }
+        {
+            self.remove_placement_groups([uid], false);
         }
         self.virtual_placements.push_back(placement);
     }
@@ -4003,10 +4002,10 @@ fn decode_payload(
             if data.len() > MAX_TRANSMISSION_BYTES {
                 return Err(ProtocolError::too_large("decompressed data is too large"));
             }
-            if let Some(expected) = expected_size {
-                if data.len() as u64 != expected {
-                    return Err(ProtocolError::invalid("decompressed size does not match S"));
-                }
+            if let Some(expected) = expected_size
+                && data.len() as u64 != expected
+            {
+                return Err(ProtocolError::invalid("decompressed size does not match S"));
             }
             data
         }
@@ -4245,10 +4244,10 @@ impl GraphicsResponse {
             }
             controls.push_str(&format!("I={image_number}"));
         }
-        if self.image_id != 0 {
-            if let Some(placement_id) = self.placement_id.filter(|id| *id != 0) {
-                controls.push_str(&format!(",p={placement_id}"));
-            }
+        if self.image_id != 0
+            && let Some(placement_id) = self.placement_id.filter(|id| *id != 0)
+        {
+            controls.push_str(&format!(",p={placement_id}"));
         }
         if let Some(frame_number) = self.frame_number.filter(|frame| *frame != 0) {
             controls.push_str(&format!(",r={frame_number}"));

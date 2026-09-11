@@ -41,6 +41,30 @@ impl App {
         window.request_redraw();
     }
 
+    /// Set normal and SGR-bold OpenType `wght` requests atomically.
+    pub(super) fn set_font_weights(&mut self, weight: u16, bold_weight: u16) {
+        let mut candidate = self.config.clone();
+        candidate.font.weight = weight;
+        candidate.font.bold_weight = bold_weight;
+        if let Err(error) = candidate.validate() {
+            self.toasts
+                .warning(format!("Font weights rejected: {error:#}"));
+            return;
+        }
+
+        self.config.font.weight = weight;
+        self.config.font.bold_weight = bold_weight;
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        renderer.set_font_weights(weight, bold_weight);
+        if let Some(window) = self.window.clone() {
+            let size = window.inner_size();
+            self.sync_terminal_geometry(size.width, size.height);
+            window.request_redraw();
+        }
+    }
+
     /// Set font family to a specific value
     pub(super) fn set_font_family(&mut self, family: String) {
         self.config
@@ -393,6 +417,9 @@ impl App {
         self.default_font_size = self.config.font.size;
         self.set_font_family(self.config.font.family.clone());
         self.set_font_size(self.config.font.size);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_font_weights(self.config.font.weight, self.config.font.bold_weight);
+        }
         self.set_line_height(self.config.font.line_height);
         let tab_bar_position_changed = self.renderer.as_ref().is_some_and(|renderer| {
             renderer.tab_bar_position() != self.config.window.tab_bar_position
@@ -693,6 +720,12 @@ impl App {
             }
             SettingsAction::SetFontFamily(family) => {
                 self.set_font_family(family);
+            }
+            SettingsAction::SetFontWeight(weight) => {
+                self.set_font_weights(weight, self.config.font.bold_weight);
+            }
+            SettingsAction::SetBoldFontWeight(weight) => {
+                self.set_font_weights(self.config.font.weight, weight);
             }
             SettingsAction::SetFontFallback { index, family } => {
                 self.set_font_fallback(index, family);

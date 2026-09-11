@@ -40,18 +40,18 @@ move surrounding cells.
 
 ## Caching and invalidation
 
-The shaping cache key includes run content, font size and line height,
-bold/italic request, the effective ordered feature values, primary family,
-ordered fallback families, and fallback resolution. Unicode-range or OpenType
+The shaping cache key includes run content, font size and line height, both
+configured `wght` values, bold/italic request, the effective ordered feature
+values, primary family, ordered fallback families, and fallback resolution. Unicode-range or OpenType
 feature policy changes synchronously clear this cache and persistent row
 geometry before another frame can reuse a run. Rasterized shaped glyphs are separately
 reused by their resolved face/glyph/size/subpixel identity. The run cache is
 bounded to 4,096 entries; reaching the bound clears the run map and records an
 eviction count rather than allowing unbounded growth.
 
-Font, size, line-height, scale, atlas, ligature, and explicit feature changes
-invalidate the relevant glyph/run state. Assigning an already-active feature
-map is a no-op.
+Font, weight, size, line-height, scale, atlas, ligature, and explicit feature
+changes invalidate the relevant glyph/run state. Assigning an already-active
+feature map is a no-op.
 
 ## Verification
 

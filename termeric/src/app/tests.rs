@@ -5126,6 +5126,8 @@ fn headless_font_settings_preserve_order_and_apply_without_a_window() {
     });
     app.apply_settings_action(SettingsAction::SetFontLigatures(false));
     app.apply_settings_action(SettingsAction::SetBoldIsBright(true));
+    app.apply_settings_action(SettingsAction::SetFontWeight(350));
+    app.apply_settings_action(SettingsAction::SetBoldFontWeight(825));
     app.apply_settings_action(SettingsAction::SetLineHeight(1.35));
 
     assert_eq!(app.config.font.family, "Fira Mono");
@@ -5135,7 +5137,17 @@ fn headless_font_settings_preserve_order_and_apply_without_a_window() {
     );
     assert!(!app.config.font.ligatures);
     assert!(app.config.font.bold_is_bright);
+    assert_eq!(app.config.font.weight, 350);
+    assert_eq!(app.config.font.bold_weight, 825);
     assert_eq!(app.config.font.line_height, 1.35);
+
+    app.apply_settings_action(SettingsAction::SetFontWeight(900));
+    app.apply_settings_action(SettingsAction::SetBoldFontWeight(200));
+    assert_eq!(
+        (app.config.font.weight, app.config.font.bold_weight),
+        (350, 825),
+        "invalid settings pairs must leave both live values unchanged"
+    );
 
     app.apply_settings_action(SettingsAction::SetFontFallback {
         index: 0,

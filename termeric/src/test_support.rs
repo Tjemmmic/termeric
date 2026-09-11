@@ -330,7 +330,7 @@ fn scheduled_resource_soak_scenario() {
             .unwrap();
         }
         terminal.process(output.as_bytes());
-        terminal.resize(if iteration % 2 == 0 { 80 } else { 132 }, 40);
+        terminal.resize(if iteration.is_multiple_of(2) { 80 } else { 132 }, 40);
         let mut search = Search::new();
         search.start();
         for character in "needle".chars() {

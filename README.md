@@ -60,7 +60,7 @@ have build-and-unit CI only and remain unverified as runtime targets; see the
 
 ## Building
 
-Requires Rust 2024 edition (1.85+).
+Requires Rust 1.89 or newer.
 
 ```bash
 cargo build --release
@@ -85,6 +85,8 @@ Termeric reads `~/.config/termeric/config.toml`. A starter config lives in [`ass
 [font]
 family = "monospace"
 size   = 14.0
+weight = 400
+bold_weight = 700
 fallback = ["Noto Sans Mono", "Noto Color Emoji"] # ordered, up to 16
 ligatures = true
 bold_is_bright = false
@@ -128,6 +130,9 @@ bindings = "vi" # or "emacs"
 ```
 
 Settings are also editable live from within the terminal — press the gear icon in the tab bar, or open the settings modal via the command palette.
+Font → Normal Weight and Bold Weight apply validated OpenType `wght` values
+live; variable fonts use their real weight axis while static fonts select the
+closest face.
 Font → Range Overrides opens a bounded manager for adding, editing, and deleting
 rules with `U+START-U+END | FAMILY`; changes apply live and use the normal
 Settings Save action for persistence. Its **Inspect Glyph Coverage** action

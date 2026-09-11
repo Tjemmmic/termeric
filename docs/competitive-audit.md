@@ -264,14 +264,17 @@ awaiting evidence:
   Unicode code space. Its Unicode 17.0 canonical-name search uses a compact
   one-time index, deterministic ranking, UAX #44 exact aliases, and a 256-row
   result ceiling without loading the whole database into palette state.
-  Settings now supplies a bounded request-scoped range
-  editor with atomic shared validation and stale-rule protection plus an
+  Settings now supplies validated normal/bold OpenType `wght` controls and a
+  bounded request-scoped range editor with atomic shared validation and
+  stale-rule protection plus an
   on-demand inspector that explains complete-grapheme range/primary/fallback
   attempts and resolved platform shaping faces. A bounded OpenType feature map
   now layers deterministic tag/value overrides over the simple Ligatures preset
-  without permitting grid-breaking kerning. Variable-font axes still trail
-  kitty/WezTerm's broader power-user font controls; localized character
-  descriptions, CLDR emoji
+  without permitting grid-breaking kerning. Variable fonts use their real
+  weight axis without double synthetic emboldening, including fallback,
+  range, ligature, and OSC 66 shaping. Arbitrary `wdth`, `slnt`, `ital`,
+  `opsz`, and custom axes still trail kitty/WezTerm's broader power-user font
+  controls; localized character descriptions, CLDR emoji
   keywords, and exhaustive system-font recommendation remain deliberately out
   of scope.
 - **More window policies.** Ordinary windows now expose live and persisted

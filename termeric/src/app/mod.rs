@@ -1494,6 +1494,8 @@ impl App {
             &self.config.font.family,
             &self.config.font.fallback,
             &self.config.font.range_overrides,
+            self.config.font.weight,
+            self.config.font.bold_weight,
             self.config.font.line_height,
             self.config.window.padding as f32,
             scale_factor,
@@ -2777,7 +2779,7 @@ impl App {
         let elapsed = now
             .saturating_duration_since(self.cursor_blink_start)
             .as_secs_f32();
-        (elapsed / half_period) as u64 % 2 == 0
+        ((elapsed / half_period) as u64).is_multiple_of(2)
     }
 
     fn next_cursor_blink_deadline(&self, now: Instant) -> Option<Instant> {
@@ -4246,7 +4248,7 @@ fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> 
         return 1.0;
     }
     let half_period = (period_seconds / 2.0).max(0.001);
-    if (elapsed_seconds / half_period) as u64 % 2 == 0 {
+    if ((elapsed_seconds / half_period) as u64).is_multiple_of(2) {
         1.0
     } else {
         0.3
@@ -4278,7 +4280,7 @@ fn resolve_cursor_presentation(
 }
 
 fn blink_phase_visible(elapsed: std::time::Duration, half_period: std::time::Duration) -> bool {
-    (elapsed.as_nanos() / half_period.as_nanos()) % 2 == 0
+    (elapsed.as_nanos() / half_period.as_nanos()).is_multiple_of(2)
 }
 
 fn next_blink_boundary(start: Instant, now: Instant, half_period: std::time::Duration) -> Instant {
