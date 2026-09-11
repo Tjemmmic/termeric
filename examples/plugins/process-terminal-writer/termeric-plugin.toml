@@ -1,0 +1,78 @@
+api_version = 23
+id = "process-terminal-writer"
+name = "Process Terminal Writer"
+version = "1.0.0"
+description = "Demonstrates guarded, exact terminal input across process-owned windows"
+permissions = ["process-spawn", "process-query", "process-terminal-input", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "draft-in-sibling-pane"
+name = "Draft Text in Sibling Pane"
+description = "Paste safe text without Enter into the first available pane in another window"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{
+            "type": "query-process",
+            "query_id": "input-targets",
+        }]
+    elif event["type"] == "process-query-result":
+        origin = event["origin_window_id"]
+        targets = [
+            (window, tab, pane)
+            for window in event["windows"]
+            if window["id"] != origin
+            for tab in window["tabs"]
+            if not tab["closed"]
+            for pane in tab["panes"]
+            if not pane["closed"]
+        ]
+        target = next(iter(targets), None)
+        if target is None:
+            actions = [{
+                "type": "show-notice",
+                "title": "Process terminal writer",
+                "lines": ["No available sibling-window pane was found."],
+            }]
+        else:
+            window, tab, pane = target
+            actions = [{
+                "type": "send-process-text",
+                "action_id": "draft-safe-text",
+                "window_id": window["id"],
+                "tab_id": tab["id"],
+                "pane_id": pane["id"],
+                "text": "hello from the process terminal writer",
+                "paste": True,
+                "enter": False,
+            }]
+    elif event["type"] == "process-action-result" and event["action"] == "send-process-text":
+        state = event["disposition"] if event["ok"] else "failed"
+        actions = [{
+            "type": "show-notice",
+            "title": "Process terminal writer",
+            "lines": [
+                f"Input {state}.",
+                f"Window: {event['window_id']}",
+                f"Bytes: {event['input_bytes'] if event['ok'] else 0}",
+            ],
+        }]
+    else:
+        actions = []
+    response = {
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }
+    print(json.dumps(response, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

@@ -76,6 +76,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::SendProcessText {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -175,6 +178,9 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                     ..
                 } => "query-process-terminal",
+                crate::plugin::structured::StructuredResponseAction::SendProcessText { .. } => {
+                    "send-process-text"
+                }
                 crate::plugin::structured::StructuredResponseAction::QueryTerminal { .. } => {
                     "terminal-query"
                 }
@@ -366,6 +372,20 @@ impl App {
     ) -> Result<(), String> {
         let mut invocation = continuation.ok_or_else(|| {
             "process terminal queries require a live persistent handler continuation".to_string()
+        })?;
+        invocation.event_json = event_json;
+        clear_structured_host_authority(&mut invocation);
+        self.submit_structured_handler(invocation)?;
+        Ok(())
+    }
+
+    pub(super) fn continue_structured_process_terminal_input(
+        &mut self,
+        event_json: String,
+        continuation: Option<crate::plugin::structured::StructuredHandlerInvocation>,
+    ) -> Result<(), String> {
+        let mut invocation = continuation.ok_or_else(|| {
+            "process terminal input requires a live persistent handler continuation".to_string()
         })?;
         invocation.event_json = event_json;
         clear_structured_host_authority(&mut invocation);
@@ -2226,6 +2246,7 @@ pub(super) fn clear_structured_host_authority(
     invocation.allow_process_query = false;
     invocation.allow_process_actions = false;
     invocation.allow_process_terminal_text = false;
+    invocation.allow_process_terminal_input = false;
 }
 
 pub(super) fn reduce_structured_process_query_authority(
@@ -2233,7 +2254,9 @@ pub(super) fn reduce_structured_process_query_authority(
 ) {
     let retain_process_actions = invocation.allow_process_actions;
     let retain_process_terminal_text = invocation.allow_process_terminal_text;
+    let retain_process_terminal_input = invocation.allow_process_terminal_input;
     clear_structured_host_authority(invocation);
     invocation.allow_process_actions = retain_process_actions;
     invocation.allow_process_terminal_text = retain_process_terminal_text;
+    invocation.allow_process_terminal_input = retain_process_terminal_input;
 }

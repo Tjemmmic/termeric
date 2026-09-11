@@ -165,6 +165,11 @@ same stable identities, with at most 256 history lines and 8 KiB of
 presentation-safe UTF-8 text inside the existing bounded event frame. The
 result clears every host authority; raw PTY streaming, terminal input, and
 fallback to an active target remain outside this grant.
+API v23 adds separately granted, guarded cross-window terminal input. One exact
+process-owned pane can receive at most 8 KiB of validated UTF-8 using its own
+paste mode, only when the destination window has explicitly enabled external
+input. Destructive matches remain pending in that exact window until confirmed;
+the action never activates or retargets by focus, and its result cannot chain.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

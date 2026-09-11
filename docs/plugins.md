@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v22 are constrained local extension formats.
+Termeric plugin APIs v1 through v23 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -56,6 +56,10 @@ native activation or broader cross-window mutation.
 API v22 adds an independent `process-terminal-text` grant for one bounded,
 presentation-safe read of an exact pane in any live process-owned window. It
 does not expose raw PTY bytes, stream output, activate a window, or grant input.
+API v23 adds an independent `process-terminal-input` grant for one guarded,
+bounded UTF-8 write to an exact pane in any live process-owned window. The
+destination window's disabled-by-default external-input policy and destructive
+confirmation remain mandatory.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -103,6 +107,8 @@ The API v21 cross-window navigation sample is
 [`examples/plugins/process-navigator/termeric-plugin.toml`](../examples/plugins/process-navigator/termeric-plugin.toml).
 The API v22 cross-window terminal-text sample is
 [`examples/plugins/process-terminal-reader/termeric-plugin.toml`](../examples/plugins/process-terminal-reader/termeric-plugin.toml).
+The API v23 cross-window terminal-input sample is
+[`examples/plugins/process-terminal-writer/termeric-plugin.toml`](../examples/plugins/process-terminal-writer/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -894,7 +900,7 @@ tab-close, pane-move, terminal-input, and pane-layout authority so one external 
 state and then perform one granted operation.
 After a terminal-query result, all query and workspace-mutation authority is
 cleared. A later external subscribed event may start another independently
-bounded request. The API does not expose cell styles, images, selection,
+bounded request. API v11 does not expose cell styles, images, selection,
 clipboard, environment, raw PTY bytes, live output subscriptions, terminal
 input, other windows, or process-global terminal discovery.
 
@@ -1503,10 +1509,11 @@ selection, environment, clipboard, filesystem contents, or secrets. The
 `process-query` grant does not broaden `workspace-query` for existing plugins.
 For API v20, the result clears process/current-window/terminal query authority
 and every mutation authority before delivery. An API v21+ handler may retain
-only separately granted `process-actions` and `process-terminal-text`
-authorities for the single bounded query-to-navigation or query-to-text
-sequences documented below. Native activation, input, topology, movement,
-creation, and closure remain unsupported by this disclosure grant.
+only separately granted `process-actions`, `process-terminal-text`, and (for
+API v23) `process-terminal-input` authorities for the single bounded
+query-to-navigation, query-to-text, or query-to-input sequences documented
+below. Those remain separate grants; process inventory itself authorizes no
+native activation, input, topology, movement, creation, or closure.
 
 ## Manifest API v21 cross-window workspace navigation
 
@@ -1573,9 +1580,10 @@ Success returns a correlated result to the originating handler:
 A target failure is still a normal result with `ok: false`, the exact target
 IDs, null change fields, a control-safe error of at most 1 KiB, and an
 `error_truncated` flag. At most one host operation is accepted per handler
-response. Informational UI actions may coexist when separately granted. A
-For API v21, a process-query result retains only separately granted
-`process-actions` authority; the process-action result clears every query and mutation authority,
+response. Informational UI actions may coexist when separately granted. For
+API v21, a process-query result retains only separately granted
+`process-actions` authority; the process-action result clears every query and
+mutation authority,
 so it cannot navigate, query, or mutate again. Existing API v7 navigation
 remains current-window-only and unchanged.
 
@@ -1648,13 +1656,101 @@ control-safe error with `error_truncated`. The operation never selects a tab,
 focuses a pane, changes scroll position, raises or activates a native window,
 or dispatches navigation hooks.
 
-At most one host operation is accepted per response. An API v22 process-query
-result may retain only separately granted `process-actions` and
-`process-terminal-text` authority, allowing one inventory-to-navigation or
-inventory-to-text sequence. A process-terminal-query result clears every host
+At most one host operation is accepted per response. An API v22+ process-query
+result may retain only separately granted `process-actions`,
+`process-terminal-text`, and (for API v23) `process-terminal-input` authority,
+allowing one inventory-to-navigation, inventory-to-text, or inventory-to-input
+sequence. A process-terminal-query result clears every host
 query and mutation authority before delivery, so it cannot read a second pane,
 navigate, send input, or otherwise chain. Existing API v11 `terminal-query`
 remains exact-current-window-only and unchanged.
+
+## Manifest API v23 guarded cross-window terminal input
+
+API v23 preserves every earlier contract and adds the independent
+`process-terminal-input` mutation grant. Review the destination-sensitive
+program and enable external input explicitly before installing the sample:
+
+```toml
+[security]
+allow_gui_control_input = true
+```
+
+```bash
+termeric plugin validate examples/plugins/process-terminal-writer
+termeric plugin install examples/plugins/process-terminal-writer \
+  --allow process-spawn --allow process-query \
+  --allow process-terminal-input --allow event-subscribe \
+  --allow ui-actions --enable
+```
+
+The sample contributes **Process Terminal Writer: Draft Text in Sibling Pane**.
+It deliberately pastes safe text without Enter. After requesting the API v20
+inventory and choosing one exact pane, it emits:
+
+```json
+{"type":"send-process-text","action_id":"draft-safe-text","window_id":7,"tab_id":12,"pane_id":3,"text":"hello from the process terminal writer","paste":true,"enter":false}
+```
+
+Only an API v23 persistent handler with the retained
+`process-terminal-input` grant may emit this action. The process-lifetime
+`window_id`, window-local `tab_id`, and tab-local `pane_id` must be exact.
+Termeric revalidates the originating plugin, generation, continuation, and
+authority, then resolves the complete destination path immediately before
+encoding and writing. A stale, missing, closed, closing, terminal-less, or
+read-only destination fails without fallback or partial input.
+
+The destination window must independently have
+`security.allow_gui_control_input = true`; the default remains deny. Input is
+limited to 8 KiB of UTF-8 containing printable characters, tab, and newline,
+and the request must include text or Enter. Paste encoding and the final Enter
+byte use the exact destination terminal's current mode snapshot. Raw bytes,
+key events, mouse input, signals, broadcast, and cross-process targets remain
+unavailable.
+
+Every process-plugin write uses destructive-command detection. A match creates
+one request-scoped confirmation in the exact destination window and returns
+`disposition: "pending_confirmation"` without writing. It does not activate,
+raise, select, or focus that window/tab/pane. Confirming later writes only the
+captured bytes to the captured terminal owner; cancellation or stale ownership
+cannot retarget a replacement terminal.
+
+A successful or pending write returns a bounded correlated result:
+
+```json
+{
+  "schema_version": 2,
+  "request_id": 46,
+  "plugin_id": "process-terminal-writer",
+  "event": {
+    "type": "process-action-result",
+    "action_id": "draft-safe-text",
+    "action": "send-process-text",
+    "ok": true,
+    "process_id": 12345,
+    "origin_window_id": 2,
+    "window_id": 7,
+    "tab_id": 12,
+    "pane_id": 3,
+    "input_bytes": 38,
+    "wire_bytes": 50,
+    "paste": true,
+    "enter": false,
+    "disposition": "sent",
+    "confirmation_id": null,
+    "error": null
+  }
+}
+```
+
+`input_bytes` describes accepted UTF-8 plus a requested Enter; `wire_bytes`
+truthfully includes any bracketed-paste framing. It does not claim that a shell
+parsed or completed a command. Failure preserves correlation and exact target
+IDs while returning null byte/disposition fields plus a bounded control-safe
+error and `error_truncated` flag. The input result clears every host query and
+mutation authority, so it cannot write, read, navigate, or query again.
+Existing API v17 `terminal-input` remains exact-current-window-only and
+unchanged.
 
 ## Permissions and isolation
 
@@ -1682,6 +1778,7 @@ remains exact-current-window-only and unchanged.
 | `process-query` | API v20+, after `--allow process-query`; exposes one bounded, creation-ordered read-only inventory of the live windows owned by this Termeric process, including the exact originating stable window ID, through a persistent handler. |
 | `process-actions` | API v21+, after `--allow process-actions`; permits one exact non-activating tab selection or pane focus in any live process-owned window through a persistent handler, with atomic full-path validation and a correlated non-chainable result. |
 | `process-terminal-text` | API v22+, after `--allow process-terminal-text`; permits one exact, non-activating read of at most 256 history lines and 8 KiB of presentation-safe UTF-8 text from any live process-owned pane through a persistent handler, with a correlated non-chainable result. |
+| `process-terminal-input` | API v23+, after `--allow process-terminal-input`; permits one exact, non-activating write of at most 8 KiB of validated UTF-8 to any live process-owned pane through a persistent handler, additionally requiring the destination window's disabled-by-default external-input policy and preserving destructive confirmation. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -1689,7 +1786,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v22 may also request `terminal-text` for
+`ui-actions`; API v4 through v23 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -1735,6 +1832,11 @@ API v22 adds only `process-terminal-text`, independently of process/current-
 window inventory, navigation, terminal input, native activation, topology,
 lifecycle, movement, layout, creation, closure, UI, filesystem, network,
 clipboard, or secret access.
+API v23 adds only `process-terminal-input`, independently of process/current-
+window inventory, navigation, terminal text, native activation, topology,
+lifecycle, movement, layout, creation, closure, UI, filesystem, network,
+clipboard, or secret access. Runtime execution additionally requires the
+destination window's external-input policy and destructive confirmation.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -1869,6 +1971,14 @@ Before distributing a local directory:
     targets, UTF-8/JSON clipping, non-activation, correlated bounded errors,
     process-query authority reduction, and complete terminal-result authority
     removal. Treat every returned text snapshot as potentially sensitive.
+27. For API v23, test exact grant/version/mode and destination-policy denial,
+    strict input shape and 8-KiB/control bounds, malformed IDs, duplicate and
+    mixed host-operation rejection, same- and sibling-window exact routing,
+    stale/closed/closing/terminal-less/read-only targets, destination-mode
+    paste/Enter encoding, destructive confirmation ownership and cancellation,
+    non-activation/focus preservation, bounded correlated results,
+    process-query authority reduction, and complete input-result authority
+    removal. Use inert destinations and never execute destructive fixtures.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -1971,6 +2081,15 @@ one-operation enforcement, complete result-authority removal, retained-grant
 install/update behavior, and a checked-in process terminal reader. Its tests
 use only in-memory terminals and inert local shell/Python fixtures; no provider
 runs or AI tokens are consumed.
+API v23 adds exact permission/version/mode and destination-policy gating,
+strict bounded input parsing, same- and sibling-window exact stable-ID writes,
+destination-mode paste/Enter encoding, stale/read-only target refusal,
+non-activation and focus preservation, request-scoped destructive confirmation,
+bounded correlated results, query-to-input authority reduction, one-operation
+enforcement, complete result-authority removal, retained-grant install/update
+behavior, and a checked-in process terminal writer. Its tests use only inert
+local terminals and shell/Python fixtures; no provider runs, destructive
+command executes, or AI tokens are consumed.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -1988,12 +2107,13 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v22's public surface includes current-window inventory,
+and secrets. API v23's public surface includes current-window inventory,
 navigation, topology, exact presented-text reads, ordinary pane/tab lifecycle,
 pane movement, bounded terminal input, same-tab pane layouts, command-scoped
 exact-window closure, process-wide read-only inventory, persistent handlers,
 non-activating cross-window tab/pane navigation, bounded cross-window
-presentation-safe terminal reads, namespaced commands,
+presentation-safe terminal reads, guarded cross-window UTF-8 terminal input,
+namespaced commands,
 non-secret settings, and narrowly granted completed-region snapshots. Those
 capabilities are not enough to represent the privileged
 workflows; broader migration waits for a separately designed sandboxed API.
@@ -2012,7 +2132,7 @@ after that PTY write and remains outside automated acceptance.
 `api_version = 12`, `api_version = 13`, `api_version = 14`,
 `api_version = 15`, `api_version = 16`, `api_version = 17`,
 `api_version = 18`, `api_version = 19`, `api_version = 20`,
-`api_version = 21`, and `api_version = 22`
+`api_version = 21`, `api_version = 22`, and `api_version = 23`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -2068,6 +2188,9 @@ API v22 adds separately granted exact non-activating presentation-safe terminal
 text reads in any live process-owned window. Process-query results may retain
 that independently granted disclosure authority, while terminal-query results
 remove every host authority.
+API v23 adds separately granted exact guarded terminal input in any live
+process-owned window. Process-query results may retain that independently
+granted mutation authority, while input results remove every host authority.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit

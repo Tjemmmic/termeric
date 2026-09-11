@@ -4653,7 +4653,7 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
 }
 
 #[test]
-fn process_query_retains_only_process_actions_and_action_results_revoke_every_authority() {
+fn process_query_retains_only_independent_process_followups_and_results_revoke_authority() {
     let mut invocation = crate::plugin::structured::StructuredHandlerInvocation {
         plugin_id: "process-inspector".into(),
         program: "fixture".into(),
@@ -4675,6 +4675,7 @@ fn process_query_retains_only_process_actions_and_action_results_revoke_every_au
         allow_process_query: true,
         allow_process_actions: true,
         allow_process_terminal_text: true,
+        allow_process_terminal_input: true,
         mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
     };
 
@@ -4683,6 +4684,7 @@ fn process_query_retains_only_process_actions_and_action_results_revoke_every_au
     assert!(process_query_result.allow_ui_actions);
     assert!(process_query_result.allow_process_actions);
     assert!(process_query_result.allow_process_terminal_text);
+    assert!(process_query_result.allow_process_terminal_input);
     assert!(!process_query_result.allow_workspace_query);
     assert!(!process_query_result.allow_workspace_actions);
     assert!(!process_query_result.allow_workspace_topology);
@@ -4715,6 +4717,7 @@ fn process_query_retains_only_process_actions_and_action_results_revoke_every_au
     assert!(!invocation.allow_process_query);
     assert!(!invocation.allow_process_actions);
     assert!(!invocation.allow_process_terminal_text);
+    assert!(!invocation.allow_process_terminal_input);
 }
 
 #[cfg(unix)]
@@ -4786,6 +4789,7 @@ fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
                 allow_process_query: false,
                 allow_process_actions: false,
                 allow_process_terminal_text: false,
+                allow_process_terminal_input: false,
                 mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
             }),
         )

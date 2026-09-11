@@ -3196,7 +3196,7 @@ impl App {
         ),
         String,
     > {
-        self.send_external_text(tab_id, pane_id, text, paste, enter, false)
+        self.send_external_text(tab_id, pane_id, text, paste, enter, false, None)
     }
 
     pub(super) fn send_plugin_text(
@@ -3215,7 +3215,27 @@ impl App {
         ),
         String,
     > {
-        self.send_external_text(tab_id, pane_id, text, paste, enter, true)
+        self.send_external_text(tab_id, pane_id, text, paste, enter, true, None)
+    }
+
+    pub(super) fn send_process_plugin_text(
+        &mut self,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+        text: &str,
+        paste: bool,
+        enter: bool,
+    ) -> std::result::Result<
+        (
+            u32,
+            u32,
+            crate::control::protocol::InputDisposition,
+            Option<u64>,
+        ),
+        String,
+    > {
+        self.send_external_text(tab_id, pane_id, text, paste, enter, true, Some(window_id))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3227,6 +3247,7 @@ impl App {
         paste: bool,
         enter: bool,
         always_guard_destructive: bool,
+        target_window_id: Option<u64>,
     ) -> std::result::Result<
         (
             u32,
@@ -3314,7 +3335,10 @@ impl App {
         let wire_bytes = u32::try_from(wire.len()).expect("bounded control wire input fits u32");
 
         if guarded && let Some(mut matched) = crate::terminal::guardrails::check_command(text) {
-            matched.target = format!("GUI tab {tab_id}, pane {pane_id}");
+            matched.target = target_window_id.map_or_else(
+                || format!("GUI tab {tab_id}, pane {pane_id}"),
+                |window_id| format!("GUI window {window_id}, tab {tab_id}, pane {pane_id}"),
+            );
             let confirmation_id = self.guardrail.show(
                 matched,
                 vec![crate::terminal::guardrails::GuardedWrite::new(origin, wire)],

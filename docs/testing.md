@@ -1091,6 +1091,14 @@ presentation-safe text extraction, non-activation, correlated bounded errors,
 process-query authority reduction, complete terminal-result authority removal,
 retained-grant updates, and a checked-in process terminal reader. All fixtures
 are local and hermetic; no AI provider process or tokens are involved.
+API v23 adds exact process-terminal-input version/mode/grant and destination-
+policy denial, strict input/control/8-KiB bounds, same- and sibling-window
+stable-ID routing, stale/read-only target refusal, destination-mode paste/Enter
+encoding, non-activation and focus preservation, exact-target destructive
+confirmation/cancellation, bounded correlated results, process-query authority
+reduction, complete input-result authority removal, retained-grant updates,
+and a checked-in process terminal writer. All fixtures are local and inert; no
+AI provider process, destructive command, or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

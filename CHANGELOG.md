@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v23 adds an independent `process-terminal-input`
+  grant for one exact, non-activating write of at most 8 KiB of validated UTF-8
+  to any live process-owned pane. The destination window's disabled-by-default
+  external-input policy, terminal-mode-aware paste/Enter encoding, read-only
+  refusal, and request-scoped destructive confirmation remain mandatory.
+  Stable targets are revalidated without focus fallback; results are bounded,
+  correlated, and stripped of every host authority. Strict parsing, routing,
+  policy/confirmation behavior, retained-grant updates, and the checked-in
+  process-terminal-writer sample are hermetically tested without provider
+  execution, destructive command execution, or AI-token use.
+
 - Declarative plugin API v22 adds an independent `process-terminal-text` grant
   for one exact, non-activating presentation-safe terminal snapshot from any
   live process-owned pane. Requests are persistent-only, bounded to 256 history

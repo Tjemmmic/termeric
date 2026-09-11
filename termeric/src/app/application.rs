@@ -590,6 +590,112 @@ impl Application {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn plugin_process_terminal_input_event(
+        &mut self,
+        plugin_id: &str,
+        origin_window_id: u64,
+        action_id: &str,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+        input_text: &str,
+        paste: bool,
+        enter: bool,
+    ) -> Result<String, String> {
+        if action_id.trim().is_empty()
+            || action_id.len() > crate::plugin::structured::MAX_ACTION_ID_BYTES
+            || action_id.chars().any(char::is_control)
+        {
+            return Err(format!(
+                "process terminal input action id must be non-empty, control-safe UTF-8 within {} bytes",
+                crate::plugin::structured::MAX_ACTION_ID_BYTES
+            ));
+        }
+        if input_text.len() > crate::plugin::structured::MAX_TERMINAL_INPUT_BYTES {
+            return Err(format!(
+                "plugin process terminal input is limited to {} UTF-8 bytes",
+                crate::plugin::structured::MAX_TERMINAL_INPUT_BYTES
+            ));
+        }
+        if input_text.is_empty() && !enter {
+            return Err("plugin process terminal input must include text or enter".into());
+        }
+        if !crate::control::protocol::valid_control_input_text(input_text) {
+            return Err(
+                "plugin process terminal input permits printable UTF-8, tab, and newline only"
+                    .into(),
+            );
+        }
+
+        let result = self
+            .control_native_window_id(window_id)
+            .and_then(|native_id| {
+                self.windows
+                    .get_mut(&native_id)
+                    .filter(|window| !window.should_exit)
+                    .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                    .send_process_plugin_text(window_id, tab_id, pane_id, input_text, paste, enter)
+            });
+        let event = match result {
+            Ok((input_bytes, wire_bytes, disposition, confirmation_id)) => serde_json::json!({
+                "type": "process-action-result",
+                "action_id": action_id,
+                "action": "send-process-text",
+                "ok": true,
+                "process_id": std::process::id(),
+                "origin_window_id": origin_window_id,
+                "window_id": window_id,
+                "tab_id": tab_id,
+                "pane_id": pane_id,
+                "input_bytes": input_bytes,
+                "wire_bytes": wire_bytes,
+                "paste": paste,
+                "enter": enter,
+                "disposition": disposition,
+                "confirmation_id": confirmation_id,
+                "error": null,
+            }),
+            Err(error) => {
+                let mut budget = 1024;
+                let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                serde_json::json!({
+                    "type": "process-action-result",
+                    "action_id": action_id,
+                    "action": "send-process-text",
+                    "ok": false,
+                    "process_id": std::process::id(),
+                    "origin_window_id": origin_window_id,
+                    "window_id": window_id,
+                    "tab_id": tab_id,
+                    "pane_id": pane_id,
+                    "input_bytes": null,
+                    "wire_bytes": null,
+                    "paste": paste,
+                    "enter": enter,
+                    "disposition": null,
+                    "confirmation_id": null,
+                    "error": error,
+                    "error_truncated": error_truncated,
+                })
+            }
+        };
+        let envelope = serde_json::json!({
+            "schema_version": 1,
+            "plugin_id": plugin_id,
+            "event": event,
+        });
+        let encoded = serde_json::to_string(&envelope)
+            .map_err(|error| format!("could not encode process terminal input result: {error}"))?;
+        if encoded.len() > crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES {
+            return Err(format!(
+                "process terminal input result exceeds {} bytes",
+                crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+            ));
+        }
+        Ok(encoded)
+    }
+
     fn handle_structured_plugin_completed(
         &mut self,
         mut completion: crate::plugin::structured::StructuredHandlerCompletion,
@@ -606,6 +712,9 @@ impl Application {
                             ..
                         }
                         | crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
+                            ..
+                        }
+                        | crate::plugin::structured::StructuredResponseAction::SendProcessText {
                             ..
                         }
                 )
@@ -653,6 +762,9 @@ impl Application {
                     crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                         ..
                     } => continuation.allow_process_terminal_text,
+                    crate::plugin::structured::StructuredResponseAction::SendProcessText {
+                        ..
+                    } => continuation.allow_process_terminal_input,
                     _ => false,
                 });
         if !has_continuation_authority {
@@ -724,6 +836,28 @@ impl Application {
                     *max_bytes,
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::SendProcessText {
+                action_id,
+                window_id,
+                tab_id,
+                pane_id,
+                text,
+                paste,
+                enter,
+            } => (
+                "terminal-input",
+                self.plugin_process_terminal_input_event(
+                    &plugin_id,
+                    origin_window_id,
+                    action_id,
+                    *window_id,
+                    *tab_id,
+                    *pane_id,
+                    text,
+                    *paste,
+                    *enter,
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -739,6 +873,9 @@ impl Application {
                             ..
                         }
                         | crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
+                            ..
+                        }
+                        | crate::plugin::structured::StructuredResponseAction::SendProcessText {
                             ..
                         }
                 )
@@ -759,6 +896,9 @@ impl Application {
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
                     ..
                 } => window.continue_structured_process_terminal_query(event_json, continuation),
+                crate::plugin::structured::StructuredResponseAction::SendProcessText { .. } => {
+                    window.continue_structured_process_terminal_input(event_json, continuation)
+                }
                 _ => unreachable!("only process operations are intercepted"),
             });
             if let Err(error) = result {
@@ -4235,6 +4375,281 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("closing")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_terminal_input_is_exact_guarded_policy_gated_and_non_activating() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+
+        let shell = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "sleep 2".into()],
+            env: Default::default(),
+        };
+        let mut tabs = crate::tabs::TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let target_tab = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "sleep 2".into()],
+                None,
+                Some("input target"),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        let untouched_tab = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "sleep 2".into()],
+                None,
+                Some("active tab"),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        tabs.tab_mut_by_id(target_tab)
+            .unwrap()
+            .focused_terminal_mut()
+            .unwrap()
+            .set_mode(termeric_core::term::TerminalMode::BRACKETED_PASTE, true);
+        assert_eq!(tabs.active_tab_id(), Some(untouched_tab));
+
+        let mut target = App::new_headless(Config::default()).unwrap();
+        target.tabs = Some(tabs);
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        application.windows.insert(native_id, target);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let disabled = application
+            .plugin_process_terminal_input_event(
+                "process-terminal-writer",
+                9,
+                "policy-disabled",
+                7,
+                target_tab as u64,
+                0,
+                "safe",
+                true,
+                true,
+            )
+            .unwrap();
+        let disabled: serde_json::Value = serde_json::from_str(&disabled).unwrap();
+        assert_eq!(disabled["event"]["ok"], false);
+        assert!(
+            disabled["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("disabled")
+        );
+
+        application
+            .windows
+            .get_mut(&native_id)
+            .unwrap()
+            .config
+            .security
+            .allow_gui_control_input = true;
+        let sent = application
+            .plugin_process_terminal_input_event(
+                "process-terminal-writer",
+                9,
+                "safe-input",
+                7,
+                target_tab as u64,
+                0,
+                "safe",
+                true,
+                true,
+            )
+            .unwrap();
+        assert!(sent.len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES);
+        let sent: serde_json::Value = serde_json::from_str(&sent).unwrap();
+        assert_eq!(sent["plugin_id"], "process-terminal-writer");
+        assert_eq!(sent["event"]["type"], "process-action-result");
+        assert_eq!(sent["event"]["action"], "send-process-text");
+        assert_eq!(sent["event"]["action_id"], "safe-input");
+        assert_eq!(sent["event"]["ok"], true);
+        assert_eq!(sent["event"]["origin_window_id"], 9);
+        assert_eq!(sent["event"]["window_id"], 7);
+        assert_eq!(sent["event"]["tab_id"], target_tab as u64);
+        assert_eq!(sent["event"]["pane_id"], 0);
+        assert_eq!(sent["event"]["input_bytes"], 5);
+        assert_eq!(sent["event"]["wire_bytes"], 17);
+        assert_eq!(sent["event"]["disposition"], "sent");
+        assert!(sent["event"]["confirmation_id"].is_null());
+        assert!(application.windows[&native_id].window.is_none());
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab_id(),
+            Some(untouched_tab)
+        );
+
+        let stale = application
+            .plugin_process_terminal_input_event(
+                "process-terminal-writer",
+                9,
+                "stale-window",
+                8,
+                target_tab as u64,
+                0,
+                "safe",
+                false,
+                false,
+            )
+            .unwrap();
+        let stale: serde_json::Value = serde_json::from_str(&stale).unwrap();
+        assert_eq!(stale["event"]["ok"], false);
+        assert!(
+            stale["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist")
+        );
+
+        application.windows.get_mut(&native_id).unwrap().should_exit = true;
+        let closing = application
+            .plugin_process_terminal_input_event(
+                "process-terminal-writer",
+                9,
+                "closing-window",
+                7,
+                target_tab as u64,
+                0,
+                "safe",
+                false,
+                false,
+            )
+            .unwrap();
+        let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+        assert_eq!(closing["event"]["ok"], false);
+        assert!(
+            closing["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("closing")
+        );
+        application.windows.get_mut(&native_id).unwrap().should_exit = false;
+
+        assert!(
+            application
+                .windows
+                .get_mut(&native_id)
+                .unwrap()
+                .tabs
+                .as_mut()
+                .unwrap()
+                .tab_mut_by_id(target_tab)
+                .unwrap()
+                .toggle_focused_pane_read_only()
+        );
+        let read_only = application
+            .plugin_process_terminal_input_event(
+                "process-terminal-writer",
+                7,
+                "read-only",
+                7,
+                target_tab as u64,
+                0,
+                "safe",
+                false,
+                false,
+            )
+            .unwrap();
+        let read_only: serde_json::Value = serde_json::from_str(&read_only).unwrap();
+        assert_eq!(read_only["event"]["ok"], false);
+        assert!(
+            read_only["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("read-only")
+        );
+        assert!(
+            !application
+                .windows
+                .get_mut(&native_id)
+                .unwrap()
+                .tabs
+                .as_mut()
+                .unwrap()
+                .tab_mut_by_id(target_tab)
+                .unwrap()
+                .toggle_focused_pane_read_only()
+        );
+
+        let guarded = application
+            .plugin_process_terminal_input_event(
+                "process-terminal-writer",
+                9,
+                "guarded-input",
+                7,
+                target_tab as u64,
+                0,
+                "rm -rf /",
+                false,
+                true,
+            )
+            .unwrap();
+        let guarded: serde_json::Value = serde_json::from_str(&guarded).unwrap();
+        assert_eq!(guarded["event"]["ok"], true);
+        assert_eq!(guarded["event"]["disposition"], "pending_confirmation");
+        let confirmation_id = guarded["event"]["confirmation_id"].as_u64().unwrap();
+        let target = application.windows.get_mut(&native_id).unwrap();
+        assert!(target.guardrail.is_awaiting(confirmation_id));
+        assert_eq!(
+            target.guardrail.matched.as_ref().unwrap().target,
+            format!("GUI window 7, tab {target_tab}, pane 0")
+        );
+        assert_eq!(
+            target.tabs.as_ref().unwrap().active_tab_id(),
+            Some(untouched_tab)
+        );
+        target.apply_guardrail_action(crate::terminal::guardrails::GuardrailAction::Cancel {
+            request_id: confirmation_id,
+        });
+        assert!(!target.guardrail.is_awaiting_current());
+
+        assert!(
+            application
+                .plugin_process_terminal_input_event(
+                    "process-terminal-writer",
+                    9,
+                    "bad\naction",
+                    7,
+                    target_tab as u64,
+                    0,
+                    "safe",
+                    false,
+                    false,
+                )
+                .unwrap_err()
+                .contains("control-safe")
+        );
+        assert!(
+            application
+                .plugin_process_terminal_input_event(
+                    "process-terminal-writer",
+                    9,
+                    "empty",
+                    7,
+                    target_tab as u64,
+                    0,
+                    "",
+                    false,
+                    false,
+                )
+                .unwrap_err()
+                .contains("text or enter")
         );
     }
 
