@@ -8,6 +8,18 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v30 adds an independent `process-pane-layout` grant
+  for swapping two exact panes, balancing dividers, or applying a columns,
+  rows, or grid preset to one exact ordinary split tab in an exact live
+  process-owned window. The existing API v18 layout path preserves terminal
+  owners, stable pane IDs, focus, and active-tab selection while stale,
+  closing, unsplit, live-domain, serial, and duplicate-pane targets fail
+  without fallback. Results are bounded and correlated, with no native
+  activation, lifecycle feedback, or retained host authority. Strict parsing,
+  routing, refusal, grant/install behavior, and the checked-in process-pane-
+  arranger example are hermetically tested without provider execution or
+  AI-token use.
+
 - Declarative plugin API v29 adds an independent `process-tab-close` grant for
   scheduling closure of one exact ordinary tab in an exact live process-owned
   window. The plugin-safe close path protects the final non-closing tab and

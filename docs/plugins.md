@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v29 are constrained local extension formats.
+Termeric plugin APIs v1 through v30 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -81,6 +81,9 @@ and window and refusing final-pane or unsupported targets.
 API v29 adds an independent `process-tab-close` grant for scheduling closure of
 one exact ordinary tab in an exact live process-owned window while preserving
 its window and refusing the final non-closing tab.
+API v30 adds an independent `process-pane-layout` grant for swapping, balancing,
+or applying columns/rows/grid layouts to one exact ordinary split tab in an
+exact live process-owned window while preserving terminal identity and focus.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -142,6 +145,8 @@ The API v28 cross-window pane-closure sample is
 [`examples/plugins/process-pane-pruner/termeric-plugin.toml`](../examples/plugins/process-pane-pruner/termeric-plugin.toml).
 The API v29 cross-window tab-closure sample is
 [`examples/plugins/process-tab-pruner/termeric-plugin.toml`](../examples/plugins/process-tab-pruner/termeric-plugin.toml).
+The API v30 cross-window pane-layout sample is
+[`examples/plugins/process-pane-arranger/termeric-plugin.toml`](../examples/plugins/process-pane-arranger/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -1544,11 +1549,12 @@ For API v20, the result clears process/current-window/terminal query authority
 and every mutation authority before delivery. An API v21+ handler may retain
 only separately granted `process-actions`, `process-terminal-text`,
 `process-terminal-input`, `process-tab-create`, `process-pane-create`,
-`process-pane-move`, `process-tab-move`, `process-pane-close`, and (for API v29)
-`process-tab-close` authorities for the single bounded query-to-navigation,
+`process-pane-move`, `process-tab-move`, `process-pane-close`,
+`process-tab-close`, and (for API v30) `process-pane-layout` authorities for
+the single bounded query-to-navigation,
 query-to-text, query-to-input, query-to-tab-creation, or
-query-to-pane-creation/movement/closure or query-to-tab-movement/closure sequences
-documented below. Those remain separate
+query-to-pane-creation/movement/closure/layout or query-to-tab-movement/closure
+sequences documented below. Those remain separate
 grants; process inventory itself authorizes no native activation, input,
 topology, movement, creation, or closure.
 
@@ -1697,10 +1703,12 @@ At most one host operation is accepted per response. An API v22+ process-query
 result may retain only separately granted `process-actions`,
 `process-terminal-text`, `process-terminal-input`, `process-tab-create`,
 `process-pane-create`, `process-pane-move`, `process-tab-move`,
-`process-pane-close`, and (for API v29) `process-tab-close` authority, allowing one
+`process-pane-close`, `process-tab-close`, and (for API v30)
+`process-pane-layout` authority, allowing one
 inventory-to-navigation, inventory-to-text, inventory-to-input,
 inventory-to-tab-creation, inventory-to-pane-creation/movement, or
-inventory-to-tab-movement or inventory-to-pane/tab-closure sequence. A
+inventory-to-tab-movement, inventory-to-pane/tab-closure, or
+inventory-to-pane-layout sequence. A
 process-terminal-query result clears every host
 query and mutation authority before delivery, so it cannot read a second pane,
 navigate, send input, or otherwise chain. Existing API v11 `terminal-query`
@@ -2124,6 +2132,49 @@ its separate lifecycle semantics. API v29 does not grant window closure,
 creation, native activation, arbitrary launches, live-domain mutation, or
 broader topology/layout mutation.
 
+## Manifest API v30 cross-window ordinary-pane layouts
+
+API v30 adds the independent `process-pane-layout` mutation grant. Review and
+install the sample with:
+
+```bash
+termeric plugin validate examples/plugins/process-pane-arranger
+termeric plugin install examples/plugins/process-pane-arranger \
+  --allow process-spawn --allow process-query \
+  --allow process-pane-layout --allow event-subscribe \
+  --allow ui-actions --enable
+```
+
+After a bounded process inventory, a persistent handler may emit exactly one
+of these operations:
+
+```json
+{"type":"swap-process-panes","action_id":"swap-panes","window_id":7,"tab_id":12,"first_pane_id":3,"second_pane_id":4}
+{"type":"balance-process-panes","action_id":"balance-panes","window_id":7,"tab_id":12}
+{"type":"apply-process-pane-layout","action_id":"grid-panes","window_id":7,"tab_id":12,"preset":"grid"}
+```
+
+`preset` is exactly `columns`, `rows`, or `grid`, and a swap requires two
+distinct pane IDs. Only an API v30 persistent handler with retained
+`process-pane-layout` authority may emit these actions. Termeric revalidates
+plugin generation, continuation authority, stable process-owned window ID,
+window-local tab ID, and pane IDs immediately before mutation; it never falls
+back to an active or focused target.
+
+The operations reuse API v18's ordinary split-layout path. They preserve live
+terminal owners, stable pane IDs, focused pane, and active-tab selection.
+Closing, missing, unsplit, live-domain, and serial targets fail without
+mutation. Applying a preset retains API v18's zoom behavior, and none of the
+operations activates or raises a native window or dispatches lifecycle hooks.
+
+Success reports the exact target, resulting `pane_order`, `focused_pane_id`,
+and `zoomed_pane_id`; balancing also reports `changed`. Failure returns null
+result fields plus a bounded control-safe `error` and `error_truncated`. Every
+result clears all host authority. API v18 `pane-layout` remains
+originating-window-only. API v30 does not grant pane creation, movement, or
+closure; tab/window mutation; arbitrary layout trees; live-domain layout
+mutation; native activation; or arbitrary launches.
+
 ## Permissions and isolation
 
 | Capability | Public API status |
@@ -2157,6 +2208,7 @@ broader topology/layout mutation.
 | `process-tab-move` | API v27+, after `--allow process-tab-move`; permits exact same-window tab reordering or movement of one exact ordinary tab into an exact process-owned destination window, preserving complete live tab state without native activation or implicit source-window closure. |
 | `process-pane-close` | API v28+, after `--allow process-pane-close`; permits closure of one exact ordinary pane in an exact live process-owned window while preserving its containing tab/window and refusing the final pane, without selection or native activation. |
 | `process-tab-close` | API v29+, after `--allow process-tab-close`; permits scheduled closure of one exact ordinary tab in an exact live process-owned window while preserving the window and refusing the final non-closing tab, without native activation or lifecycle feedback. |
+| `process-pane-layout` | API v30+, after `--allow process-pane-layout`; permits exact pane swap, divider balancing, or columns/rows/grid presets in one exact ordinary split tab in an exact live process-owned window, preserving terminal identity, focus, and active-tab selection without native activation. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -2164,7 +2216,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v29 may also request `terminal-text` for
+`ui-actions`; API v4 through v30 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -2239,6 +2291,10 @@ API v29 adds only `process-tab-close`, independently of process/current-window
 inventory, navigation, terminal text/input, native activation, lifecycle,
 window closure, creation, movement, layout, UI, filesystem, network, clipboard,
 or secret access.
+API v30 adds only `process-pane-layout`, independently of process/current-window
+inventory, navigation, terminal text/input, native activation, lifecycle,
+pane/tab/window creation, movement, or closure, arbitrary layout trees, UI,
+filesystem, network, clipboard, or secret access.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -2425,6 +2481,14 @@ Before distributing a local directory:
     refusal, containing-window preservation, lifecycle-hook suppression,
     non-activation, bounded correlated results, process-query authority
     reduction, and complete result-authority removal.
+34. For API v30, test exact grant/version/mode denial, all three strict action
+    shapes and preset values, distinct swap IDs, duplicate and mixed host-
+    operation rejection, exact same- and sibling-window routing, stale/closed/
+    closing/uninitialized/unsplit/live-domain/serial refusal, terminal-owner,
+    stable-ID, focus, active-tab, and zoom-policy preservation, non-activation,
+    bounded correlated results, process-query authority reduction, complete
+    result-authority removal, retained-grant updates, and the checked-in
+    process pane arranger.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -2584,6 +2648,14 @@ query-to-tab-close authority reduction, one-operation enforcement, complete
 result-authority removal, retained-grant install/update behavior, and a
 checked-in process tab pruner. Its tests use only inert local shell/Python
 fixtures; no provider runs or AI tokens are consumed.
+API v30 adds exact permission/version/mode gating, strict stable-path/action/
+preset parsing, same- and sibling-window exact routing, stale and unsupported
+target refusal, ordinary layout and terminal-identity preservation,
+non-selection/non-activation, bounded correlated results, query-to-pane-layout
+authority reduction, one-operation enforcement, complete result-authority
+removal, retained-grant install/update behavior, and a checked-in process pane
+arranger. Its tests use only inert local shell/Python fixtures; no provider runs
+or AI tokens are consumed.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -2601,7 +2673,7 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v29's public surface includes current-window inventory,
+and secrets. API v30's public surface includes current-window inventory,
 navigation, topology, exact presented-text reads, ordinary pane/tab lifecycle,
 pane movement, bounded terminal input, same-tab pane layouts, command-scoped
 exact-window closure, process-wide read-only inventory, persistent handlers,
@@ -2613,6 +2685,7 @@ cross-window ordinary pane movement,
 cross-window ordinary tab movement,
 cross-window exact ordinary pane closure,
 cross-window exact ordinary tab closure,
+cross-window exact ordinary pane layout operations,
 namespaced commands,
 non-secret settings, and narrowly granted completed-region snapshots. Those
 capabilities are not enough to represent the privileged
@@ -2634,7 +2707,8 @@ after that PTY write and remains outside automated acceptance.
 `api_version = 18`, `api_version = 19`, `api_version = 20`,
 `api_version = 21`, `api_version = 22`, `api_version = 23`,
 `api_version = 24`, `api_version = 25`, `api_version = 26`,
-`api_version = 27`, `api_version = 28`, and `api_version = 29`
+`api_version = 27`, `api_version = 28`, `api_version = 29`, and
+`api_version = 30`
 are separately supported exact contracts; registry `schema_version = 1`
 remains exact. API v1
 preserves its process-only behavior, while API v2 adds the explicitly granted
@@ -2721,6 +2795,12 @@ independently granted mutation authority, while closure results remove every
 host authority. It preserves the containing window, refuses the final
 non-closing tab and unsupported targets, suppresses lifecycle feedback, and
 never activates a native window.
+API v30 adds separately granted pane swapping, divider balancing, and
+columns/rows/grid presets for one exact ordinary split tab in any live process-
+owned window. Process-query results may retain that independently granted
+mutation authority, while layout results remove every host authority. It
+preserves terminal owners, stable pane IDs, focus, and active-tab selection,
+refuses stale or unsupported targets, and never activates a native window.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit

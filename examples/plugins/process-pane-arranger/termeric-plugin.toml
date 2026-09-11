@@ -1,0 +1,73 @@
+api_version = 30
+id = "process-pane-arranger"
+name = "Process Pane Arranger"
+version = "1.0.0"
+description = "Demonstrates permissioned ordinary-pane layout control across process-owned windows"
+permissions = ["process-spawn", "process-query", "process-pane-layout", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "apply-grid-in-sibling-window"
+name = "Grid Panes in Another Window"
+description = "Arrange one split ordinary tab in a sibling window as a grid"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+def notice(message):
+    return [{
+        "type": "show-notice",
+        "title": "Process Pane Arranger",
+        "lines": [message[:400]],
+    }]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{"type": "query-process", "query_id": "pane-layout-targets"}]
+    elif event["type"] == "process-query-result":
+        origin = event["origin_window_id"]
+        target = next(
+            (
+                (window, tab)
+                for window in event["windows"] if window["id"] != origin
+                for tab in window["tabs"]
+                if not tab["closed"]
+                and tab["kind"] == "ordinary"
+                and len([pane for pane in tab["panes"] if not pane["closed"]]) > 1
+            ),
+            None,
+        )
+        if target is None:
+            actions = notice("No sibling window with an ordinary split tab was found.")
+        else:
+            window, tab = target
+            actions = [{
+                "type": "apply-process-pane-layout",
+                "action_id": "apply-sibling-grid",
+                "window_id": window["id"],
+                "tab_id": tab["id"],
+                "preset": "grid",
+            }]
+    elif event["type"] == "process-action-result" and event["action"] == "apply-process-pane-layout":
+        if event["ok"]:
+            actions = notice(
+                "Applied grid layout. Pane order: "
+                + ", ".join(str(pane_id) for pane_id in event["pane_order"])
+                + f"; focused: {event['focused_pane_id']}; zoomed: {event['zoomed_pane_id']}"
+            )
+        else:
+            actions = notice("Pane layout failed: " + event["error"])
+    else:
+        actions = []
+    print(json.dumps({
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

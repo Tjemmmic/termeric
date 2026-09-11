@@ -206,6 +206,11 @@ any live process-owned window. It preserves the containing window, refuses the
 final non-closing tab plus stale, closing, live-domain, and uninitialized
 targets, suppresses lifecycle feedback, and reports remaining/active tab state
 without native activation.
+API v30 adds separately granted swapping, balancing, and columns/rows/grid
+layout presets for one exact ordinary split tab in any live process-owned
+window. It preserves live terminal owners, stable pane IDs, focus, and active
+tab selection; stale, closing, unsplit, live-domain, serial, and duplicate-pane
+targets fail without fallback or native activation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

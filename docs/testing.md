@@ -1148,6 +1148,14 @@ preservation, lifecycle-hook suppression, non-activation, bounded correlated
 results, process-query authority reduction, complete result-authority removal,
 retained-grant updates, and a checked-in process tab pruner. All fixtures are
 local and inert; no AI provider process or tokens are involved.
+API v30 adds exact process-pane-layout version/mode/grant denial, strict stable-
+ID/action/preset parsing, distinct swap targets, one-operation enforcement,
+same- and sibling-window routing, stale and unsupported-target refusal,
+terminal-owner/stable-ID/focus/active-tab preservation, non-activation, bounded
+correlated results, process-query authority reduction, complete result-
+authority removal, retained-grant updates, and a checked-in process pane
+arranger. All fixtures are local and inert; no AI provider process or tokens
+are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay
