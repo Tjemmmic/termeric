@@ -145,6 +145,14 @@ used by rendering and pointer hit tests. Every mutation returns the same
 configuration-validation path. Requests for background controls are swallowed
 while the modal is active.
 
+Font → Range Overrides is exposed as a named button with its active count. It
+opens the same accessible information/input overlay used by other bounded
+management flows: rules and navigation are named choices, add/edit uses one
+editable `U+START-U+END | FAMILY` field with UTF-8 cursor semantics, and delete
+requires a named confirmation. Request IDs and full rule identities prevent a
+stale semantic action from retargeting a different rule after config reload;
+cancel, dismissal, and overlay replacement revoke the pending action context.
+
 The custom-command panel is likewise isolated as a modal dialog. It exposes
 named New and Close buttons, each command as separate Run and Delete actions,
 an empty-state announcement, and the inline editor's Name and Shell Command

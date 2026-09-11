@@ -696,6 +696,10 @@ impl App {
             SettingsAction::SetFontFallback { index, family } => {
                 self.set_font_fallback(index, family);
             }
+            SettingsAction::ManageFontRangeOverrides => {
+                self.open_font_range_manager();
+                return;
+            }
             SettingsAction::SetFontLigatures(enabled) => {
                 self.config.font.ligatures = enabled;
                 if let Some(renderer) = &mut self.renderer {

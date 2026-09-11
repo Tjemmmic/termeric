@@ -6540,6 +6540,47 @@ mod tests {
     }
 
     #[test]
+    fn font_range_manager_setting_is_an_accessible_button() {
+        use crate::ui::settings::SettingsSection;
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        assert!(app.settings_panel.accessibility_focus_setting(
+            SettingsSection::Font,
+            "Range Overrides",
+            &app.config,
+            &app.shortcut_registry,
+        ));
+        let snapshot = app.accessibility_snapshot();
+        let manager = *app
+            .accessibility
+            .settings_nodes
+            .get(&SettingsSemanticTarget::Setting {
+                section: SettingsSection::Font,
+                label: "Range Overrides",
+            })
+            .unwrap();
+        let node = &snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == manager)
+            .unwrap()
+            .1;
+        assert_eq!(node.role(), Role::Button);
+        assert!(node.supports_action(Action::Click));
+
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: manager,
+            data: None,
+        });
+        assert!(!app.settings_panel.is_active());
+        assert!(app.info_overlay.is_awaiting_current());
+        assert_eq!(app.info_overlay.title(), "Font Range Overrides");
+    }
+
+    #[test]
     fn settings_filter_reports_utf8_cursor_and_empty_results() {
         use crate::ui::settings::SettingsKey;
 

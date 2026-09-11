@@ -101,8 +101,13 @@ metrics, and terminal width remains governed by the Unicode width policy.
 
 Startup and live reload apply the rules. A changed rule list invalidates
 persistent terminal rows plus scalar, shaped-run, mask-atlas, and color-atlas
-state. Settings shows how many rules are active; structured rule editing remains
-configuration-file-only.
+state. Settings → Font → Range Overrides shows the canonical rule list and
+provides bounded add, edit, and confirmed-delete flows. Its input form accepts
+`U+START-U+END | FAMILY` with `U+`, `0x`, or bare hexadecimal bounds, reuses
+shared configuration validation, and keeps invalid input available for
+correction without changing live state. Changes apply immediately but are
+written to `config.toml` only through the normal Settings Save action. Rule
+identity, rather than a displayed row index, protects edits across live reload.
 
 ## Blink scheduling
 

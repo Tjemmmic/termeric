@@ -1332,6 +1332,7 @@ impl App {
                     // picker. Any older hidden action context is obsolete too.
                     self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
+                    self.pending_font_range_management = None;
                     self.pending_file_upload = None;
                 }
             }
@@ -1341,6 +1342,9 @@ impl App {
             } => {
                 let choice_is_current = self.info_overlay.choice(request_id, &choice_id).is_some();
                 if !choice_is_current {
+                    return;
+                }
+                if self.handle_font_range_manager_choice(request_id, &choice_id) {
                     return;
                 }
                 if self.handle_runtime_plugin_manager_choice(request_id, &choice_id) {
@@ -1381,20 +1385,24 @@ impl App {
                 }]);
             }
             InfoOverlayAction::SubmitInput { request_id } => {
-                if !self.submit_runtime_plugin_manager_input(request_id)
+                if !self.submit_font_range_manager_input(request_id)
+                    && !self.submit_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
                     self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
+                    self.pending_font_range_management = None;
                     self.pending_file_upload = None;
                 }
             }
             InfoOverlayAction::CancelInput { request_id } => {
-                if !self.cancel_runtime_plugin_manager_input(request_id)
+                if !self.cancel_font_range_manager_input(request_id)
+                    && !self.cancel_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
                     self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
+                    self.pending_font_range_management = None;
                     self.pending_file_upload = None;
                 }
             }

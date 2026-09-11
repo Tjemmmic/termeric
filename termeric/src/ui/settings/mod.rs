@@ -356,6 +356,8 @@ pub enum SettingsAction {
         index: usize,
         family: Option<String>,
     },
+    /// Open the bounded Unicode-range font override manager.
+    ManageFontRangeOverrides,
     /// Change font line height
     SetLineHeight(f32),
     /// Enable or disable programming ligatures.
@@ -680,11 +682,13 @@ impl SettingsPanel {
             items.push(SettingItem {
                 label: "Range Overrides",
                 value: match config.font.range_overrides.len() {
-                    0 => "None (configure in config.toml)".into(),
-                    1 => "1 configured in config.toml".into(),
-                    count => format!("{count} configured in config.toml"),
+                    0 => "Manage · none configured".into(),
+                    1 => "Manage · 1 configured".into(),
+                    count => format!("Manage · {count} configured"),
                 },
-                kind: SettingKind::ReadOnly,
+                kind: SettingKind::Action {
+                    action: SettingsAction::ManageFontRangeOverrides,
+                },
             });
 
             items.extend([
@@ -2339,8 +2343,13 @@ mod tests {
             .iter()
             .find(|entry| entry.label == "Range Overrides")
             .expect("range override summary");
-        assert_eq!(ranges.value, "1 configured in config.toml");
-        assert!(matches!(ranges.kind, SettingKind::ReadOnly));
+        assert_eq!(ranges.value, "Manage · 1 configured");
+        assert!(matches!(
+            ranges.kind,
+            SettingKind::Action {
+                action: SettingsAction::ManageFontRangeOverrides
+            }
+        ));
         assert!(matches!(
             panel.map_dropdown_action(first.section, first.label, &first.kind, 0),
             SettingsAction::SetFontFallback {
@@ -2519,6 +2528,52 @@ mod tests {
             20.0,
         );
         assert!(matches!(action, SettingsAction::ManageRuntimePlugins));
+    }
+
+    #[test]
+    fn font_range_manager_action_has_shared_keyboard_pointer_and_semantic_routing() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        let config = Config::default();
+        let registry = default_registry();
+        for character in "range overrides".chars() {
+            panel.handle_key(SettingsKey::FilterChar(character), &config, &registry);
+        }
+        assert!(matches!(
+            panel.handle_key(SettingsKey::Enter, &config, &registry),
+            SettingsAction::ManageFontRangeOverrides
+        ));
+        assert!(matches!(
+            panel.accessibility_activate_setting(
+                SettingsSection::Font,
+                "Range Overrides",
+                &config,
+                &registry,
+            ),
+            SettingsAction::ManageFontRangeOverrides
+        ));
+
+        let entries = panel.build_entries(&config, &registry);
+        assert_eq!(entries.len(), 2, "filtered list contains header and action");
+        let layout = SettingsModalLayout::calculate(
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+            panel.animation_progress(),
+            entries.len(),
+        );
+        let action = panel.handle_click(
+            layout.panel_x + layout.padding,
+            layout.list_y + layout.row_height * 1.5,
+            &config,
+            &registry,
+            1000.0,
+            800.0,
+            10.0,
+            20.0,
+        );
+        assert!(matches!(action, SettingsAction::ManageFontRangeOverrides));
     }
 
     #[test]

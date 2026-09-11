@@ -60,7 +60,10 @@ Font choice can be refined with bounded inclusive `font.range_overrides`.
 Lookup uses the grapheme's first non-default-ignorable scalar, but the selected
 family must cover every substantive scalar in that grapheme or Termeric falls
 through to the normal ordered family chain. Range routing never changes the
-Unicode width result or the primary font's terminal cell metrics. See the
+Unicode width result or the primary font's terminal cell metrics. The bounded
+Settings manager lists canonical intervals and atomically adds, edits, or
+confirmed-deletes rules through the same validation contract; edits apply live
+and persist only when Settings is saved. See the
 [SGR rendering policy](sgr-rendering.md#unicode-range-font-overrides).
 
 ## Evidence and exclusions

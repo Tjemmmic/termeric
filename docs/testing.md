@@ -214,7 +214,11 @@ fixtures prove mapped-family precedence, binary-search boundaries, first-
 substantive-scalar ownership, complete-grapheme refusal, and missing-family
 fallback without depending on host fonts. Headless application tests prove a
 valid live reload retains the policy and an invalid overlapping replacement is
-atomic. No native compositor, downloaded font, or provider process is used.
+atomic. The Settings manager is additionally covered through its shared
+keyboard, pointer, and accessibility action plus request-scoped add, edit,
+confirmed delete, correction-preserving validation errors, cap/paging,
+cancellation, live-reload identity drift, and overlay-replacement refusal. No
+native compositor, downloaded font, or provider process is used.
 
 Keyboard cases cover every named legacy key, xterm modifier parameters 2-8,
 DECCKM/DECKPAM transitions, physical keypad identity, Control and Alt, AltGr,

@@ -120,6 +120,9 @@ bindings = "vi" # or "emacs"
 ```
 
 Settings are also editable live from within the terminal — press the gear icon in the tab bar, or open the settings modal via the command palette.
+Font → Range Overrides opens a bounded manager for adding, editing, and deleting
+rules with `U+START-U+END | FAMILY`; changes apply live and use the normal
+Settings Save action for persistence.
 Line and memory limits are both enforced per terminal and pane; see the
 [scrollback memory model](docs/scrollback-memory.md).
 Copy mode entry and quick select are configurable in Keyboard Shortcuts; modal

@@ -259,10 +259,11 @@ awaiting evidence:
   metrics while falling through safely when the mapped face is absent or
   incomplete. The picker searches a curated common-character index and reaches
   every non-control scalar by exact code point without materializing the
-  Unicode code space. A graphical range editor, variable-font axes/arbitrary
-  OpenType features, exhaustive or localized Unicode-name search, and
-  glyph-coverage feedback still trail kitty/WezTerm's broader power-user font
-  and character tooling.
+  Unicode code space. Settings now supplies a bounded request-scoped range
+  editor with atomic shared validation and stale-rule protection. Variable-font
+  axes/arbitrary OpenType features, exhaustive or localized Unicode-name
+  search, and glyph-coverage feedback still trail kitty/WezTerm's broader
+  power-user font and character tooling.
 - **More window policies.** Ordinary windows now expose live and persisted
   normal/always-on-top/always-on-bottom requests, and quick access has a
   dedicated topmost placement policy. A transient pane-local read-only lock now

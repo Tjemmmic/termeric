@@ -7,6 +7,7 @@ mod copy_mode;
 mod desktop_io;
 mod domain_picker;
 mod event_loop;
+mod font_range_editor;
 mod ime;
 mod mouse;
 mod plugin_actions;
@@ -1183,6 +1184,9 @@ pub struct App {
     /// Request-scoped navigation and confirmation state for management of
     /// installed third-party plugins.
     pending_runtime_plugin_management: Option<PendingRuntimePluginManagement>,
+    /// Request-scoped navigation and mutation authority for Unicode-range
+    /// font overrides managed through the shared information overlay.
+    pending_font_range_management: Option<font_range_editor::PendingFontRangeManagement>,
     /// Temporary registry and installation roots used only by hermetic tests.
     #[cfg(test)]
     runtime_plugin_test_paths: Option<(PathBuf, PathBuf)>,
@@ -1401,6 +1405,7 @@ impl App {
 
             pending_profile_selection: None,
             pending_runtime_plugin_management: None,
+            pending_font_range_management: None,
             #[cfg(test)]
             runtime_plugin_test_paths: None,
             pending_file_upload: None,
