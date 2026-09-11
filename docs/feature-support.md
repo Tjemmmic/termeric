@@ -127,8 +127,8 @@ exact release candidate:
    explicitly removed from the UI/configuration.
 2. The VT support manifest and deterministic conformance/fuzz smoke from
    [#16](https://github.com/Tjemmmic/termeric/issues/16) pass.
-3. The workspace test/build/Clippy checks, headless GPU smoke, and the
-   end-to-end Linux acceptance suite from
+3. The candidate-bound [hermetic release preflight](release-preflight.md),
+   headless GPU smoke, and the end-to-end Linux acceptance suite from
    [#17](https://github.com/Tjemmmic/termeric/issues/17) pass.
 4. Performance, memory, idle-resource, and soak budgets from
    [#18](https://github.com/Tjemmmic/termeric/issues/18) through

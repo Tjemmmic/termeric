@@ -13,6 +13,12 @@ means the named local evidence passes now; it cannot become a release pass
 until reproduced for an exact candidate SHA. A configured workflow without an
 accepted artifact remains **blocked**.
 
+The candidate-bound [hermetic preflight](release-preflight.md) now converts the
+provider-free portions of gates 1, 2, 3, 5, and 8 into one tamper-checked record.
+This historical dry run predates such a clean record, so its provisional and
+blocked dispositions remain unchanged until the first exact-candidate artifact
+is retained.
+
 | Gate | Evidence mode | Current dry-run result |
 |---:|---|---|
 | 1 | Automated document contract | **Provisional pass.** The authoritative matrix contains no **Broken** capability row. |

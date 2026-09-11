@@ -78,7 +78,9 @@ superiority:
 4. **Resource limits are product behavior.** Scrollback, images, search results,
    transcripts, helpers, plugins, and relays have explicit ceilings and visible
    degradation instead of relying only on eventual allocator pressure.
-5. **Evidence is fail closed.** The benchmark contract rejects missing,
+5. **Evidence is fail closed.** A fixed provider-free preflight binds source
+   quality gates, complete logs, the clean candidate, and release binary into
+   one tamper-checked artifact. The benchmark contract rejects missing,
    duplicate, context-drifted, or incompatible metrics; the opt-in external
    runner separately rejects rankings when selected terminals, grids,
    retention, or native pixel geometry differ; the feature matrix

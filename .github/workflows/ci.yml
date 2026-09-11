@@ -5,6 +5,12 @@ on:
     branches: [main, improvements]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_preflight:
+        description: Produce candidate-bound hermetic release-preflight evidence
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "23 5 * * 1"
 
@@ -47,6 +53,8 @@ jobs:
           python3 -m unittest scripts.test_check_gui_visual
       - name: Prove native evidence-record contracts
         run: python3 -m unittest scripts.test_native_acceptance_record
+      - name: Prove hermetic release-preflight contracts
+        run: python3 -m unittest scripts.test_release_preflight
       - name: Prove integration evidence-record contracts
         run: |
           python3 -m unittest scripts.test_integration_acceptance_record
@@ -110,6 +118,43 @@ jobs:
           path: |
             target/debian/*.deb
             target/debian/package-acceptance.json
+          if-no-files-found: error
+
+  hermetic-release-preflight:
+    name: Candidate-bound hermetic release preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.release_preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build and terminfo acceptance dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils pkg-config libfontconfig1-dev \
+            libwayland-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libssl-dev libvulkan-dev mesa-vulkan-drivers ncurses-bin vim less tmux \
+            zsh fish
+      - name: Populate the locked Cargo cache before offline evidence execution
+        run: cargo fetch --locked
+      - name: Run fixed provider-free release preflight
+        run: >-
+          python3 scripts/release_preflight.py run
+          --output target/release-preflight
+      - name: Revalidate preflight logs, candidate, and release binary
+        run: >-
+          python3 scripts/release_preflight.py validate
+          target/release-preflight/record.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hermetic-release-preflight
+          path: target/release-preflight/
           if-no-files-found: error
 
   arch-package:

@@ -8,6 +8,15 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- A fixed-command hermetic release preflight now binds formatting, documentation
+  contracts, Python/Rust tests, terminfo application probes, strict Clippy,
+  debug/release/docs builds, and the non-GUI release version path to one clean
+  candidate and release-binary digest. Complete logs are path-confined and
+  hashed; validation rejects gate drift, source changes, dirty/ineligible
+  records, tampering, and stale binaries. Cargo runs offline, provider opt-ins
+  are removed, and the explicit workflow-dispatch lane cannot substitute for
+  native, package, soak, remote, or authenticated-provider evidence.
+
 - Arch Linux now has a maintained `termeric-git` PKGBUILD and checked
   `.SRCINFO`, plus an unprivileged helper that packages the exact local checkout.
   Fail-closed archive inspection validates safe membership, metadata and runtime

@@ -356,6 +356,7 @@ termeric-core/      Library crate — terminal emulation
 - [`docs/operator-acceptance.md`](docs/operator-acceptance.md) — native tool installation, ordered release commands, and manual provider checklist
 - [`docs/install.md`](docs/install.md) — install, upgrade, uninstall, and troubleshooting
 - [`docs/release-acceptance.md`](docs/release-acceptance.md) — candidate-specific Linux evidence and open checks
+- [`docs/release-preflight.md`](docs/release-preflight.md) — candidate-bound provider-free quality evidence and validation
 - [`docs/terminal-conformance.md`](docs/terminal-conformance.md) — VT support manifest, reference traces, and fuzzing
 - [`docs/device-attributes-and-charsets.md`](docs/device-attributes-and-charsets.md) — conservative DA identity, G0-G3 invocation, DEC graphics mapping, and presentation-state reports
 - [`docs/kitty-graphics.md`](docs/kitty-graphics.md) — bounded static and frame-animation profile, Unix-local media, limits, and unsupported extensions

@@ -36,6 +36,12 @@ GitHub issue links. Its negative tests prove those failures remain fail-closed;
 the separate Markdown checker resolves every repository-local documentation
 target.
 
+For an exact clean candidate, the fixed-command
+[hermetic release preflight](release-preflight.md) runs these provider-free
+quality gates offline and binds their complete logs, tool context, Git SHA, and
+release-binary digest into one validated artifact. It does not replace native,
+package-manager, soak, remote-host, or authenticated-integration evidence.
+
 Live-domain compatibility coverage includes an executable-level
 `domain protocol-version --json` probe under an isolated runtime directory. It
 must return the compiled wire version without creating a daemon socket or token.
