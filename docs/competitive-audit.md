@@ -138,9 +138,11 @@ awaiting evidence:
   authoritative snapshot and return reconciled GUI-local state. Cross-window
   live placement remains an explicit topology-model boundary rather than an
   optimistically acknowledged action.
-  That narrower typed surface is still
-  the largest gap against kitty remote control and WezTerm's CLI/Lua automation
-  and belongs in the remaining scope of issue #29.
+  That narrower typed surface is still the largest gap against kitty remote
+  control and WezTerm's CLI/Lua automation. Closed issue #29 established the
+  bounded authenticated foundation; any broader authority now needs its own
+  separately reviewed issue rather than silently expanding that completed
+  scope.
 - **Richer extension hooks.** API v2 adds an explicitly granted, 16 KiB,
   schema-versioned read-only launch-context snapshot while preserving API v1.
   API v3 now provides coarse app/tab lifecycle subscriptions on a bounded
@@ -291,8 +293,11 @@ awaiting evidence:
 - kitty's OSC 99 notification discovery and bounded title/body assembly are
   now implemented, but replacement, activation/close reports, buttons, icons,
   filtering, urgency, expiry, and sound selection still require a richer
-  native backend. Kitty's text-sizing, terminal file-transfer, and
-  multiple-cursor extensions remain unimplemented. The
+  native backend. Kitty OSC 66 text sizing now has bounded multicell parsing,
+  grid/edit/reflow/history/domain semantics, scaled shaping, alignment, and
+  cursor geometry; native font-quality and client acceptance remain deferred.
+  Kitty's terminal file-transfer and multiple-cursor extensions remain
+  unimplemented. The
   [kitty protocol index](https://sw.kovidgoyal.net/kitty/protocol-extensions/)
   is the moving reference. These should be demand-driven after the beta gates;
   implementing every new private protocol is not a prerequisite for terminal
