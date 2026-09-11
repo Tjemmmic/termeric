@@ -1,0 +1,63 @@
+api_version = 27
+id = "process-tab-mover"
+name = "Process Tab Mover"
+version = "1.0.0"
+description = "Demonstrates exact ordinary-tab movement across process-owned windows"
+permissions = ["process-spawn", "process-query", "process-tab-move", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "move-tab-between-windows"
+name = "Move Tab Between Windows"
+description = "Move an available tab from the current window into a sibling window"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{"type": "query-process", "query_id": "tab-move-targets"}]
+    elif event["type"] == "process-query-result":
+        origin = event["origin_window_id"]
+        source_window = next((window for window in event["windows"] if window["id"] == origin), None)
+        destination_window = next((window for window in event["windows"] if window["id"] != origin), None)
+        source_tabs = [] if source_window is None else [tab for tab in source_window["tabs"] if not tab["closed"]]
+        if len(source_tabs) < 2 or destination_window is None:
+            actions = [{
+                "type": "show-notice",
+                "title": "Process tab mover",
+                "lines": ["Two source tabs and a sibling destination window are required."],
+            }]
+        else:
+            actions = [{
+                "type": "move-process-tab",
+                "action_id": "move-sibling-tab",
+                "source_window_id": source_window["id"],
+                "tab_id": source_tabs[0]["id"],
+                "destination_window_id": destination_window["id"],
+                "destination_index": len(destination_window["tabs"]),
+            }]
+    elif event["type"] == "process-action-result" and event["action"] == "move-process-tab":
+        if event["ok"]:
+            lines = [
+                f"Moved tab {event['source_tab_id']} as tab {event['destination_tab_id']}.",
+                f"Destination window: {event['destination_window_id']}",
+                f"Destination index: {event['destination_index']}",
+            ]
+        else:
+            lines = ["Tab movement failed: " + event["error"]]
+        actions = [{"type": "show-notice", "title": "Process tab mover", "lines": lines}]
+    else:
+        actions = []
+    print(json.dumps({
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

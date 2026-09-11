@@ -8,6 +8,17 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v27 adds an independent `process-tab-move` grant for
+  exact same-window tab reordering and cross-window ordinary-tab movement.
+  Source/destination identities and insertion index are revalidated before the
+  existing atomic transfer preserves live PTYs, pane/plugin state, title,
+  history, launch metadata, and pinning under a fresh destination-local tab
+  ID. It never activates a native window and refuses cross-window movement of
+  the final non-closing source tab so movement cannot implicitly grant window
+  closure. Parsing, routing, refusal, grant/install behavior, and the checked-
+  in process-tab-mover example are hermetically tested without provider or
+  AI-token use.
+
 - Declarative plugin API v26 adds an independent `process-pane-move` grant for
   moving one exact ordinary pane between exact live process-owned tabs and
   windows. Source and destination window/tab/pane identities plus split

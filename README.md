@@ -189,6 +189,13 @@ identities plus a horizontal or vertical direction. The existing atomic
 transfer path preserves the live PTY, title, history, and launch state, returns
 the fresh destination-local pane ID, never activates a native window, and
 cannot chain another host operation.
+API v27 adds separately granted cross-window ordinary-tab movement and exact
+same-window reordering. A persistent handler identifies the source window/tab,
+destination window/index, and action correlation explicitly. The atomic
+transfer preserves live PTYs, panes, plugin-tab state, title, history, launch
+state, and pinning while returning a fresh destination-local tab ID without
+native activation. Cross-window movement refuses the source window's final
+non-closing tab so this grant cannot implicitly close a window.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

@@ -691,6 +691,82 @@ impl Application {
                     }
                 }
             }
+            crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
+                action_id,
+                source_window_id,
+                tab_id,
+                destination_window_id,
+                destination_index,
+            } => {
+                let result = if source_window_id != destination_window_id {
+                    self.validate_plugin_process_tab_move_source(source_window_id, tab_id)
+                        .and_then(|()| {
+                            self.move_control_tab(
+                                &action_id,
+                                source_window_id,
+                                tab_id,
+                                destination_window_id,
+                                destination_index,
+                            )
+                        })
+                } else {
+                    self.move_control_tab(
+                        &action_id,
+                        source_window_id,
+                        tab_id,
+                        destination_window_id,
+                        destination_index,
+                    )
+                };
+                match result {
+                    Ok(crate::control::protocol::Response::TabMoved {
+                        destination_tab_id,
+                        destination_index,
+                        source_window_closing,
+                        changed,
+                        ..
+                    }) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "move-process-tab",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "source_window_id": source_window_id,
+                        "source_tab_id": tab_id,
+                        "destination_window_id": destination_window_id,
+                        "destination_tab_id": destination_tab_id,
+                        "destination_index": destination_index,
+                        "source_window_closing": source_window_closing,
+                        "changed": changed,
+                        "error": null,
+                    }),
+                    Ok(_) => {
+                        return Err("process tab movement returned an unexpected result".into());
+                    }
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "move-process-tab",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "source_window_id": source_window_id,
+                            "source_tab_id": tab_id,
+                            "destination_window_id": destination_window_id,
+                            "destination_tab_id": null,
+                            "destination_index": destination_index,
+                            "source_window_closing": null,
+                            "changed": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
             _ => return Err("structured response did not contain a process action".into()),
         };
         let envelope = serde_json::json!({
@@ -707,6 +783,42 @@ impl Application {
             ));
         }
         Ok(encoded)
+    }
+
+    fn validate_plugin_process_tab_move_source(
+        &self,
+        source_window_id: u64,
+        tab_id: u64,
+    ) -> Result<(), String> {
+        let native_id = self.control_native_window_id(source_window_id)?;
+        let window = self
+            .windows
+            .get(&native_id)
+            .filter(|window| !window.should_exit)
+            .ok_or_else(|| format!("GUI window {source_window_id} is closing"))?;
+        let tabs = window
+            .tabs
+            .as_ref()
+            .ok_or_else(|| "Source window has no initialized tab manager".to_string())?;
+        let tab_id = usize::try_from(tab_id)
+            .map_err(|_| "Source tab ID does not fit this platform".to_string())?;
+        let tab = tabs
+            .tab_by_id(tab_id)
+            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the source window"))?;
+        if tab.closed || tab.is_closing() {
+            return Err(format!("GUI tab {tab_id} is closing"));
+        }
+        let non_closing_tabs = tabs
+            .all_tabs()
+            .iter()
+            .filter(|tab| !tab.closed && !tab.is_closing())
+            .count();
+        if non_closing_tabs <= 1 {
+            return Err(format!(
+                "Cannot move the final non-closing tab {tab_id}; window closure requires separate authority"
+            ));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -951,6 +1063,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::MoveProcessPane {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
+                            ..
+                        }
                 )
             })
         });
@@ -1008,6 +1123,9 @@ impl Application {
                     crate::plugin::structured::StructuredResponseAction::MoveProcessPane {
                         ..
                     } => continuation.allow_process_pane_move,
+                    crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
+                        ..
+                    } => continuation.allow_process_tab_move,
                     _ => false,
                 });
         if !has_continuation_authority {
@@ -1125,6 +1243,14 @@ impl Application {
                     process_operation.clone(),
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::MoveProcessTab { .. } => (
+                "tab-move",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -1154,6 +1280,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::MoveProcessPane {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
+                            ..
+                        }
                 )
             });
         }
@@ -1176,6 +1305,9 @@ impl Application {
                     ..
                 }
                 | crate::plugin::structured::StructuredResponseAction::MoveProcessPane { .. } => {
+                    window.continue_structured_process_action(event_json, continuation)
+                }
+                crate::plugin::structured::StructuredResponseAction::MoveProcessTab { .. } => {
                     window.continue_structured_process_action(event_json, continuation)
                 }
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
@@ -6161,6 +6293,139 @@ mod tests {
                 .unwrap()
                 .iter_with_layout()
                 .any(|(pane, _)| pane.pty.child_id() == moved_child)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_tab_movement_preserves_state_and_refuses_final_source_tab() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+        let (source, destination, moved_child) = pane_transfer_fixture();
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let source_native = WindowId::from(303_u64);
+        let destination_native = WindowId::from(404_u64);
+        application.windows.insert(source_native, source);
+        application.windows.insert(destination_native, destination);
+        application.window_order = vec![source_native, destination_native];
+        application.control_window_ids.insert(source_native, 7);
+        application.control_window_ids.insert(destination_native, 8);
+
+        let action = || crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
+            action_id: "move-sibling-tab".into(),
+            source_window_id: 7,
+            tab_id: 0,
+            destination_window_id: 8,
+            destination_index: 1,
+        };
+        let refused = application
+            .plugin_process_action_event("process-tab-mover", 7, action())
+            .unwrap();
+        let refused: serde_json::Value = serde_json::from_str(&refused).unwrap();
+        assert_eq!(refused["event"]["ok"], false);
+        assert!(refused["event"]["destination_tab_id"].is_null());
+        assert!(
+            refused["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("final non-closing tab")
+        );
+        assert_eq!(
+            application.windows[&source_native]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            1
+        );
+        assert_eq!(
+            application.windows[&destination_native]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            1
+        );
+
+        application
+            .windows
+            .get_mut(&source_native)
+            .unwrap()
+            .tabs
+            .as_mut()
+            .unwrap()
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "sleep 5".into()],
+                None,
+                Some("survivor"),
+                None,
+                std::collections::HashMap::new(),
+            )
+            .unwrap();
+        let reordered = application
+            .plugin_process_action_event(
+                "process-tab-mover",
+                7,
+                crate::plugin::structured::StructuredResponseAction::MoveProcessTab {
+                    action_id: "reorder-source-tab".into(),
+                    source_window_id: 7,
+                    tab_id: 0,
+                    destination_window_id: 7,
+                    destination_index: 1,
+                },
+            )
+            .unwrap();
+        let reordered: serde_json::Value = serde_json::from_str(&reordered).unwrap();
+        assert_eq!(reordered["event"]["ok"], true);
+        assert_eq!(reordered["event"]["destination_tab_id"], 0);
+        assert_eq!(reordered["event"]["changed"], true);
+        assert_eq!(reordered["event"]["source_window_closing"], false);
+        let moved = application
+            .plugin_process_action_event("process-tab-mover", 7, action())
+            .unwrap();
+        let moved: serde_json::Value = serde_json::from_str(&moved).unwrap();
+        assert_eq!(moved["plugin_id"], "process-tab-mover");
+        assert_eq!(moved["event"]["action"], "move-process-tab");
+        assert_eq!(moved["event"]["ok"], true);
+        assert_eq!(moved["event"]["source_tab_id"], 0);
+        assert_eq!(moved["event"]["destination_window_id"], 8);
+        assert_eq!(moved["event"]["destination_tab_id"], 1);
+        assert_eq!(moved["event"]["destination_index"], 1);
+        assert_eq!(moved["event"]["source_window_closing"], false);
+        assert_eq!(moved["event"]["changed"], true);
+        assert_eq!(
+            application.windows[&source_native]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            1
+        );
+        assert!(!application.windows[&source_native].should_exit);
+        let destination_tabs = application.windows[&destination_native]
+            .tabs
+            .as_ref()
+            .unwrap();
+        assert_eq!(destination_tabs.count(), 2);
+        let transferred = destination_tabs.tab_by_id(1).unwrap();
+        assert!(
+            transferred
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .iter_with_layout()
+                .any(|(pane, _)| pane.pty.child_id() == moved_child)
+        );
+        assert_eq!(
+            application.window_order,
+            vec![source_native, destination_native]
+        );
+        assert!(
+            moved.to_string().len() <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
         );
     }
 
