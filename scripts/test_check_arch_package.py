@@ -13,6 +13,7 @@ from scripts.check_arch_package import (
     LIFECYCLE_OPT_IN,
     METADATA_FILES,
     REQUIRED_DEPENDENCIES,
+    SYNTHETIC_PREDECESSOR_VERSION,
     exercise_system_lifecycle,
     normalize_member_name,
     parse_pkginfo,
@@ -27,6 +28,7 @@ from scripts.check_arch_package import (
     validate_package_metadata,
     verify_removed,
     verify_user_state,
+    write_lifecycle_pacman_config,
     write_report,
 )
 
@@ -134,6 +136,18 @@ class ArchPackageCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(CheckError, "expected 'termeric-git'"):
             validate_package_metadata(fields)
 
+    def test_metadata_rejects_pacman_invalid_tilde_version(self):
+        fields = valid_metadata()
+        fields["pkgver"] = ["0~termeric-lifecycle-1"]
+        with self.assertRaisesRegex(CheckError, "package version is invalid"):
+            validate_package_metadata(fields)
+
+    def test_synthetic_predecessor_version_passes_archive_validation(self):
+        fields = valid_metadata()
+        fields["pkgver"] = [SYNTHETIC_PREDECESSOR_VERSION]
+        metadata = validate_package_metadata(fields)
+        self.assertEqual(metadata["version"], SYNTHETIC_PREDECESSOR_VERSION)
+
     def test_os_release_recognizes_arch_derivatives(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "os-release"
@@ -198,7 +212,7 @@ class ArchPackageCheckTests(unittest.TestCase):
                 "scripts.check_arch_package.verify_installed"
             ), mock.patch(
                 "scripts.check_arch_package.installed_version",
-                return_value="0~termeric-lifecycle-1",
+                return_value=SYNTHETIC_PREDECESSOR_VERSION,
             ), mock.patch(
                 "scripts.check_arch_package.subprocess.run"
             ) as cleanup, mock.patch("builtins.print"):
@@ -224,6 +238,32 @@ class ArchPackageCheckTests(unittest.TestCase):
             metadata.write_text("pkgver = 1-1\npkgver = 2-1\n")
             with self.assertRaisesRegex(CheckError, "no unique pkgver"):
                 replace_metadata_version(metadata, "0~test-1")
+
+    def test_lifecycle_pacman_config_removes_only_active_noextract_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "pacman.conf"
+            destination = root / "lifecycle.conf"
+            source.write_text(
+                "[options]\n"
+                "#NoExtract = documented-default\n"
+                "NoExtract = usr/share/doc/*\n"
+                "  noextract=usr/share/man/*\n"
+                "Architecture = auto\n"
+                "[core]\n"
+                "Include = /etc/pacman.d/mirrorlist\n"
+            )
+
+            write_lifecycle_pacman_config(source, destination)
+
+            self.assertEqual(
+                destination.read_text(),
+                "[options]\n"
+                "#NoExtract = documented-default\n"
+                "Architecture = auto\n"
+                "[core]\n"
+                "Include = /etc/pacman.d/mirrorlist\n",
+            )
 
     def test_layout_accepts_expected_files_and_modes_without_native_tools(self):
         with tempfile.TemporaryDirectory() as directory:

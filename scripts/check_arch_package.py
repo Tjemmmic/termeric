@@ -34,7 +34,7 @@ PACKAGE_NAME = "termeric-git"
 CONFLICTING_PACKAGE_NAME = "termeric"
 TERMINFO_NAME = "xterm-termeric"
 LIFECYCLE_OPT_IN = "TERMERIC_ARCH_PACKAGE_LIFECYCLE_ACCEPT"
-SYNTHETIC_PREDECESSOR_VERSION = "0~termeric-lifecycle-1"
+SYNTHETIC_PREDECESSOR_VERSION = "0.0.0.r0.g0000000-1"
 EXPECTED_FILES = {
     "usr/bin/termeric": 0o755,
     "usr/share/applications/termeric.desktop": 0o644,
@@ -187,7 +187,7 @@ def validate_package_metadata(fields: dict[str, list[str]]) -> dict[str, object]
     architecture = one_field(fields, "arch")
     if name != PACKAGE_NAME:
         raise CheckError(f"package name is {name!r}, expected {PACKAGE_NAME!r}")
-    if not re.fullmatch(r"[0-9][0-9A-Za-z.+_:~-]*", version):
+    if not re.fullmatch(r"[0-9][0-9A-Za-z.+_:-]*", version):
         raise CheckError(f"package version is invalid: {version!r}")
     if architecture != "x86_64":
         raise CheckError(f"package architecture is {architecture!r}, expected 'x86_64'")
@@ -347,6 +347,22 @@ def replace_metadata_version(path: Path, version: str) -> None:
     path.write_text(changed, encoding="utf-8")
 
 
+def write_lifecycle_pacman_config(source: Path, destination: Path) -> None:
+    """Copy Pacman policy without host-specific payload exclusions.
+
+    Arch's container image deliberately excludes documentation and other files
+    to keep the image small. Lifecycle acceptance must install the complete
+    package payload so owned-file and removal checks remain meaningful.
+    """
+    lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
+    retained = [
+        line
+        for line in lines
+        if re.match(r"^\s*NoExtract\s*=", line, flags=re.IGNORECASE) is None
+    ]
+    destination.write_text("".join(retained), encoding="utf-8")
+
+
 def write_mtree(root: Path) -> None:
     members = sorted(
         f"./{path.relative_to(root).as_posix()}"
@@ -469,14 +485,17 @@ def exercise_system_lifecycle(
         sentinel.write_text("retain user state\n", encoding="utf-8")
         environment = dict(os.environ)
         environment["HOME"] = str(synthetic_home)
+        pacman_config = temporary / "pacman.conf"
+        write_lifecycle_pacman_config(Path("/etc/pacman.conf"), pacman_config)
         predecessor = build_synthetic_predecessor(
             package, temporary, actual_version
         )
         pacman = require_tool("pacman")
+        pacman_command = [pacman, "--config", str(pacman_config)]
         installed_by_check = False
         try:
             run(
-                [pacman, "-U", "--noconfirm", str(predecessor)],
+                [*pacman_command, "-U", "--noconfirm", str(predecessor)],
                 env=environment,
                 timeout=600,
             )
@@ -485,14 +504,18 @@ def exercise_system_lifecycle(
             print(f"ok install: synthetic predecessor {SYNTHETIC_PREDECESSOR_VERSION}")
 
             run(
-                [pacman, "-U", "--noconfirm", str(package.resolve())],
+                [*pacman_command, "-U", "--noconfirm", str(package.resolve())],
                 env=environment,
                 timeout=600,
             )
             verify_installed(actual_version)
             print(f"ok upgrade: {SYNTHETIC_PREDECESSOR_VERSION} -> {actual_version}")
 
-            run([pacman, "-R", "--noconfirm", PACKAGE_NAME], env=environment, timeout=600)
+            run(
+                [*pacman_command, "-R", "--noconfirm", PACKAGE_NAME],
+                env=environment,
+                timeout=600,
+            )
             installed_by_check = False
             verify_removed()
             verify_user_state(sentinel)
@@ -512,7 +535,7 @@ def exercise_system_lifecycle(
         finally:
             if installed_by_check and installed_version() is not None:
                 subprocess.run(
-                    [pacman, "-R", "--noconfirm", PACKAGE_NAME],
+                    [*pacman_command, "-R", "--noconfirm", PACKAGE_NAME],
                     env=environment,
                     capture_output=True,
                     text=True,

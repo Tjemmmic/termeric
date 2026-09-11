@@ -698,9 +698,12 @@ requires root, an Arch-family host, `--system-lifecycle`, and the exact
 CI host it creates and validates a candidate-payload predecessor with an older
 Arch version, installs it with Pacman, upgrades to the unchanged candidate,
 runs only `termeric --version`, removes the package, rejects owned-file residue,
-and confirms a synthetic user-state sentinel survives. A cleanup attempt runs
-after any failure. This proves package-manager mechanics, not migration from a
-real previous release or GUI behavior.
+and confirms a synthetic user-state sentinel survives. The lifecycle uses a
+temporary copy of the host Pacman configuration with active `NoExtract` rules
+removed so slim container-image policy cannot silently omit package-owned files;
+the host configuration itself is never changed. A cleanup attempt runs after
+any failure. This proves package-manager mechanics, not migration from a real
+previous release or GUI behavior.
 
 The OSC integration lane adds BEL/ST and chunk-boundary parser coverage for
 titles, clipboard operations, and dynamic colors; malformed and oversized input
