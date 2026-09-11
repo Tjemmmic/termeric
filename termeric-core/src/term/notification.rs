@@ -1,6 +1,6 @@
 //! Bounded terminal-local state for Kitty's OSC 99 notification protocol.
 
-use crate::event::NotificationRequest;
+use crate::event::{NotificationRequest, NotificationUrgency};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
 
@@ -9,6 +9,9 @@ pub const MAX_NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
 pub const MAX_PENDING_NOTIFICATIONS: usize = 16;
 pub const MAX_PENDING_NOTIFICATION_BYTES: usize = 256 * 1024;
 pub const MAX_NOTIFICATION_IDENTIFIER_BYTES: usize = 128;
+pub const MAX_NOTIFICATION_METADATA_VALUE_BYTES: usize = 256;
+pub const MAX_NOTIFICATION_TYPES: usize = 8;
+pub const MAX_NOTIFICATION_ICON_NAMES: usize = 8;
 pub const MAX_OSC99_DECODED_CHUNK_BYTES: usize = 2 * 1024;
 pub const MAX_OSC99_ENCODED_CHUNK_BYTES: usize = 4 * 1024;
 const MAX_OSC99_METADATA_BYTES: usize = 1024;
@@ -28,6 +31,10 @@ struct Metadata {
     payload: PayloadKind,
     done: bool,
     encoded: bool,
+    application_name: Option<String>,
+    notification_types: Vec<String>,
+    icon_names: Vec<String>,
+    urgency: Option<NotificationUrgency>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -90,11 +97,44 @@ struct PendingNotification {
     identifier: String,
     title: PendingField,
     body: PendingField,
+    application_name: Option<String>,
+    notification_types: Vec<String>,
+    icon_names: Vec<String>,
+    urgency: Option<NotificationUrgency>,
 }
 
 impl PendingNotification {
     fn retained_bytes(&self) -> usize {
-        self.identifier.len() + self.title.retained_bytes() + self.body.retained_bytes()
+        self.identifier.len()
+            + self.title.retained_bytes()
+            + self.body.retained_bytes()
+            + self.application_name.as_ref().map_or(0, String::len)
+            + self
+                .notification_types
+                .iter()
+                .map(String::len)
+                .sum::<usize>()
+            + self.icon_names.iter().map(String::len).sum::<usize>()
+    }
+
+    fn apply_metadata(&mut self, metadata: Metadata) -> Result<(), ()> {
+        if let Some(application_name) = metadata.application_name {
+            self.application_name = Some(application_name);
+        }
+        append_unique_bounded(
+            &mut self.notification_types,
+            metadata.notification_types,
+            MAX_NOTIFICATION_TYPES,
+        )?;
+        append_unique_bounded(
+            &mut self.icon_names,
+            metadata.icon_names,
+            MAX_NOTIFICATION_ICON_NAMES,
+        )?;
+        if metadata.urgency.is_some() {
+            self.urgency = metadata.urgency;
+        }
+        Ok(())
     }
 
     fn finish(mut self) -> Option<NotificationRequest> {
@@ -113,6 +153,10 @@ impl PendingNotification {
         Some(NotificationRequest {
             title: Some(title),
             body,
+            application_name: self.application_name,
+            notification_types: self.notification_types,
+            icon_names: self.icon_names,
+            urgency: self.urgency,
         })
     }
 }
@@ -171,21 +215,27 @@ impl NotificationProtocol {
             return Osc99Action::None;
         }
 
-        let mut notification = metadata
-            .identifier
+        let identifier = metadata.identifier.clone();
+        let payload_kind = metadata.payload;
+        let encoded = metadata.encoded;
+        let done = metadata.done;
+        let mut notification = identifier
             .as_deref()
             .and_then(|identifier| self.take(identifier))
             .unwrap_or_else(|| PendingNotification {
-                identifier: metadata.identifier.clone().unwrap_or_default(),
+                identifier: identifier.unwrap_or_default(),
                 ..PendingNotification::default()
             });
-        let (field, limit) = match metadata.payload {
+        if notification.apply_metadata(metadata).is_err() {
+            return Osc99Action::None;
+        }
+        let (field, limit) = match payload_kind {
             PayloadKind::Title => (&mut notification.title, MAX_NOTIFICATION_TITLE_BYTES),
             PayloadKind::Body => (&mut notification.body, MAX_NOTIFICATION_BODY_BYTES),
             _ => unreachable!(),
         };
-        let appended = if metadata.encoded {
-            field.append_encoded(&payload, metadata.done, limit)
+        let appended = if encoded {
+            field.append_encoded(&payload, done, limit)
         } else {
             field.append_plain(&payload, limit)
         };
@@ -193,7 +243,7 @@ impl NotificationProtocol {
             return Osc99Action::None;
         }
 
-        if metadata.done {
+        if done {
             return notification
                 .finish()
                 .map_or(Osc99Action::None, Osc99Action::Notify);
@@ -272,7 +322,10 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
             return Err(());
         }
         let key = key[0];
-        let singular = matches!(key, b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a');
+        let singular = matches!(
+            key,
+            b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a' | b'f' | b'u'
+        );
         if singular && std::mem::replace(&mut seen[key as usize], true) {
             return Err(());
         }
@@ -293,6 +346,29 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
             }
             b'd' => metadata.done = parse_bool(value)?,
             b'e' => metadata.encoded = parse_bool(value)?,
+            b'f' => metadata.application_name = Some(decode_metadata_text(value)?),
+            b't' => {
+                if metadata.notification_types.len() >= MAX_NOTIFICATION_TYPES {
+                    return Err(());
+                }
+                metadata
+                    .notification_types
+                    .push(decode_metadata_text(value)?);
+            }
+            b'n' => {
+                if metadata.icon_names.len() >= MAX_NOTIFICATION_ICON_NAMES {
+                    return Err(());
+                }
+                metadata.icon_names.push(decode_metadata_text(value)?);
+            }
+            b'u' => {
+                metadata.urgency = Some(match value {
+                    b"0" => NotificationUrgency::Low,
+                    b"1" => NotificationUrgency::Normal,
+                    b"2" => NotificationUrgency::Critical,
+                    _ => return Err(()),
+                });
+            }
             b'c' if value == b"0" => {}
             b'c' => return Err(()),
             b'o' if value == b"always" => {}
@@ -355,7 +431,45 @@ fn valid_metadata_value_byte(byte: u8) -> bool {
                 | b'`'
                 | b'~'
                 | b'?'
+                | b'='
         )
+}
+
+fn decode_metadata_text(value: &[u8]) -> Result<String, ()> {
+    if value.len() > MAX_NOTIFICATION_METADATA_VALUE_BYTES.saturating_mul(2)
+        || !valid_base64_bytes(value)
+    {
+        return Err(());
+    }
+    let decoded = STANDARD
+        .decode(value)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(value))
+        .map_err(|_| ())?;
+    if decoded.is_empty() || decoded.len() > MAX_NOTIFICATION_METADATA_VALUE_BYTES {
+        return Err(());
+    }
+    let text = String::from_utf8(decoded).map_err(|_| ())?;
+    if text.chars().any(is_unsafe_plain_character) {
+        return Err(());
+    }
+    Ok(text)
+}
+
+fn append_unique_bounded(
+    destination: &mut Vec<String>,
+    incoming: Vec<String>,
+    limit: usize,
+) -> Result<(), ()> {
+    for value in incoming {
+        if destination.contains(&value) {
+            continue;
+        }
+        if destination.len() >= limit {
+            return Err(());
+        }
+        destination.push(value);
+    }
+    Ok(())
 }
 
 fn join_payload(parts: &[&[u8]], encoded: bool) -> Option<Vec<u8>> {
@@ -415,6 +529,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("hello".into()),
                 body: String::new(),
+                ..NotificationRequest::default()
             })
         );
         assert_eq!(
@@ -422,6 +537,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("héllo 🌱".into()),
                 body: String::new(),
+                ..NotificationRequest::default()
             })
         );
     }
@@ -446,6 +562,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("hello".into()),
                 body: "world".into(),
+                ..NotificationRequest::default()
             })
         );
         assert_eq!(
@@ -453,8 +570,104 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("other title".into()),
                 body: String::new(),
+                ..NotificationRequest::default()
             })
         );
+    }
+
+    #[test]
+    fn rich_metadata_survives_chunking_and_is_typed() {
+        let mut protocol = NotificationProtocol::default();
+        assert_eq!(
+            protocol.handle(&parts(
+                b"i=job:d=0:f=YnVpbGQtYWdlbnQ=:t=YnVpbGQuY29tcGxldGU=:n=d2FybmluZw==:u=2",
+                b"Build",
+            )),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(
+                b"i=other:d=0:f=bW9uaXRvcg==:n=aW5mbw==:u=0",
+                b"Other",
+            )),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(
+                b"i=job:p=body:t=Y2k=:t=Y2k=:n=bXktYXBw",
+                b"finished",
+            )),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Build".into()),
+                body: "finished".into(),
+                application_name: Some("build-agent".into()),
+                notification_types: vec!["build.complete".into(), "ci".into()],
+                icon_names: vec!["warning".into(), "my-app".into()],
+                urgency: Some(NotificationUrgency::Critical),
+            })
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=other", b" done")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Other done".into()),
+                body: String::new(),
+                application_name: Some("monitor".into()),
+                notification_types: Vec::new(),
+                icon_names: vec!["info".into()],
+                urgency: Some(NotificationUrgency::Low),
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_or_over_limit_metadata_retires_only_its_assembly() {
+        let mut protocol = NotificationProtocol::default();
+        assert_eq!(
+            protocol.handle(&parts(b"i=bad:d=0:t=b25l", b"stale")),
+            Osc99Action::None
+        );
+        for index in 2..=MAX_NOTIFICATION_TYPES {
+            let metadata = format!("i=bad:d=0:t={}", STANDARD.encode(format!("type-{index}")));
+            assert_eq!(
+                protocol.handle(&parts(metadata.as_bytes(), b"")),
+                Osc99Action::None
+            );
+        }
+        assert_eq!(protocol.pending_len(), 1);
+        assert_eq!(
+            protocol.handle(&parts(b"i=bad:d=0:t=b3ZlcmZsb3c=", b"")),
+            Osc99Action::None
+        );
+        assert_eq!(protocol.pending_len(), 0);
+        assert_eq!(
+            protocol.handle(&parts(b"i=bad", b"fresh")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("fresh".into()),
+                body: String::new(),
+                ..NotificationRequest::default()
+            })
+        );
+
+        assert_eq!(
+            protocol.handle(&parts(b"i=duplicate:f=YQ==:f=Yg==", b"ignored")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=control:f=Cg==", b"ignored")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=urgency:u=3", b"ignored")),
+            Osc99Action::None
+        );
+
+        let oversized = STANDARD.encode(vec![b'x'; MAX_NOTIFICATION_METADATA_VALUE_BYTES + 1]);
+        let metadata = format!("i=large:f={oversized}");
+        assert_eq!(
+            protocol.handle(&parts(metadata.as_bytes(), b"ignored")),
+            Osc99Action::None
+        );
+        assert_eq!(protocol.pending_len(), 0);
     }
 
     #[test]
@@ -478,14 +691,16 @@ mod tests {
             protocol.handle(&parts(b"i=bad", b"fresh")),
             Osc99Action::Notify(NotificationRequest {
                 title: Some("fresh".into()),
-                body: String::new()
+                body: String::new(),
+                ..NotificationRequest::default()
             })
         );
         assert_eq!(
             protocol.handle(&parts(b"i=good", b" value")),
             Osc99Action::Notify(NotificationRequest {
                 title: Some("kept value".into()),
-                body: String::new()
+                body: String::new(),
+                ..NotificationRequest::default()
             })
         );
     }
@@ -507,7 +722,8 @@ mod tests {
             protocol.handle(&parts(b"i=item-0", b"gone")),
             Osc99Action::Notify(NotificationRequest {
                 title: Some("gone".into()),
-                body: String::new()
+                body: String::new(),
+                ..NotificationRequest::default()
             })
         );
 

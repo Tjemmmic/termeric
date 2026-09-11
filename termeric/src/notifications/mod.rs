@@ -7,6 +7,10 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{self, SyncSender, TryRecvError, TrySendError};
 use std::time::{Duration, Instant};
 
+use termeric_core::NotificationRequest;
+#[cfg(target_os = "linux")]
+use termeric_core::NotificationUrgency;
+
 const DESKTOP_COMMAND_QUEUE_CAPACITY: usize = 16;
 const MAX_DESKTOP_HELPER_CHILDREN: usize = 8;
 const MAX_DELIVERY_ERROR_CHARS: usize = 512;
@@ -345,6 +349,15 @@ impl Notifications {
 
     /// Send a desktop notification
     pub fn notify(&mut self, title: &str, body: &str) -> Option<String> {
+        self.notify_request(&NotificationRequest {
+            title: Some(title.to_owned()),
+            body: body.to_owned(),
+            ..NotificationRequest::default()
+        })
+    }
+
+    /// Send one typed terminal notification through the platform helper.
+    pub fn notify_request(&mut self, request: &NotificationRequest) -> Option<String> {
         if !self.enabled {
             return None;
         }
@@ -358,11 +371,12 @@ impl Notifications {
 
         self.last_notification = Some(Instant::now());
 
+        let title = request.title.as_deref().unwrap_or("Terminal");
         let Some(command) = &self.command else {
-            log::info!("Notification: {} - {}", title, body);
+            log::info!("Notification: {} - {}", title, request.body);
             return None;
         };
-        let args = notification_args(title, body);
+        let args = notification_args(request, title);
         if let Err(error) = spawn_desktop_command(command, &args, "desktop notification") {
             let message = bounded_delivery_error("Desktop notification unavailable", &error);
             log::warn!("{message}");
@@ -370,7 +384,7 @@ impl Notifications {
         }
         self.last_delivery_failure = None;
 
-        log::debug!("Sent notification: {title:?} - {body:?}");
+        log::debug!("Sent notification: {title:?} - {:?}", request.body);
         None
     }
 
@@ -390,20 +404,63 @@ fn default_notification_command() -> Option<String> {
     None
 }
 
-fn notification_args(title: &str, body: &str) -> Vec<String> {
+fn notification_args(request: &NotificationRequest, title: &str) -> Vec<String> {
     #[cfg(target_os = "linux")]
-    return vec!["--app-name=Termeric".into(), title.into(), body.into()];
+    {
+        let app_name = request.application_name.as_deref().unwrap_or("Termeric");
+        let mut args = vec![format!("--app-name={app_name}")];
+        if !request.notification_types.is_empty() {
+            args.push(format!(
+                "--category={}",
+                request.notification_types.join(",")
+            ));
+        }
+        if let Some(icon_name) = request.icon_names.first() {
+            args.push(format!("--icon={}", freedesktop_icon_name(icon_name)));
+        } else if let Some(application_name) = request.application_name.as_deref() {
+            args.push(format!("--icon={application_name}"));
+        }
+        if let Some(urgency) = request.urgency {
+            let urgency = match urgency {
+                NotificationUrgency::Low => "low",
+                NotificationUrgency::Normal => "normal",
+                NotificationUrgency::Critical => "critical",
+            };
+            args.push(format!("--urgency={urgency}"));
+        }
+        args.push(title.into());
+        args.push(request.body.clone());
+        return args;
+    }
     #[cfg(target_os = "macos")]
     return vec![
         "-e".into(),
         format!(
             "display notification \"{}\" with title \"{}\"",
-            body.replace('"', "\\\""),
+            request.body.replace('"', "\\\""),
             title.replace('"', "\\\"")
         ),
     ];
     #[allow(unreachable_code)]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = (request, title);
+    #[allow(unreachable_code)]
     Vec::new()
+}
+
+#[cfg(target_os = "linux")]
+fn freedesktop_icon_name(name: &str) -> &str {
+    match name {
+        "error" => "dialog-error",
+        "warn" | "warning" => "dialog-warning",
+        "info" => "dialog-information",
+        "question" => "dialog-question",
+        "help" => "help-browser",
+        "file-manager" => "system-file-manager",
+        "system-monitor" => "utilities-system-monitor",
+        "text-editor" => "accessories-text-editor",
+        _ => name,
+    }
 }
 
 #[cfg(test)]
@@ -469,5 +526,82 @@ mod tests {
         let error = notifications.notify("title", "body").unwrap();
         assert!(error.chars().count() <= MAX_DELIVERY_ERROR_CHARS);
         assert!(error.ends_with('…'));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rich_notification_metadata_becomes_separate_notify_send_arguments() {
+        let request = NotificationRequest {
+            title: Some("Build; $(touch nope)".into()),
+            body: "Finished `without a shell`".into(),
+            application_name: Some("build agent".into()),
+            notification_types: vec!["build.complete".into(), "ci".into()],
+            icon_names: vec!["warning".into(), "unused-second-choice".into()],
+            urgency: Some(NotificationUrgency::Critical),
+        };
+        assert_eq!(
+            notification_args(&request, request.title.as_deref().unwrap()),
+            vec![
+                "--app-name=build agent",
+                "--category=build.complete,ci",
+                "--icon=dialog-warning",
+                "--urgency=critical",
+                "Build; $(touch nope)",
+                "Finished `without a shell`",
+            ]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn default_notification_arguments_and_universal_icons_are_stable() {
+        let request = NotificationRequest {
+            title: Some("Title".into()),
+            body: "Body".into(),
+            ..NotificationRequest::default()
+        };
+        assert_eq!(
+            notification_args(&request, "Title"),
+            vec!["--app-name=Termeric", "Title", "Body"]
+        );
+        assert_eq!(freedesktop_icon_name("error"), "dialog-error");
+        assert_eq!(freedesktop_icon_name("warn"), "dialog-warning");
+        assert_eq!(freedesktop_icon_name("warning"), "dialog-warning");
+        assert_eq!(freedesktop_icon_name("info"), "dialog-information");
+        assert_eq!(freedesktop_icon_name("question"), "dialog-question");
+        assert_eq!(freedesktop_icon_name("help"), "help-browser");
+        assert_eq!(freedesktop_icon_name("file-manager"), "system-file-manager");
+        assert_eq!(
+            freedesktop_icon_name("system-monitor"),
+            "utilities-system-monitor"
+        );
+        assert_eq!(
+            freedesktop_icon_name("text-editor"),
+            "accessories-text-editor"
+        );
+        assert_eq!(freedesktop_icon_name("org.example.App"), "org.example.App");
+
+        let application_icon = NotificationRequest {
+            title: Some("Title".into()),
+            application_name: Some("org.example.App".into()),
+            ..NotificationRequest::default()
+        };
+        assert!(
+            notification_args(&application_icon, "Title")
+                .contains(&"--icon=org.example.App".to_string())
+        );
+
+        for (urgency, expected) in [
+            (NotificationUrgency::Low, "--urgency=low"),
+            (NotificationUrgency::Normal, "--urgency=normal"),
+            (NotificationUrgency::Critical, "--urgency=critical"),
+        ] {
+            let request = NotificationRequest {
+                title: Some("Title".into()),
+                urgency: Some(urgency),
+                ..NotificationRequest::default()
+            };
+            assert!(notification_args(&request, "Title").contains(&expected.to_string()));
+        }
     }
 }

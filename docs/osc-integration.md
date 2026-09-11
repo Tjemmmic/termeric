@@ -143,7 +143,10 @@ desktop helper.
 Termeric also implements a bounded subset of Kitty's
 [OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
 `d`, and `e` provide strict identifiers, title/body selection, completion, and
-plain or RFC 4648 base64 payloads. Plain chunks are limited to 2,048 bytes;
+plain or RFC 4648 base64 payloads. The `f`, `t`, and `n` keys add base64-encoded
+application identity, ordered notification types, and ordered icon-name
+candidates; `u=0/1/2` is retained as typed low/normal/critical urgency. Plain
+chunks are limited to 2,048 bytes;
 encoded chunks are limited to 4,096 bytes and accept Kitty's encode-before-
 chunking and encode-after-chunking forms, including an unpadded final chunk.
 Assembled titles and bodies retain at most 4 KiB and 16 KiB respectively.
@@ -156,18 +159,33 @@ text to be completed later. Pending state is global across screen changes and
 DECSTR, while RIS clears it. A completed body-only message promotes its body to
 the title as Kitty specifies; an empty message is ignored.
 
-`OSC 99 ; i=id:p=? ; ST` receives the owner-routed response
-`OSC 99 ; i=id:p=? ; p=title,body:o=always ST`, under the requesting terminal's
-S7C1T/S8C1T framing. The response deliberately advertises only the implemented
-title/body payloads and `always` occasion. Non-`always` occasion requirements
-and close-event requests are rejected. Replacement, activation/focus, buttons,
-close/alive reports, filtering, urgency, expiry, sound selection, icon names or
-data, and icon caching are not advertised or claimed.
+Each decoded application/type/icon metadata value is limited to 256 bytes.
+At most eight unique notification types and eight unique icon candidates are
+retained per request, in first-seen order; repeated values are deduplicated.
+Metadata allocations count toward the aggregate pending-state ceiling. Invalid
+base64, UTF-8, C0/C1 controls, invalid urgency, duplicate singular keys, and
+per-list overflow fail closed and retire only the affected identified assembly.
+
+`OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
+terminal's S7C1T/S8C1T framing. Linux responds with
+`p=title,body:o=always:u=0,1,2`; other targets respond with
+`p=title,body:o=always`. The platform split keeps urgency discovery truthful.
+Application/type/icon-name metadata has no capability-query key. Non-`always`
+occasion requirements and close-event requests are rejected. Replacement,
+activation/focus, buttons, close/alive reports, application-side filtering,
+expiry, sound selection, transmitted icon data, and icon caching are not
+advertised or claimed.
 
 Completed OSC 99 requests enter the same rate-limited, bounded background
-desktop-helper path as legacy notifications. Parser/helper tests do not claim
-that a real notification daemon displayed them; real-compositor permission and
-presentation remain manual acceptance.
+desktop-helper path as legacy notifications. On Linux, `f`, `t`, the first `n`
+candidate, and `u` become separate `notify-send` app-name, category, icon, and
+urgency arguments. Kitty's universal semantic icon names are mapped to common
+freedesktop names; other names are delegated to the desktop icon resolver. If
+`n` is absent, `f` is also offered to that resolver as the icon name.
+macOS retains title/body behavior and ignores metadata without a reliable
+`osascript` equivalent. Parser/helper tests do not claim that a real notification
+daemon displayed them; real-compositor permission and presentation remain
+manual acceptance.
 
 [kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
 

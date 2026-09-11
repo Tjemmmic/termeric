@@ -48,14 +48,33 @@ pub enum TerminalEvent {
     Exit,
 }
 
+/// Desktop notification urgency from Kitty OSC 99.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationUrgency {
+    /// Low-priority information.
+    Low,
+    /// Normal-priority information.
+    Normal,
+    /// Critical information that should be emphasized by the desktop.
+    Critical,
+}
+
 /// Desktop notification request
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NotificationRequest {
     /// Notification title. Kitty OSC 99 body-only requests promote their body
     /// here as required by that protocol.
     pub title: Option<String>,
     /// Notification body/message
     pub body: String,
+    /// Application identity supplied by Kitty OSC 99 `f` metadata.
+    pub application_name: Option<String>,
+    /// Ordered notification categories supplied by Kitty OSC 99 `t` metadata.
+    pub notification_types: Vec<String>,
+    /// Ordered icon-name candidates supplied by Kitty OSC 99 `n` metadata.
+    pub icon_names: Vec<String>,
+    /// Optional Kitty OSC 99 urgency. Absence retains the desktop default.
+    pub urgency: Option<NotificationUrgency>,
 }
 
 /// Clipboard request type

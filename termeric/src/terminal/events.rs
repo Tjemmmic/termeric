@@ -160,7 +160,9 @@ mod tests {
     #[test]
     fn osc99_notifications_are_forwarded_but_queries_stay_with_the_owner() {
         let mut terminal = Terminal::new(80, 24);
-        terminal.process(b"\x1b]99;i=capability:p=?;\x1b\\\x1b]99;;finished\x1b\\");
+        terminal.process(
+            b"\x1b]99;i=capability:p=?;\x1b\\\x1b]99;f=YnVpbGQtYWdlbnQ=:u=2;finished\x1b\\",
+        );
         let mut forwarded = Vec::new();
         let mut replies = Vec::new();
 
@@ -175,13 +177,18 @@ mod tests {
                 termeric_core::NotificationRequest {
                     title: Some("finished".into()),
                     body: String::new(),
+                    application_name: Some("build-agent".into()),
+                    urgency: Some(termeric_core::NotificationUrgency::Critical),
+                    ..termeric_core::NotificationRequest::default()
                 }
             )]
         );
-        assert_eq!(
-            replies,
-            b"\x1b]99;i=capability:p=?;p=title,body:o=always\x1b\\"
-        );
+        #[cfg(target_os = "linux")]
+        let expected_reply =
+            b"\x1b]99;i=capability:p=?;p=title,body:o=always:u=0,1,2\x1b\\".as_slice();
+        #[cfg(not(target_os = "linux"))]
+        let expected_reply = b"\x1b]99;i=capability:p=?;p=title,body:o=always\x1b\\".as_slice();
+        assert_eq!(replies, expected_reply);
         assert_eq!(result.protocol_replies, 1);
         assert_eq!(result.dropped_app_events, 0);
     }

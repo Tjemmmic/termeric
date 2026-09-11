@@ -517,6 +517,7 @@ fn desktop_helper_spawn_failures_become_deduplicated_visible_toasts() {
         event: TerminalEvent::Notification(termeric_core::NotificationRequest {
             title: Some("Build".into()),
             body: "Finished".into(),
+            ..termeric_core::NotificationRequest::default()
         }),
     });
     let messages = app
@@ -535,6 +536,7 @@ fn desktop_helper_spawn_failures_become_deduplicated_visible_toasts() {
         event: TerminalEvent::Notification(termeric_core::NotificationRequest {
             title: Some("Build".into()),
             body: "Again".into(),
+            ..termeric_core::NotificationRequest::default()
         }),
     });
     assert_eq!(app.toasts.iter().count(), 2);

@@ -569,8 +569,7 @@ impl App {
                 }
             }
             TerminalEvent::Notification(req) => {
-                let title = req.title.as_deref().unwrap_or("Terminal");
-                if let Some(error) = self.notifications.notify(title, &req.body) {
+                if let Some(error) = self.notifications.notify_request(&req) {
                     self.toasts.warning(error);
                 }
             }

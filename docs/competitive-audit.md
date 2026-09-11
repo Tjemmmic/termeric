@@ -293,10 +293,11 @@ awaiting evidence:
   vocabulary, bounded screen-local stack operations, queries, exact pane
   routing, and native Winit mappings. Cross-desktop visual acceptance remains
   pending, so this is partial rather than a parity claim.
-- kitty's OSC 99 notification discovery and bounded title/body assembly are
-  now implemented, but replacement, activation/close reports, buttons, icons,
-  filtering, urgency, expiry, and sound selection still require a richer
-  native backend. Kitty OSC 66 text sizing now has bounded multicell parsing,
+- kitty's OSC 99 notification discovery, bounded title/body assembly, typed
+  application/type/icon-name metadata, and Linux urgency routing are now
+  implemented. Replacement, activation/close/alive reports, buttons,
+  transmitted icons/cache, occasion filtering, expiry, and sound selection
+  still require a richer native backend. Kitty OSC 66 text sizing now has bounded multicell parsing,
   grid/edit/reflow/history/domain semantics, scaled shaping, alignment, and
   cursor geometry; native font-quality and client acceptance remain deferred.
   Kitty's terminal file-transfer and multiple-cursor extensions remain

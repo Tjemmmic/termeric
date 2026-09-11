@@ -955,15 +955,18 @@ bounded and deduplicated audio/notification failures, retry recovery, and the
 512-character error ceiling. An App event-routing fixture verifies one visible
 warning per failing integration. The native X11 spies continue to prove exact
 `paplay` and `notify-send` argv; no external desktop service is contacted by the
-unit fixtures.
+unit fixtures. Pure Linux argument fixtures additionally prove that OSC 99
+application identity, categories, semantic icon mapping, and urgency remain
+separate arguments even when title/body text contains shell metacharacters.
 
 The OSC 99 conformance fixture fragments two interleaved notification IDs,
 plain and base64 title/body payloads, completion, and a capability query under
 S8C1T. Focused core tests cover both legal base64 chunking strategies,
 UTF-8/control validation, strict identifiers, malformed-continuation cleanup,
 screen/DECSTR/RIS lifecycle, owner routing, the 16-pending and 256-KiB aggregate
-ceilings, and 4-KiB/16-KiB completed-field bounds. No native notification
-service is contacted.
+ceilings, 4-KiB/16-KiB completed-field bounds, typed `f`/`t`/`n`/`u` metadata,
+deduplication, per-value/per-list ceilings, and Linux-only urgency discovery.
+No native notification service is contacted.
 
 Diff-review tests are provider-free state and accessibility fixtures. They
 cover bounded row/line construction, exact shared layout and pointer targets,

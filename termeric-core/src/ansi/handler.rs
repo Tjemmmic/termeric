@@ -1476,6 +1476,7 @@ impl Perform for Handler<'_> {
                         .push_event(TerminalEvent::Notification(NotificationRequest {
                             title: None,
                             body: message.to_string(),
+                            ..NotificationRequest::default()
                         }));
                 }
             }
@@ -1523,7 +1524,11 @@ impl Perform for Handler<'_> {
                     if let Some(body) = body {
                         log::info!("Desktop notification: {title:?} - {body:?}");
                         self.terminal.push_event(TerminalEvent::Notification(
-                            NotificationRequest { title, body },
+                            NotificationRequest {
+                                title,
+                                body,
+                                ..NotificationRequest::default()
+                            },
                         ));
                     }
                 }
@@ -2058,6 +2063,7 @@ mod osc_tests {
             vec![TerminalEvent::Notification(NotificationRequest {
                 title: None,
                 body: "build;complete".into(),
+                ..NotificationRequest::default()
             })]
         );
         assert_eq!(
@@ -2065,6 +2071,7 @@ mod osc_tests {
             vec![TerminalEvent::Notification(NotificationRequest {
                 title: Some("build".into()),
                 body: "line;two".into(),
+                ..NotificationRequest::default()
             })]
         );
         assert!(parse_notification_text(&[b"line\nfeed"], 64).is_none());

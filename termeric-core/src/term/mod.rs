@@ -942,7 +942,11 @@ impl Terminal {
         match self.notification_protocol.handle(params) {
             Osc99Action::None => {}
             Osc99Action::Query(identifier) => {
-                let response = format!("\x1b]99;i={identifier}:p=?;p=title,body:o=always\x1b\\");
+                #[cfg(target_os = "linux")]
+                let capabilities = "p=title,body:o=always:u=0,1,2";
+                #[cfg(not(target_os = "linux"))]
+                let capabilities = "p=title,body:o=always";
+                let response = format!("\x1b]99;i={identifier}:p=?;{capabilities}\x1b\\");
                 self.push_event(TerminalEvent::PtyWrite(response.into_bytes()));
             }
             Osc99Action::Notify(request) => {

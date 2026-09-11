@@ -550,12 +550,12 @@ notes = "Bounded escape-safe UTF-8 emits typed notification events and preserves
 [[sequence]]
 id = "osc99-notifications"
 family = "OSC"
-syntax = "OSC 99 Kitty notifications: i/p/d/e title, body, and query"
+syntax = "OSC 99 Kitty notifications: i/p/d/e/f/t/n/u title, body, metadata, and query"
 layer = "app"
 status = "partial"
-evidence = ["fixture:osc99-notifications", "test:src/term/notification.rs#interleaved_identifiers_and_both_base64_chunk_styles_do_not_mix", "test:src/term/notification.rs#pending_count_and_bytes_are_hard_bounded", "test:src/ansi/processor.rs#osc99_notifications_are_chunked_queryable_and_reset_bounded", "test:../termeric/src/terminal/events.rs#osc99_notifications_are_forwarded_but_queries_stay_with_the_owner"]
-tracking_issue = "https://github.com/Tjemmmic/termeric/issues/71"
-notes = "Truthful capability queries advertise only title/body payloads and the always occasion. Plain escape-safe UTF-8 plus padded/unpadded RFC 4648 chunks assemble by strict 128-byte identifiers under 4-KiB title, 16-KiB body, 16-pending, and 256-KiB aggregate payload ceilings. Replies use owner-local S7C1T/S8C1T framing; interleaved state survives screen/DECSTR changes and clears on RIS. Replacement, activation/focus, buttons, close/alive reports, application/type filtering, urgency, expiry, sound selection, icons, and native presentation evidence are not claimed."
+evidence = ["fixture:osc99-notifications", "test:src/term/notification.rs#interleaved_identifiers_and_both_base64_chunk_styles_do_not_mix", "test:src/term/notification.rs#rich_metadata_survives_chunking_and_is_typed", "test:src/term/notification.rs#malformed_or_over_limit_metadata_retires_only_its_assembly", "test:src/term/notification.rs#pending_count_and_bytes_are_hard_bounded", "test:src/ansi/processor.rs#osc99_notifications_are_chunked_queryable_and_reset_bounded", "test:../termeric/src/terminal/events.rs#osc99_notifications_are_forwarded_but_queries_stay_with_the_owner", "test:../termeric/src/notifications/mod.rs#rich_notification_metadata_becomes_separate_notify_send_arguments"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/74"
+notes = "Truthful capability queries advertise title/body payloads, the always occasion, and Linux urgency values. Plain escape-safe UTF-8 plus padded/unpadded RFC 4648 chunks assemble by strict 128-byte identifiers; bounded base64 application/type/icon-name metadata survives interleaving and reaches separate Linux helper arguments. Limits are 4-KiB title, 16-KiB body, 256 bytes per metadata value, eight types, eight icon names, 16 pending requests, and 256 KiB aggregate retained data. Replies use owner-local S7C1T/S8C1T framing; interleaved state survives screen/DECSTR changes and clears on RIS. Replacement, activation/focus, buttons, close/alive reports, occasion filtering, expiry, sound selection, transmitted icons, and native presentation evidence are not claimed."
 
 [[sequence]]
 id = "osc66-text-sizing"

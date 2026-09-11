@@ -1216,14 +1216,17 @@ mod tests {
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("simple 🌱".into()),
                     body: String::new(),
+                    ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("build".into()),
                     body: "complete".into(),
+                    ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("other result".into()),
                     body: String::new(),
+                    ..crate::event::NotificationRequest::default()
                 }),
             ]
         );
@@ -1238,17 +1241,25 @@ mod tests {
               \x1b]99;e=1;%%%\x1b\\\
               \x1b]99;p=future;ignored\x1b\\",
         );
-        assert_eq!(
-            terminal.drain_events(),
-            vec![
-                crate::event::TerminalEvent::PtyWrite(
-                    b"\x1b]99;i=query-7:p=?;p=title,body:o=always\x1b\\".to_vec(),
-                ),
-                crate::event::TerminalEvent::PtyWrite(
-                    b"\x9d99;i=query-8:p=?;p=title,body:o=always\x9c".to_vec(),
-                ),
-            ]
-        );
+        #[cfg(target_os = "linux")]
+        let expected_query_events = vec![
+            crate::event::TerminalEvent::PtyWrite(
+                b"\x1b]99;i=query-7:p=?;p=title,body:o=always:u=0,1,2\x1b\\".to_vec(),
+            ),
+            crate::event::TerminalEvent::PtyWrite(
+                b"\x9d99;i=query-8:p=?;p=title,body:o=always:u=0,1,2\x9c".to_vec(),
+            ),
+        ];
+        #[cfg(not(target_os = "linux"))]
+        let expected_query_events = vec![
+            crate::event::TerminalEvent::PtyWrite(
+                b"\x1b]99;i=query-7:p=?;p=title,body:o=always\x1b\\".to_vec(),
+            ),
+            crate::event::TerminalEvent::PtyWrite(
+                b"\x9d99;i=query-8:p=?;p=title,body:o=always\x9c".to_vec(),
+            ),
+        ];
+        assert_eq!(terminal.drain_events(), expected_query_events);
 
         // Incomplete state is global across a screen switch and DECSTR, but a
         // full RIS retires it so stale application text cannot be completed.
@@ -1265,10 +1276,12 @@ mod tests {
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("before-after".into()),
                     body: String::new(),
+                    ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("fresh".into()),
                     body: String::new(),
+                    ..crate::event::NotificationRequest::default()
                 }),
             ]
         );
