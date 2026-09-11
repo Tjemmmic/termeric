@@ -12,9 +12,14 @@ const PLUGIN_MANAGER_PAGE_SIZE: usize = 24;
 const PLUGIN_SETTINGS_PAGE_SIZE: usize = 24;
 const PLUGIN_SETTING_VALUES_PAGE_SIZE: usize = 24;
 const PLUGIN_PERMISSION_PAGE_SIZE: usize = 24;
+const PLUGIN_PROFILE_PAGE_SIZE: usize = 24;
 const PLUGIN_LIST_SHORTCUTS: [char; PLUGIN_MANAGER_PAGE_SIZE] = [
     '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'd', 'e', 'f', 'g', 'h', 't', 'j', 'k', 'l',
     'm', 'o', 'q', 'r', 's',
+];
+const PLUGIN_PROFILE_SHORTCUTS: [char; PLUGIN_PROFILE_PAGE_SIZE] = [
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+    'o', 'q', 'r', 's', 't',
 ];
 
 impl App {
@@ -383,6 +388,26 @@ impl App {
             ),
         ];
         push_wrapped_field(&mut lines, "Source", &status.source.display().to_string());
+        if let Some(profile) = status
+            .configured_default_profile
+            .as_deref()
+            .and_then(|id| status.profiles.iter().find(|profile| profile.id == id))
+            .or_else(|| status.profiles.first())
+        {
+            let origin = if status.configured_default_profile.is_some() {
+                "configured"
+            } else {
+                "manifest order"
+            };
+            lines.push(format!(
+                "Default profile: {} ({}) · {origin}",
+                profile.name, profile.id
+            ));
+        } else if status.diagnostic.is_some() {
+            lines.push("Default profile: unavailable while plugin diagnostics are active".into());
+        } else {
+            lines.push("Default profile: unavailable (no launch profiles)".into());
+        }
         lines.extend([
             format!("Requested permissions: {requested}"),
             format!("Granted permissions: {granted}"),
@@ -401,6 +426,16 @@ impl App {
         lines.push(String::new());
 
         let mut choices = Vec::new();
+        if status.diagnostic.is_none() && !status.profiles.is_empty() {
+            let source_line = lines.len();
+            lines.push("[P] Choose default profile".into());
+            choices.push(InfoOverlayChoice::new(
+                "choose-default-profile",
+                "Choose default profile",
+                source_line,
+                Some('p'),
+            ));
+        }
         if status.diagnostic.is_none() && !status.setting_definitions.is_empty() {
             let source_line = lines.len();
             lines.push("[S] Configure settings".into());
@@ -461,6 +496,127 @@ impl App {
         self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
             request_id,
             view: RuntimePluginManagerView::Detail { plugin_id, page },
+        });
+    }
+
+    fn show_runtime_plugin_default_profiles(
+        &mut self,
+        plugin_id: String,
+        page: usize,
+        requested_profile_page: usize,
+    ) {
+        let Some(status) = self.current_runtime_plugin_status(&plugin_id, page) else {
+            return;
+        };
+        if status.diagnostic.is_some() || status.profiles.is_empty() {
+            self.show_runtime_plugin_detail(plugin_id, page);
+            return;
+        }
+        let page_count = status
+            .profiles
+            .len()
+            .div_ceil(PLUGIN_PROFILE_PAGE_SIZE)
+            .max(1);
+        let profile_page = requested_profile_page.min(page_count - 1);
+        let start = profile_page * PLUGIN_PROFILE_PAGE_SIZE;
+        let end = (start + PLUGIN_PROFILE_PAGE_SIZE).min(status.profiles.len());
+        let effective_id = status
+            .configured_default_profile
+            .as_deref()
+            .or_else(|| status.profiles.first().map(|profile| profile.id.as_str()));
+        let mut lines = vec![
+            format!("{} ({})", status.name, status.id),
+            format!(
+                "Launch profiles: {} · page {}/{}",
+                status.profiles.len(),
+                profile_page + 1,
+                page_count
+            ),
+            "The default is used only when a launch or restore does not name a profile.".into(),
+            String::new(),
+        ];
+        let mut choices = Vec::new();
+        for (local_index, profile) in status.profiles[start..end].iter().enumerate() {
+            let source_line = lines.len();
+            let marker = if effective_id == Some(profile.id.as_str()) {
+                "*"
+            } else {
+                " "
+            };
+            let origin =
+                if status.configured_default_profile.as_deref() == Some(profile.id.as_str()) {
+                    " · configured"
+                } else if status.configured_default_profile.is_none() && local_index + start == 0 {
+                    " · manifest order"
+                } else {
+                    ""
+                };
+            let label = format!("{} ({}){origin}", profile.name, profile.id);
+            let shortcut = PLUGIN_PROFILE_SHORTCUTS[local_index];
+            lines.push(format!(
+                "[{marker}] [{}] {label}",
+                shortcut.to_ascii_uppercase()
+            ));
+            if !profile.description.is_empty() {
+                push_wrapped_field(&mut lines, "  Description", &profile.description);
+            }
+            choices.push(InfoOverlayChoice::new(
+                format!("profile:{}", profile.id),
+                label,
+                source_line,
+                Some(shortcut),
+            ));
+        }
+        if profile_page > 0 {
+            let source_line = lines.len();
+            lines.push("[P] Previous profiles".into());
+            choices.push(InfoOverlayChoice::new(
+                "previous-page",
+                "Previous profiles",
+                source_line,
+                Some('p'),
+            ));
+        }
+        if profile_page + 1 < page_count {
+            let source_line = lines.len();
+            lines.push("[N] Next profiles".into());
+            choices.push(InfoOverlayChoice::new(
+                "next-page",
+                "Next profiles",
+                source_line,
+                Some('n'),
+            ));
+        }
+        if status.configured_default_profile.is_some() {
+            let source_line = lines.len();
+            lines.push("[D] Use manifest order".into());
+            choices.push(InfoOverlayChoice::new(
+                "manifest-order",
+                "Use manifest order",
+                source_line,
+                Some('d'),
+            ));
+        }
+        let source_line = lines.len();
+        lines.push("[B] Back to plugin details".into());
+        choices.push(InfoOverlayChoice::new(
+            "back",
+            "Back to plugin details",
+            source_line,
+            Some('b'),
+        ));
+        let request_id = self.info_overlay.show_choices(
+            format!("Default Profile: {}", status.name),
+            lines,
+            choices,
+        );
+        self.pending_runtime_plugin_management = Some(PendingRuntimePluginManagement {
+            request_id,
+            view: RuntimePluginManagerView::DefaultProfile {
+                plugin_id,
+                page,
+                profile_page,
+            },
         });
     }
 
@@ -857,6 +1013,9 @@ impl App {
             | RuntimePluginManagerView::InstallPath { page }
             | RuntimePluginManagerView::ReviewInstall { page, .. } => (None, *page),
             RuntimePluginManagerView::Detail { plugin_id, page }
+            | RuntimePluginManagerView::DefaultProfile {
+                plugin_id, page, ..
+            }
             | RuntimePluginManagerView::Settings {
                 plugin_id, page, ..
             }
@@ -988,6 +1147,9 @@ impl App {
                 ),
             },
             RuntimePluginManagerView::Detail { plugin_id, page } => match choice_id {
+                "choose-default-profile" => {
+                    self.show_runtime_plugin_default_profiles(plugin_id, page, 0)
+                }
                 "configure-settings" => self.show_runtime_plugin_settings(plugin_id, page, 0),
                 "toggle" => {
                     let enabled = self
@@ -1025,6 +1187,52 @@ impl App {
                 ),
                 "back" => self.show_runtime_plugin_list(page),
                 _ => {}
+            },
+            RuntimePluginManagerView::DefaultProfile {
+                plugin_id,
+                page,
+                profile_page,
+            } => match choice_id {
+                "previous-page" => self.show_runtime_plugin_default_profiles(
+                    plugin_id,
+                    page,
+                    profile_page.saturating_sub(1),
+                ),
+                "next-page" => self.show_runtime_plugin_default_profiles(
+                    plugin_id,
+                    page,
+                    profile_page.saturating_add(1),
+                ),
+                "manifest-order" => self.apply_runtime_plugin_default_profile_change(
+                    plugin_id,
+                    page,
+                    PluginConfigurationChange::ClearDefaultProfile,
+                ),
+                "back" => self.show_runtime_plugin_detail(plugin_id, page),
+                choice if choice.starts_with("profile:") => {
+                    let profile_id = &choice[8..];
+                    let exists = self
+                        .current_runtime_plugin_status(&plugin_id, page)
+                        .is_some_and(|status| {
+                            status
+                                .profiles
+                                .iter()
+                                .any(|profile| profile.id == profile_id)
+                        });
+                    if exists {
+                        self.apply_runtime_plugin_default_profile_change(
+                            plugin_id,
+                            page,
+                            PluginConfigurationChange::DefaultProfile(profile_id.into()),
+                        );
+                    } else {
+                        self.toasts.warning(format!(
+                            "Profile {profile_id:?} no longer exists; refreshed plugin profiles"
+                        ));
+                        self.show_runtime_plugin_default_profiles(plugin_id, page, profile_page);
+                    }
+                }
+                _ => self.show_runtime_plugin_default_profiles(plugin_id, page, profile_page),
             },
             RuntimePluginManagerView::Settings {
                 plugin_id,
@@ -1370,6 +1578,40 @@ impl App {
         }
     }
 
+    fn apply_runtime_plugin_default_profile_change(
+        &mut self,
+        plugin_id: String,
+        page: usize,
+        change: PluginConfigurationChange,
+    ) {
+        let command = PluginAdminCommand::Configure {
+            id: plugin_id.clone(),
+            change,
+        };
+        match self.execute_runtime_plugin_admin(command) {
+            Ok(message) => {
+                self.last_plugin_registry_mtime =
+                    std::fs::metadata(self.runtime_plugin_registry_path_for_app())
+                        .and_then(|metadata| metadata.modified())
+                        .ok();
+                self.sync_plugins_from_config();
+                self.reload_dynamic_keybindings();
+                self.toasts.success(message);
+                self.show_runtime_plugin_detail(plugin_id, page);
+            }
+            Err(error) => {
+                let error = format!("{error:#}");
+                self.toasts
+                    .error(format!("Default profile update failed: {error}"));
+                self.show_runtime_plugin_error(
+                    RuntimePluginManagerView::Detail { plugin_id, page },
+                    "Default Profile Update Failed",
+                    &error,
+                );
+            }
+        }
+    }
+
     fn runtime_plugin_setting_schema_is_current(
         &mut self,
         plugin_id: &str,
@@ -1606,6 +1848,52 @@ program = "termeric-test-fixture-must-not-run"
         )
     }
 
+    fn profile_fixture_manifest(id: &str, version: &str, profile_count: usize) -> String {
+        let profiles = (0..profile_count)
+            .map(|index| {
+                format!(
+                    r#"[[profiles]]
+id = "profile-{index}"
+name = "Profile {index}"
+description = "Local inert profile {index}"
+program = "termeric-test-fixture-must-not-run-{index}"
+"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            r#"api_version = 10
+id = "{id}"
+name = "Fixture {id}"
+version = "{version}"
+permissions = ["process-spawn"]
+
+{profiles}
+[[settings]]
+type = "boolean"
+id = "verbose"
+name = "Verbose"
+default = true
+"#
+        )
+    }
+
+    fn event_only_fixture_manifest(id: &str) -> String {
+        format!(
+            r#"api_version = 3
+id = "{id}"
+name = "Fixture {id}"
+version = "1.0.0"
+permissions = ["process-spawn", "event-subscribe"]
+
+[event_handler]
+program = "termeric-test-fixture-must-not-run"
+events = ["app-ready"]
+"#
+        )
+    }
+
     fn typed_fixture_manifest(integer_max: i64) -> String {
         format!(
             r#"api_version = 10
@@ -1737,6 +2025,34 @@ program = "termeric-test-fixture-must-not-run"
             PluginAdminCommand::Install {
                 directory: source.clone(),
                 grants: BTreeSet::from([crate::plugin::runtime::PluginPermission::ProcessSpawn]),
+                enable: false,
+                replace: false,
+            },
+            registry,
+            root,
+        )
+        .unwrap();
+        source
+    }
+
+    fn install_profile_fixture(
+        base: &std::path::Path,
+        registry: &std::path::Path,
+        root: &std::path::Path,
+        id: &str,
+        profile_count: usize,
+    ) -> PathBuf {
+        let source = base.join(format!("source-{id}"));
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            profile_fixture_manifest(id, "1.0.0", profile_count),
+        )
+        .unwrap();
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: BTreeSet::from([PluginPermission::ProcessSpawn]),
                 enable: false,
                 replace: false,
             },
@@ -1997,6 +2313,222 @@ program = "termeric-test-fixture-must-not-run"
             app.info_overlay
                 .choice(app.info_overlay.request_id(), "previous-page")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn manager_selects_and_clears_default_profile_without_other_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = temp.path().join("registry.toml");
+        let root = temp.path().join("installed");
+        std::fs::create_dir_all(&root).unwrap();
+        install_profile_fixture(temp.path(), &registry, &root, "profile-tool", 2);
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Configure {
+                id: "profile-tool".into(),
+                change: PluginConfigurationChange::Set {
+                    key: "verbose".into(),
+                    value: "false".into(),
+                },
+            },
+            &registry,
+            &root,
+        )
+        .unwrap();
+        let installed_manifest = root
+            .join("profile-tool")
+            .join(crate::plugin::runtime::MANIFEST_NAME);
+        let installed_bytes = std::fs::read(&installed_manifest).unwrap();
+        let (_, before) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        let before = before.into_iter().next().unwrap();
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
+        app.open_runtime_plugin_manager();
+        choose(&mut app, "plugin:profile-tool");
+        assert!(
+            app.info_overlay.lines().iter().any(
+                |line| line.contains("Default profile: Profile 0 (profile-0) · manifest order")
+            )
+        );
+        choose(&mut app, "choose-default-profile");
+        let picker_request = app.info_overlay.request_id();
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id: picker_request + 1,
+            choice_id: "profile:profile-1".into(),
+        });
+        assert_eq!(app.info_overlay.request_id(), picker_request);
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id: picker_request,
+            choice_id: "profile:not-declared".into(),
+        });
+        assert_eq!(app.info_overlay.request_id(), picker_request);
+        choose(&mut app, "profile:profile-1");
+
+        let (_, selected) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        let selected = selected.into_iter().next().unwrap();
+        assert_eq!(
+            selected.configured_default_profile.as_deref(),
+            Some("profile-1")
+        );
+        assert!(
+            app.info_overlay.lines().iter().any(|line| {
+                line.contains("Default profile: Profile 1 (profile-1) · configured")
+            })
+        );
+        assert_eq!(selected.enabled, before.enabled);
+        assert_eq!(selected.source, before.source);
+        assert_eq!(selected.requested, before.requested);
+        assert_eq!(selected.granted, before.granted);
+        assert_eq!(selected.settings, before.settings);
+        assert_eq!(std::fs::read(&installed_manifest).unwrap(), installed_bytes);
+
+        choose(&mut app, "choose-default-profile");
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "manifest-order")
+                .is_some()
+        );
+        choose(&mut app, "manifest-order");
+        let (_, reset) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        assert!(reset[0].configured_default_profile.is_none());
+        assert!(
+            app.info_overlay.lines().iter().any(
+                |line| line.contains("Default profile: Profile 0 (profile-0) · manifest order")
+            )
+        );
+        assert_eq!(std::fs::read(installed_manifest).unwrap(), installed_bytes);
+    }
+
+    #[test]
+    fn default_profile_picker_is_bounded_and_hidden_for_event_only_plugins() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = temp.path().join("registry.toml");
+        let root = temp.path().join("installed");
+        std::fs::create_dir_all(&root).unwrap();
+        install_profile_fixture(temp.path(), &registry, &root, "many-profiles", 32);
+        let event_source = temp.path().join("source-event-only");
+        std::fs::create_dir_all(&event_source).unwrap();
+        std::fs::write(
+            event_source.join(crate::plugin::runtime::MANIFEST_NAME),
+            event_only_fixture_manifest("event-only"),
+        )
+        .unwrap();
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: event_source,
+                grants: BTreeSet::new(),
+                enable: false,
+                replace: false,
+            },
+            &registry,
+            &root,
+        )
+        .unwrap();
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.set_runtime_plugin_test_paths(registry, root);
+        app.open_runtime_plugin_manager();
+        choose(&mut app, "plugin:many-profiles");
+        choose(&mut app, "choose-default-profile");
+        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
+        let shortcuts = app
+            .info_overlay
+            .choices()
+            .iter()
+            .filter_map(|choice| choice.shortcut)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(shortcuts.len(), app.info_overlay.choices().len());
+        assert_eq!(
+            app.info_overlay
+                .choice_for_shortcut(app.info_overlay.request_id(), 'b')
+                .map(|choice| choice.id.as_str()),
+            Some("back")
+        );
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "next-page")
+                .is_some()
+        );
+        choose(&mut app, "next-page");
+        assert!(app.info_overlay.choices().len() <= crate::ui::info_overlay::MAX_INFO_CHOICES);
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "previous-page")
+                .is_some()
+        );
+
+        app.open_runtime_plugin_manager();
+        choose(&mut app, "plugin:event-only");
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "choose-default-profile")
+                .is_none()
+        );
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("Default profile: unavailable"))
+        );
+    }
+
+    #[test]
+    fn removed_profile_cannot_be_selected_from_a_stale_picker() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = temp.path().join("registry.toml");
+        let root = temp.path().join("installed");
+        std::fs::create_dir_all(&root).unwrap();
+        let source = install_profile_fixture(temp.path(), &registry, &root, "changing-tool", 2);
+
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.set_runtime_plugin_test_paths(registry.clone(), root.clone());
+        app.open_runtime_plugin_manager();
+        choose(&mut app, "plugin:changing-tool");
+        choose(&mut app, "choose-default-profile");
+        let stale_request = app.info_overlay.request_id();
+        assert!(
+            app.info_overlay
+                .choice(stale_request, "profile:profile-1")
+                .is_some()
+        );
+        std::fs::write(
+            source.join(crate::plugin::runtime::MANIFEST_NAME),
+            profile_fixture_manifest("changing-tool", "2.0.0", 1),
+        )
+        .unwrap();
+        crate::plugin::runtime::execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "changing-tool".into(),
+            },
+            &registry,
+            &root,
+        )
+        .unwrap();
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id: stale_request,
+            choice_id: "profile:profile-1".into(),
+        });
+
+        let (_, statuses) =
+            crate::plugin::runtime::discover_runtime_plugins_at(&registry, &root).unwrap();
+        assert!(statuses[0].configured_default_profile.is_none());
+        assert_eq!(
+            app.info_overlay.title(),
+            "Default Profile: Fixture changing-tool"
+        );
+        assert!(
+            app.info_overlay
+                .choice(app.info_overlay.request_id(), "profile:profile-1")
+                .is_none()
+        );
+        assert!(
+            app.toasts
+                .iter()
+                .any(|toast| toast.message.contains("no longer exists"))
         );
     }
 

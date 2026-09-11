@@ -739,6 +739,11 @@ enum RuntimePluginManagerView {
         plugin_id: String,
         page: usize,
     },
+    DefaultProfile {
+        plugin_id: String,
+        page: usize,
+        profile_page: usize,
+    },
     Settings {
         plugin_id: String,
         page: usize,

@@ -225,8 +225,8 @@ enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal. It can also review and install a local plugin from an
 absolute directory path with explicit grants; enabling is offered only after
 every requested permission is granted. Typed settings are editable in-app.
-Replacement installs and default-profile selection remain explicit CLI
-operations.
+The manager also shows, selects, and clears each plugin's default launch profile.
+Replacement installs remain an explicit CLI operation.
 See the [third-party plugin API and security model](docs/plugins.md).
 
 Bundled themes live under [`termeric/themes/`](termeric/themes/). Put personal

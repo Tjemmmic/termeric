@@ -998,6 +998,10 @@ fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                         "--default-profile requires PROFILE",
                     )?)
                 }
+                Some("--clear-default-profile") => {
+                    require_count(values, 2, "plugin configure ID --clear-default-profile")?;
+                    PluginConfigurationChange::ClearDefaultProfile
+                }
                 Some("--set") => {
                     require_count(values, 4, "plugin configure ID --set KEY VALUE")?;
                     PluginConfigurationChange::Set {
@@ -1016,7 +1020,7 @@ fn parse_plugin(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                     PluginConfigurationChange::ResetSettings
                 }
                 _ => anyhow::bail!(
-                    "plugin configure expects --default-profile, --set, --unset, or --reset-settings"
+                    "plugin configure expects --default-profile, --clear-default-profile, --set, --unset, or --reset-settings"
                 ),
             };
             PluginAdminCommand::Configure { id, change }
@@ -1037,6 +1041,7 @@ Usage: termeric plugin SUBCOMMAND\n\n\
   enable ID\n\
   disable ID\n\
   configure ID --default-profile PROFILE\n\
+  configure ID --clear-default-profile\n\
   configure ID --set KEY VALUE\n\
   configure ID --unset KEY\n\
   configure ID --reset-settings\n\
@@ -2431,6 +2436,32 @@ mod tests {
                 ..
             })
         ));
+        assert!(matches!(
+            parse(
+                ["plugin", "configure", "sample", "--clear-default-profile"]
+                    .into_iter()
+                    .map(OsString::from)
+            )
+            .unwrap(),
+            ParseOutcome::Plugin(crate::plugin::runtime::PluginAdminCommand::Configure {
+                id,
+                change: crate::plugin::runtime::PluginConfigurationChange::ClearDefaultProfile,
+            }) if id == "sample"
+        ));
+        assert!(
+            parse(
+                [
+                    "plugin",
+                    "configure",
+                    "sample",
+                    "--clear-default-profile",
+                    "extra",
+                ]
+                .into_iter()
+                .map(OsString::from)
+            )
+            .is_err()
+        );
         assert!(
             parse(
                 ["plugin", "install", "/tmp/sample", "--allow", "camera"]

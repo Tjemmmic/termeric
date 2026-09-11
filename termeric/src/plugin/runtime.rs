@@ -1008,6 +1008,13 @@ impl PluginRegistry {
 }
 
 #[derive(Debug, Clone)]
+pub struct RuntimePluginProfileSummary {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct RuntimePluginStatus {
     pub id: String,
     pub name: String,
@@ -1016,6 +1023,8 @@ pub struct RuntimePluginStatus {
     pub source: PathBuf,
     pub requested: BTreeSet<PluginPermission>,
     pub granted: BTreeSet<PluginPermission>,
+    pub profiles: Vec<RuntimePluginProfileSummary>,
+    pub configured_default_profile: Option<String>,
     pub settings: BTreeMap<String, PluginSettingValue>,
     /// Validated manifest schema for healthy installations.
     pub setting_definitions: Vec<DeclarativeSetting>,
@@ -1060,6 +1069,16 @@ fn discover_from_registry(
                     source: installed.source.clone(),
                     requested: manifest.permissions.clone(),
                     granted: installed.grants.clone(),
+                    profiles: manifest
+                        .profiles
+                        .iter()
+                        .map(|profile| RuntimePluginProfileSummary {
+                            id: profile.id.clone(),
+                            name: profile.name.clone(),
+                            description: profile.description.clone(),
+                        })
+                        .collect(),
+                    configured_default_profile: installed.default_profile.clone(),
                     settings: effective_settings(&manifest, &installed.settings)
                         .expect("installed settings were validated during load"),
                     setting_definitions: manifest.settings.clone(),
@@ -1094,6 +1113,8 @@ fn discover_from_registry(
                     requested: inspected
                         .map_or_else(BTreeSet::new, |manifest| manifest.permissions),
                     granted: installed.grants.clone(),
+                    profiles: Vec::new(),
+                    configured_default_profile: installed.default_profile.clone(),
                     settings: BTreeMap::new(),
                     setting_definitions: Vec::new(),
                     configured_settings: BTreeMap::new(),
@@ -1601,6 +1622,7 @@ pub enum PluginAdminCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginConfigurationChange {
     DefaultProfile(String),
+    ClearDefaultProfile,
     Set { key: String, value: String },
     Unset { key: String },
     ResetSettings,
@@ -1738,6 +1760,10 @@ pub(crate) fn execute_admin_at(
                     }
                     installed.default_profile = Some(default_profile.clone());
                     format!("configured {id}: default-profile={default_profile}")
+                }
+                PluginConfigurationChange::ClearDefaultProfile => {
+                    installed.default_profile = None;
+                    format!("configured {id}: default-profile=manifest-order")
                 }
                 PluginConfigurationChange::Set { key, value } => {
                     validate_identifier("setting id", &key)?;
@@ -3763,6 +3789,34 @@ events = ["command-invoked"]
             HookResponse::Action(PluginAction::OpenTab {
                 profile: Some(profile), cwd: None, ..
             }) if profile == "quiet"
+        ));
+
+        execute_admin_at(
+            PluginAdminCommand::Configure {
+                id: "sample-tools".into(),
+                change: PluginConfigurationChange::ClearDefaultProfile,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        assert!(registry.plugins[0].default_profile.is_none());
+        let (mut plugins, statuses) = discover_from_registry(&registry, &root);
+        assert_eq!(statuses[0].profiles.len(), 2);
+        assert!(statuses[0].configured_default_profile.is_none());
+        assert!(matches!(
+            plugins[0].on_hook(
+                &Hook::WorkspaceRestore {
+                    plugin_id: "sample-tools".into(),
+                    profile: None,
+                    cwd: None
+                },
+                &context
+            ),
+            HookResponse::Action(PluginAction::OpenTab {
+                profile: Some(profile), cwd: None, ..
+            }) if profile == "default"
         ));
 
         execute_admin_at(

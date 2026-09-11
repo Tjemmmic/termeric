@@ -169,6 +169,7 @@ termeric plugin install examples/plugins/task-runner \
 termeric plugin list
 termeric plugin show task-runner --json
 termeric plugin configure task-runner --default-profile tests
+termeric plugin configure task-runner --clear-default-profile
 ```
 
 An open Termeric process polls the registry at the existing 750 ms config
@@ -185,6 +186,10 @@ enabled requires every requested permission. The runtime re-reads the manifest
 and requires its fingerprint to match the reviewed fingerprint immediately
 before using the same atomic install path as the CLI. Duplicate IDs are refused
 and directed to the existing Update action rather than replaced silently. It can
+show the effective default launch profile and whether it comes from an explicit
+choice or manifest order. Its bounded profile picker selects by stable profile
+ID and can clear an explicit choice back to the first-profile manifest-order
+fallback; event-only and unhealthy plugins do not expose the picker. It can
 edit every declared Boolean, integer, text, and choice setting, restore one
 manifest default, enable or disable immediately, and use request-scoped
 confirmations before updating from source, resetting all overrides, or removing
@@ -194,9 +199,9 @@ revalidated through the same atomic registry path as the CLI, and an editor
 whose plugin schema changed after opening fails closed. A removal never deletes
 the recorded original source directory.
 
-Replacement installation, relative-path interpretation, and default-profile
-selection remain explicit CLI operations. Typed setting set/unset is supported
-both in-app and through the CLI. `plugin list/show` also remains the
+Replacement installation and relative-path interpretation remain explicit CLI
+operations. Default-profile selection/reset and typed setting set/unset are
+supported both in-app and through the CLI. `plugin list/show` remains the
 untruncated/scriptable diagnostic record. Remote installation, catalogs, and
 download/signature trust are not implied by the local in-app flow.
 
@@ -250,7 +255,10 @@ Every profile contributes `<plugin-id>.open-<profile-id>` under its plugin
 name in the command palette. `--profile my-tools:check` and workspace restore
 use the same versioned hook and argv construction. A configured default profile
 is used only when a restore does not name one; a named archive profile always
-wins.
+wins. With no configured default, the first profile in manifest order is used.
+The in-app **Use manifest order** action and CLI
+`plugin configure ID --clear-default-profile` restore that adaptive fallback;
+they do not store today's first profile ID.
 
 Manifests reject unknown fields, unknown enum values, duplicate profile IDs,
 reserved built-in IDs, NULs, multiline identity fields, unsupported API
