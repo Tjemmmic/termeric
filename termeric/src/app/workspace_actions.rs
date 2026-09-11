@@ -2995,6 +2995,98 @@ impl App {
         ))
     }
 
+    pub(super) fn swap_plugin_panes(
+        &mut self,
+        tab_id: u64,
+        first_pane_id: u32,
+        second_pane_id: u32,
+    ) -> std::result::Result<(Vec<u32>, u32, Option<u32>), String> {
+        let active_before = self.tabs.as_ref().and_then(TabManager::active_tab_id);
+        let state = {
+            let manager = self.plugin_pane_layout_manager(tab_id)?;
+            manager
+                .swap_exact(PaneId(first_pane_id), PaneId(second_pane_id))
+                .map_err(|error| format!("Could not swap panes: {error:#}"))?;
+            plugin_pane_layout_state(manager)
+        };
+        self.finish_plugin_pane_layout(active_before);
+        Ok(state)
+    }
+
+    pub(super) fn balance_plugin_panes(
+        &mut self,
+        tab_id: u64,
+    ) -> std::result::Result<(bool, Vec<u32>, u32, Option<u32>), String> {
+        let active_before = self.tabs.as_ref().and_then(TabManager::active_tab_id);
+        let (changed, state) = {
+            let manager = self.plugin_pane_layout_manager(tab_id)?;
+            let changed = manager
+                .balance_exact()
+                .map_err(|error| format!("Could not balance panes: {error:#}"))?;
+            (changed, plugin_pane_layout_state(manager))
+        };
+        self.finish_plugin_pane_layout(active_before);
+        Ok((changed, state.0, state.1, state.2))
+    }
+
+    pub(super) fn apply_plugin_pane_layout(
+        &mut self,
+        tab_id: u64,
+        preset: crate::panes::PaneLayoutPreset,
+    ) -> std::result::Result<(Vec<u32>, u32, Option<u32>), String> {
+        let active_before = self.tabs.as_ref().and_then(TabManager::active_tab_id);
+        let state = {
+            let manager = self.plugin_pane_layout_manager(tab_id)?;
+            manager
+                .apply_layout_preset_exact(preset)
+                .map_err(|error| format!("Could not apply pane layout: {error:#}"))?;
+            plugin_pane_layout_state(manager)
+        };
+        self.finish_plugin_pane_layout(active_before);
+        Ok(state)
+    }
+
+    fn plugin_pane_layout_manager(
+        &mut self,
+        tab_id: u64,
+    ) -> std::result::Result<&mut PaneManager, String> {
+        let tab_id = usize::try_from(tab_id)
+            .map_err(|_| "Target tab ID does not fit this platform".to_string())?;
+        let tab = self
+            .tabs
+            .as_mut()
+            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?
+            .tab_mut_by_id(tab_id)
+            .ok_or_else(|| format!("GUI tab {tab_id} does not exist in the target window"))?;
+        if tab.closed || tab.closing_at.is_some() {
+            return Err(format!("GUI tab {tab_id} is closing"));
+        }
+        if tab.live_domain_tab_route().is_some() {
+            return Err(format!(
+                "GUI tab {tab_id} belongs to daemon-authoritative live-domain topology"
+            ));
+        }
+        if matches!(tab.tab_type, crate::tabs::TabType::Serial { .. }) {
+            return Err(format!("GUI tab {tab_id} is a serial terminal"));
+        }
+        tab.pane_manager
+            .as_mut()
+            .ok_or_else(|| format!("GUI tab {tab_id} is not split"))
+    }
+
+    fn finish_plugin_pane_layout(&mut self, active_before: Option<usize>) {
+        debug_assert_eq!(
+            self.tabs.as_ref().and_then(TabManager::active_tab_id),
+            active_before,
+            "plugin pane layout must not change the active tab"
+        );
+        self.divider_dragging = None;
+        self.refresh_focused_terminal_surfaces();
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     pub(super) fn resize_control_divider(
         &mut self,
         tab_id: u64,
@@ -3638,6 +3730,14 @@ impl App {
             window.request_redraw();
         }
     }
+}
+
+fn plugin_pane_layout_state(manager: &PaneManager) -> (Vec<u32>, u32, Option<u32>) {
+    (
+        manager.pane_ids().into_iter().map(|id| id.0).collect(),
+        manager.focused_id().0,
+        manager.zoomed_id().map(|id| id.0),
+    )
 }
 
 #[cfg(test)]

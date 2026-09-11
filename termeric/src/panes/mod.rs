@@ -1425,6 +1425,82 @@ impl PaneManager {
         swapped
     }
 
+    /// Swap two exact live pane identities within the existing split tree.
+    /// This preserves PTYs, focus, zoom ownership, and divider geometry.
+    pub(crate) fn swap_exact(&mut self, first: PaneId, second: PaneId) -> anyhow::Result<()> {
+        self.validate_complete_live_layout()?;
+        if first == second {
+            anyhow::bail!("Pane swap requires two distinct pane IDs");
+        }
+        for pane_id in [first, second] {
+            let pane = self
+                .panes
+                .get(&pane_id)
+                .with_context(|| format!("GUI pane {} does not exist", pane_id.0))?;
+            if pane.closed {
+                anyhow::bail!("GUI pane {} is closed", pane_id.0);
+            }
+        }
+        if !self.tree.swap(first, second) {
+            anyhow::bail!("Pane swap target disappeared from the layout tree");
+        }
+        self.navigation_memory.clear();
+        self.recalculate_sizes();
+        Ok(())
+    }
+
+    /// Reset every divider ratio in one complete live layout. The returned
+    /// flag distinguishes an already-balanced no-op from a geometry change.
+    pub(crate) fn balance_exact(&mut self) -> anyhow::Result<bool> {
+        self.validate_complete_live_layout()?;
+        let changed = self
+            .tree
+            .get_dividers(PaneRect {
+                x: 0.0,
+                y: 0.0,
+                width: self.total_width,
+                height: self.total_height,
+            })
+            .iter()
+            .any(|divider| divider.ratio_millis != 500);
+        if changed {
+            self.tree.balance();
+            self.recalculate_sizes();
+        }
+        Ok(changed)
+    }
+
+    /// Rebuild one complete live layout from its current visual stable-ID
+    /// order. Presets deliberately clear zoom because the geometry is replaced.
+    pub(crate) fn apply_layout_preset_exact(
+        &mut self,
+        preset: PaneLayoutPreset,
+    ) -> anyhow::Result<()> {
+        self.validate_complete_live_layout()?;
+        let (direction, alternate) = match preset {
+            PaneLayoutPreset::Columns => (SplitDirection::Vertical, false),
+            PaneLayoutPreset::Rows => (SplitDirection::Horizontal, false),
+            PaneLayoutPreset::Grid => (SplitDirection::Vertical, true),
+        };
+        if !self.tree.apply_preset(direction, alternate) {
+            anyhow::bail!("Pane layout split ID space is exhausted");
+        }
+        self.zoomed = None;
+        self.navigation_memory.clear();
+        self.recalculate_sizes();
+        Ok(())
+    }
+
+    fn validate_complete_live_layout(&self) -> anyhow::Result<()> {
+        if self.open_pane_count() != self.pane_count() {
+            anyhow::bail!("Pane layout contains closed pane records awaiting cleanup");
+        }
+        if self.open_pane_count() < 2 {
+            anyhow::bail!("Pane layout requires at least two live panes");
+        }
+        Ok(())
+    }
+
     pub fn balance(&mut self) -> bool {
         if self.panes.len() <= 1 {
             return false;
@@ -1898,6 +1974,120 @@ mod tests {
             assert_eq!(layout.keys().copied().collect::<HashSet<_>>(), unique);
             assert_eq!(manager.get_dividers().len(), manager.pane_count() - 1);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_layout_primitives_preserve_owners_focus_and_atomicity() {
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let mut manager = property_manager(4);
+        let original = manager.pane_ids();
+        let child_ids: HashMap<_, _> = original
+            .iter()
+            .map(|id| (*id, manager.get_pane(*id).unwrap().pty.child_id()))
+            .collect();
+        let focused = original[1];
+        manager.focus(focused);
+        assert!(manager.toggle_zoom());
+
+        manager.swap_exact(original[0], original[3]).unwrap();
+        let mut expected = original.clone();
+        expected.swap(0, 3);
+        assert_eq!(manager.pane_ids(), expected);
+        assert_eq!(manager.focused_id(), focused);
+        assert_eq!(manager.zoomed_id(), Some(focused));
+        for (id, child_id) in &child_ids {
+            assert_eq!(manager.get_pane(*id).unwrap().pty.child_id(), *child_id);
+        }
+
+        assert!(manager.toggle_zoom());
+        let target = manager.get_dividers()[0].target;
+        let DividerTarget::Local(divider_id) = target else {
+            panic!("ordinary layout unexpectedly used a domain divider")
+        };
+        manager.resize_local_divider(divider_id, 700).unwrap();
+        assert!(manager.toggle_zoom());
+        assert!(manager.balance_exact().unwrap());
+        assert_eq!(manager.zoomed_id(), Some(focused));
+        assert!(manager.toggle_zoom());
+        assert!(
+            manager
+                .get_dividers()
+                .iter()
+                .all(|divider| divider.ratio_millis == 500)
+        );
+        assert!(!manager.balance_exact().unwrap());
+        assert_eq!(manager.pane_ids(), expected);
+        assert_eq!(manager.focused_id(), focused);
+
+        assert!(manager.toggle_zoom());
+        manager
+            .apply_layout_preset_exact(PaneLayoutPreset::Columns)
+            .unwrap();
+        assert_eq!(manager.pane_ids(), expected);
+        assert_eq!(manager.focused_id(), focused);
+        assert_eq!(manager.zoomed_id(), None);
+        assert!(
+            manager
+                .get_dividers()
+                .iter()
+                .all(|divider| divider.vertical)
+        );
+
+        manager
+            .apply_layout_preset_exact(PaneLayoutPreset::Rows)
+            .unwrap();
+        assert!(
+            manager
+                .get_dividers()
+                .iter()
+                .all(|divider| !divider.vertical)
+        );
+        manager
+            .apply_layout_preset_exact(PaneLayoutPreset::Grid)
+            .unwrap();
+        let dividers = manager.get_dividers();
+        assert!(dividers.iter().any(|divider| divider.vertical));
+        assert!(dividers.iter().any(|divider| !divider.vertical));
+        for (id, child_id) in &child_ids {
+            assert_eq!(manager.get_pane(*id).unwrap().pty.child_id(), *child_id);
+        }
+
+        let before = manager.pane_ids();
+        manager.get_pane_mut(focused).unwrap().closed = true;
+        assert!(
+            manager
+                .balance_exact()
+                .unwrap_err()
+                .to_string()
+                .contains("closed")
+        );
+        assert!(
+            manager
+                .apply_layout_preset_exact(PaneLayoutPreset::Columns)
+                .unwrap_err()
+                .to_string()
+                .contains("closed")
+        );
+        assert!(
+            manager
+                .swap_exact(before[0], before[1])
+                .unwrap_err()
+                .to_string()
+                .contains("closed")
+        );
+        assert_eq!(manager.pane_ids(), before);
+
+        let mut unsplit = property_manager(1);
+        assert!(
+            unsplit
+                .balance_exact()
+                .unwrap_err()
+                .to_string()
+                .contains("at least two")
+        );
     }
 
     #[cfg(unix)]

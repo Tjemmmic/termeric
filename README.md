@@ -142,6 +142,9 @@ preserving its live PTY and returning its fresh destination-local identity.
 API v17 separately grants bounded UTF-8 input to one exact current-window pane;
 the global external-input policy remains disabled by default, and destructive
 commands require visible confirmation regardless of the destination tab type.
+API v18 separately grants exact same-tab pane swapping, divider balancing, and
+columns/rows/grid presets for ordinary split tabs while preserving live
+terminal owners, focus, and stable pane IDs.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

@@ -1020,6 +1020,13 @@ ownership/cancellation, correlated byte/disposition results, same-process
 query-to-input reuse, one-operation enforcement, authority removal, and a
 checked-in non-executing terminal writer. Only inert local shell/Python
 fixtures are used; no AI provider process or tokens are involved.
+API v18 adds exact pane-layout version/mode/grant denial, strict swap/balance/
+preset parsing, atomic stale/duplicate/unsplit/closed/closing/live/serial
+refusal, background-tab routing, live PTY and stable-ID preservation, focus and
+zoom contracts, balance idempotence, columns/rows/grid geometry, correlated
+state, same-process query-to-layout reuse, one-operation enforcement,
+authority removal, and a checked-in pane arranger. Only inert local shell/
+Python fixtures are used; no AI provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

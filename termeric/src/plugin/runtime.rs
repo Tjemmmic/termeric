@@ -15,7 +15,9 @@
 //! adds separately granted ordinary-tab creation in the originating window.
 //! API v14 adds separately granted exact ordinary-pane closure.
 //! API v15 adds separately granted exact ordinary-tab closure scheduling.
-//! API v16 adds separately granted exact ordinary-pane movement.
+//! API v16 adds separately granted exact ordinary-pane movement, API v17 adds
+//! bounded exact-pane terminal input, and API v18 adds exact same-tab pane
+//! swapping, balancing, and layout presets.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -28,7 +30,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 17;
+pub const PLUGIN_API_VERSION: u32 = 18;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -72,6 +74,7 @@ pub enum PluginPermission {
     TabClose,
     PaneMove,
     TerminalInput,
+    PaneLayout,
     Secrets,
 }
 
@@ -96,6 +99,7 @@ impl std::fmt::Display for PluginPermission {
             Self::TabClose => "tab-close",
             Self::PaneMove => "pane-move",
             Self::TerminalInput => "terminal-input",
+            Self::PaneLayout => "pane-layout",
             Self::Secrets => "secrets",
         })
     }
@@ -124,6 +128,7 @@ impl std::str::FromStr for PluginPermission {
             "tab-close" => Ok(Self::TabClose),
             "pane-move" => Ok(Self::PaneMove),
             "terminal-input" => Ok(Self::TerminalInput),
+            "pane-layout" => Ok(Self::PaneLayout),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -586,6 +591,15 @@ impl PluginManifest {
         {
             bail!("terminal-input requires an API v17 persistent event handler");
         }
+        if self.permissions.contains(&PluginPermission::PaneLayout)
+            && (self.api_version < 18
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("pane-layout requires an API v18 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -714,6 +728,7 @@ impl PluginRegistry {
                         | PluginPermission::TabClose
                         | PluginPermission::PaneMove
                         | PluginPermission::TerminalInput
+                        | PluginPermission::PaneLayout
                 )
             }) {
                 bail!(
@@ -1157,6 +1172,9 @@ impl DeclarativePlugin {
                     allow_terminal_input: self.manifest.api_version >= 17
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && self.grants.contains(&PluginPermission::TerminalInput),
+                    allow_pane_layout: self.manifest.api_version >= 18
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::PaneLayout),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -1903,6 +1921,24 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::PaneMove
                 | PluginPermission::TerminalInput
         ),
+        18 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+                | PluginPermission::PaneMove
+                | PluginPermission::TerminalInput
+                | PluginPermission::PaneLayout
+        ),
         _ => false,
     }
 }
@@ -2551,6 +2587,31 @@ events = ["command-completed"]
         manifest
     }
 
+    fn pane_layout_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = event_grants(true);
+        grants.insert(PluginPermission::PaneLayout);
+        grants
+    }
+
+    fn pane_layout_manifest() -> PluginManifest {
+        let mut manifest = workspace_query_manifest();
+        manifest.api_version = 18;
+        manifest.id = "pane-arranger".into();
+        manifest.permissions.insert(PluginPermission::PaneLayout);
+        manifest.commands.push(DeclarativeHandlerCommand {
+            id: "apply-grid-layout".into(),
+            name: "Apply Grid Layout".into(),
+            description: String::new(),
+        });
+        manifest
+            .event_handler
+            .as_mut()
+            .unwrap()
+            .events
+            .insert(StructuredEventKind::CommandInvoked);
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -2868,7 +2929,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 18");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 19");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -3308,6 +3369,36 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn checked_in_api_v18_pane_arranger_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/pane-arranger");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 18);
+        assert_eq!(manifest.id, "pane-arranger");
+        assert_eq!(manifest.commands.len(), 1);
+        assert_eq!(manifest.commands[0].id, "apply-grid-layout");
+        assert_eq!(manifest.permissions, pane_layout_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        let registry = PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "pane-arranger".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: pane_layout_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        };
+        registry.validate().unwrap();
+    }
+
+    #[test]
     fn checked_in_api_v15_tab_pruner_example_is_a_valid_manifest() {
         let directory =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/tab-pruner");
@@ -3458,6 +3549,70 @@ events = ["command-invoked"]
         assert_eq!(installed.grants, terminal_input_grants());
         let (installed_manifest, _, _) =
             PluginManifest::from_directory(&root.join("terminal-writer")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
+    fn api_v18_pane_layout_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/pane-arranger")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: event_grants(true),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("pane-layout"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: pane_layout_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "pane-arranger".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "pane-arranger")
+            .unwrap();
+        assert!(installed.enabled);
+        assert_eq!(installed.grants, pane_layout_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("pane-arranger")).unwrap();
         assert_eq!(installed_manifest.version, "1.1.0");
     }
 
@@ -4197,6 +4352,71 @@ events = ["command-invoked"]
             panic!("ungranted terminal input fixture did not create an invocation")
         };
         assert!(!invocation.allow_terminal_input);
+    }
+
+    #[test]
+    fn api_v18_pane_layout_requires_persistent_mode_and_exact_grant() {
+        let manifest = pane_layout_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &pane_layout_grants()).unwrap();
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 1,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, pane_layout_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "pane-arranger.apply-grid-layout".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v18 pane layout handler did not create an invocation")
+        };
+        assert!(invocation.allow_workspace_query);
+        assert!(invocation.allow_pane_layout);
+        assert!(!invocation.allow_terminal_input);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v17 = manifest.clone();
+        v17.api_version = 17;
+        assert!(v17.validate().unwrap_err().to_string().contains("API v18"));
+
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+
+        let mut grants = pane_layout_grants();
+        grants.remove(&PluginPermission::PaneLayout);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: pane-layout")
+        );
+
+        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "pane-arranger.apply-grid-layout".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted pane layout fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_pane_layout);
     }
 
     #[test]

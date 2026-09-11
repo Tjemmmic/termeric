@@ -1,0 +1,68 @@
+api_version = 18
+id = "pane-arranger"
+name = "Pane Arranger"
+version = "1.0.0"
+description = "Demonstrates permissioned same-tab pane layout control"
+permissions = ["process-spawn", "workspace-query", "pane-layout", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "apply-grid-layout"
+name = "Apply Grid Layout"
+description = "Arrange the active ordinary split tab as a grid"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+def notice(message):
+    return [{
+        "type": "show-notice",
+        "title": "Pane Arranger",
+        "lines": [message[:400]],
+    }]
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{
+            "type": "query-workspace",
+            "query_id": "find-active-split-tab",
+        }]
+    elif event["type"] == "workspace-query-result":
+        active = next(
+            (tab for tab in event["window"]["tabs"] if tab["active"]),
+            None,
+        )
+        if (
+            active is None
+            or active["closed"]
+            or active["kind"] in ("live_domain", "serial")
+            or len(active["panes"]) < 2
+        ):
+            actions = notice("The active tab must be an ordinary split terminal.")
+        else:
+            actions = [{
+                "type": "apply-pane-layout",
+                "action_id": "apply-grid-layout",
+                "tab_id": active["id"],
+                "preset": "grid",
+            }]
+    elif event["type"] == "workspace-action-result":
+        if event["ok"]:
+            actions = notice("Applied a grid layout to the active split tab.")
+        else:
+            actions = notice("Pane layout failed: " + event["error"])
+    else:
+        actions = notice("Unexpected pane-arranger event.")
+    response = {
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }
+    print(json.dumps(response, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

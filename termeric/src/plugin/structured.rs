@@ -44,6 +44,14 @@ pub enum StructuredHandlerMode {
     Persistent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginPaneLayoutPreset {
+    Columns,
+    Rows,
+    Grid,
+}
+
 #[derive(Debug, Clone)]
 pub struct StructuredHandlerInvocation {
     pub plugin_id: String,
@@ -83,6 +91,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit sending bounded text to one exact current-window terminal. Its
     /// result clears every host-operation authority.
     pub allow_terminal_input: bool,
+    /// Permit non-destructive same-tab pane layout changes in the current
+    /// window. Its result clears every host-operation authority.
+    pub allow_pane_layout: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -159,6 +170,21 @@ pub enum StructuredResponseAction {
         text: String,
         paste: bool,
         enter: bool,
+    },
+    SwapPanes {
+        action_id: String,
+        tab_id: u64,
+        first_pane_id: u32,
+        second_pane_id: u32,
+    },
+    BalancePanes {
+        action_id: String,
+        tab_id: u64,
+    },
+    ApplyPaneLayout {
+        action_id: String,
+        tab_id: u64,
+        preset: PluginPaneLayoutPreset,
     },
 }
 
@@ -478,6 +504,7 @@ fn run_handler(
         invocation.allow_tab_close,
         invocation.allow_pane_move,
         invocation.allow_terminal_input,
+        invocation.allow_pane_layout,
     )
 }
 
@@ -603,6 +630,7 @@ impl PersistentHandler {
         allow_tab_close: bool,
         allow_pane_move: bool,
         allow_terminal_input: bool,
+        allow_pane_layout: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -671,6 +699,7 @@ impl PersistentHandler {
             allow_tab_close,
             allow_pane_move,
             allow_terminal_input,
+            allow_pane_layout,
             request_id,
         )?;
         if let Some(status) = self
@@ -747,6 +776,7 @@ fn run_persistent_handler(
                 invocation.allow_tab_close,
                 invocation.allow_pane_move,
                 invocation.allow_terminal_input,
+                invocation.allow_pane_layout,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -933,6 +963,7 @@ fn parse_response_with_host_creation(
         allow_tab_close,
         false,
         false,
+        false,
     )
 }
 
@@ -950,6 +981,7 @@ fn parse_response_with_host_mutation(
     allow_tab_close: bool,
     allow_pane_move: bool,
     allow_terminal_input: bool,
+    allow_pane_layout: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -972,6 +1004,7 @@ fn parse_response_with_host_mutation(
         allow_tab_close,
         allow_pane_move,
         allow_terminal_input,
+        allow_pane_layout,
     )
 }
 
@@ -1027,6 +1060,7 @@ fn parse_persistent_response_with_host_creation(
         allow_tab_close,
         false,
         false,
+        false,
         expected_request_id,
     )
 }
@@ -1045,6 +1079,7 @@ fn parse_persistent_response_with_host_mutation(
     allow_tab_close: bool,
     allow_pane_move: bool,
     allow_terminal_input: bool,
+    allow_pane_layout: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1074,6 +1109,7 @@ fn parse_persistent_response_with_host_mutation(
         allow_tab_close,
         allow_pane_move,
         allow_terminal_input,
+        allow_pane_layout,
     )
 }
 
@@ -1090,6 +1126,7 @@ fn validate_response_actions(
     allow_tab_close: bool,
     allow_pane_move: bool,
     allow_terminal_input: bool,
+    allow_pane_layout: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1285,6 +1322,35 @@ fn validate_response_actions(
                     );
                 }
             }
+            StructuredResponseAction::SwapPanes {
+                action_id,
+                first_pane_id,
+                second_pane_id,
+                ..
+            } => {
+                if !allow_pane_layout {
+                    return Err(
+                        "handler requested pane layout without API v18 persistent pane-layout authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("pane layout action id", action_id, MAX_ACTION_ID_BYTES)?;
+                if first_pane_id == second_pane_id {
+                    return Err("pane swap requires two distinct pane IDs".into());
+                }
+            }
+            StructuredResponseAction::BalancePanes { action_id, .. }
+            | StructuredResponseAction::ApplyPaneLayout { action_id, .. } => {
+                if !allow_pane_layout {
+                    return Err(
+                        "handler requested pane layout without API v18 persistent pane-layout authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("pane layout action id", action_id, MAX_ACTION_ID_BYTES)?;
+            }
         }
     }
     if host_operations > 1 {
@@ -1350,6 +1416,7 @@ mod tests {
             allow_tab_close: false,
             allow_pane_move: false,
             allow_terminal_input: false,
+            allow_pane_layout: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1946,7 +2013,7 @@ mod tests {
         assert_eq!(
             parse_persistent_response_with_host_mutation(
                 move_pane, false, false, false, false, false, false, false, false, false, true,
-                false, 9,
+                false, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::MovePane {
@@ -1979,6 +2046,7 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
                 9,
             )
             .unwrap_err()
@@ -1999,6 +2067,7 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
                 9,
             )
             .unwrap_err()
@@ -2008,7 +2077,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_host_mutation(
                 unsafe_id, false, false, false, false, false, false, false, false, false, true,
-                false, 9,
+                false, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -2040,6 +2109,7 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
                 9,
             )
             .unwrap_err()
@@ -2060,6 +2130,7 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
                 9,
             )
             .unwrap_err()
@@ -2073,7 +2144,7 @@ mod tests {
         assert_eq!(
             parse_persistent_response_with_host_mutation(
                 send_text, false, false, false, false, false, false, false, false, false, false,
-                true, 9,
+                true, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::SendText {
@@ -2106,6 +2177,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 9,
             )
             .unwrap_err()
@@ -2116,7 +2188,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_host_mutation(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                true, 9,
+                true, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -2126,7 +2198,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_host_mutation(
                 escape, false, false, false, false, false, false, false, false, false, false, true,
-                9,
+                false, 9,
             )
             .unwrap_err()
             .contains("printable UTF-8")
@@ -2136,7 +2208,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_host_mutation(
                 empty, false, false, false, false, false, false, false, false, false, false, true,
-                9,
+                false, 9,
             )
             .unwrap_err()
             .contains("include text or enter")
@@ -2169,6 +2241,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 9,
             )
             .unwrap_err()
@@ -2181,6 +2254,175 @@ mod tests {
                 query_and_send,
                 false,
                 true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+    }
+
+    #[test]
+    fn pane_layout_is_typed_independently_gated_strict_and_single_operation() {
+        let swap = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"swap-panes","action_id":"swap-build-logs","tab_id":42,"first_pane_id":3,"second_pane_id":7}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_host_mutation(
+                swap, false, false, false, false, false, false, false, false, false, false, false,
+                true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::SwapPanes {
+                action_id: "swap-build-logs".into(),
+                tab_id: 42,
+                first_pane_id: 3,
+                second_pane_id: 7,
+            }]
+        );
+        assert!(
+            parse_persistent_response(swap, false, false, false, false, false, 9)
+                .unwrap_err()
+                .contains("pane-layout authority")
+        );
+
+        let balance = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-panes","action_id":"balance-build","tab_id":42}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_host_mutation(
+                balance, false, false, false, false, false, false, false, false, false, false,
+                false, true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::BalancePanes {
+                action_id: "balance-build".into(),
+                tab_id: 42,
+            }]
+        );
+
+        let preset = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-pane-layout","action_id":"grid-build","tab_id":42,"preset":"grid"}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_host_mutation(
+                preset, false, false, false, false, false, false, false, false, false, false,
+                false, true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::ApplyPaneLayout {
+                action_id: "grid-build".into(),
+                tab_id: 42,
+                preset: PluginPaneLayoutPreset::Grid,
+            }]
+        );
+
+        let same = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"swap-panes","action_id":"same","tab_id":42,"first_pane_id":3,"second_pane_id":3}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                same, false, false, false, false, false, false, false, false, false, false, false,
+                true, 9,
+            )
+            .unwrap_err()
+            .contains("distinct")
+        );
+        let invalid_preset = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-pane-layout","action_id":"grid-build","tab_id":42,"preset":"mosaic"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                invalid_preset,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("unknown variant")
+        );
+        let unknown_fields = [
+            serde_json::json!({"type":"swap-panes","action_id":"swap","tab_id":42,"first_pane_id":3,"second_pane_id":7,"window_id":3}),
+            serde_json::json!({"type":"balance-panes","action_id":"balance","tab_id":42,"window_id":3}),
+            serde_json::json!({"type":"apply-pane-layout","action_id":"grid","tab_id":42,"preset":"grid","window_id":3}),
+        ];
+        for action in unknown_fields {
+            let response = serde_json::json!({
+                "schema_version": 2,
+                "request_id": 9,
+                "actions": [action],
+            });
+            assert!(
+                parse_persistent_response_with_host_mutation(
+                    &serde_json::to_vec(&response).unwrap(),
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                    9,
+                )
+                .unwrap_err()
+                .contains("unknown field")
+            );
+        }
+        for action_id in ["bad\naction".into(), "x".repeat(MAX_ACTION_ID_BYTES + 1)] {
+            let shapes = [
+                serde_json::json!({"type":"swap-panes","action_id":action_id.clone(),"tab_id":42,"first_pane_id":3,"second_pane_id":7}),
+                serde_json::json!({"type":"balance-panes","action_id":action_id.clone(),"tab_id":42}),
+                serde_json::json!({"type":"apply-pane-layout","action_id":action_id,"tab_id":42,"preset":"grid"}),
+            ];
+            for action in shapes {
+                let response = serde_json::json!({
+                    "schema_version": 2,
+                    "request_id": 9,
+                    "actions": [action],
+                });
+                assert!(
+                    parse_persistent_response_with_host_mutation(
+                        &serde_json::to_vec(&response).unwrap(),
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                        9,
+                    )
+                    .unwrap_err()
+                    .contains("control-safe")
+                );
+            }
+        }
+        let two_layouts = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"balance-panes","action_id":"balance-build","tab_id":42},{"type":"apply-pane-layout","action_id":"grid-build","tab_id":42,"preset":"grid"}]}"#;
+        assert!(
+            parse_persistent_response_with_host_mutation(
+                two_layouts,
+                false,
+                false,
+                false,
                 false,
                 false,
                 false,
@@ -2517,6 +2759,57 @@ done"#,
                 .unwrap(),
             vec![StructuredResponseAction::ShowMessage {
                 message: "input-result-received".into(),
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_query_then_pane_layout_then_result_is_bounded() {
+        let mut invocation = persistent_fixture(
+            "pane-layout-fixture",
+            r#"count=0
+while IFS= read -r event; do
+  count=$((count + 1))
+  if [ "$count" -eq 1 ]; then
+    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"inventory"}]}\n'
+  elif [ "$count" -eq 2 ]; then
+    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"apply-pane-layout","action_id":"grid","tab_id":7,"preset":"grid"}]}\n'
+  else
+    printf '{"schema_version":2,"request_id":3,"actions":[{"type":"show-message","message":"layout-result-received"}]}\n'
+  fi
+done"#,
+        );
+        invocation.allow_workspace_query = true;
+        invocation.allow_pane_layout = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::QueryWorkspace { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"inventory"}}"#.into();
+        invocation.allow_workspace_query = false;
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::ApplyPaneLayout {
+                preset: PluginPaneLayoutPreset::Grid,
+                ..
+            }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"apply-pane-layout","ok":true}}"#.into();
+        invocation.allow_pane_layout = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowMessage {
+                message: "layout-result-received".into(),
             }]
         );
         assert_eq!(handlers.len(), 1);
@@ -2869,6 +3162,7 @@ done"#,
             allow_tab_close: false,
             allow_pane_move: false,
             allow_terminal_input: false,
+            allow_pane_layout: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -2909,6 +3203,7 @@ done"#,
             allow_tab_close: false,
             allow_pane_move: false,
             allow_terminal_input: false,
+            allow_pane_layout: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -2936,6 +3231,7 @@ done"#,
             allow_tab_close: false,
             allow_pane_move: false,
             allow_terminal_input: false,
+            allow_pane_layout: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

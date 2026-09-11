@@ -1304,6 +1304,255 @@ fn plugin_pane_movement_preserves_pty_and_returns_exact_destination_state() {
 
 #[cfg(unix)]
 #[test]
+fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let target_tab_id = tabs.new_tab().unwrap();
+    let target = tabs.tab_mut_by_id(target_tab_id).unwrap();
+    let owner = target.take_terminal_owner().unwrap();
+    let mut panes = PaneManager::from_existing(
+        owner,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    panes.split(SplitDirection::Vertical).unwrap();
+    panes.split(SplitDirection::Horizontal).unwrap();
+    let original = panes.pane_ids();
+    let owners: HashMap<_, _> = original
+        .iter()
+        .map(|id| (*id, panes.get_pane(*id).unwrap().pty.child_id()))
+        .collect();
+    panes.focus(original[1]);
+    assert!(panes.toggle_zoom());
+    target.pane_manager = Some(panes);
+    let active_tab_id = tabs.new_tab().unwrap();
+    assert_eq!(tabs.active_tab_id(), Some(active_tab_id));
+
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    let swapped = app
+        .structured_workspace_action_event(
+            "pane-arranger",
+            crate::plugin::structured::StructuredResponseAction::SwapPanes {
+                action_id: "swap-edges".into(),
+                tab_id: target_tab_id as u64,
+                first_pane_id: original[0].0,
+                second_pane_id: original[2].0,
+            },
+        )
+        .unwrap();
+    let swapped: serde_json::Value = serde_json::from_str(&swapped).unwrap();
+    let mut expected = original.clone();
+    expected.swap(0, 2);
+    assert_eq!(swapped["event"]["ok"], true);
+    assert_eq!(swapped["event"]["action"], "swap-panes");
+    assert_eq!(
+        swapped["event"]["pane_order"],
+        serde_json::json!(expected.iter().map(|id| id.0).collect::<Vec<_>>())
+    );
+    assert_eq!(swapped["event"]["focused_pane_id"], original[1].0);
+    assert_eq!(swapped["event"]["zoomed_pane_id"], original[1].0);
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab_id(),
+        Some(active_tab_id)
+    );
+
+    let target = app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(target_tab_id)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap();
+    assert!(target.toggle_zoom());
+    let crate::panes::DividerTarget::Local(divider_id) = target.get_dividers()[0].target else {
+        panic!("ordinary layout unexpectedly used a domain divider")
+    };
+    target.resize_local_divider(divider_id, 700).unwrap();
+
+    let balanced = app
+        .structured_workspace_action_event(
+            "pane-arranger",
+            crate::plugin::structured::StructuredResponseAction::BalancePanes {
+                action_id: "balance".into(),
+                tab_id: target_tab_id as u64,
+            },
+        )
+        .unwrap();
+    let balanced: serde_json::Value = serde_json::from_str(&balanced).unwrap();
+    assert_eq!(balanced["event"]["ok"], true);
+    assert_eq!(balanced["event"]["changed"], true);
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab_id(),
+        Some(active_tab_id)
+    );
+
+    let arranged = app
+        .structured_workspace_action_event(
+            "pane-arranger",
+            crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
+                action_id: "grid".into(),
+                tab_id: target_tab_id as u64,
+                preset: crate::plugin::structured::PluginPaneLayoutPreset::Grid,
+            },
+        )
+        .unwrap();
+    let arranged: serde_json::Value = serde_json::from_str(&arranged).unwrap();
+    assert_eq!(arranged["event"]["ok"], true);
+    assert_eq!(arranged["event"]["preset"], "grid");
+    assert!(arranged["event"]["zoomed_pane_id"].is_null());
+    assert_eq!(
+        app.tabs.as_ref().unwrap().active_tab_id(),
+        Some(active_tab_id)
+    );
+    let target = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .tab_by_id(target_tab_id)
+        .unwrap()
+        .pane_manager
+        .as_ref()
+        .unwrap();
+    assert_eq!(target.focused_id(), original[1]);
+    assert_eq!(target.pane_ids(), expected);
+    for (id, child_id) in owners {
+        assert_eq!(target.get_pane(id).unwrap().pty.child_id(), child_id);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_pane_layout_refuses_unsupported_or_incomplete_tabs_atomically() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let tab_id = tabs.new_tab().unwrap();
+    let tab = tabs.tab_mut_by_id(tab_id).unwrap();
+    let owner = tab.take_terminal_owner().unwrap();
+    let mut panes = PaneManager::from_existing(
+        owner,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    let sibling = panes.split(SplitDirection::Vertical).unwrap();
+    let original = panes.pane_ids();
+    tab.pane_manager = Some(panes);
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+
+    let error = app
+        .swap_plugin_panes(tab_id as u64, original[0].0, u32::MAX)
+        .unwrap_err();
+    assert!(error.contains("does not exist"));
+    let panes = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .tab_by_id(tab_id)
+        .unwrap()
+        .pane_manager
+        .as_ref()
+        .unwrap();
+    assert_eq!(panes.pane_ids(), original);
+
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(tab_id)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(sibling)
+        .unwrap()
+        .closed = true;
+    assert!(
+        app.balance_plugin_panes(tab_id as u64)
+            .unwrap_err()
+            .contains("closed")
+    );
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .tab_mut_by_id(tab_id)
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(sibling)
+        .unwrap()
+        .closed = false;
+
+    let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(tab_id).unwrap();
+    tab.closing_at = Some(Instant::now());
+    assert!(
+        app.balance_plugin_panes(tab_id as u64)
+            .unwrap_err()
+            .contains("closing")
+    );
+    let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(tab_id).unwrap();
+    tab.closing_at = None;
+    tab.live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "fake-domain".into(),
+        tab_id: 8,
+        pane_ids: HashMap::new(),
+    });
+    assert!(
+        app.balance_plugin_panes(tab_id as u64)
+            .unwrap_err()
+            .contains("live-domain")
+    );
+    let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(tab_id).unwrap();
+    tab.live_domain = None;
+    tab.tab_type = crate::tabs::TabType::Serial {
+        name: "fixture".into(),
+    };
+    assert!(
+        app.balance_plugin_panes(tab_id as u64)
+            .unwrap_err()
+            .contains("serial terminal")
+    );
+    let unsplit_id = app.tabs.as_mut().unwrap().new_tab().unwrap();
+    assert!(
+        app.balance_plugin_panes(unsplit_id as u64)
+            .unwrap_err()
+            .contains("not split")
+    );
+    assert!(
+        app.balance_plugin_panes(u64::MAX)
+            .unwrap_err()
+            .contains("does not exist")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;

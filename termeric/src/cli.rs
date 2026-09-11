@@ -1056,6 +1056,7 @@ API v14 adds separately granted exact ordinary-pane closure.\n\
 API v15 adds separately granted exact ordinary-tab closure scheduling.\n\
 API v16 adds separately granted exact ordinary-pane movement between tabs.\n\
 API v17 adds separately granted bounded input to one exact current-window terminal.\n\
+API v18 adds separately granted same-tab pane swapping, balancing, and presets.\n\
 Installation records the\n\
 canonical local source and a manifest fingerprint; it never downloads code."
         .into()

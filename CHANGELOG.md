@@ -8,6 +8,16 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v18 adds an independent `pane-layout` grant for
+  swapping two exact panes, balancing dividers, or applying columns, rows, and
+  grid presets within one ordinary current-window split tab. Operations
+  preserve live terminal owners, stable pane IDs, focus, and active-tab state;
+  swap and balance retain zoom, while presets clear it as they replace hidden
+  geometry. Strict schemas, atomic unsupported-target refusal, bounded
+  correlated results, and complete result-authority removal are covered by
+  hermetic parser, registry, persistent-process, App, PTY-identity, and layout
+  tests plus a checked-in pane-arranger example. No provider process runs.
+
 - Declarative plugin API v17 adds an independent `terminal-input` grant for
   sending at most 8 KiB of printable UTF-8, tab, and newline input to one exact
   current-window pane. The existing external-input policy remains disabled by
