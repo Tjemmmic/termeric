@@ -558,6 +558,16 @@ tracking_issue = "https://github.com/Tjemmmic/termeric/issues/71"
 notes = "Truthful capability queries advertise only title/body payloads and the always occasion. Plain escape-safe UTF-8 plus padded/unpadded RFC 4648 chunks assemble by strict 128-byte identifiers under 4-KiB title, 16-KiB body, 16-pending, and 256-KiB aggregate payload ceilings. Replies use owner-local S7C1T/S8C1T framing; interleaved state survives screen/DECSTR changes and clears on RIS. Replacement, activation/focus, buttons, close/alive reports, application/type filtering, urgency, expiry, sound selection, icons, and native presentation evidence are not claimed."
 
 [[sequence]]
+id = "osc66-text-sizing"
+family = "OSC"
+syntax = "OSC 66 Kitty text sizing and explicit cell widths"
+layer = "app"
+status = "partial"
+evidence = ["fixture:osc66-text-sizing", "fixture:osc66-text-sizing-s8-st", "test:src/term/mod.rs#osc66_places_atomic_scaled_blocks_and_advances_by_their_width", "test:src/term/mod.rs#osc66_natural_width_segments_graphemes_into_separate_blocks", "test:src/term/mod.rs#osc66_wrap_and_no_wrap_respect_horizontal_margins", "test:src/term/mod.rs#normal_text_obeys_multicell_overwrite_and_lower_row_skip_rules", "test:src/term/mod.rs#osc66_horizontal_edits_preserve_whole_single_row_blocks_and_erase_multiline_blocks", "test:src/term/mod.rs#osc66_scroll_moves_complete_blocks_and_clears_only_split_multiline_blocks", "test:src/term/mod.rs#osc66_ed22_archives_complete_blocks_before_erasing_the_viewport", "test:src/term/mod.rs#osc66_screen_switches_and_synchronized_output_keep_blocks_isolated", "test:src/term/mod.rs#osc66_selective_erase_preserves_protected_blocks_atomically", "test:src/term/mod.rs#osc66_resize_retains_fitting_blocks_and_discards_clipped_blocks", "test:src/term/mod.rs#osc66_ansi_export_replays_descriptor_and_text_once", "test:src/term/mod.rs#osc66_selection_emits_leader_text_once_without_covered_spaces", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_preserves_osc66_content_and_geometry_once", "test:../termeric/src/renderer/text.rs#fractional_multicell_alignment_uses_the_full_block_and_pane_clip", "test:../termeric/src/renderer/mod.rs#multicell_cursor_geometry_expands_from_every_covered_cell", "test:../termeric/src/terminal/search.rs#multicell_text_is_indexed_once_across_its_full_column_span"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/72"
+notes = "Strict bounded metadata and 4096-byte safe UTF-8 payloads support integer scale, explicit and Unicode-grapheme-derived widths, fractional scale, alignment, wrapping, cursor advance, atomic overwrite/edit/erase/scroll/resize behavior, ED 22 archival, compact scrollback, ANSI session and local-domain replay, semantic extraction, scaled glyph shaping, pane clipping, and expanded cursor geometry. Invalid and oversized operations fail closed. Automated core and renderer geometry evidence passes; native font-quality and interactive cursor presentation remain deliberately unclaimed pending manual review."
+
+[[sequence]]
 id = "osc-pointer-shapes"
 family = "OSC"
 syntax = "OSC 22 Kitty/xterm mouse pointer shapes"

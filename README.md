@@ -41,7 +41,8 @@ the [modern input and accessibility policy](docs/accessibility-and-input.md). Se
 titles, working directories, clipboard access, dynamic colors, and mouse
 pointer shapes, including bounded application-owned title/icon queries and the
 xterm title stack, plus capability-negotiated Kitty OSC 99 title/body desktop
-notifications. See the
+notifications. Kitty OSC 66 text sizing and explicit cell widths have bounded
+automated coverage, with native visual acceptance still pending. See the
 [feature-support matrix](docs/feature-support.md) for exact boundaries rather
 than inferring support from a parser, setting, or UI entry.
 

@@ -8,7 +8,9 @@ mod hyperlink;
 mod row;
 mod storage;
 
-pub use cell::{Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec};
+pub use cell::{
+    Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, MultiCell, MultiCellAlignment,
+};
 pub use hyperlink::{Hyperlink, HyperlinkRegistry};
 pub use row::Row;
 pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, GridMemoryUsage, RowView};
@@ -53,6 +55,28 @@ pub struct Grid {
     scroll_offset: usize,
 }
 
+/// Validated rectangle occupied by one OSC 66 multicell text block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MultiCellRegion {
+    pub top: usize,
+    pub left: usize,
+    pub descriptor: MultiCell,
+}
+
+impl MultiCellRegion {
+    pub fn bottom(self) -> usize {
+        self.top + self.descriptor.rows()
+    }
+
+    pub fn right(self) -> usize {
+        self.left + self.descriptor.columns()
+    }
+
+    pub fn contains(self, row: usize, col: usize) -> bool {
+        row >= self.top && row < self.bottom() && col >= self.left && col < self.right()
+    }
+}
+
 impl Grid {
     /// Create a new grid with the specified dimensions
     pub fn new(cols: usize, rows: usize) -> Self {
@@ -84,6 +108,11 @@ impl Grid {
                 *target = (*source).clone();
             }
         }
+        let blank = Cell {
+            flags: CellFlags::DIRTY,
+            ..Cell::default()
+        };
+        snapshot.repair_multicells(&blank);
 
         snapshot.cursor = self.cursor;
         // A terminal cursor is not presented while the user is viewing
@@ -177,6 +206,195 @@ impl Grid {
         self.storage.cell_mut(row, col)
     }
 
+    /// Resolve and validate the complete active-screen OSC 66 block covering
+    /// one cell. Malformed or clipped descriptors do not gain authority over
+    /// neighboring cells.
+    pub fn multicell_region_at(&self, row: usize, col: usize) -> Option<MultiCellRegion> {
+        let descriptor = self.cell(row, col)?.multicell;
+        if !descriptor.is_present() {
+            return None;
+        }
+        let top = row.checked_sub(descriptor.relative_row())?;
+        let left = col.checked_sub(descriptor.relative_col())?;
+        let leader = self.cell(top, left)?.multicell;
+        if !leader.is_leader()
+            || !leader.has_same_layout(descriptor)
+            || leader.rows() > self.rows.saturating_sub(top)
+            || leader.columns() > self.cols.saturating_sub(left)
+            || self.cell(top, left)?.content.is_empty()
+        {
+            return None;
+        }
+        for relative_row in 0..leader.rows() {
+            for relative_col in 0..leader.columns() {
+                let expected = leader.at(relative_col, relative_row)?;
+                let cell = self.cell(top + relative_row, left + relative_col)?;
+                if cell.multicell != expected
+                    || ((relative_row != 0 || relative_col != 0) && !cell.content.is_empty())
+                {
+                    return None;
+                }
+            }
+        }
+        Some(MultiCellRegion {
+            top,
+            left,
+            descriptor: leader,
+        })
+    }
+
+    /// Clear one complete validated multicell block. A top-row partial
+    /// overwrite can request ordinary space content, while leader overwrites
+    /// and erasures use the supplied BCE blank.
+    pub(crate) fn clear_multicell_at(
+        &mut self,
+        row: usize,
+        col: usize,
+        blank: &Cell,
+        replace_with_spaces: bool,
+    ) -> bool {
+        let Some(region) = self.multicell_region_at(row, col) else {
+            if let Some(cell) = self.cell_mut(row, col)
+                && cell.multicell.is_present()
+            {
+                *cell = blank.clone();
+                cell.flags.insert(CellFlags::DIRTY);
+            }
+            return false;
+        };
+        for target_row in region.top..region.bottom() {
+            for target_col in region.left..region.right() {
+                if let Some(cell) = self.cell_mut(target_row, target_col) {
+                    if replace_with_spaces {
+                        cell.set_char(' ');
+                    } else {
+                        *cell = blank.clone();
+                        cell.flags.insert(CellFlags::DIRTY);
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Erase every complete multicell block intersecting an active-screen
+    /// rectangle. The rectangle is clipped to the grid; malformed descriptors
+    /// inside it are cleared individually and never authorize neighboring
+    /// mutations.
+    pub(crate) fn erase_multicells_intersecting(
+        &mut self,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
+        blank: &Cell,
+        preserve_protected: bool,
+    ) -> usize {
+        let bottom = bottom.min(self.rows);
+        let right = right.min(self.cols);
+        if top >= bottom || left >= right {
+            return 0;
+        }
+
+        let mut regions = HashSet::new();
+        let mut malformed = Vec::new();
+        for row in top..bottom {
+            for col in left..right {
+                let Some(cell) = self.cell(row, col) else {
+                    continue;
+                };
+                if !cell.multicell.is_present() {
+                    continue;
+                }
+                if let Some(region) = self.multicell_region_at(row, col) {
+                    if !preserve_protected
+                        || !self
+                            .cell(region.top, region.left)
+                            .is_some_and(|cell| cell.flags.contains(CellFlags::PROTECTED))
+                    {
+                        regions.insert((region.top, region.left));
+                    }
+                } else if !preserve_protected || !cell.flags.contains(CellFlags::PROTECTED) {
+                    malformed.push((row, col));
+                }
+            }
+        }
+
+        for (row, col) in malformed {
+            if let Some(cell) = self.cell_mut(row, col) {
+                *cell = blank.clone();
+                cell.flags.insert(CellFlags::DIRTY);
+            }
+        }
+        for (row, col) in regions.iter().copied() {
+            self.clear_multicell_at(row, col, blank, false);
+        }
+        regions.len()
+    }
+
+    /// Remove descriptors made invalid by row-local edits, clipping, or
+    /// resize. Complete blocks are retained; every other descriptor becomes a
+    /// normal BCE blank so a later cell can never resolve into stale content.
+    pub(crate) fn repair_multicells(&mut self, blank: &Cell) {
+        let mut valid = HashSet::new();
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                if self
+                    .cell(row, col)
+                    .is_some_and(|cell| cell.multicell.is_leader())
+                    && let Some(region) = self.multicell_region_at(row, col)
+                {
+                    valid.insert((region.top, region.left));
+                }
+            }
+        }
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let keep = self.cell(row, col).is_none_or(|cell| {
+                    if !cell.multicell.is_present() {
+                        return true;
+                    }
+                    row.checked_sub(cell.multicell.relative_row())
+                        .zip(col.checked_sub(cell.multicell.relative_col()))
+                        .is_some_and(|anchor| valid.contains(&anchor))
+                });
+                if !keep && let Some(cell) = self.cell_mut(row, col) {
+                    *cell = blank.clone();
+                    cell.flags.insert(CellFlags::DIRTY);
+                }
+            }
+        }
+    }
+
+    /// Erase blocks split by a horizontal structural-edit boundary.
+    pub(crate) fn erase_multicells_crossing_row(
+        &mut self,
+        boundary: usize,
+        left: usize,
+        right: usize,
+        blank: &Cell,
+    ) {
+        if boundary == 0 || boundary >= self.rows || left >= right {
+            return;
+        }
+        let mut regions = HashSet::new();
+        for row in [boundary - 1, boundary] {
+            for col in left..right.min(self.cols) {
+                if let Some(region) = self.multicell_region_at(row, col)
+                    && region.top < boundary
+                    && region.bottom() > boundary
+                    && region.left < right
+                    && region.right() > left
+                {
+                    regions.insert((region.top, region.left));
+                }
+            }
+        }
+        for (row, col) in regions {
+            self.clear_multicell_at(row, col, blank, false);
+        }
+    }
+
     /// Get the current cursor state
     pub fn cursor(&self) -> Cursor {
         self.cursor
@@ -220,6 +438,25 @@ impl Grid {
             }
             // If scrollback didn't grow (at capacity), content shifts but we can't
             // maintain the exact same view since the oldest line was deleted
+        }
+        evicted
+    }
+
+    /// Copy the active viewport into compact history without moving it.
+    pub(crate) fn archive_visible(&mut self) -> usize {
+        let old_len = self.storage.scrollback_len();
+        let was_at_max = self.scroll_offset > 0 && self.scroll_offset >= old_len;
+        let evicted = self.storage.archive_visible();
+        let new_len = self.storage.scrollback_len();
+        if self.scroll_offset > 0 {
+            if was_at_max {
+                self.scroll_offset = new_len;
+            } else {
+                self.scroll_offset = self
+                    .scroll_offset
+                    .saturating_add(new_len.saturating_sub(old_len))
+                    .min(new_len);
+            }
         }
         evicted
     }
@@ -461,6 +698,70 @@ mod tests {
         let cursor = grid.cursor();
         assert_eq!(cursor.row, 23);
         assert_eq!(cursor.col, 79);
+    }
+
+    #[test]
+    fn multicell_regions_validate_and_clear_atomically() {
+        let mut grid = Grid::new(8, 4);
+        let leader = MultiCell::new(
+            2,
+            2,
+            1,
+            2,
+            MultiCellAlignment::Center,
+            MultiCellAlignment::End,
+            0,
+            0,
+        )
+        .unwrap();
+        for relative_row in 0..leader.rows() {
+            for relative_col in 0..leader.columns() {
+                let cell = grid.cell_mut(1 + relative_row, 2 + relative_col).unwrap();
+                cell.multicell = leader.at(relative_col, relative_row).unwrap();
+            }
+        }
+        grid.cell_mut(1, 2).unwrap().set_grapheme("large");
+        grid.cell_mut(1, 2).unwrap().multicell = leader;
+
+        let region = grid.multicell_region_at(2, 5).unwrap();
+        assert_eq!((region.top, region.left), (1, 2));
+        assert_eq!((region.bottom(), region.right()), (3, 6));
+        assert!(region.contains(1, 2));
+        assert!(region.contains(2, 5));
+        assert!(!region.contains(3, 5));
+
+        let blank = Cell::default();
+        assert!(grid.clear_multicell_at(1, 4, &blank, true));
+        for row in 1..3 {
+            for col in 2..6 {
+                let cell = grid.cell(row, col).unwrap();
+                assert_eq!(cell.content, CellContent::Char(' '));
+                assert!(!cell.multicell.is_present());
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_multicell_descriptor_cannot_clear_neighbors() {
+        let mut grid = Grid::new(4, 2);
+        grid.cell_mut(0, 0).unwrap().set_char('a');
+        grid.cell_mut(0, 1).unwrap().set_char('b');
+        grid.cell_mut(0, 1).unwrap().multicell = MultiCell::new(
+            2,
+            2,
+            0,
+            0,
+            MultiCellAlignment::Start,
+            MultiCellAlignment::Start,
+            1,
+            0,
+        )
+        .unwrap();
+
+        assert!(grid.multicell_region_at(0, 1).is_none());
+        assert!(!grid.clear_multicell_at(0, 1, &Cell::default(), false));
+        assert_eq!(grid.cell(0, 0).unwrap().content, CellContent::Char('a'));
+        assert!(grid.cell(0, 1).unwrap().is_empty());
     }
 
     #[test]

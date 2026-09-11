@@ -3631,6 +3631,32 @@ mod tests {
     }
 
     #[test]
+    fn terminal_attach_snapshot_preserves_osc66_content_and_geometry_once() {
+        let mut terminal = Terminal::new(10, 3);
+        terminal.process(b"\x1b]66;s=2:w=2;domain\x07!");
+
+        let snapshot = terminal_snapshot(&terminal, 4096);
+        assert_eq!(
+            String::from_utf8_lossy(&snapshot).matches("domain").count(),
+            1
+        );
+
+        let mut replica = Terminal::new(10, 3);
+        replica.process(&snapshot);
+        let region = replica.grid().multicell_region_at(1, 3).unwrap();
+        assert_eq!((region.top, region.left), (0, 0));
+        assert_eq!(
+            (region.descriptor.rows(), region.descriptor.columns()),
+            (2, 4)
+        );
+        assert_eq!(
+            replica.grid().cell(0, 0).unwrap().content.to_text(),
+            "domain"
+        );
+        assert_eq!(replica.grid().cell(0, 4).unwrap().content.to_text(), "!");
+    }
+
+    #[test]
     fn terminal_attach_snapshot_restores_decoded_graphics_after_the_text_ris() {
         let mut terminal = Terminal::new(10, 2);
         terminal.process(b"prompt\x1b_Ga=t,f=32,s=1,v=1,i=7;/wAA/w==\x1b\\");

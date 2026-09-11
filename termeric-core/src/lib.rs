@@ -46,14 +46,15 @@ pub use graphics::{
 };
 pub use grid::{
     Cell, CellAttrs, CellContent, CellFlags, CellRef, Color, ColorSpec, Cursor,
-    DEFAULT_SCROLLBACK_MEMORY_BYTES, Grid, GridMemoryUsage, Row, RowView,
+    DEFAULT_SCROLLBACK_MEMORY_BYTES, Grid, GridMemoryUsage, MultiCell, MultiCellAlignment,
+    MultiCellRegion, Row, RowView,
 };
 pub use pty::Pty;
 pub use shell::{CommandRegion, PromptMark, ShellIntegration};
 pub use term::{
     DynamicColors, MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES,
-    MAX_NOTIFICATION_TITLE_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES,
-    MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS, Point, PointerShape,
-    ReportedWorkingDirectory, Selection, SelectionType, Terminal, TerminalMemoryUsage,
-    XTERM_TITLE_STACK_DEPTH,
+    MAX_NOTIFICATION_TITLE_BYTES, MAX_OSC66_TEXT_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES,
+    MAX_OSC99_ENCODED_CHUNK_BYTES, MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS,
+    Point, PointerShape, ReportedWorkingDirectory, Selection, SelectionType, Terminal,
+    TerminalMemoryUsage, XTERM_TITLE_STACK_DEPTH,
 };

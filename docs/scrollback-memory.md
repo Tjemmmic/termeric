@@ -7,6 +7,11 @@ styles as runs. Wide leaders and spacers live in the compact content encoding,
 so they do not split an otherwise uniform paint-style run. Rendering
 reconstructs only requested historical cells; resize reflow expands and
 consumes one logical line at a time rather than cloning the entire rich history.
+OSC 66 leaders likewise own their text once while a packed four-byte descriptor
+is reconstructed for each covered cell. Complete one-row blocks survive normal
+scrolling into history, and ED 22 archives the full viewport before erasure;
+multirow blocks split by a live viewport/history boundary are cleared atomically
+instead of leaving an invalid partial block.
 
 ## Resource policy
 

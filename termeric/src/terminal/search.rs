@@ -104,7 +104,9 @@ impl SearchLine {
         let mut byte_to_col: Option<Vec<usize>> = None;
         for col in 0..cols {
             let Some(cell) = row.get(col) else { continue };
-            if cell.is_wide_char_spacer() {
+            if cell.is_wide_char_spacer()
+                || (cell.multicell.is_present() && !cell.multicell.is_leader())
+            {
                 continue;
             }
             let start = text.len();
@@ -1334,4 +1336,14 @@ mod tests {
         search.cancel();
         assert_eq!(search.result_index_memory_bytes(), 0);
     }
+}
+#[test]
+fn multicell_text_is_indexed_once_across_its_full_column_span() {
+    let mut terminal = termeric_core::Terminal::new(10, 3);
+    terminal.process(b"\x1b]66;s=2:w=2;title\x07!");
+    let row = terminal.grid().row_at_offset(0).unwrap();
+    let line = SearchLine::from_row(&row, terminal.cols());
+    assert_eq!(line.text.trim_end(), "title!");
+    assert_eq!(line.columns_for(0, 5), (0, 4));
+    assert_eq!(line.columns_for(5, 6), (4, 5));
 }

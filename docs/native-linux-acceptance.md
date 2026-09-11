@@ -22,6 +22,8 @@ uncommitted source. The template contains exact cases for:
 
 - real X11 and Wayland visual, fractional-scale, font, emoji, resize, and
   fullscreen behavior;
+- Kitty OSC 66 integer/fractional text sizing, explicit-width placement,
+  clipping, overwrite behavior, and expanded block/beam/underline cursors;
 - clipboard/primary selection, OSC 52, URL, notification, and audible-bell
   desktop policy on both display stacks;
 - lost/outdated-surface and device recovery, PTY survival, idle behavior, and

@@ -1,6 +1,6 @@
 //! Grid storage with scrollback buffer
 
-use super::cell::{Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec};
+use super::cell::{Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, MultiCell};
 use super::row::Row;
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
@@ -55,6 +55,9 @@ struct CellStyle {
     flags: CellFlags,
     /// Raw identifier; `CellFlags::HYPERLINK` is the compact Option tag.
     hyperlink_id: u32,
+    /// OSC 66 geometry is zero for ordinary cells. Covered cells intentionally
+    /// form separate runs because their relative coordinates differ.
+    multicell: MultiCell,
 }
 
 impl CellStyle {
@@ -77,6 +80,7 @@ impl CellStyle {
             attrs: cell.attrs,
             flags,
             hyperlink_id: cell.hyperlink_id.unwrap_or_default(),
+            multicell: cell.multicell,
         }
     }
 
@@ -99,6 +103,7 @@ impl CellStyle {
             attrs: self.attrs,
             flags: self.flags | structural_flags,
             hyperlink_id: self.hyperlink_id(),
+            multicell: self.multicell,
         }
     }
 }
@@ -455,7 +460,9 @@ impl<'a> RowView<'a> {
     pub fn plain_text(&self, cols: usize) -> String {
         let mut text = String::with_capacity(cols);
         for cell in self.iter().take(cols) {
-            if !cell.is_wide_char_spacer() {
+            if !cell.is_wide_char_spacer()
+                && (!cell.multicell.is_present() || cell.multicell.is_leader())
+            {
                 push_content(&mut text, &cell.content);
             }
         }
@@ -490,7 +497,9 @@ impl fmt::Display for RowView<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut text = String::new();
         for cell in self.iter() {
-            if cell.is_wide_char_spacer() {
+            if cell.is_wide_char_spacer()
+                || (cell.multicell.is_present() && !cell.multicell.is_leader())
+            {
                 continue;
             }
             match &cell.content {
@@ -623,6 +632,15 @@ impl GridStorage {
 
         self.rows.push(recycled);
         evicted
+    }
+
+    /// Append a copy of every visible row to compact scrollback without
+    /// changing the viewport. Used by Kitty's ED 22 extension, whose copy
+    /// must retain complete multicell descriptors before the screen is erased.
+    pub(crate) fn archive_visible(&mut self) -> usize {
+        let rows = self.rows.clone();
+        rows.into_iter()
+            .fold(0_usize, |evicted, row| evicted + self.push_scrollback(row))
     }
 
     /// Scroll the grid down by one line (reverse scroll)
@@ -973,7 +991,7 @@ impl GridStorage {
         // Trim trailing empty cells so padding doesn't inflate the line
         while cells
             .last()
-            .is_some_and(|c| c.is_empty() && !c.is_wide_char_spacer())
+            .is_some_and(|c| c.is_empty() && !c.is_wide_char_spacer() && !c.multicell.is_present())
         {
             cells.pop();
         }
@@ -997,9 +1015,10 @@ impl GridStorage {
 
             while row_cells.len() < cols && cells.peek().is_some() {
                 if cells.peek().is_some_and(|cell| {
-                    cell.flags.contains(CellFlags::WIDE_CHAR)
-                        || (!cell.content.is_empty()
-                            && crate::unicode::grapheme_width(&cell.content.to_text()) == 2)
+                    !cell.multicell.is_present()
+                        && (cell.flags.contains(CellFlags::WIDE_CHAR)
+                            || (!cell.content.is_empty()
+                                && crate::unicode::grapheme_width(&cell.content.to_text()) == 2))
                 }) {
                     // A one-column grid cannot represent a pair. Preserve the
                     // grapheme in its sole cell without a wide flag and consume
@@ -1352,10 +1371,24 @@ mod tests {
             .unwrap()
             .flags
             .insert(CellFlags::WIDE_CHAR_SPACER);
+        let multicell = MultiCell::new(
+            1,
+            2,
+            0,
+            0,
+            crate::grid::MultiCellAlignment::Start,
+            crate::grid::MultiCellAlignment::Start,
+            0,
+            0,
+        )
+        .unwrap();
+        row.get_mut(10).unwrap().set_grapheme("exact");
+        row.get_mut(10).unwrap().multicell = multicell;
+        row.get_mut(11).unwrap().multicell = multicell.at(1, 0).unwrap();
 
         let original = row.clone();
         let compact = CompactRow::from_row(row);
-        assert_eq!(compact.content.len(), 9);
+        assert_eq!(compact.content.len(), 12);
         assert!(compact.owned_bytes() < 32 * size_of::<Cell>());
         for column in 0..32 {
             let mut expected = original.get(column).unwrap().clone();

@@ -191,7 +191,7 @@ impl Processor {
                 }
                 b';' => {
                     self.osc_payload_mode = if self.osc_command_valid
-                        && matches!(self.osc_command, 0 | 1 | 2 | 8 | 9 | 99 | 777)
+                        && matches!(self.osc_command, 0 | 1 | 2 | 8 | 9 | 66 | 99 | 777)
                     {
                         OscPayloadMode::Utf8
                     } else {

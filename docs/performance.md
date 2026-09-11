@@ -113,6 +113,14 @@ The current suite measures:
   submission, and `SurfaceTexture::present` when X11 plus `xdotool` are
   available.
 
+OSC 66 uses a four-byte packed descriptor in each occupied cell and keeps its
+bounded text payload only in the leader. A regression test keeps the full
+`Cell` at or below 64 bytes, compact-history tests require exact descriptor
+reconstruction without covered-cell payload duplication, and scale variants
+reuse the bounded shaping caches and glyph atlases. Ordinary cells retain the
+existing allocation-free descriptor default and text fast path; native
+scaled-font quality is intentionally not inferred from these resource checks.
+
 The synthetic key-to-submit metric intentionally excludes OS keyboard delivery,
 shell scheduling, surface presentation, and compositor latency. The separate
 `latency.displayed_key_event_to_present` metric starts inside the native Winit

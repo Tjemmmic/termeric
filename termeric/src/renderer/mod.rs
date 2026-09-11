@@ -2032,42 +2032,59 @@ impl Renderer {
                         is_selected.then_some(self.ui.selection_text).flatten(),
                         brightness,
                     );
-                    match &cell.content {
-                        CellContent::Char(character)
-                            if !character.is_whitespace()
-                                && *character != termeric_core::IMAGE_PLACEHOLDER
-                                && !cell.flags.contains(CellFlags::WIDE_CHAR) =>
-                        {
-                            text_run.push(
-                                &mut self.text_pipeline,
-                                *character,
-                                x,
-                                y,
-                                text_color,
-                                style.font,
-                                pane_clip,
-                                cell_width,
-                            );
+                    if cell.multicell.is_leader() {
+                        text_run.flush(&mut self.text_pipeline);
+                        self.text_pipeline.push_styled_multicell(
+                            &cell.content.to_text(),
+                            x,
+                            y,
+                            text_color,
+                            style.font,
+                            pane_clip,
+                            cell_width,
+                            cell_height,
+                            cell.multicell,
+                        );
+                    } else if cell.multicell.is_present() {
+                        text_run.flush(&mut self.text_pipeline);
+                    } else {
+                        match &cell.content {
+                            CellContent::Char(character)
+                                if !character.is_whitespace()
+                                    && *character != termeric_core::IMAGE_PLACEHOLDER
+                                    && !cell.flags.contains(CellFlags::WIDE_CHAR) =>
+                            {
+                                text_run.push(
+                                    &mut self.text_pipeline,
+                                    *character,
+                                    x,
+                                    y,
+                                    text_color,
+                                    style.font,
+                                    pane_clip,
+                                    cell_width,
+                                );
+                            }
+                            CellContent::Char(character)
+                                if !character.is_whitespace()
+                                    && *character != termeric_core::IMAGE_PLACEHOLDER =>
+                            {
+                                text_run.flush(&mut self.text_pipeline);
+                                self.text_pipeline.push_styled_char(
+                                    *character, x, y, text_color, style.font, pane_clip,
+                                );
+                            }
+                            CellContent::Grapheme(grapheme)
+                                if !grapheme.starts_with(termeric_core::IMAGE_PLACEHOLDER)
+                                    && !grapheme.chars().all(char::is_whitespace) =>
+                            {
+                                text_run.flush(&mut self.text_pipeline);
+                                self.text_pipeline.push_styled_grapheme(
+                                    grapheme, x, y, text_color, style.font, pane_clip,
+                                );
+                            }
+                            _ => text_run.flush(&mut self.text_pipeline),
                         }
-                        CellContent::Char(character)
-                            if !character.is_whitespace()
-                                && *character != termeric_core::IMAGE_PLACEHOLDER =>
-                        {
-                            text_run.flush(&mut self.text_pipeline);
-                            self.text_pipeline.push_styled_char(
-                                *character, x, y, text_color, style.font, pane_clip,
-                            );
-                        }
-                        CellContent::Grapheme(grapheme)
-                            if !grapheme.starts_with(termeric_core::IMAGE_PLACEHOLDER)
-                                && !grapheme.chars().all(char::is_whitespace) =>
-                        {
-                            text_run.flush(&mut self.text_pipeline);
-                            self.text_pipeline.push_styled_grapheme(
-                                grapheme, x, y, text_color, style.font, pane_clip,
-                            );
-                        }
-                        _ => text_run.flush(&mut self.text_pipeline),
                     }
                 } else {
                     text_run.flush(&mut self.text_pipeline);
@@ -2105,10 +2122,14 @@ impl Renderer {
         if is_focused && cursor_opacity > 0.0 && scroll_offset == 0 && !filter_mode {
             let cursor = grid.cursor();
             if cursor.visible {
-                let x = offset_x + cursor_pos.0 * cell_width;
-                let y = offset_y + cursor_pos.1 * cell_height;
+                let (cursor_top, cursor_left, cursor_rows, cursor_columns) =
+                    cursor_cell_geometry(grid, cursor.row, cursor.col);
+                let x = offset_x + cursor_left as f32 * cell_width;
+                let y = offset_y + cursor_top as f32 * cell_height;
+                let cursor_width = cursor_columns as f32 * cell_width;
+                let cursor_height = cursor_rows as f32 * cell_height;
 
-                if y + cell_height <= max_grid_y {
+                if y + cursor_height <= max_grid_y {
                     let cursor_color = apply_brightness(
                         dynamic_colors
                             .cursor()
@@ -2127,13 +2148,13 @@ impl Renderer {
                             self.rect_pipeline.push_rounded_rect(
                                 x,
                                 y,
-                                cell_width,
-                                cell_height,
+                                cursor_width,
+                                cursor_height,
                                 cc,
                                 2.0,
                             );
-                            let cursor_row = cursor.row;
-                            let cursor_col = cursor.col;
+                            let cursor_row = cursor_top;
+                            let cursor_col = cursor_left;
                             if let Some(cell) = grid.cell_scrolled(cursor_row, cursor_col) {
                                 let style = ResolvedCellStyle::resolve(
                                     &self.terminal_palette,
@@ -2146,32 +2167,48 @@ impl Renderer {
                                     let mut color =
                                         style.text_color(Some(self.ui.cursor_text), brightness);
                                     color[3] = cursor_opacity;
-                                    match &cell.content {
-                                        CellContent::Char(character)
-                                            if !character.is_whitespace()
-                                                && *character
-                                                    != termeric_core::IMAGE_PLACEHOLDER =>
-                                        {
-                                            self.text_pipeline.push_styled_char(
-                                                *character, x, y, color, style.font, pane_clip,
-                                            );
+                                    if cell.multicell.is_leader() {
+                                        self.text_pipeline.push_styled_multicell(
+                                            &cell.content.to_text(),
+                                            x,
+                                            y,
+                                            color,
+                                            style.font,
+                                            pane_clip,
+                                            cell_width,
+                                            cell_height,
+                                            cell.multicell,
+                                        );
+                                    } else {
+                                        match &cell.content {
+                                            CellContent::Char(character)
+                                                if !character.is_whitespace()
+                                                    && *character
+                                                        != termeric_core::IMAGE_PLACEHOLDER =>
+                                            {
+                                                self.text_pipeline.push_styled_char(
+                                                    *character, x, y, color, style.font, pane_clip,
+                                                );
+                                            }
+                                            CellContent::Grapheme(grapheme)
+                                                if !grapheme.starts_with(
+                                                    termeric_core::IMAGE_PLACEHOLDER,
+                                                ) && !grapheme
+                                                    .chars()
+                                                    .all(char::is_whitespace) =>
+                                            {
+                                                self.text_pipeline.push_styled_grapheme(
+                                                    grapheme, x, y, color, style.font, pane_clip,
+                                                );
+                                            }
+                                            _ => {}
                                         }
-                                        CellContent::Grapheme(grapheme)
-                                            if !grapheme
-                                                .starts_with(termeric_core::IMAGE_PLACEHOLDER)
-                                                && !grapheme.chars().all(char::is_whitespace) =>
-                                        {
-                                            self.text_pipeline.push_styled_grapheme(
-                                                grapheme, x, y, color, style.font, pane_clip,
-                                            );
-                                        }
-                                        _ => {}
                                     }
                                     self.draw_sgr_decorations(
                                         style,
                                         x,
                                         y,
-                                        cell_width,
+                                        cursor_width,
                                         brightness,
                                         Some((self.ui.cursor_text, cursor_opacity)),
                                     );
@@ -2182,8 +2219,8 @@ impl Renderer {
                             let underline_height = 2.0_f32.max(cell_height * 0.1);
                             self.rect_pipeline.push_rect(
                                 x,
-                                y + cell_height - underline_height,
-                                cell_width,
+                                y + cursor_height - underline_height,
+                                cursor_width,
                                 underline_height,
                                 cc,
                             );
@@ -2191,7 +2228,7 @@ impl Renderer {
                         CursorStyle::Beam => {
                             let beam_width = 2.0_f32.max(cell_width * 0.1);
                             self.rect_pipeline
-                                .push_rect(x, y, beam_width, cell_height, cc);
+                                .push_rect(x, y, beam_width, cursor_height, cc);
                         }
                     }
                 }
@@ -2249,6 +2286,28 @@ impl Renderer {
             }
         }
     }
+}
+
+fn cursor_cell_geometry(grid: &Grid, row: usize, col: usize) -> (usize, usize, usize, usize) {
+    grid.multicell_region_at(row, col)
+        .map_or((row, col, 1, 1), |region| {
+            (
+                region.top,
+                region.left,
+                region.descriptor.rows(),
+                region.descriptor.columns(),
+            )
+        })
+}
+
+#[cfg(test)]
+#[test]
+fn multicell_cursor_geometry_expands_from_every_covered_cell() {
+    let mut terminal = termeric_core::Terminal::new(10, 4);
+    terminal.process(b".\x1b]66;s=2:w=2;X\x07");
+    assert_eq!(cursor_cell_geometry(terminal.grid(), 0, 1), (0, 1, 2, 4));
+    assert_eq!(cursor_cell_geometry(terminal.grid(), 1, 4), (0, 1, 2, 4));
+    assert_eq!(cursor_cell_geometry(terminal.grid(), 3, 9), (3, 9, 1, 1));
 }
 
 fn acceptance_trigger_ready(path: Option<&Path>, injected: &AtomicBool) -> bool {
@@ -2703,6 +2762,9 @@ pub(crate) fn headless_unicode_render_smoke(device: &Device, queue: &Queue) -> R
             }
             text::QueuedContent::Run { .. } => {
                 anyhow::bail!("standalone Unicode golden unexpectedly became a row run");
+            }
+            text::QueuedContent::MultiCell { .. } => {
+                anyhow::bail!("standalone Unicode golden unexpectedly became a multicell");
             }
         }
     }

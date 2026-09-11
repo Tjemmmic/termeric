@@ -248,7 +248,9 @@ impl Row {
         let end = end.min(self.cells.len()).max(start);
         let mut changed = false;
         for cell in &mut self.cells[start..end] {
-            let drawn = !cell.content.is_empty() || cell.is_wide_char_spacer();
+            let drawn = !cell.content.is_empty()
+                || cell.is_wide_char_spacer()
+                || cell.multicell.is_present();
             if !exact_rectangle && !drawn {
                 continue;
             }
@@ -381,7 +383,9 @@ impl Row {
         let mut s = String::new();
 
         for cell in &self.cells {
-            if cell.is_wide_char_spacer() {
+            if cell.is_wide_char_spacer()
+                || (cell.multicell.is_present() && !cell.multicell.is_leader())
+            {
                 continue;
             }
             match &cell.content {
@@ -422,6 +426,7 @@ impl Row {
             .iter()
             .rposition(|c| {
                 !c.is_wide_char_spacer()
+                    && (!c.multicell.is_present() || c.multicell.is_leader())
                     && (!c.content.is_empty()
                         || c.fg != default_fg
                         || c.bg != default_bg
@@ -437,6 +442,12 @@ impl Row {
                 break;
             }
             if cell.is_wide_char_spacer() {
+                continue;
+            }
+            if cell.multicell.is_present() && !cell.multicell.is_leader() {
+                if cell.multicell.relative_row() > 0 && cell.multicell.relative_col() == 0 {
+                    s.push_str(&format!("\x1b[{}C", cell.multicell.columns()));
+                }
                 continue;
             }
 
@@ -529,10 +540,34 @@ impl Row {
                 cur_underline_color_spec = cell.underline_color_spec;
             }
 
-            match &cell.content {
-                CellContent::Empty => s.push(' '),
-                CellContent::Char(c) => s.push(*c),
-                CellContent::Grapheme(g) => s.push_str(g),
+            if cell.multicell.is_leader() {
+                let descriptor = cell.multicell;
+                let mut metadata =
+                    format!("s={}:w={}", descriptor.scale(), descriptor.logical_width());
+                if descriptor.denominator() != 0 {
+                    metadata.push_str(&format!(
+                        ":n={}:d={}",
+                        descriptor.numerator(),
+                        descriptor.denominator()
+                    ));
+                }
+                if descriptor.vertical_alignment() as u8 != 0 {
+                    metadata.push_str(&format!(":v={}", descriptor.vertical_alignment() as u8));
+                }
+                if descriptor.horizontal_alignment() as u8 != 0 {
+                    metadata.push_str(&format!(":h={}", descriptor.horizontal_alignment() as u8));
+                }
+                s.push_str("\x1b]66;");
+                s.push_str(&metadata);
+                s.push(';');
+                s.push_str(&cell.content.to_text());
+                s.push('\x07');
+            } else {
+                match &cell.content {
+                    CellContent::Empty => s.push(' '),
+                    CellContent::Char(c) => s.push(*c),
+                    CellContent::Grapheme(g) => s.push_str(g),
+                }
             }
         }
 

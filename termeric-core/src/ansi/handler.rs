@@ -1459,6 +1459,9 @@ impl Perform for Handler<'_> {
                 }
             }
 
+            // Kitty text sizing and explicit cell-width protocol.
+            66 => self.terminal.handle_osc66_multicell(&params[1..]),
+
             // Desktop notification (OSC 9) - iTerm2 style
             // Format: OSC 9 ; message ST
             9 => {

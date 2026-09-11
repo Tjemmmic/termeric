@@ -1038,6 +1038,12 @@ fn assert_terminal_invariants(terminal: &Terminal) {
                         .contains(CellFlags::WIDE_CHAR_SPACER)
                 );
             }
+            if cell.multicell.is_present() {
+                assert!(
+                    grid.multicell_region_at(row_index, col).is_some(),
+                    "multicell descriptor at {row_index}:{col} must resolve to one complete block"
+                );
+            }
         }
     }
 

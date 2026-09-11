@@ -67,6 +67,11 @@ struct TextUniforms {
 pub(super) enum QueuedContent {
     Char(char),
     Grapheme(Box<str>),
+    /// One OSC 66 text block shaped at a multiple of the configured font.
+    MultiCell {
+        text: Box<str>,
+        font_scale: f32,
+    },
     /// A contiguous sequence of one-column terminal cells shaped together.
     Run {
         text: String,
@@ -227,6 +232,15 @@ fn queued_glyphs(
                     })
                     .collect()
             }),
+        QueuedContent::MultiCell { text, font_scale } => glyph_cache
+            .shape_multicell_styled(text, queued.style, *font_scale, queue)
+            .map(|run| {
+                run.glyphs
+                    .into_iter()
+                    .map(|glyph| (glyph.entry, glyph.x_offset))
+                    .collect()
+            })
+            .unwrap_or_default(),
         QueuedContent::Run { text, cell_width } => glyph_cache
             .shape_run_styled(text, queued.style, queue)
             .map(|run| {
@@ -246,6 +260,46 @@ fn queued_glyphs(
                     .collect()
             }),
     }
+}
+
+fn multicell_origin_and_clip(
+    block_x: f32,
+    block_y: f32,
+    pane_clip: TextClip,
+    cell_width: f32,
+    cell_height: f32,
+    descriptor: termeric_core::MultiCell,
+) -> (f32, f32, TextClip) {
+    let block_width = descriptor.columns() as f32 * cell_width;
+    let block_height = descriptor.rows() as f32 * cell_height;
+    let fraction = if descriptor.denominator() == 0 {
+        1.0
+    } else {
+        f32::from(descriptor.numerator()) / f32::from(descriptor.denominator())
+    };
+    let align_offset =
+        |remaining: f32, alignment: termeric_core::MultiCellAlignment| match alignment {
+            termeric_core::MultiCellAlignment::Start => 0.0,
+            termeric_core::MultiCellAlignment::End => remaining,
+            termeric_core::MultiCellAlignment::Center => remaining * 0.5,
+        };
+    let x = block_x
+        + align_offset(
+            block_width * (1.0 - fraction),
+            descriptor.horizontal_alignment(),
+        );
+    let y = block_y
+        + align_offset(
+            block_height * (1.0 - fraction),
+            descriptor.vertical_alignment(),
+        );
+    let clip = TextClip {
+        left: pane_clip.left.max(block_x),
+        top: pane_clip.top.max(block_y),
+        right: pane_clip.right.min(block_x + block_width),
+        bottom: pane_clip.bottom.min(block_y + block_height),
+    };
+    (x, y, clip)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -541,6 +595,10 @@ impl TextPipeline {
         let mut atlas_pages = Vec::new();
 
         for character in &queued {
+            let character_baseline = match character.content {
+                QueuedContent::MultiCell { font_scale, .. } => baseline * font_scale,
+                _ => baseline,
+            };
             for (entry, x_offset) in queued_glyphs(character, glyph_cache, queue) {
                 let page = entry.page_key();
                 if !atlas_pages.contains(&page) {
@@ -555,7 +613,7 @@ impl TextPipeline {
                     character.color,
                     atlas_width as f32,
                     atlas_height as f32,
-                    baseline,
+                    character_baseline,
                     character.clip,
                 );
             }
@@ -703,6 +761,39 @@ impl TextPipeline {
         }
     }
 
+    /// Queue an OSC 66 leader, clipping its scaled glyphs to the occupied
+    /// rectangle and aligning a fractional render area within that rectangle.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_styled_multicell(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        color: [f32; 4],
+        style: FontStyle,
+        pane_clip: TextClip,
+        cell_width: f32,
+        cell_height: f32,
+        descriptor: termeric_core::MultiCell,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        let (x, y, clip) =
+            multicell_origin_and_clip(x, y, pane_clip, cell_width, cell_height, descriptor);
+        self.queued.push(QueuedChar {
+            content: QueuedContent::MultiCell {
+                text: text.into(),
+                font_scale: descriptor.font_scale(),
+            },
+            x,
+            y,
+            color,
+            style,
+            clip: Some(clip),
+        });
+    }
+
     /// Upload vertex data to GPU
     pub fn upload(&mut self, device: &Device, queue: &Queue, glyph_cache: &mut GlyphCache) {
         self.vertices.clear();
@@ -753,6 +844,10 @@ impl TextPipeline {
                 next_boundary_idx += 1;
             }
 
+            let queued_baseline = match queued.content {
+                QueuedContent::MultiCell { font_scale, .. } => baseline * font_scale,
+                _ => baseline,
+            };
             for (entry, x_offset) in queued_glyphs(queued, glyph_cache, queue) {
                 append_glyph_quad(
                     &mut self.vertices,
@@ -763,7 +858,7 @@ impl TextPipeline {
                     queued.color,
                     atlas_w,
                     atlas_h,
-                    baseline,
+                    queued_baseline,
                     queued.clip,
                 );
             }
@@ -904,5 +999,50 @@ mod tests {
             accumulator.take_pending().unwrap().content,
             QueuedContent::Char('x')
         );
+    }
+
+    #[test]
+    fn fractional_multicell_alignment_uses_the_full_block_and_pane_clip() {
+        let descriptor = termeric_core::MultiCell::new(
+            2,
+            3,
+            1,
+            2,
+            termeric_core::MultiCellAlignment::End,
+            termeric_core::MultiCellAlignment::Center,
+            0,
+            0,
+        )
+        .unwrap();
+        let pane = TextClip {
+            left: 5.0,
+            top: 8.0,
+            right: 55.0,
+            bottom: 35.0,
+        };
+        let (x, y, clip) = multicell_origin_and_clip(0.0, 10.0, pane, 10.0, 10.0, descriptor);
+        assert_eq!(x, 30.0);
+        assert_eq!(y, 15.0);
+        assert_eq!(clip.left, 5.0);
+        assert_eq!(clip.top, 10.0);
+        assert_eq!(clip.right, 55.0);
+        assert_eq!(clip.bottom, 30.0);
+    }
+
+    #[test]
+    fn every_fractional_multicell_alignment_has_deterministic_origin() {
+        let alignments = [
+            (termeric_core::MultiCellAlignment::Start, 0.0, 0.0),
+            (termeric_core::MultiCellAlignment::End, 30.0, 10.0),
+            (termeric_core::MultiCellAlignment::Center, 15.0, 5.0),
+        ];
+        for (horizontal, expected_x, _) in alignments {
+            for (vertical, _, expected_y) in alignments {
+                let descriptor =
+                    termeric_core::MultiCell::new(2, 3, 1, 2, horizontal, vertical, 0, 0).unwrap();
+                let (x, y, _) = multicell_origin_and_clip(0.0, 0.0, CLIP, 10.0, 10.0, descriptor);
+                assert_eq!((x, y), (expected_x, expected_y));
+            }
+        }
     }
 }

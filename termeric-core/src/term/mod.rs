@@ -6,6 +6,7 @@
 mod cursor;
 mod keyboard;
 mod mode;
+mod multicell;
 mod notification;
 mod pointer;
 mod selection;
@@ -20,6 +21,8 @@ pub use keyboard::{
     XtermUserDefinedKeys,
 };
 pub use mode::TerminalMode;
+pub use multicell::MAX_OSC66_TEXT_BYTES;
+use multicell::Osc66Command;
 pub use notification::{
     MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES, MAX_NOTIFICATION_TITLE_BYTES,
     MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES, MAX_PENDING_NOTIFICATION_BYTES,
@@ -42,12 +45,13 @@ use crate::graphics::{
     StoredImage,
 };
 use crate::grid::{
-    Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry,
+    Cell, CellAttrs, CellContent, CellFlags, Color, ColorSpec, Grid, HyperlinkRegistry, MultiCell,
 };
 use crate::shell::ShellIntegration;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Tab stop interval
 const TAB_INTERVAL: usize = 8;
@@ -947,6 +951,208 @@ impl Terminal {
         }
     }
 
+    /// Parse and place one bounded Kitty OSC 66 text-sizing operation.
+    pub(crate) fn handle_osc66_multicell(&mut self, params: &[&[u8]]) {
+        let Some(command) = Osc66Command::parse(params) else {
+            return;
+        };
+        if command.width == 0 {
+            for grapheme in command.text.graphemes(true) {
+                let grapheme_width = crate::unicode::grapheme_width(grapheme);
+                if grapheme_width == 0 {
+                    continue;
+                }
+                let width = grapheme_width.clamp(1, 2) as u8;
+                if !self.place_multicell(&command, grapheme, width) {
+                    break;
+                }
+            }
+        } else {
+            self.place_multicell(&command, &command.text, command.width);
+        }
+    }
+
+    fn place_multicell(&mut self, command: &Osc66Command, text: &str, width: u8) -> bool {
+        let Some(leader_descriptor) = MultiCell::new(
+            command.scale,
+            width,
+            command.numerator,
+            command.denominator,
+            command.horizontal,
+            command.vertical,
+            0,
+            0,
+        ) else {
+            return false;
+        };
+        let columns = leader_descriptor.columns();
+        let rows = leader_descriptor.rows();
+        let cols = self.cols;
+        if columns > cols || rows > self.rows {
+            return false;
+        }
+
+        let Some((top, left)) = self.prepare_multicell_position(columns, rows) else {
+            return false;
+        };
+        let bottom = top + rows;
+        let right = left + columns;
+        let blank = self.erase_cell();
+
+        // Resolve every collision before mutating any cell. This ensures a
+        // partial intersection cannot leave a stale descriptor behind.
+        let mut collisions = HashSet::new();
+        for row in top..bottom {
+            for col in left..right {
+                if let Some(region) = self.grid().multicell_region_at(row, col) {
+                    collisions.insert((region.top, region.left));
+                }
+            }
+        }
+        for (row, col) in collisions {
+            let replace_with_spaces = !(top <= row && row < bottom && left <= col && col < right);
+            self.grid_mut()
+                .clear_multicell_at(row, col, &blank, replace_with_spaces);
+        }
+
+        if self.mode.contains(TerminalMode::INSERT) {
+            self.grid_mut()
+                .erase_multicells_intersecting(top, bottom, left, cols, &blank, false);
+            for row in top..bottom {
+                if let Some(row) = self.grid_mut().row_mut(row) {
+                    row.insert_cells_bounded(left, cols, columns, &blank);
+                }
+            }
+        }
+
+        let mut template = Cell {
+            fg: self.current_fg,
+            bg: self.current_bg,
+            fg_spec: self.current_fg_spec,
+            bg_spec: self.current_bg_spec,
+            underline_color: self.current_underline_color,
+            underline_color_spec: self.current_underline_color_spec,
+            attrs: self.current_attrs,
+            hyperlink_id: self.current_hyperlink_id,
+            ..Cell::default()
+        };
+        template.flags.insert(CellFlags::DIRTY);
+        template
+            .flags
+            .set(CellFlags::HYPERLINK, self.current_hyperlink_id.is_some());
+        template
+            .flags
+            .set(CellFlags::PROTECTED, self.current_character_protected);
+
+        for relative_row in 0..rows {
+            for relative_col in 0..columns {
+                let Some(descriptor) = leader_descriptor.at(relative_col, relative_row) else {
+                    return false;
+                };
+                let Some(cell) = self
+                    .grid_mut()
+                    .cell_mut(top + relative_row, left + relative_col)
+                else {
+                    return false;
+                };
+                *cell = template.clone();
+                cell.multicell = descriptor;
+                if relative_row == 0 && relative_col == 0 {
+                    let mut scalars = text.chars();
+                    cell.content = match (scalars.next(), scalars.next()) {
+                        (Some(character), None) => CellContent::Char(character),
+                        (Some(_), Some(_)) => CellContent::Grapheme(text.into()),
+                        _ => return false,
+                    };
+                }
+            }
+        }
+
+        if right == cols {
+            self.grid_mut().set_cursor(top, cols - 1);
+            self.grid_mut().set_wrap_pending(true);
+        } else {
+            self.grid_mut().set_cursor(top, right);
+        }
+        self.remember_last_graphic(text, CharacterSet::Ascii);
+        true
+    }
+
+    fn prepare_multicell_position(
+        &mut self,
+        columns: usize,
+        rows: usize,
+    ) -> Option<(usize, usize)> {
+        let cols = self.cols;
+        for _ in 0..=cols {
+            let cursor = self.grid().cursor();
+            let (line_left, line_right) = self.write_horizontal_bounds(cursor.row, cursor.col);
+            if columns > line_right.saturating_sub(line_left) {
+                return None;
+            }
+            if cursor.col < line_left {
+                self.grid_mut().set_cursor(cursor.row, line_left);
+                continue;
+            }
+            if cursor.wrap_pending || cursor.col + columns > line_right {
+                if self.mode.contains(TerminalMode::AUTOWRAP) || cursor.wrap_pending {
+                    self.multicell_wrap_to_next_line(true);
+                } else {
+                    self.grid_mut()
+                        .set_cursor(cursor.row, line_right.saturating_sub(columns));
+                }
+                continue;
+            }
+
+            let skip_to = (cursor.col..cursor.col + columns)
+                .filter_map(|col| self.grid().multicell_region_at(cursor.row, col))
+                .filter(|region| {
+                    self.grid()
+                        .cell(cursor.row, cursor.col.max(region.left))
+                        .is_some_and(|cell| cell.multicell.relative_row() > 0)
+                })
+                .map(|region| region.right())
+                .max();
+            if let Some(next_col) = skip_to {
+                if next_col + columns <= line_right {
+                    self.grid_mut().set_cursor(cursor.row, next_col);
+                } else {
+                    self.multicell_wrap_to_next_line(false);
+                }
+                continue;
+            }
+
+            let mut top = cursor.row;
+            if self.row_inside_vertical_margins(top) {
+                let height = self.scroll_bottom - self.scroll_top;
+                if rows > height {
+                    return None;
+                }
+                let overflow = top.saturating_add(rows).saturating_sub(self.scroll_bottom);
+                if overflow > 0 {
+                    self.scroll_up(overflow);
+                    top = top.saturating_sub(overflow);
+                    self.grid_mut().set_cursor(top, cursor.col);
+                }
+            } else if top + rows > self.rows {
+                return None;
+            }
+            return Some((top, self.grid().cursor().col));
+        }
+        None
+    }
+
+    fn multicell_wrap_to_next_line(&mut self, wrapped: bool) {
+        let cursor = self.grid().cursor();
+        let (left, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
+        let full_width = left == 0 && right == self.cols;
+        if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+            row.set_wrapped(wrapped && full_width);
+        }
+        self.grid_mut().set_cursor(cursor.row, left);
+        self.linefeed();
+    }
+
     /// Get the active grid
     pub fn grid(&self) -> &Grid {
         if self.alt_screen_active {
@@ -1716,10 +1922,11 @@ impl Terminal {
         }
     }
 
-    fn shift_selection_after_full_scroll(&mut self) {
+    fn shift_selection_after_full_scroll(&mut self, lines: usize) {
+        let lines = i32::try_from(lines).unwrap_or(i32::MAX);
         if let Some(selection) = &mut self.selection {
-            selection.start.row = selection.start.row.saturating_sub(1);
-            selection.end.row = selection.end.row.saturating_sub(1);
+            selection.start.row = selection.start.row.saturating_sub(lines);
+            selection.end.row = selection.end.row.saturating_sub(lines);
         }
         self.clear_selection_if_evicted();
     }
@@ -1921,6 +2128,11 @@ impl Terminal {
             .filter_map(|row| shell_logical_anchor(&self.grid, row).map(|anchor| (row, anchor)))
             .collect::<Vec<_>>();
         self.grid.resize(cols, rows);
+        let resize_blank = Cell {
+            flags: CellFlags::DIRTY,
+            ..Cell::default()
+        };
+        self.grid.repair_multicells(&resize_blank);
         let remapped_shell_rows = shell_anchors
             .into_iter()
             .filter_map(|(old_row, anchor)| {
@@ -1941,8 +2153,10 @@ impl Terminal {
                 scroll_offset: self.grid.scroll_offset(),
             });
         self.alt_grid.resize(cols, rows);
+        self.alt_grid.repair_multicells(&resize_blank);
         if let Some(snapshot) = &mut self.synchronized_output_snapshot {
             snapshot.grid.resize(cols, rows);
+            snapshot.grid.repair_multicells(&resize_blank);
         }
 
         // Preserve customized stops that still fit. Newly exposed columns get
@@ -2125,22 +2339,58 @@ impl Terminal {
         }
         // If not autowrap, cursor stays at last column (overwrite mode)
 
-        let mut cursor = self.grid().cursor();
-        let (left, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
-        if width == 2 && cursor.col + 1 >= right {
-            if self.mode.contains(TerminalMode::AUTOWRAP) && right - left >= 2 {
-                if let Some(row) = self.grid_mut().row_mut(cursor.row) {
-                    row.set_wrapped(left == 0 && right == cols);
+        // Normal text cannot split a valid multicell block. Lower rows are
+        // skipped, while the leader and other top-row cells use Kitty's
+        // erase-versus-space overwrite distinction.
+        loop {
+            let cursor = self.grid().cursor();
+            let (current_left, current_right) =
+                self.write_horizontal_bounds(cursor.row, cursor.col);
+            if width == 2 && cursor.col + 1 >= current_right {
+                if self.mode.contains(TerminalMode::AUTOWRAP) && current_right - current_left >= 2 {
+                    if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                        row.set_wrapped(current_left == 0 && current_right == cols);
+                    }
+                    self.grid_mut().set_cursor(cursor.row, current_left);
+                    self.linefeed();
+                    continue;
                 }
-                self.grid_mut().set_cursor(cursor.row, left);
-                self.linefeed();
-                cursor = self.grid().cursor();
-            } else {
                 // A one-column grid cannot represent a wide pair. Keep the
                 // grapheme visible in the sole cell without creating an orphan.
                 width = 1;
             }
+            let collision = (cursor.col..cursor.col.saturating_add(width).min(current_right))
+                .find_map(|col| {
+                    self.grid()
+                        .multicell_region_at(cursor.row, col)
+                        .map(|region| (col, region))
+                });
+            let Some((collision_col, region)) = collision else {
+                break;
+            };
+            let descriptor = self
+                .grid()
+                .cell(cursor.row, collision_col)
+                .expect("resolved multicell collision is in bounds")
+                .multicell;
+            if descriptor.relative_row() > 0 {
+                if region.right() + width <= current_right {
+                    self.grid_mut().set_cursor(cursor.row, region.right());
+                } else {
+                    self.multicell_wrap_to_next_line(false);
+                }
+                continue;
+            }
+            let blank = self.erase_cell();
+            self.grid_mut().clear_multicell_at(
+                cursor.row,
+                collision_col,
+                &blank,
+                !descriptor.is_leader(),
+            );
         }
+        let cursor = self.grid().cursor();
+        let (_, right) = self.write_horizontal_bounds(cursor.row, cursor.col);
 
         let fg = self.current_fg;
         let bg = self.current_bg;
@@ -2150,10 +2400,18 @@ impl Terminal {
         let protected = self.current_character_protected;
 
         let blank = self.erase_cell();
-        if self.mode.contains(TerminalMode::INSERT)
-            && let Some(row) = self.grid_mut().row_mut(cursor.row)
-        {
-            row.insert_cells_bounded(cursor.col, right, width, &blank);
+        if self.mode.contains(TerminalMode::INSERT) {
+            self.grid_mut().erase_multicells_intersecting(
+                cursor.row,
+                cursor.row + 1,
+                cursor.col,
+                right,
+                &blank,
+                false,
+            );
+            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                row.insert_cells_bounded(cursor.col, right, width, &blank);
+            }
         }
 
         // Clear either half of any existing wide pair, then write the leader
@@ -2272,6 +2530,26 @@ impl Terminal {
                 return false;
             };
             col = leader;
+        }
+        if let Some(region) = self.grid().multicell_region_at(cursor.row, col) {
+            let candidate = self.grid().cell(cursor.row, col).unwrap();
+            if candidate.multicell.relative_row() != 0 {
+                return false;
+            }
+            let leader = self.grid().cell(region.top, region.left).unwrap();
+            let original = leader.content.to_text();
+            if !crate::unicode::extends_grapheme(&original, next) {
+                return false;
+            }
+            let mut combined = original;
+            combined.push(next);
+            let descriptor = leader.multicell;
+            if let Some(leader) = self.grid_mut().cell_mut(region.top, region.left) {
+                leader.set_grapheme(&combined);
+                leader.multicell = descriptor;
+            }
+            self.remember_last_graphic(&combined, CharacterSet::Ascii);
+            return true;
         }
         let Some(cell) = self.grid().cell(cursor.row, col) else {
             return false;
@@ -2443,9 +2721,32 @@ impl Terminal {
         let full_width = scroll_left == 0 && scroll_right == self.cols;
         let blank = self.erase_cell();
         for _ in 0..n {
+            if full_width {
+                self.grid_mut().erase_multicells_crossing_row(
+                    scroll_top.saturating_add(1),
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                );
+                self.grid_mut().erase_multicells_crossing_row(
+                    scroll_bottom.saturating_sub(1),
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                );
+            } else {
+                self.grid_mut().erase_multicells_intersecting(
+                    scroll_top,
+                    scroll_bottom,
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                    false,
+                );
+            }
             if full_width && scroll_top == 0 && scroll_bottom == self.rows {
                 let evicted = self.grid_mut().scroll_up();
-                self.shift_selection_after_full_scroll();
+                self.shift_selection_after_full_scroll(1);
                 self.note_history_eviction(evicted);
                 if !self.alt_screen_active {
                     let oldest = -(self.grid().scrollback_len() as i32);
@@ -2467,6 +2768,7 @@ impl Terminal {
                 );
             }
         }
+        self.grid_mut().repair_multicells(&blank);
         let preserve_history =
             !self.alt_screen_active && full_width && scroll_top == 0 && scroll_bottom == self.rows;
         let history_lines = self.grid().scrollback_len();
@@ -2489,6 +2791,29 @@ impl Terminal {
         let full_width = scroll_left == 0 && scroll_right == self.cols;
         let blank = self.erase_cell();
         for _ in 0..n {
+            if full_width {
+                self.grid_mut().erase_multicells_crossing_row(
+                    scroll_top.saturating_add(1),
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                );
+                self.grid_mut().erase_multicells_crossing_row(
+                    scroll_bottom.saturating_sub(1),
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                );
+            } else {
+                self.grid_mut().erase_multicells_intersecting(
+                    scroll_top,
+                    scroll_bottom,
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                    false,
+                );
+            }
             if full_width && scroll_top == 0 && scroll_bottom == self.rows {
                 self.grid_mut().scroll_down();
             } else if full_width {
@@ -2504,6 +2829,7 @@ impl Terminal {
                 );
             }
         }
+        self.grid_mut().repair_multicells(&blank);
         self.graphics.scroll_down(
             self.alt_screen_active,
             scroll_top..scroll_bottom,
@@ -2683,6 +3009,22 @@ impl Terminal {
 
         match mode {
             0 => {
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row,
+                    cursor.row + 1,
+                    cursor.col,
+                    cols,
+                    &blank,
+                    false,
+                );
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row + 1,
+                    rows,
+                    0,
+                    cols,
+                    &blank,
+                    false,
+                );
                 // Erase from cursor to end of screen
                 if let Some(row) = self.grid_mut().row_mut(cursor.row) {
                     row.erase_range(cursor.col, cols, &blank);
@@ -2694,6 +3036,16 @@ impl Terminal {
                 }
             }
             1 => {
+                self.grid_mut()
+                    .erase_multicells_intersecting(0, cursor.row, 0, cols, &blank, false);
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row,
+                    cursor.row + 1,
+                    0,
+                    cursor.col + 1,
+                    &blank,
+                    false,
+                );
                 // Erase from start of screen to cursor
                 for row in 0..cursor.row {
                     if let Some(row) = self.grid_mut().row_mut(row) {
@@ -2704,7 +3056,23 @@ impl Terminal {
                     row.erase_range(0, cursor.col + 1, &blank);
                 }
             }
-            2 => {
+            2 | 22 => {
+                if mode == 22 && !self.alt_screen_active {
+                    let evicted = self.grid_mut().archive_visible();
+                    self.shift_selection_after_full_scroll(rows);
+                    self.note_history_eviction(evicted);
+                    let oldest = -(self.grid().scrollback_len() as i32);
+                    let scroll_amount = i32::try_from(rows).unwrap_or(i32::MAX);
+                    self.shell
+                        .prompt_tracker
+                        .adjust_for_scroll(scroll_amount, oldest);
+                    if let Some(navigation) = &mut self.prompt_navigation {
+                        navigation.row = navigation.row.saturating_sub(scroll_amount);
+                    }
+                    self.retain_prompt_navigation(oldest);
+                }
+                self.grid_mut()
+                    .erase_multicells_intersecting(0, rows, 0, cols, &blank, false);
                 // Erase the viewport without moving the cursor or clearing
                 // scrollback.
                 for row in 0..rows {
@@ -2742,6 +3110,14 @@ impl Terminal {
             _ => return,
         };
 
+        self.grid_mut().erase_multicells_intersecting(
+            cursor.row,
+            cursor.row + 1,
+            start,
+            end,
+            &blank,
+            false,
+        );
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
             row.erase_range(start, end, &blank);
         }
@@ -2757,6 +3133,22 @@ impl Terminal {
 
         match mode {
             0 => {
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row,
+                    cursor.row + 1,
+                    cursor.col,
+                    cols,
+                    &blank,
+                    true,
+                );
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row + 1,
+                    rows,
+                    0,
+                    cols,
+                    &blank,
+                    true,
+                );
                 if let Some(row) = self.grid_mut().row_mut(cursor.row) {
                     row.selective_erase_range(cursor.col, cols, &blank);
                 }
@@ -2767,6 +3159,16 @@ impl Terminal {
                 }
             }
             1 => {
+                self.grid_mut()
+                    .erase_multicells_intersecting(0, cursor.row, 0, cols, &blank, true);
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row,
+                    cursor.row + 1,
+                    0,
+                    cursor.col + 1,
+                    &blank,
+                    true,
+                );
                 for row in 0..cursor.row {
                     if let Some(row) = self.grid_mut().row_mut(row) {
                         row.selective_erase_range(0, cols, &blank);
@@ -2777,6 +3179,8 @@ impl Terminal {
                 }
             }
             2 => {
+                self.grid_mut()
+                    .erase_multicells_intersecting(0, rows, 0, cols, &blank, true);
                 for row in 0..rows {
                     if let Some(row) = self.grid_mut().row_mut(row) {
                         row.selective_erase_range(0, cols, &blank);
@@ -2797,6 +3201,14 @@ impl Terminal {
             2 => (0, self.cols),
             _ => return,
         };
+        self.grid_mut().erase_multicells_intersecting(
+            cursor.row,
+            cursor.row + 1,
+            start,
+            end,
+            &blank,
+            true,
+        );
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
             row.selective_erase_range(start, end, &blank);
         }
@@ -3074,11 +3486,20 @@ impl Terminal {
             })
             .collect();
         let blank = self.erase_cell();
+        self.grid_mut().erase_multicells_intersecting(
+            destination.top,
+            destination.top + height,
+            destination.left,
+            destination.left + width,
+            &blank,
+            false,
+        );
         for (offset, cells) in snapshot.iter().enumerate() {
             if let Some(row) = self.grid_mut().row_mut(destination.top + offset) {
                 row.replace_range(destination.left, cells, &blank);
             }
         }
+        self.grid_mut().repair_multicells(&blank);
         self.graphics.copy_rect(
             self.alt_screen_active,
             source.top..source.top + height,
@@ -3133,8 +3554,17 @@ impl Terminal {
             attrs: self.current_attrs,
             flags,
             hyperlink_id: None,
+            multicell: Default::default(),
         };
         let blank = self.erase_cell();
+        self.grid_mut().erase_multicells_intersecting(
+            area.top,
+            area.bottom,
+            area.left,
+            area.right,
+            &blank,
+            false,
+        );
         for row in area.top..area.bottom {
             if let Some(row) = self.grid_mut().row_mut(row) {
                 row.fill_range(area.left, area.right, &fill, &blank);
@@ -3160,6 +3590,14 @@ impl Terminal {
             return;
         };
         let blank = self.erase_cell();
+        self.grid_mut().erase_multicells_intersecting(
+            area.top,
+            area.bottom,
+            area.left,
+            area.right,
+            &blank,
+            false,
+        );
         for row in area.top..area.bottom {
             if let Some(row) = self.grid_mut().row_mut(row) {
                 row.erase_range(area.left, area.right, &blank);
@@ -3185,6 +3623,14 @@ impl Terminal {
             return;
         };
         let blank = self.erase_cell();
+        self.grid_mut().erase_multicells_intersecting(
+            area.top,
+            area.bottom,
+            area.left,
+            area.right,
+            &blank,
+            true,
+        );
         for row in area.top..area.bottom {
             if let Some(row) = self.grid_mut().row_mut(row) {
                 row.selective_erase_range(area.left, area.right, &blank);
@@ -4213,12 +4659,14 @@ impl Terminal {
         } else {
             (0, self.cols)
         };
-        if cursor.col >= left
-            && cursor.col < right
-            && let Some(row) = self.grid_mut().row_mut(cursor.row)
-        {
-            row.insert_cells_bounded(cursor.col, right, count, &blank);
-            self.grid_mut().set_wrap_pending(false);
+        if cursor.col >= left && cursor.col < right {
+            self.erase_multicells_for_horizontal_shift(
+                cursor.row, cursor.col, right, count, true, &blank,
+            );
+            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                row.insert_cells_bounded(cursor.col, right, count, &blank);
+                self.grid_mut().set_wrap_pending(false);
+            }
         }
     }
 
@@ -4231,12 +4679,14 @@ impl Terminal {
         } else {
             (0, self.cols)
         };
-        if cursor.col >= left
-            && cursor.col < right
-            && let Some(row) = self.grid_mut().row_mut(cursor.row)
-        {
-            row.delete_cells_bounded(cursor.col, right, count, &blank);
-            self.grid_mut().set_wrap_pending(false);
+        if cursor.col >= left && cursor.col < right {
+            self.erase_multicells_for_horizontal_shift(
+                cursor.row, cursor.col, right, count, false, &blank,
+            );
+            if let Some(row) = self.grid_mut().row_mut(cursor.row) {
+                row.delete_cells_bounded(cursor.col, right, count, &blank);
+                self.grid_mut().set_wrap_pending(false);
+            }
         }
     }
 
@@ -4244,8 +4694,47 @@ impl Terminal {
     pub fn erase_chars(&mut self, count: usize) {
         let cursor = self.grid().cursor();
         let blank = self.erase_cell();
+        self.grid_mut().erase_multicells_intersecting(
+            cursor.row,
+            cursor.row + 1,
+            cursor.col,
+            cursor.col.saturating_add(count),
+            &blank,
+            false,
+        );
         if let Some(row) = self.grid_mut().row_mut(cursor.row) {
             row.erase_range(cursor.col, cursor.col.saturating_add(count), &blank);
+        }
+    }
+
+    fn erase_multicells_for_horizontal_shift(
+        &mut self,
+        row: usize,
+        start: usize,
+        right: usize,
+        count: usize,
+        inserting: bool,
+        blank: &Cell,
+    ) {
+        let count = count.min(right.saturating_sub(start));
+        let mut erase = HashSet::new();
+        for col in start..right {
+            let Some(region) = self.grid().multicell_region_at(row, col) else {
+                continue;
+            };
+            let split = if region.descriptor.rows() > 1 {
+                true
+            } else if inserting {
+                region.left < start || region.right() > right.saturating_sub(count)
+            } else {
+                region.left < start.saturating_add(count) && region.right() > start
+            };
+            if split {
+                erase.insert((region.top, region.left));
+            }
+        }
+        for (top, left) in erase {
+            self.grid_mut().clear_multicell_at(top, left, blank, false);
         }
     }
 
@@ -4259,8 +4748,31 @@ impl Terminal {
             && self.col_inside_horizontal_margins(cursor.col)
         {
             let blank = self.erase_cell();
+            let full_width = scroll_left == 0 && scroll_right == self.cols;
+            if !full_width {
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row,
+                    scroll_bottom,
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                    false,
+                );
+            }
             for _ in 0..count {
-                if scroll_left == 0 && scroll_right == self.cols {
+                if full_width {
+                    self.grid_mut().erase_multicells_crossing_row(
+                        cursor.row.saturating_add(1),
+                        scroll_left,
+                        scroll_right,
+                        &blank,
+                    );
+                    self.grid_mut().erase_multicells_crossing_row(
+                        scroll_bottom.saturating_sub(1),
+                        scroll_left,
+                        scroll_right,
+                        &blank,
+                    );
                     self.grid_mut()
                         .scroll_region_down(cursor.row, scroll_bottom);
                 } else {
@@ -4273,6 +4785,7 @@ impl Terminal {
                     );
                 }
             }
+            self.grid_mut().repair_multicells(&blank);
             self.graphics.scroll_down(
                 self.alt_screen_active,
                 cursor.row..scroll_bottom,
@@ -4293,8 +4806,31 @@ impl Terminal {
             && self.col_inside_horizontal_margins(cursor.col)
         {
             let blank = self.erase_cell();
+            let full_width = scroll_left == 0 && scroll_right == self.cols;
+            if !full_width {
+                self.grid_mut().erase_multicells_intersecting(
+                    cursor.row,
+                    scroll_bottom,
+                    scroll_left,
+                    scroll_right,
+                    &blank,
+                    false,
+                );
+            }
             for _ in 0..count {
-                if scroll_left == 0 && scroll_right == self.cols {
+                if full_width {
+                    self.grid_mut().erase_multicells_crossing_row(
+                        cursor.row.saturating_add(1),
+                        scroll_left,
+                        scroll_right,
+                        &blank,
+                    );
+                    self.grid_mut().erase_multicells_crossing_row(
+                        scroll_bottom.saturating_sub(1),
+                        scroll_left,
+                        scroll_right,
+                        &blank,
+                    );
                     self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
                 } else {
                     self.grid_mut().scroll_rect_up(
@@ -4306,6 +4842,7 @@ impl Terminal {
                     );
                 }
             }
+            self.grid_mut().repair_multicells(&blank);
             self.graphics.scroll_up(
                 self.alt_screen_active,
                 cursor.row..scroll_bottom,
@@ -4659,6 +5196,10 @@ impl Terminal {
                 col.checked_sub(1)
                     .and_then(|leader| row.get(leader))
                     .and_then(|leader| leader.content.char())
+            } else if cell.multicell.is_present() {
+                col.checked_sub(cell.multicell.relative_col())
+                    .and_then(|leader| row.get(leader))
+                    .and_then(|leader| leader.content.char())
             } else {
                 cell.content.char()
             }
@@ -4749,11 +5290,18 @@ impl Terminal {
                 .is_some_and(|cell| cell.is_wide_char_spacer())
             {
                 start_col = start_col.saturating_sub(1);
+            } else if let Some(cell) = grid_row.get(start_col)
+                && cell.multicell.is_present()
+                && cell.multicell.relative_row() == 0
+            {
+                start_col = start_col.saturating_sub(cell.multicell.relative_col());
             }
 
             for col in start_col..=end_col {
                 if let Some(cell) = grid_row.get(col) {
-                    if cell.is_wide_char_spacer() {
+                    if cell.is_wide_char_spacer()
+                        || (cell.multicell.is_present() && !cell.multicell.is_leader())
+                    {
                         continue;
                     }
                     match &cell.content {
@@ -4819,6 +5367,268 @@ mod tests {
         let term = Terminal::new(80, 24);
         assert_eq!(term.cols(), 80);
         assert_eq!(term.rows(), 24);
+    }
+
+    #[test]
+    fn osc66_places_atomic_scaled_blocks_and_advances_by_their_width() {
+        let mut term = Terminal::new(12, 5);
+        term.process(b"\x1b]66;s=2:w=3:n=1:d=2:v=1:h=2;hello\x07");
+
+        let region = term
+            .grid()
+            .multicell_region_at(1, 5)
+            .expect("covered cell resolves to its block");
+        assert_eq!((region.top, region.left), (0, 0));
+        assert_eq!(region.descriptor.columns(), 6);
+        assert_eq!(region.descriptor.rows(), 2);
+        assert_eq!(region.descriptor.font_scale(), 1.0);
+        assert_eq!(
+            region.descriptor.vertical_alignment(),
+            crate::MultiCellAlignment::End
+        );
+        assert_eq!(
+            region.descriptor.horizontal_alignment(),
+            crate::MultiCellAlignment::Center
+        );
+        assert_eq!(term.grid().cell(0, 0).unwrap().content.to_text(), "hello");
+        assert!(term.grid().cell(0, 1).unwrap().content.is_empty());
+        assert_eq!(term.grid().cursor().col, 6);
+    }
+
+    #[test]
+    fn osc66_natural_width_segments_graphemes_into_separate_blocks() {
+        let mut term = Terminal::new(12, 5);
+        assert!(Osc66Command::parse(&[b"s=2", "A界".as_bytes()]).is_some());
+        term.process("\x1b]66;s=2;A界\x07".as_bytes());
+
+        let ascii = term.grid().multicell_region_at(0, 1).unwrap();
+        let wide = term.grid().multicell_region_at(1, 5).unwrap();
+        assert_eq!((ascii.left, ascii.descriptor.columns()), (0, 2));
+        assert_eq!((wide.left, wide.descriptor.columns()), (2, 4));
+        assert_eq!(term.grid().cell(0, 2).unwrap().content.to_text(), "界");
+        assert_eq!(term.grid().cursor().col, 6);
+    }
+
+    #[test]
+    fn normal_text_obeys_multicell_overwrite_and_lower_row_skip_rules() {
+        let mut term = Terminal::new(10, 4);
+        term.process(b"\x1b]66;s=2:w=2;A\x07");
+        term.grid_mut().set_cursor(1, 0);
+        term.write_char('x');
+        assert!(term.grid().multicell_region_at(0, 0).is_some());
+        assert_eq!(term.grid().cell(1, 4).unwrap().content.to_text(), "x");
+
+        term.grid_mut().set_cursor(0, 1);
+        term.write_char('y');
+        assert!(term.grid().multicell_region_at(0, 0).is_none());
+        assert_eq!(term.grid().cell(0, 0).unwrap().content.to_text(), " ");
+        assert_eq!(term.grid().cell(0, 1).unwrap().content.to_text(), "y");
+        assert_eq!(term.grid().cell(1, 0).unwrap().content.to_text(), " ");
+    }
+
+    #[test]
+    fn combining_scalar_extends_multicell_leader_without_splitting_block() {
+        let mut term = Terminal::new(10, 4);
+        term.process(b"\x1b]66;s=2;A\x07");
+        term.process("\u{301}".as_bytes());
+
+        assert_eq!(
+            term.grid().cell(0, 0).unwrap().content.to_text(),
+            "A\u{301}"
+        );
+        assert!(term.grid().multicell_region_at(1, 1).is_some());
+        assert_eq!(term.grid().cursor().col, 2);
+    }
+
+    #[test]
+    fn osc66_discards_blocks_larger_than_the_screen() {
+        let mut term = Terminal::new(4, 2);
+        term.process(b"\x1b]66;s=3:w=2;x\x07");
+        assert!(term.grid().cell(0, 0).unwrap().content.is_empty());
+        assert_eq!(term.grid().cursor().col, 0);
+    }
+
+    #[test]
+    fn osc66_wrap_and_no_wrap_respect_horizontal_margins() {
+        let mut wrapped = Terminal::new(12, 4);
+        wrapped.set_left_right_margin_mode(true);
+        wrapped.set_left_right_margins(2, 10);
+        wrapped.grid_mut().set_cursor(0, 8);
+        wrapped.process(b"\x1b]66;w=3;x\x07");
+        let region = wrapped.grid().multicell_region_at(1, 1).unwrap();
+        assert_eq!((region.top, region.left), (1, 1));
+
+        let mut no_wrap = Terminal::new(12, 4);
+        no_wrap.set_left_right_margin_mode(true);
+        no_wrap.set_left_right_margins(2, 10);
+        no_wrap.process(b"\x1b[?7l");
+        no_wrap.grid_mut().set_cursor(0, 8);
+        no_wrap.process(b"\x1b]66;w=3;x\x07");
+        let region = no_wrap.grid().multicell_region_at(0, 8).unwrap();
+        assert_eq!((region.top, region.left), (0, 7));
+    }
+
+    #[test]
+    fn osc66_horizontal_edits_preserve_whole_single_row_blocks_and_erase_multiline_blocks() {
+        let mut one_row = Terminal::new(10, 4);
+        one_row.process(b"..\x1b]66;s=1:w=2;X\x07");
+        one_row.grid_mut().set_cursor(0, 0);
+        one_row.insert_chars(1);
+        let shifted = one_row.grid().multicell_region_at(0, 4).unwrap();
+        assert_eq!((shifted.top, shifted.left), (0, 3));
+        one_row.grid_mut().set_cursor(0, 4);
+        one_row.erase_chars(1);
+        assert!(one_row.grid().multicell_region_at(0, 3).is_none());
+
+        let mut multiline = Terminal::new(10, 4);
+        multiline.process(b"..\x1b]66;s=2;X\x07");
+        multiline.grid_mut().set_cursor(1, 0);
+        multiline.delete_chars(1);
+        assert!(multiline.grid().multicell_region_at(0, 2).is_none());
+    }
+
+    #[test]
+    fn osc66_resize_retains_fitting_blocks_and_discards_clipped_blocks() {
+        let mut term = Terminal::new(8, 4);
+        term.process(b".\x1b]66;s=2:w=2;wide\x07");
+        term.resize(10, 5);
+        assert!(term.grid().multicell_region_at(1, 4).is_some());
+
+        term.resize(3, 5);
+        assert!(
+            term.grid()
+                .iter_cells()
+                .all(|(_, _, cell)| !cell.multicell.is_present())
+        );
+    }
+
+    #[test]
+    fn osc66_ansi_export_replays_descriptor_and_text_once() {
+        let mut source = Terminal::new(10, 3);
+        source.process(b"\x1b]66;s=1:w=3:n=1:d=2:h=1;abc\x07!");
+        let line = source.grid().export_scrollback_text().remove(0);
+        assert!(line.contains("\x1b]66;s=1:w=3:n=1:d=2:h=1;abc\x07"));
+        assert_eq!(line.matches("abc").count(), 1);
+
+        let mut restored = Terminal::new(10, 3);
+        restored.process(line.as_bytes());
+        let region = restored.grid().multicell_region_at(0, 2).unwrap();
+        assert_eq!((region.left, region.descriptor.columns()), (0, 3));
+        assert_eq!(restored.grid().cell(0, 3).unwrap().content.to_text(), "!");
+    }
+
+    #[test]
+    fn osc66_selection_emits_leader_text_once_without_covered_spaces() {
+        let mut term = Terminal::new(10, 3);
+        term.process(b"\x1b]66;s=2:w=2;title\x07!");
+        let mut selection = Selection::new(Point::new(0, 1), SelectionType::Simple);
+        selection.update(Point::new(1, 4));
+        term.set_selection(Some(selection));
+        assert_eq!(term.get_selection_text().as_deref(), Some("title!"));
+    }
+
+    #[test]
+    fn osc66_scroll_moves_complete_blocks_and_clears_only_split_multiline_blocks() {
+        let mut term = Terminal::new(8, 4);
+        term.grid_mut().set_cursor(1, 1);
+        term.process(b"\x1b]66;s=2:w=2;move\x07");
+        term.scroll_up(1);
+        assert!(term.grid().multicell_region_at(1, 4).is_some());
+        assert_eq!(term.grid().cell(0, 1).unwrap().content.to_text(), "move");
+
+        term.scroll_up(1);
+        assert!(
+            term.grid()
+                .iter_cells()
+                .all(|(_, _, cell)| !cell.multicell.is_present())
+        );
+
+        let mut history = Terminal::new(8, 2);
+        history.process(b"\x1b]66;w=2;kept\x07");
+        history.scroll_up(1);
+        let archived = history.grid().row_at_offset(-1).unwrap();
+        assert!(archived.get(0).unwrap().multicell.is_leader());
+        assert_eq!(archived.get(0).unwrap().content.to_text(), "kept");
+    }
+
+    #[test]
+    fn osc66_ed22_archives_complete_blocks_before_erasing_the_viewport() {
+        let mut term = Terminal::new(8, 3);
+        term.process(b"\x1b]66;s=2:w=2;kept\x07!");
+        term.erase_in_display(22);
+
+        assert_eq!(term.grid().scrollback_len(), 3);
+        assert!(
+            term.grid()
+                .iter_cells()
+                .all(|(_, _, cell)| !cell.multicell.is_present())
+        );
+        let top = term.grid().row_at_offset(-3).unwrap();
+        let lower = term.grid().row_at_offset(-2).unwrap();
+        assert!(top.get(0).unwrap().multicell.is_leader());
+        assert_eq!(top.get(0).unwrap().content.to_text(), "kept");
+        assert!(lower.get(3).unwrap().multicell.is_present());
+        assert_eq!(top.get(4).unwrap().content.to_text(), "!");
+    }
+
+    #[test]
+    fn osc66_screen_switches_and_synchronized_output_keep_blocks_isolated() {
+        let mut screens = Terminal::new(8, 3);
+        screens.process(b"\x1b]66;s=2:w=2;primary\x07");
+        screens.enter_alt_screen();
+        assert!(
+            screens
+                .grid()
+                .iter_cells()
+                .all(|(_, _, cell)| !cell.multicell.is_present())
+        );
+        screens.process(b"\x1b]66;w=2;alternate\x07");
+        assert!(screens.grid().multicell_region_at(0, 1).is_some());
+        screens.exit_alt_screen();
+        assert!(screens.grid().multicell_region_at(1, 3).is_some());
+        assert_eq!(
+            screens.grid().cell(0, 0).unwrap().content.to_text(),
+            "primary"
+        );
+
+        let mut synchronized = Terminal::new(8, 3);
+        synchronized.process(b"\x1b[?2026h\x1b]66;s=2:w=2;pending\x07");
+        assert!(
+            synchronized
+                .presentation_grid()
+                .iter_cells()
+                .all(|(_, _, cell)| !cell.multicell.is_present())
+        );
+        synchronized.process(b"\x1b[?2026l");
+        assert!(
+            synchronized
+                .presentation_grid()
+                .multicell_region_at(1, 3)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn osc66_selective_erase_preserves_protected_blocks_atomically() {
+        let mut term = Terminal::new(8, 3);
+        term.process(b"\x1b[1\"q\x1b]66;s=2:w=2;safe\x07");
+        term.grid_mut().set_cursor(0, 1);
+        term.selective_erase_in_line(0);
+        assert!(term.grid().multicell_region_at(1, 3).is_some());
+
+        term.process(b"\x1b[0\"q");
+        term.erase_in_line(2);
+        assert!(term.grid().multicell_region_at(0, 0).is_none());
+    }
+
+    #[test]
+    fn fragmented_utf8_osc66_remains_streaming_safe() {
+        let mut term = Terminal::new(10, 4);
+        for byte in "\x1b]66;s=2:w=2;界\x1b\\".as_bytes() {
+            term.process(std::slice::from_ref(byte));
+        }
+        assert_eq!(term.grid().cell(0, 0).unwrap().content.to_text(), "界");
+        assert!(term.grid().multicell_region_at(1, 3).is_some());
     }
 
     #[test]

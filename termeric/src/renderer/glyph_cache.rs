@@ -1087,7 +1087,7 @@ impl GlyphCache {
         style: FontStyle,
         queue: &Queue,
     ) -> Option<LigatureRun> {
-        self.shape_cached(text, style, queue)
+        self.shape_cached(text, style, 1.0, queue)
     }
 
     /// Shape a multi-scalar grapheme regardless of the programming-ligature
@@ -1099,19 +1099,43 @@ impl GlyphCache {
         style: FontStyle,
         queue: &Queue,
     ) -> Option<LigatureRun> {
-        self.shape_cached(text, style, queue)
+        self.shape_cached(text, style, 1.0, queue)
     }
 
-    fn shape_cached(&mut self, text: &str, style: FontStyle, queue: &Queue) -> Option<LigatureRun> {
+    /// Shape OSC 66 content at a bounded multiple of the configured base font.
+    pub(super) fn shape_multicell_styled(
+        &mut self,
+        text: &str,
+        style: FontStyle,
+        font_scale: f32,
+        queue: &Queue,
+    ) -> Option<LigatureRun> {
+        if font_scale <= 0.0 {
+            return None;
+        }
+        self.shape_cached(text, style, font_scale.clamp(1.0 / 15.0, 7.0), queue)
+    }
+
+    fn shape_cached(
+        &mut self,
+        text: &str,
+        style: FontStyle,
+        font_scale: f32,
+        queue: &Queue,
+    ) -> Option<LigatureRun> {
         if text.is_empty() {
             return None;
         }
+        let metrics = Metrics::new(
+            self.metrics.font_size * font_scale,
+            self.metrics.line_height * font_scale,
+        );
         let font_features =
             terminal_font_features(self.ligatures_enabled, &self.font_feature_overrides);
         let key = LigatureKey::new(
             text,
-            self.font_size,
-            self.metrics.line_height,
+            metrics.font_size,
+            metrics.line_height,
             style,
             self.ligatures_enabled,
             font_features,
@@ -1136,7 +1160,7 @@ impl GlyphCache {
             return Some(run);
         }
         self.shaping_cache_metrics.misses += 1;
-        let (run, retry_next_frame) = self.shape_text_internal(text, style, queue)?;
+        let (run, retry_next_frame) = self.shape_text_internal(text, style, metrics, queue)?;
         if retry_next_frame {
             self.deferred_ligature_cache.insert(key, run.clone());
         } else {
@@ -1184,13 +1208,14 @@ impl GlyphCache {
         &mut self,
         text: &str,
         style: FontStyle,
+        metrics: Metrics,
         queue: &Queue,
     ) -> Option<(LigatureRun, bool)> {
         let mut glyph_infos: Vec<(cosmic_text::CacheKey, cosmic_text::fontdb::ID, f32, f32)> =
             Vec::new();
 
         {
-            let mut buffer = Buffer::new(&mut self.font_system, self.metrics);
+            let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
             let default_family = if self.use_monospace_fallback {
                 "monospace".to_string()

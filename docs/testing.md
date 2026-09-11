@@ -773,6 +773,14 @@ palette resolution. A two-pane inactive-tab fixture applies distinct operations
 by stable origin. Exact behavior and the remaining native clipboard row are in
 [`osc-integration.md`](osc-integration.md).
 
+Kitty OSC 66 has separate BEL, S7/ST, S8/ST, and byte-fragmented conformance
+coverage. Core tests validate bounded metadata and safe UTF-8, grapheme and
+explicit-width placement, all overwrite classes, edit/erase/scroll/resize
+lifecycle, ED 22 history archival, semantic extraction, ANSI/session replay,
+and local-domain snapshot replay. Renderer tests validate fractional alignment,
+block clipping, and expanded cursor geometry. Native font and compositor
+quality remains the deferred checklist in [`text-sizing.md`](text-sizing.md).
+
 The Kitty graphics lane covers APC framing across PTY chunks, strict controls,
 padded and raw-unpadded standard base64, current-Kitty 128-KiB chunks,
 raw/PNG/zlib decoding, bounded uploads, capability queries, quiet and

@@ -488,7 +488,9 @@ fn append_row_text(grid: &Grid, row_index: i32, text: &mut String, spans: &mut V
     };
     for col in 0..grid.cols() {
         let Some(cell) = row.get(col) else { break };
-        if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+        if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
+            || (cell.multicell.is_present() && !cell.multicell.is_leader())
+        {
             continue;
         }
         let byte_start = text.len();
@@ -497,11 +499,7 @@ fn append_row_text(grid: &Grid, row_index: i32, text: &mut String, spans: &mut V
             CellContent::Char(character) => text.push(*character),
             CellContent::Grapheme(grapheme) => text.push_str(grapheme),
         }
-        let display_width = if cell.flags.contains(CellFlags::WIDE_CHAR) {
-            2
-        } else {
-            1
-        };
+        let display_width = cell.width();
         spans.push(TextCellSpan {
             byte_start,
             byte_end: text.len(),

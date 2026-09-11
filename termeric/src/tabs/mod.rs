@@ -1861,7 +1861,9 @@ impl TabManager {
                 let mut line = String::new();
                 for col in 0..grid.cols() {
                     if let Some(cell) = grid.cell(row, col) {
-                        if cell.is_wide_char_spacer() {
+                        if cell.is_wide_char_spacer()
+                            || (cell.multicell.is_present() && !cell.multicell.is_leader())
+                        {
                             continue;
                         }
                         if cell.content.is_empty() {

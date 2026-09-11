@@ -5566,7 +5566,9 @@ fn accessible_line(grid: &Grid, row: usize) -> AccessibleLine {
 }
 
 fn append_accessible_cell(cell: &Cell, value: &mut String, lengths: &mut Vec<u8>) {
-    if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+    if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
+        || (cell.multicell.is_present() && !cell.multicell.is_leader())
+    {
         return;
     }
     if cell.attrs.contains(CellAttrs::HIDDEN) || cell.content.is_empty() {

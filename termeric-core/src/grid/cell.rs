@@ -4,6 +4,199 @@
 
 use bitflags::bitflags;
 
+/// Alignment of fractionally scaled content inside an OSC 66 multicell block.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum MultiCellAlignment {
+    /// Align with the top or left edge.
+    #[default]
+    Start = 0,
+    /// Align with the bottom or right edge.
+    End = 1,
+    /// Center within the occupied cell rectangle.
+    Center = 2,
+}
+
+/// Compact, self-validating geometry for one cell in an OSC 66 text block.
+///
+/// The same scale, logical width, fraction, and alignment are stored in every
+/// occupied cell. Only the top-left cell owns text; `relative_col` and
+/// `relative_row` let any covered cell locate that leader without a heap
+/// allocation or a separate spatial index.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct MultiCell(u32);
+
+impl MultiCell {
+    const PRESENT: u32 = 1 << 31;
+    const RELATIVE_COL_SHIFT: u32 = 0;
+    const RELATIVE_ROW_SHIFT: u32 = 6;
+    const SCALE_SHIFT: u32 = 9;
+    const WIDTH_SHIFT: u32 = 12;
+    const NUMERATOR_SHIFT: u32 = 15;
+    const DENOMINATOR_SHIFT: u32 = 19;
+    const HORIZONTAL_SHIFT: u32 = 23;
+    const VERTICAL_SHIFT: u32 = 25;
+
+    const RELATIVE_COL_MASK: u32 = 0x3f;
+    const RELATIVE_ROW_MASK: u32 = 0x07;
+    const THREE_BIT_MASK: u32 = 0x07;
+    const FOUR_BIT_MASK: u32 = 0x0f;
+    const ALIGNMENT_MASK: u32 = 0x03;
+    const POSITION_MASK: u32 =
+        Self::RELATIVE_COL_MASK | (Self::RELATIVE_ROW_MASK << Self::RELATIVE_ROW_SHIFT);
+
+    /// Construct one occupied-cell descriptor. Returns `None` if any value is
+    /// outside Kitty's protocol range or the relative position is not inside
+    /// the resulting `scale * width` by `scale` block.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        scale: u8,
+        width: u8,
+        numerator: u8,
+        denominator: u8,
+        horizontal: MultiCellAlignment,
+        vertical: MultiCellAlignment,
+        relative_col: u8,
+        relative_row: u8,
+    ) -> Option<Self> {
+        if !(1..=7).contains(&scale)
+            || !(1..=7).contains(&width)
+            || numerator > 15
+            || denominator > 15
+            || (denominator == 0 && numerator != 0)
+            || (denominator != 0 && numerator >= denominator)
+            || relative_col >= scale.saturating_mul(width)
+            || relative_row >= scale
+        {
+            return None;
+        }
+        let value = Self::PRESENT
+            | u32::from(relative_col) << Self::RELATIVE_COL_SHIFT
+            | u32::from(relative_row) << Self::RELATIVE_ROW_SHIFT
+            | u32::from(scale) << Self::SCALE_SHIFT
+            | u32::from(width) << Self::WIDTH_SHIFT
+            | u32::from(numerator) << Self::NUMERATOR_SHIFT
+            | u32::from(denominator) << Self::DENOMINATOR_SHIFT
+            | (horizontal as u32) << Self::HORIZONTAL_SHIFT
+            | (vertical as u32) << Self::VERTICAL_SHIFT;
+        Some(Self(value))
+    }
+
+    /// Whether this descriptor represents a multicell block.
+    pub fn is_present(self) -> bool {
+        self.0 & Self::PRESENT != 0
+    }
+
+    /// Overall integer scale (`1..=7`).
+    pub fn scale(self) -> u8 {
+        ((self.0 >> Self::SCALE_SHIFT) & Self::THREE_BIT_MASK) as u8
+    }
+
+    /// Logical width before multiplying by `scale` (`1..=7`).
+    pub fn logical_width(self) -> u8 {
+        ((self.0 >> Self::WIDTH_SHIFT) & Self::THREE_BIT_MASK) as u8
+    }
+
+    /// Occupied columns in the terminal grid.
+    pub fn columns(self) -> usize {
+        usize::from(self.scale()) * usize::from(self.logical_width())
+    }
+
+    /// Occupied rows in the terminal grid.
+    pub fn rows(self) -> usize {
+        usize::from(self.scale())
+    }
+
+    /// Fractional-scale numerator, or zero when fractional scaling is off.
+    pub fn numerator(self) -> u8 {
+        ((self.0 >> Self::NUMERATOR_SHIFT) & Self::FOUR_BIT_MASK) as u8
+    }
+
+    /// Fractional-scale denominator, or zero when fractional scaling is off.
+    pub fn denominator(self) -> u8 {
+        ((self.0 >> Self::DENOMINATOR_SHIFT) & Self::FOUR_BIT_MASK) as u8
+    }
+
+    /// Effective font-size multiplier relative to the base font.
+    pub fn font_scale(self) -> f32 {
+        let scale = f32::from(self.scale());
+        if self.denominator() == 0 {
+            scale
+        } else {
+            scale * f32::from(self.numerator()) / f32::from(self.denominator())
+        }
+    }
+
+    /// Horizontal alignment inside the occupied rectangle.
+    pub fn horizontal_alignment(self) -> MultiCellAlignment {
+        alignment_from_bits((self.0 >> Self::HORIZONTAL_SHIFT) & Self::ALIGNMENT_MASK)
+    }
+
+    /// Vertical alignment inside the occupied rectangle.
+    pub fn vertical_alignment(self) -> MultiCellAlignment {
+        alignment_from_bits((self.0 >> Self::VERTICAL_SHIFT) & Self::ALIGNMENT_MASK)
+    }
+
+    /// Column offset from this cell back to the block leader.
+    pub fn relative_col(self) -> usize {
+        ((self.0 >> Self::RELATIVE_COL_SHIFT) & Self::RELATIVE_COL_MASK) as usize
+    }
+
+    /// Row offset from this cell back to the block leader.
+    pub fn relative_row(self) -> usize {
+        ((self.0 >> Self::RELATIVE_ROW_SHIFT) & Self::RELATIVE_ROW_MASK) as usize
+    }
+
+    /// Whether this cell is the top-left text-owning leader.
+    pub fn is_leader(self) -> bool {
+        self.is_present() && self.relative_col() == 0 && self.relative_row() == 0
+    }
+
+    /// Return the descriptor for another position in the same block.
+    pub(crate) fn at(self, relative_col: usize, relative_row: usize) -> Option<Self> {
+        if !self.is_present()
+            || relative_col >= self.columns()
+            || relative_row >= self.rows()
+            || relative_col > Self::RELATIVE_COL_MASK as usize
+            || relative_row > Self::RELATIVE_ROW_MASK as usize
+        {
+            return None;
+        }
+        Some(Self(
+            (self.0 & !Self::POSITION_MASK)
+                | (relative_col as u32) << Self::RELATIVE_COL_SHIFT
+                | (relative_row as u32) << Self::RELATIVE_ROW_SHIFT,
+        ))
+    }
+
+    /// Whether two occupied cells describe the same layout independent of
+    /// their relative positions.
+    pub(crate) fn has_same_layout(self, other: Self) -> bool {
+        self.is_present()
+            && other.is_present()
+            && (self.0 & !Self::POSITION_MASK) == (other.0 & !Self::POSITION_MASK)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn raw(self) -> u32 {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+fn alignment_from_bits(bits: u32) -> MultiCellAlignment {
+    match bits {
+        1 => MultiCellAlignment::End,
+        2 => MultiCellAlignment::Center,
+        _ => MultiCellAlignment::Start,
+    }
+}
+
 /// RGB color
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Color {
@@ -212,6 +405,8 @@ pub struct Cell {
     pub flags: CellFlags,
     /// Hyperlink ID (index into hyperlink registry, if this cell is part of a hyperlink)
     pub hyperlink_id: Option<u32>,
+    /// Compact OSC 66 block geometry. Zero means ordinary terminal content.
+    pub multicell: MultiCell,
 }
 
 impl Default for Cell {
@@ -227,6 +422,7 @@ impl Default for Cell {
             attrs: CellAttrs::empty(),
             flags: CellFlags::empty(),
             hyperlink_id: None,
+            multicell: MultiCell::default(),
         }
     }
 }
@@ -244,6 +440,7 @@ impl Cell {
             && self.attrs.is_empty()
             && (self.flags - CellFlags::DIRTY).is_empty()
             && self.hyperlink_id.is_none()
+            && !self.multicell.is_present()
     }
 
     /// Create a new empty cell
@@ -262,6 +459,7 @@ impl Cell {
     /// Set the character content
     pub fn set_char(&mut self, c: char) {
         self.content = CellContent::Char(c);
+        self.multicell = MultiCell::default();
         self.flags.insert(CellFlags::DIRTY);
     }
 
@@ -273,6 +471,7 @@ impl Cell {
             (Some(scalar), None) => CellContent::Char(scalar),
             (Some(_), Some(_)) => CellContent::Grapheme(s.into()),
         };
+        self.multicell = MultiCell::default();
         self.flags.insert(CellFlags::DIRTY);
     }
 
@@ -288,6 +487,7 @@ impl Cell {
         self.attrs = CellAttrs::empty();
         self.flags = CellFlags::DIRTY; // Keep dirty flag to trigger re-render
         self.hyperlink_id = None;
+        self.multicell = MultiCell::default();
     }
 
     /// Remove only the displayed grapheme and hyperlink identity while
@@ -304,6 +504,7 @@ impl Cell {
         );
         self.flags.insert(CellFlags::DIRTY);
         self.hyperlink_id = None;
+        self.multicell = MultiCell::default();
     }
 
     /// Reset the cell completely (including colors)
@@ -329,7 +530,11 @@ impl Cell {
 
     /// Get the display width of this cell (1 for normal, 2 for wide)
     pub fn width(&self) -> usize {
-        if self.is_wide_char() {
+        if self.multicell.is_leader() {
+            self.multicell.columns()
+        } else if self.multicell.is_present() {
+            0
+        } else if self.is_wide_char() {
             2
         } else if self.is_wide_char_spacer() {
             0
@@ -390,5 +595,67 @@ mod tests {
         assert!(attrs.contains(CellAttrs::BOLD));
         assert!(attrs.contains(CellAttrs::ITALIC));
         assert!(!attrs.contains(CellAttrs::UNDERLINE));
+    }
+
+    #[test]
+    fn multicell_descriptor_round_trips_every_protocol_field() {
+        let descriptor = MultiCell::new(
+            7,
+            7,
+            14,
+            15,
+            MultiCellAlignment::Center,
+            MultiCellAlignment::End,
+            48,
+            6,
+        )
+        .unwrap();
+        assert!(descriptor.is_present());
+        assert!(!descriptor.is_leader());
+        assert_eq!(descriptor.scale(), 7);
+        assert_eq!(descriptor.logical_width(), 7);
+        assert_eq!(descriptor.columns(), 49);
+        assert_eq!(descriptor.rows(), 7);
+        assert_eq!(descriptor.numerator(), 14);
+        assert_eq!(descriptor.denominator(), 15);
+        assert_eq!(
+            descriptor.horizontal_alignment(),
+            MultiCellAlignment::Center
+        );
+        assert_eq!(descriptor.vertical_alignment(), MultiCellAlignment::End);
+        assert_eq!(descriptor.relative_col(), 48);
+        assert_eq!(descriptor.relative_row(), 6);
+        assert_eq!(MultiCell::from_raw(descriptor.raw()), descriptor);
+
+        let leader = MultiCell::new(
+            2,
+            3,
+            0,
+            0,
+            MultiCellAlignment::Start,
+            MultiCellAlignment::Start,
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(leader.is_leader());
+        let mut cell = Cell::with_char('x');
+        cell.multicell = leader;
+        assert_eq!(cell.width(), 6);
+        cell.clear();
+        assert!(!cell.multicell.is_present());
+    }
+
+    #[test]
+    fn multicell_descriptor_rejects_impossible_geometry() {
+        assert!(std::mem::size_of::<MultiCell>() <= 4);
+        assert!(std::mem::size_of::<Cell>() <= 64);
+        let start = MultiCellAlignment::Start;
+        assert!(MultiCell::new(0, 1, 0, 0, start, start, 0, 0).is_none());
+        assert!(MultiCell::new(1, 0, 0, 0, start, start, 0, 0).is_none());
+        assert!(MultiCell::new(1, 1, 1, 0, start, start, 0, 0).is_none());
+        assert!(MultiCell::new(1, 1, 1, 1, start, start, 0, 0).is_none());
+        assert!(MultiCell::new(2, 2, 0, 0, start, start, 4, 0).is_none());
+        assert!(MultiCell::new(2, 2, 0, 0, start, start, 0, 2).is_none());
     }
 }

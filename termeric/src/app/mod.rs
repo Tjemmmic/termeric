@@ -4221,7 +4221,9 @@ fn update_visible_url_cache(
             let Some(cell) = grid.cell_scrolled(row, col) else {
                 continue;
             };
-            if cell.is_wide_char_spacer() {
+            if cell.is_wide_char_spacer()
+                || (cell.multicell.is_present() && !cell.multicell.is_leader())
+            {
                 continue;
             }
             let start = line.len();
