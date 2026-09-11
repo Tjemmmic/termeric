@@ -38,6 +38,61 @@ pub struct VisibleTextBlink {
     pub rapid: bool,
 }
 
+/// User-facing position of one explicitly configured font candidate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FontCoverageSource {
+    /// A matching inclusive Unicode-range preference.
+    Range { start: u32, end: u32 },
+    /// The configured primary family.
+    Primary,
+    /// One-based position in the configured fallback chain.
+    Fallback { index: usize },
+}
+
+/// One family actually examined by the renderer's explicit routing policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontCoverageAttempt {
+    pub source: FontCoverageSource,
+    pub family: String,
+    pub installed: bool,
+    pub complete: bool,
+}
+
+/// Final route selected after the explicit family attempts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FontCoverageRoute {
+    /// One configured candidate covers the complete grapheme.
+    Explicit {
+        source: FontCoverageSource,
+        family: String,
+    },
+    /// Cosmic-text resolved one or more platform fallback faces.
+    Platform {
+        families: Vec<String>,
+        names_truncated: bool,
+    },
+    /// No explicit candidate or platform shaping face produced a glyph.
+    Missing,
+    /// The grapheme contains only shaping controls that need no visible glyph.
+    DefaultIgnorable { family: String },
+}
+
+/// Bounded explanation for one extended grapheme.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontCoverageEntry {
+    pub grapheme: String,
+    pub codepoints: Vec<u32>,
+    pub attempts: Vec<FontCoverageAttempt>,
+    pub route: FontCoverageRoute,
+}
+
+/// Explicitly requested, read-only coverage report.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontCoverageReport {
+    pub entries: Vec<FontCoverageEntry>,
+    pub graphemes_truncated: bool,
+}
+
 /// Result of clicking in the tab bar
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabBarClick {

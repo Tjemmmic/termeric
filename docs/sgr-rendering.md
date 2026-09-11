@@ -109,6 +109,17 @@ correction without changing live state. Changes apply immediately but are
 written to `config.toml` only through the normal Settings Save action. Rule
 identity, rather than a displayed row index, protects edits across live reload.
 
+The manager's **Inspect Glyph Coverage** action accepts at most 256 UTF-8 bytes
+of literal single-line text or one exact `U+` / `0x` scalar and reports at most
+16 complete graphemes. It uses the same range lookup and one-face,
+complete-grapheme coverage predicate as rendering. Each examined range,
+primary, and numbered fallback is marked missing, installed-incomplete, or
+installed-complete; the winning explicit route is named. If none wins, one
+bounded normal-style cosmic-text shaping probe reports up to eight resolved
+platform face names or an explicit missing-glyph state. This work occurs only
+on request, never per cell or frame. Character maps and shaping explain routing
+but do not prove native rasterization or visual quality.
+
 ## Blink scheduling
 
 Blink uses `Instant`-based phase boundaries. After each frame, the renderer

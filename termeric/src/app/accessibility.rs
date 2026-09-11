@@ -3773,7 +3773,7 @@ impl App {
             let mut node = Node::new(Role::TextInput);
             node.set_label(input.label.trim_end_matches([' ', ':']));
             node.set_description(format!(
-                "Single-line plugin setting value, at most {} UTF-8 bytes",
+                "Single-line value, at most {} UTF-8 bytes",
                 input.max_bytes
             ));
             node.set_value(input.value.clone());
@@ -3845,7 +3845,7 @@ impl App {
 
         let mut dismiss = Node::new(Role::DefaultButton);
         if input_info.is_some() {
-            dismiss.set_label("Save plugin setting");
+            dismiss.set_label("Submit input");
             dismiss.set_keyboard_shortcut("Enter");
         } else {
             dismiss.set_label("Continue and close notice");
@@ -6578,6 +6578,58 @@ mod tests {
         assert!(!app.settings_panel.is_active());
         assert!(app.info_overlay.is_awaiting_current());
         assert_eq!(app.info_overlay.title(), "Font Range Overrides");
+
+        let manager_request = app.info_overlay.request_id();
+        app.accessibility_snapshot();
+        let inspect = *app
+            .accessibility
+            .info_nodes
+            .get(&InfoSemanticTarget::Choice {
+                request_id: manager_request,
+                id: "inspect".into(),
+            })
+            .unwrap();
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: inspect,
+            data: None,
+        });
+        assert_eq!(app.info_overlay.title(), "Inspect Glyph Coverage");
+
+        let input_request = app.info_overlay.request_id();
+        let snapshot = app.accessibility_snapshot();
+        let input = *app
+            .accessibility
+            .info_nodes
+            .get(&InfoSemanticTarget::Input(input_request))
+            .unwrap();
+        let submit = *app
+            .accessibility
+            .info_nodes
+            .get(&InfoSemanticTarget::Dismiss(input_request))
+            .unwrap();
+        let input_node = &snapshot
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == input)
+            .unwrap()
+            .1;
+        assert_eq!(input_node.role(), Role::TextInput);
+        assert_eq!(input_node.label(), Some("Text"));
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::SetValue,
+            target_tree: TreeId::ROOT,
+            target_node: input,
+            data: Some(ActionData::Value("U+0634".into())),
+        });
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: submit,
+            data: None,
+        });
+        assert_eq!(app.info_overlay.title(), "Glyph Coverage Report");
     }
 
     #[test]

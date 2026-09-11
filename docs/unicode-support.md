@@ -63,7 +63,12 @@ through to the normal ordered family chain. Range routing never changes the
 Unicode width result or the primary font's terminal cell metrics. The bounded
 Settings manager lists canonical intervals and atomically adds, edits, or
 confirmed-deletes rules through the same validation contract; edits apply live
-and persist only when Settings is saved. See the
+and persist only when Settings is saved. Its read-only coverage inspector
+segments literal input into at most 16 complete graphemes (or accepts an exact
+`U+` / `0x` scalar), identifies the explicit family attempts and final platform
+shaping face, and visibly distinguishes missing from installed-incomplete
+families. This is font-database/shaping evidence, not a native screenshot or
+appearance guarantee. See the
 [SGR rendering policy](sgr-rendering.md#unicode-range-font-overrides).
 
 ## Evidence and exclusions
@@ -75,7 +80,7 @@ at every byte boundary, a real PTY emits representative clusters, and the
 headless WGPU lane shapes and submits the full strings without scalar
 truncation.
 
-Bidirectional reordering, exhaustive font-coverage guarantees, and exhaustive
+Bidirectional reordering, exhaustive system-font recommendations, and exhaustive
 Unicode-name search remain outside this policy. IME/preedit, color emoji, and
 accessibility semantics are covered
 by [modern text input and accessibility](accessibility-and-input.md).

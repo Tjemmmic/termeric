@@ -3,7 +3,11 @@
 //! This module handles font loading, glyph rasterization, and texture atlas management.
 //! Supports font ligatures through cosmic-text's advanced shaping.
 
-use crate::config::FontRangeOverride;
+use super::{
+    FontCoverageAttempt, FontCoverageEntry, FontCoverageReport, FontCoverageRoute,
+    FontCoverageSource,
+};
+use crate::config::{FontRangeOverride, MAX_FONT_FALLBACKS};
 use anyhow::Result;
 use cosmic_text::{
     Attrs, Buffer, CacheKey, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, Style,
@@ -22,6 +26,10 @@ const MAX_COLOR_ATLAS_PAGES: u32 = 4;
 const COLOR_PAGE_FLAG: u16 = 1 << 15;
 const MAX_SHAPED_RUNS: usize = 4_096;
 const ATLAS_PADDING: u32 = 1;
+pub(crate) const MAX_FONT_COVERAGE_INPUT_BYTES: usize = 256;
+pub(crate) const MAX_FONT_COVERAGE_GRAPHEMES: usize = 16;
+const MAX_FONT_COVERAGE_PLATFORM_FACES: usize = 8;
+const MAX_FONT_COVERAGE_FAMILY_CHARS: usize = 256;
 
 /// Font face request resolved from terminal SGR attributes.
 #[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
@@ -1380,6 +1388,30 @@ impl GlyphCache {
         result
     }
 
+    /// Explain the exact configured-family routing for a bounded text query.
+    /// This diagnostic is explicit user work and never runs on the cell or
+    /// frame hot path.
+    pub(crate) fn inspect_font_coverage(
+        &mut self,
+        configured_primary: &str,
+        text: &str,
+    ) -> std::result::Result<FontCoverageReport, String> {
+        let default_family = if self.use_monospace_fallback {
+            "monospace"
+        } else {
+            &self.font_family
+        };
+        diagnose_font_coverage(
+            &mut self.font_system,
+            self.metrics,
+            configured_primary,
+            &self.fallback_families,
+            &self.configured_range_overrides,
+            default_family,
+            text,
+        )
+    }
+
     /// Change font size, clearing the cache and recalculating metrics
     pub fn set_font_size(&mut self, font_size: f32, queue: &Queue) {
         if (self.font_size - font_size).abs() < 0.01 {
@@ -1843,6 +1875,14 @@ fn range_override_family_with_coverage(
     rules: &[ConfiguredRangeOverride],
     grapheme: &str,
 ) -> Option<String> {
+    let rule = matching_range_override(rules, grapheme)?;
+    configured_family_covers(font_system, &rule.family, grapheme).then(|| rule.family.name.clone())
+}
+
+fn matching_range_override<'a>(
+    rules: &'a [ConfiguredRangeOverride],
+    grapheme: &str,
+) -> Option<&'a ConfiguredRangeOverride> {
     let codepoint = grapheme
         .chars()
         .find(|character| !is_font_default_ignorable(*character))? as u32;
@@ -1851,7 +1891,215 @@ fn range_override_family_with_coverage(
     if codepoint > rule.end {
         return None;
     }
-    configured_family_covers(font_system, &rule.family, grapheme).then(|| rule.family.name.clone())
+    Some(rule)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn diagnose_font_coverage(
+    font_system: &mut FontSystem,
+    metrics: Metrics,
+    configured_primary: &str,
+    fallback_families: &[String],
+    range_overrides: &[ConfiguredRangeOverride],
+    default_family: &str,
+    text: &str,
+) -> std::result::Result<FontCoverageReport, String> {
+    if text.is_empty() {
+        return Err("enter literal text or an exact Unicode scalar".into());
+    }
+    if text.len() > MAX_FONT_COVERAGE_INPUT_BYTES {
+        return Err(format!(
+            "coverage input must be no more than {MAX_FONT_COVERAGE_INPUT_BYTES} UTF-8 bytes"
+        ));
+    }
+    if text.chars().any(char::is_control) {
+        return Err("coverage input must not contain control characters".into());
+    }
+
+    let mut seen = HashSet::new();
+    let configured = std::iter::once((FontCoverageSource::Primary, configured_primary.to_string()))
+        .chain(
+            fallback_families
+                .iter()
+                .take(MAX_FONT_FALLBACKS)
+                .enumerate()
+                .map(|(index, family)| {
+                    (
+                        FontCoverageSource::Fallback { index: index + 1 },
+                        family.clone(),
+                    )
+                }),
+        )
+        .filter(|(_, family)| seen.insert(family.trim().to_ascii_lowercase()))
+        .map(|(source, family)| {
+            let configured = ConfiguredFamily {
+                faces: configured_family_faces(font_system, &family),
+                name: family,
+            };
+            (source, configured)
+        })
+        .collect::<Vec<_>>();
+
+    let mut entries = Vec::new();
+    let mut graphemes_truncated = false;
+    for grapheme in text.graphemes(true) {
+        if entries.len() == MAX_FONT_COVERAGE_GRAPHEMES {
+            graphemes_truncated = true;
+            break;
+        }
+        let codepoints = grapheme.chars().map(u32::from).collect::<Vec<_>>();
+        let substantive = grapheme
+            .chars()
+            .any(|character| !is_font_default_ignorable(character));
+        if !substantive {
+            entries.push(FontCoverageEntry {
+                grapheme: grapheme.into(),
+                codepoints,
+                attempts: Vec::new(),
+                route: FontCoverageRoute::DefaultIgnorable {
+                    family: default_family.into(),
+                },
+            });
+            continue;
+        }
+
+        let mut attempts = Vec::new();
+        let mut route = None;
+        if let Some(rule) = matching_range_override(range_overrides, grapheme) {
+            let complete = configured_family_covers(font_system, &rule.family, grapheme);
+            let source = FontCoverageSource::Range {
+                start: rule.start,
+                end: rule.end,
+            };
+            attempts.push(FontCoverageAttempt {
+                source: source.clone(),
+                family: rule.family.name.clone(),
+                installed: !rule.family.faces.is_empty(),
+                complete,
+            });
+            if complete {
+                route = Some(FontCoverageRoute::Explicit {
+                    source,
+                    family: rule.family.name.clone(),
+                });
+            }
+        }
+        if route.is_none() {
+            for (source, family) in &configured {
+                let complete = configured_family_covers(font_system, family, grapheme);
+                attempts.push(FontCoverageAttempt {
+                    source: source.clone(),
+                    family: family.name.clone(),
+                    installed: !family.faces.is_empty(),
+                    complete,
+                });
+                if complete {
+                    route = Some(FontCoverageRoute::Explicit {
+                        source: source.clone(),
+                        family: family.name.clone(),
+                    });
+                    break;
+                }
+            }
+        }
+        let route = route.unwrap_or_else(|| {
+            platform_fallback_route(font_system, metrics, default_family, grapheme)
+        });
+        entries.push(FontCoverageEntry {
+            grapheme: grapheme.into(),
+            codepoints,
+            attempts,
+            route,
+        });
+    }
+
+    Ok(FontCoverageReport {
+        entries,
+        graphemes_truncated,
+    })
+}
+
+fn platform_fallback_route(
+    font_system: &mut FontSystem,
+    metrics: Metrics,
+    default_family: &str,
+    grapheme: &str,
+) -> FontCoverageRoute {
+    let mut buffer = Buffer::new(font_system, metrics);
+    buffer.set_text(
+        font_system,
+        grapheme,
+        &font_attrs(family_for(default_family), FontStyle::default()),
+        Shaping::Advanced,
+        None,
+    );
+    let glyphs = buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .map(|glyph| {
+            let substantive_cluster = grapheme
+                .get(glyph.start..glyph.end)
+                .unwrap_or(grapheme)
+                .chars()
+                .any(|character| !is_font_default_ignorable(character));
+            (glyph.font_id, glyph.glyph_id, substantive_cluster)
+        })
+        .collect::<Vec<_>>();
+    if glyphs.is_empty()
+        || glyphs
+            .iter()
+            .any(|(_, glyph_id, substantive)| *substantive && *glyph_id == 0)
+        || !glyphs.iter().any(|(_, glyph_id, _)| *glyph_id != 0)
+    {
+        return FontCoverageRoute::Missing;
+    }
+
+    let mut seen = HashSet::new();
+    let mut families = Vec::new();
+    let mut names_truncated = false;
+    for (font_id, glyph_id, _) in glyphs {
+        if glyph_id == 0 {
+            continue;
+        }
+        let name = font_system
+            .db()
+            .face(font_id)
+            .and_then(|face| face.families.first())
+            .map(|(family, _)| family.clone())
+            .unwrap_or_else(|| format!("fontdb {:?}", font_id));
+        let (name, name_truncated) = bounded_font_coverage_family(&name);
+        names_truncated |= name_truncated;
+        if !seen.insert(name.to_ascii_lowercase()) {
+            continue;
+        }
+        if families.len() == MAX_FONT_COVERAGE_PLATFORM_FACES {
+            names_truncated = true;
+            break;
+        }
+        families.push(name);
+    }
+    if families.is_empty() {
+        FontCoverageRoute::Missing
+    } else {
+        FontCoverageRoute::Platform {
+            families,
+            names_truncated,
+        }
+    }
+}
+
+fn bounded_font_coverage_family(name: &str) -> (String, bool) {
+    let mut characters = name.chars();
+    let mut value = characters
+        .by_ref()
+        .take(MAX_FONT_COVERAGE_FAMILY_CHARS)
+        .collect::<String>();
+    let truncated = characters.next().is_some();
+    if truncated {
+        value.pop();
+        value.push('…');
+    }
+    (value, truncated)
 }
 
 fn configured_family_spans(
@@ -1881,10 +2129,20 @@ fn configured_family_spans(
     spans
 }
 
+/// Match the shaping engine's default-ignorable policy. Some Unicode
+/// default-ignorable codepoints are intentionally excluded because HarfBuzz
+/// preserves them as spacing glyphs or shaping controls.
 fn is_font_default_ignorable(character: char) -> bool {
-    matches!(character, '\u{200C}' | '\u{200D}' | '\u{FE0E}' | '\u{FE0F}')
-        || ('\u{E0100}'..='\u{E01EF}').contains(&character)
-        || ('\u{E0000}'..='\u{E007F}').contains(&character)
+    matches!(character, '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{FEFF}')
+        || ('\u{17B4}'..='\u{17B5}').contains(&character)
+        || ('\u{180B}'..='\u{180E}').contains(&character)
+        || ('\u{200B}'..='\u{200F}').contains(&character)
+        || ('\u{202A}'..='\u{202E}').contains(&character)
+        || ('\u{2060}'..='\u{206F}').contains(&character)
+        || ('\u{FE00}'..='\u{FE0F}').contains(&character)
+        || ('\u{FFF0}'..='\u{FFF8}').contains(&character)
+        || ('\u{1D173}'..='\u{1D17A}').contains(&character)
+        || ('\u{E0000}'..='\u{E0FFF}').contains(&character)
 }
 
 /// Measure cell dimensions for monospace grid
@@ -2217,6 +2475,231 @@ mod tests {
         assert_eq!(
             range_override_family_with_coverage(&mut font_system, &rules, "\u{F900}"),
             None
+        );
+    }
+
+    #[test]
+    fn coverage_report_matches_range_and_ordered_fallback_precedence() {
+        let sources = [
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "FiraMono-Medium.ttf",
+            ))),
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "NotoSansArabic.ttf",
+            ))),
+        ];
+        let mut font_system = FontSystem::new_with_fonts(sources);
+        let rules = collect_configured_range_overrides(
+            &font_system,
+            &[
+                FontRangeOverride {
+                    start: 0x0600,
+                    end: 0x06FF,
+                    family: "Fira Mono".into(),
+                },
+                FontRangeOverride {
+                    start: 0x0030,
+                    end: 0x0039,
+                    family: "Noto Sans Arabic".into(),
+                },
+            ],
+        );
+        let fallbacks = vec!["Fira Mono".into(), "Noto Sans Arabic".into()];
+        let report = diagnose_font_coverage(
+            &mut font_system,
+            Metrics::new(14.0, 16.8),
+            "Missing Primary",
+            &fallbacks,
+            &rules,
+            "Fira Mono",
+            "0شّ",
+        )
+        .unwrap();
+        assert_eq!(report.entries.len(), 2);
+        assert_eq!(
+            report.entries[0].route,
+            FontCoverageRoute::Explicit {
+                source: FontCoverageSource::Range {
+                    start: 0x0030,
+                    end: 0x0039,
+                },
+                family: "Noto Sans Arabic".into(),
+            }
+        );
+        assert_eq!(report.entries[0].attempts.len(), 1);
+        assert!(report.entries[0].attempts[0].installed);
+        assert!(report.entries[0].attempts[0].complete);
+
+        let arabic = &report.entries[1];
+        assert_eq!(arabic.grapheme, "شّ");
+        assert_eq!(arabic.attempts.len(), 4);
+        assert_eq!(
+            arabic.attempts[0].source,
+            FontCoverageSource::Range {
+                start: 0x0600,
+                end: 0x06FF,
+            }
+        );
+        assert!(arabic.attempts[0].installed);
+        assert!(!arabic.attempts[0].complete);
+        assert_eq!(arabic.attempts[1].source, FontCoverageSource::Primary);
+        assert!(!arabic.attempts[1].installed);
+        assert_eq!(
+            arabic.route,
+            FontCoverageRoute::Explicit {
+                source: FontCoverageSource::Fallback { index: 2 },
+                family: "Noto Sans Arabic".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn coverage_report_names_platform_fallback_and_missing_results() {
+        let sources = [
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "FiraMono-Medium.ttf",
+            ))),
+            cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
+                "NotoSansArabic.ttf",
+            ))),
+        ];
+        let mut font_system = FontSystem::new_with_fonts(sources);
+        let metrics = Metrics::new(14.0, 16.8);
+        let platform = diagnose_font_coverage(
+            &mut font_system,
+            metrics,
+            "Fira Mono",
+            &[],
+            &[],
+            "Fira Mono",
+            "ش",
+        )
+        .unwrap();
+        assert!(matches!(
+            &platform.entries[0].route,
+            FontCoverageRoute::Platform { families, .. }
+                if families == &["Noto Sans Arabic".to_string()]
+        ));
+
+        let missing = diagnose_font_coverage(
+            &mut font_system,
+            metrics,
+            "Fira Mono",
+            &[],
+            &[],
+            "Fira Mono",
+            "\u{10FFFF}",
+        )
+        .unwrap();
+        assert_eq!(missing.entries[0].route, FontCoverageRoute::Missing);
+
+        let ignorable = diagnose_font_coverage(
+            &mut font_system,
+            metrics,
+            "Fira Mono",
+            &[],
+            &[],
+            "Fira Mono",
+            "\u{FE0F}",
+        )
+        .unwrap();
+        assert_eq!(
+            ignorable.entries[0].route,
+            FontCoverageRoute::DefaultIgnorable {
+                family: "Fira Mono".into()
+            }
+        );
+    }
+
+    #[test]
+    fn font_default_ignorable_predicate_matches_shaping_semantics() {
+        for character in [
+            '\u{00AD}',
+            '\u{034F}',
+            '\u{061C}',
+            '\u{17B4}',
+            '\u{180E}',
+            '\u{200B}',
+            '\u{206F}',
+            '\u{FE0F}',
+            '\u{FEFF}',
+            '\u{FFF8}',
+            '\u{1D17A}',
+            '\u{E0000}',
+            '\u{E0FFF}',
+        ] {
+            assert!(
+                is_font_default_ignorable(character),
+                "U+{:04X} should be default-ignorable",
+                u32::from(character)
+            );
+        }
+        for character in [
+            'A',
+            '\u{00AE}',
+            // HarfBuzz preserves these default-ignorable codepoints because
+            // fonts use them as spacing glyphs or shaping controls.
+            '\u{115F}',
+            '\u{1161}',
+            '\u{180F}',
+            '\u{1810}',
+            '\u{2010}',
+            '\u{2070}',
+            '\u{3164}',
+            '\u{FFA0}',
+            '\u{1BCA0}',
+            '\u{E1000}',
+        ] {
+            assert!(
+                !is_font_default_ignorable(character),
+                "U+{:04X} should remain substantive",
+                u32::from(character)
+            );
+        }
+    }
+
+    #[test]
+    fn coverage_report_bounds_input_without_splitting_the_retained_graphemes() {
+        let mut font_system = FontSystem::new_with_fonts([cosmic_text::fontdb::Source::Binary(
+            Arc::new(deterministic_test_font_data_named("FiraMono-Medium.ttf")),
+        )]);
+        let text = "a".repeat(MAX_FONT_COVERAGE_GRAPHEMES + 1);
+        let report = diagnose_font_coverage(
+            &mut font_system,
+            Metrics::new(14.0, 16.8),
+            "Fira Mono",
+            &[],
+            &[],
+            "Fira Mono",
+            &text,
+        )
+        .unwrap();
+        assert_eq!(report.entries.len(), MAX_FONT_COVERAGE_GRAPHEMES);
+        assert!(report.graphemes_truncated);
+        assert!(report.entries.iter().all(|entry| entry.grapheme == "a"));
+        assert!(
+            diagnose_font_coverage(
+                &mut font_system,
+                Metrics::new(14.0, 16.8),
+                "Fira Mono",
+                &[],
+                &[],
+                "Fira Mono",
+                &"a".repeat(MAX_FONT_COVERAGE_INPUT_BYTES + 1),
+            )
+            .is_err()
+        );
+        assert!(
+            diagnose_font_coverage(
+                &mut font_system,
+                Metrics::new(14.0, 16.8),
+                "Fira Mono",
+                &[],
+                &[],
+                "Fira Mono",
+                "bad\ninput",
+            )
+            .is_err()
         );
     }
 

@@ -152,6 +152,11 @@ editable `U+START-U+END | FAMILY` field with UTF-8 cursor semantics, and delete
 requires a named confirmation. Request IDs and full rule identities prevent a
 stale semantic action from retargeting a different rule after config reload;
 cancel, dismissal, and overlay replacement revoke the pending action context.
+The manager's named **Inspect Glyph Coverage** choice opens a bounded `Text`
+input. Its read-only report exposes named Retry and Back buttons and announces
+visible truncation plus the distinction between configured-family and platform
+shaping evidence. The shared overlay describes inputs generically rather than
+mislabeling non-plugin forms as plugin settings.
 
 The custom-command panel is likewise isolated as a modal dialog. It exposes
 named New and Close buttons, each command as separate Run and Delete actions,

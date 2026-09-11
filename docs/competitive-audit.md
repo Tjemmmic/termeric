@@ -260,10 +260,12 @@ awaiting evidence:
   incomplete. The picker searches a curated common-character index and reaches
   every non-control scalar by exact code point without materializing the
   Unicode code space. Settings now supplies a bounded request-scoped range
-  editor with atomic shared validation and stale-rule protection. Variable-font
-  axes/arbitrary OpenType features, exhaustive or localized Unicode-name
-  search, and glyph-coverage feedback still trail kitty/WezTerm's broader
-  power-user font and character tooling.
+  editor with atomic shared validation and stale-rule protection plus an
+  on-demand inspector that explains complete-grapheme range/primary/fallback
+  attempts and resolved platform shaping faces. Variable-font axes/arbitrary
+  OpenType features and exhaustive or localized Unicode-name search still trail
+  kitty/WezTerm's broader power-user font and character tooling; exhaustive
+  system-font recommendation remains deliberately out of scope.
 - **More window policies.** Ordinary windows now expose live and persisted
   normal/always-on-top/always-on-bottom requests, and quick access has a
   dedicated topmost placement policy. A transient pane-local read-only lock now

@@ -220,6 +220,17 @@ confirmed delete, correction-preserving validation errors, cap/paging,
 cancellation, live-reload identity drift, and overlay-replacement refusal. No
 native compositor, downloaded font, or provider process is used.
 
+Coverage-inspector tests use the same deterministic Fira Mono and Noto Sans
+Arabic sources to prove mapped-family precedence, missing and incomplete
+attempts, numbered configured-fallback routing, one-face multi-scalar grapheme
+coverage, normal-style platform-face naming, no-glyph and default-ignorable
+states, input/control bounds, and complete-grapheme truncation. Headless UI
+tests cover literal versus exact-scalar parsing, correction-preserving errors,
+read-only input/report/retry/back/cancel behavior, and the Settings → overlay →
+text-input accessibility route. Platform fallback is a real cosmic-text shaping
+probe over only the deterministic in-memory database; no host font, GPU,
+compositor, external process, or provider is involved.
+
 Keyboard cases cover every named legacy key, xterm modifier parameters 2-8,
 DECCKM/DECKPAM transitions, physical keypad identity, Control and Alt, AltGr,
 Unicode text, shortcut precedence, and focused-pane mode selection. Xterm

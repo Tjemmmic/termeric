@@ -2,6 +2,10 @@
 
 use super::*;
 use crate::config::{FontRangeOverride, MAX_FONT_FAMILY_BYTES, MAX_FONT_RANGE_OVERRIDES};
+use crate::renderer::{
+    FontCoverageReport, FontCoverageRoute, FontCoverageSource, MAX_FONT_COVERAGE_GRAPHEMES,
+    MAX_FONT_COVERAGE_INPUT_BYTES,
+};
 use crate::ui::info_overlay::{InfoOverlayChoice, MAX_INFO_INPUT_BYTES};
 
 const RANGE_PAGE_SIZE: usize = 8;
@@ -27,6 +31,13 @@ enum FontRangeManagerView {
     Edit {
         page: usize,
         original: Option<FontRangeOverride>,
+    },
+    InspectInput {
+        page: usize,
+    },
+    CoverageReport {
+        page: usize,
+        query: String,
     },
     ConfirmDelete {
         page: usize,
@@ -71,6 +82,14 @@ impl App {
             String::new(),
         ];
         let mut choices = Vec::new();
+        let inspect_line = lines.len();
+        lines.push("[I] Inspect glyph coverage".into());
+        choices.push(InfoOverlayChoice::new(
+            "inspect",
+            "Inspect glyph coverage",
+            inspect_line,
+            Some('i'),
+        ));
         if rules.len() < MAX_FONT_RANGE_OVERRIDES {
             let source_line = lines.len();
             lines.push("[A] Add override".into());
@@ -228,6 +247,105 @@ impl App {
         });
     }
 
+    fn show_font_coverage_input(&mut self, page: usize, value: String, error: Option<&str>) {
+        let mut lines = vec![
+            "Enter literal text or one exact U+ / 0x Unicode scalar.".into(),
+            format!(
+                "The report is read-only and examines at most {MAX_FONT_COVERAGE_GRAPHEMES} complete graphemes."
+            ),
+            "Character-map and shaping evidence does not prove native visual quality.".into(),
+        ];
+        if let Some(error) = error {
+            lines.push(String::new());
+            lines.push(format!("Validation error: {error}"));
+        }
+        lines.push(String::new());
+        let input_line = lines.len();
+        lines.push(String::new());
+        lines.push("Enter inspects · Escape returns".into());
+        let cancel_line = lines.len();
+        lines.push("[Esc] Back to range manager".into());
+        let request_id = self.info_overlay.show_input(
+            "Inspect Glyph Coverage",
+            lines,
+            input_line,
+            "Text: ",
+            value,
+            MAX_FONT_COVERAGE_INPUT_BYTES.min(MAX_INFO_INPUT_BYTES),
+            vec![InfoOverlayChoice::new(
+                "cancel",
+                "Back to range manager (Escape)",
+                cancel_line,
+                None,
+            )],
+        );
+        self.pending_font_range_management = Some(PendingFontRangeManagement {
+            request_id,
+            view: FontRangeManagerView::InspectInput { page },
+        });
+    }
+
+    fn inspect_font_coverage(&mut self, page: usize, submitted: String) {
+        let query = match parse_font_coverage_query(&submitted) {
+            Ok(query) => query,
+            Err(error) => {
+                self.show_font_coverage_input(page, submitted, Some(&error));
+                return;
+            }
+        };
+        let configured_primary = self.config.font.family.clone();
+        let report = self
+            .renderer
+            .as_mut()
+            .ok_or_else(|| "the renderer is not initialized in this window".to_string())
+            .and_then(|renderer| renderer.inspect_font_coverage(&configured_primary, &query));
+        self.show_font_coverage_report(page, submitted, &query, report);
+    }
+
+    fn show_font_coverage_report(
+        &mut self,
+        page: usize,
+        submitted: String,
+        query: &str,
+        report: std::result::Result<FontCoverageReport, String>,
+    ) {
+        let mut lines = match report {
+            Ok(report) => format_font_coverage_report(&report),
+            Err(error) => vec![
+                format!("Coverage inspection unavailable: {error}"),
+                String::new(),
+                "No configuration, terminal text, cache, or renderer policy was changed.".into(),
+            ],
+        };
+        lines.insert(0, format!("Query: {}", format_grapheme(query)));
+        lines.insert(1, String::new());
+        lines.push(String::new());
+        let retry_line = lines.len();
+        lines.push("[R] Retry or inspect different text".into());
+        let back_line = lines.len();
+        lines.push("[B] Back to range manager".into());
+        let request_id = self.info_overlay.show_choices(
+            "Glyph Coverage Report",
+            lines,
+            vec![
+                InfoOverlayChoice::new(
+                    "retry",
+                    "Retry or inspect different text",
+                    retry_line,
+                    Some('r'),
+                ),
+                InfoOverlayChoice::new("back", "Back to range manager", back_line, Some('b')),
+            ],
+        );
+        self.pending_font_range_management = Some(PendingFontRangeManagement {
+            request_id,
+            view: FontRangeManagerView::CoverageReport {
+                page,
+                query: submitted,
+            },
+        });
+    }
+
     fn show_font_range_delete_confirmation(&mut self, page: usize, rule: FontRangeOverride) {
         if !self.font_range_rule_is_current(&rule) {
             self.warn_stale_font_range(page);
@@ -278,6 +396,7 @@ impl App {
                 page,
                 visible_rules,
             } => match choice_id {
+                "inspect" => self.show_font_coverage_input(page, String::new(), None),
                 "add" if self.config.font.range_overrides.len() < MAX_FONT_RANGE_OVERRIDES => {
                     self.show_font_range_edit(page, None, String::new(), None);
                 }
@@ -319,6 +438,18 @@ impl App {
                     self.show_font_range_edit(page, original, String::new(), None);
                 }
             }
+            FontRangeManagerView::InspectInput { page } => {
+                if choice_id == "cancel" {
+                    self.show_font_range_list(page);
+                } else {
+                    self.show_font_coverage_input(page, String::new(), None);
+                }
+            }
+            FontRangeManagerView::CoverageReport { page, query } => match choice_id {
+                "retry" => self.show_font_coverage_input(page, query, None),
+                "back" => self.show_font_range_list(page),
+                _ => self.show_font_coverage_input(page, query, None),
+            },
             FontRangeManagerView::ConfirmDelete { page, rule } => match choice_id {
                 "confirm" => self.delete_font_range_rule(page, rule),
                 "cancel" | "back" => self.show_font_range_detail(page, rule),
@@ -329,10 +460,7 @@ impl App {
     }
 
     pub(super) fn submit_font_range_manager_input(&mut self, request_id: u64) -> bool {
-        let Some(PendingFontRangeManagement {
-            view: FontRangeManagerView::Edit { page, original },
-            ..
-        }) = self
+        let Some(pending) = self
             .pending_font_range_management
             .as_ref()
             .filter(|pending| pending.request_id == request_id)
@@ -340,6 +468,12 @@ impl App {
         else {
             return false;
         };
+        if !matches!(
+            pending.view,
+            FontRangeManagerView::Edit { .. } | FontRangeManagerView::InspectInput { .. }
+        ) {
+            return false;
+        }
         let Some(value) = self
             .info_overlay
             .input_value(request_id)
@@ -349,6 +483,15 @@ impl App {
         };
         self.info_overlay.dismiss(request_id);
         self.pending_font_range_management = None;
+
+        let (page, original) = match pending.view {
+            FontRangeManagerView::Edit { page, original } => (page, original),
+            FontRangeManagerView::InspectInput { page } => {
+                self.inspect_font_coverage(page, value);
+                return true;
+            }
+            _ => unreachable!("input view checked above"),
+        };
 
         if let Some(rule) = original.as_ref()
             && !self.font_range_rule_is_current(rule)
@@ -410,15 +553,25 @@ impl App {
     }
 
     pub(super) fn cancel_font_range_manager_input(&mut self, request_id: u64) -> bool {
-        let Some(PendingFontRangeManagement {
-            view: FontRangeManagerView::Edit { page, original },
-            ..
-        }) = self
+        let Some(pending) = self
             .pending_font_range_management
             .as_ref()
             .filter(|pending| pending.request_id == request_id)
             .cloned()
         else {
+            return false;
+        };
+        let destination = match pending.view {
+            FontRangeManagerView::Edit { page, original } => Some((page, original)),
+            FontRangeManagerView::InspectInput { page } => {
+                self.info_overlay.dismiss(request_id);
+                self.pending_font_range_management = None;
+                self.show_font_range_list(page);
+                return true;
+            }
+            _ => None,
+        };
+        let Some((page, original)) = destination else {
             return false;
         };
         self.info_overlay.dismiss(request_id);
@@ -473,6 +626,131 @@ impl App {
             .warning("Font range overrides changed; refreshed the current list");
         self.show_font_range_list(page);
     }
+}
+
+fn parse_font_coverage_query(value: &str) -> std::result::Result<String, String> {
+    if value.is_empty() {
+        return Err("enter literal text or an exact Unicode scalar".into());
+    }
+    if value.len() > MAX_FONT_COVERAGE_INPUT_BYTES {
+        return Err(format!(
+            "input must be no more than {MAX_FONT_COVERAGE_INPUT_BYTES} UTF-8 bytes"
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err("input must not contain control characters".into());
+    }
+    let exact = value.trim();
+    if exact.starts_with("U+")
+        || exact.starts_with("u+")
+        || exact.starts_with("0x")
+        || exact.starts_with("0X")
+    {
+        let scalar = parse_hex_scalar(exact)?;
+        let character = char::from_u32(scalar)
+            .ok_or_else(|| format!("U+{scalar:04X} is not a Unicode scalar"))?;
+        if character.is_control() {
+            return Err(format!("U+{scalar:04X} is a control character"));
+        }
+        return Ok(character.to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn format_font_coverage_report(report: &FontCoverageReport) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "Extended graphemes examined: {}{}",
+            report.entries.len(),
+            if report.graphemes_truncated {
+                format!(" (truncated at {MAX_FONT_COVERAGE_GRAPHEMES})")
+            } else {
+                String::new()
+            }
+        ),
+        "Evidence: installed font character maps plus a bounded normal-style cosmic-text shaping probe."
+            .into(),
+        String::new(),
+    ];
+    for (index, entry) in report.entries.iter().enumerate() {
+        let codepoints = entry
+            .codepoints
+            .iter()
+            .map(|codepoint| format_codepoint(*codepoint))
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(format!(
+            "{}. {} · {}",
+            index + 1,
+            format_grapheme(&entry.grapheme),
+            codepoints
+        ));
+        for attempt in &entry.attempts {
+            let status = if !attempt.installed {
+                "missing"
+            } else if attempt.complete {
+                "installed, complete"
+            } else {
+                "installed, incomplete"
+            };
+            lines.push(format!(
+                "   {} · {} · {status}",
+                format_coverage_source(&attempt.source),
+                attempt.family
+            ));
+        }
+        let route = match &entry.route {
+            FontCoverageRoute::Explicit { source, family } => {
+                format!("   route: {} → {family}", format_coverage_source(source))
+            }
+            FontCoverageRoute::Platform {
+                families,
+                names_truncated,
+            } => format!(
+                "   route: platform fallback → {}{}",
+                families.join(" + "),
+                if *names_truncated {
+                    " + additional faces"
+                } else {
+                    ""
+                }
+            ),
+            FontCoverageRoute::Missing => {
+                "   route: missing glyph (no explicit or platform shaping face)".into()
+            }
+            FontCoverageRoute::DefaultIgnorable { family } => format!(
+                "   route: default-ignorable-only content retained with {family}; no visible glyph required"
+            ),
+        };
+        lines.push(route);
+        lines.push(String::new());
+    }
+    if report.graphemes_truncated {
+        lines.push(format!(
+            "Additional graphemes were omitted after the {MAX_FONT_COVERAGE_GRAPHEMES}-grapheme report limit."
+        ));
+    }
+    lines.push(
+        "A successful report explains routing; native rasterization and appearance remain separate evidence."
+            .into(),
+    );
+    lines
+}
+
+fn format_coverage_source(source: &FontCoverageSource) -> String {
+    match source {
+        FontCoverageSource::Range { start, end } => format!(
+            "range {}–{}",
+            format_codepoint(*start),
+            format_codepoint(*end)
+        ),
+        FontCoverageSource::Primary => "primary".into(),
+        FontCoverageSource::Fallback { index } => format!("fallback {index}"),
+    }
+}
+
+fn format_grapheme(grapheme: &str) -> String {
+    format!("{grapheme:?}")
 }
 
 fn parse_font_range_expression(value: &str) -> std::result::Result<FontRangeOverride, String> {
@@ -616,6 +894,108 @@ mod tests {
                 .push(parse_font_range_expression(expression).unwrap());
             assert!(config.validate().is_err(), "accepted {expression:?}");
         }
+    }
+
+    #[test]
+    fn coverage_query_parser_distinguishes_literal_text_from_exact_scalars() {
+        assert_eq!(parse_font_coverage_query("abc").unwrap(), "abc");
+        assert_eq!(parse_font_coverage_query("  ").unwrap(), "  ");
+        assert_eq!(parse_font_coverage_query(" U+1F680 ").unwrap(), "🚀");
+        assert_eq!(parse_font_coverage_query("0x0634").unwrap(), "ش");
+        for invalid in ["", "U+D800", "U+110000", "U+000A", "bad\ninput"] {
+            assert!(
+                parse_font_coverage_query(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
+        assert!(parse_font_coverage_query(&"a".repeat(MAX_FONT_COVERAGE_INPUT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn coverage_report_formatter_names_attempt_state_route_and_truncation() {
+        let report = FontCoverageReport {
+            entries: vec![crate::renderer::FontCoverageEntry {
+                grapheme: "شّ".into(),
+                codepoints: vec![0x0634, 0x0651],
+                attempts: vec![crate::renderer::FontCoverageAttempt {
+                    source: FontCoverageSource::Primary,
+                    family: "Missing Primary".into(),
+                    installed: false,
+                    complete: false,
+                }],
+                route: FontCoverageRoute::Platform {
+                    families: vec!["Noto Sans Arabic".into()],
+                    names_truncated: false,
+                },
+            }],
+            graphemes_truncated: true,
+        };
+        let lines = format_font_coverage_report(&report);
+        assert!(lines.iter().any(|line| line.contains("U+0634 U+0651")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("primary · Missing Primary · missing"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("platform fallback → Noto Sans Arabic"))
+        );
+        assert!(lines.iter().any(|line| line.contains("truncated at 16")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("native rasterization"))
+        );
+    }
+
+    #[test]
+    fn coverage_inspector_flow_is_read_only_correctable_and_reversible_headlessly() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let original = app.config.font.range_overrides.clone();
+        app.open_font_range_manager();
+        assert!(
+            app.info_overlay
+                .choice_for_shortcut(app.info_overlay.request_id(), 'i')
+                .is_some()
+        );
+        choose(&mut app, "inspect");
+        assert_eq!(app.info_overlay.title(), "Inspect Glyph Coverage");
+
+        submit(&mut app, "U+D800");
+        assert_eq!(app.info_overlay.title(), "Inspect Glyph Coverage");
+        assert_eq!(
+            app.info_overlay.input_value(app.info_overlay.request_id()),
+            Some("U+D800")
+        );
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("not a Unicode scalar"))
+        );
+
+        submit(&mut app, "U+0634");
+        assert_eq!(app.info_overlay.title(), "Glyph Coverage Report");
+        assert!(
+            app.info_overlay
+                .lines()
+                .iter()
+                .any(|line| line.contains("renderer is not initialized"))
+        );
+        assert_eq!(app.config.font.range_overrides, original);
+
+        choose(&mut app, "retry");
+        assert_eq!(app.info_overlay.title(), "Inspect Glyph Coverage");
+        assert_eq!(
+            app.info_overlay.input_value(app.info_overlay.request_id()),
+            Some("U+0634")
+        );
+        let request_id = app.info_overlay.request_id();
+        app.apply_info_overlay_action(InfoOverlayAction::CancelInput { request_id });
+        assert_eq!(app.info_overlay.title(), "Font Range Overrides");
+        assert_eq!(app.config.font.range_overrides, original);
     }
 
     #[test]

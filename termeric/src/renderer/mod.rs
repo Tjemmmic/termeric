@@ -39,6 +39,7 @@ pub(crate) use background_image::{
     DecodedBackgroundImage, load_background_image, resolve_background_image_path,
 };
 pub use glyph_cache::GlyphCache;
+pub(crate) use glyph_cache::{MAX_FONT_COVERAGE_GRAPHEMES, MAX_FONT_COVERAGE_INPUT_BYTES};
 
 use image::{ImagePipeline, presentation_geometry};
 
@@ -888,6 +889,17 @@ impl Renderer {
     /// Get all installed monospace font families
     pub fn get_monospace_fonts(&self) -> Vec<String> {
         self.glyph_cache.get_monospace_fonts()
+    }
+
+    /// Build a bounded read-only report from the same family-selection state
+    /// used by terminal rendering.
+    pub(crate) fn inspect_font_coverage(
+        &mut self,
+        configured_primary: &str,
+        text: &str,
+    ) -> std::result::Result<FontCoverageReport, String> {
+        self.glyph_cache
+            .inspect_font_coverage(configured_primary, text)
     }
 
     /// Get current font family from the glyph cache

@@ -52,6 +52,13 @@ requested size and bold/italic style; shaped entries use cosmic-text's resolved
 face, glyph, size, subpixel position, and synthetic-bold identity. Incompatible
 rasters are therefore never reused across those changes.
 
+The Font Range Overrides manager can inspect this selection policy on demand.
+Its bounded report uses the same compiled range lookup and complete-grapheme
+family predicate, then performs one diagnostic normal-style cosmic-text shaping
+probe only when every explicit family fails. Inspection neither populates nor
+invalidates the raster/shaping atlases and never runs during normal row
+construction.
+
 ## Diagnostics and verification
 
 Trace logging reports mask and color page counts, maximum pages, combined byte
