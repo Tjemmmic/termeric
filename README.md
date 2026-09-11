@@ -145,6 +145,10 @@ commands require visible confirmation regardless of the destination tab type.
 API v18 separately grants exact same-tab pane swapping, divider balancing, and
 columns/rows/grid presets for ordinary split tabs while preserving live
 terminal owners, focus, and stable pane IDs.
+API v19 separately grants closure of the exact invoking window, only from a
+declared plugin command. Termeric delivers the bounded correlated result to the
+persistent handler before normal window teardown; lifecycle events, stale
+targets, duplicate requests, and cross-window IDs cannot initiate closure.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

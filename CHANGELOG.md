@@ -8,6 +8,16 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v19 adds an independent `window-close` grant for
+  closing the exact native window in which a declared plugin command was
+  explicitly invoked. Closure carries no target ID, is unavailable to
+  lifecycle or command-completion events, and waits for the correlated bounded
+  action result to finish before normal App/window teardown. Exact
+  plugin/generation/request matching, duplicate and unavailable-state refusal,
+  authority removal, final-callback failure behavior, and sibling-window-safe
+  application removal are covered by hermetic parser, manifest, persistent
+  process, and App tests plus a checked-in example. No provider process runs.
+
 - Declarative plugin API v18 adds an independent `pane-layout` grant for
   swapping two exact panes, balancing dividers, or applying columns, rows, and
   grid presets within one ordinary current-window split tab. Operations

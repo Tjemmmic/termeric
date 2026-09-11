@@ -17,7 +17,8 @@
 //! API v15 adds separately granted exact ordinary-tab closure scheduling.
 //! API v16 adds separately granted exact ordinary-pane movement, API v17 adds
 //! bounded exact-pane terminal input, and API v18 adds exact same-tab pane
-//! swapping, balancing, and layout presets.
+//! swapping, balancing, and layout presets. API v19 adds exact current-window
+//! closure, available only from an explicitly invoked plugin command.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -30,7 +31,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 18;
+pub const PLUGIN_API_VERSION: u32 = 19;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -75,6 +76,7 @@ pub enum PluginPermission {
     PaneMove,
     TerminalInput,
     PaneLayout,
+    WindowClose,
     Secrets,
 }
 
@@ -100,6 +102,7 @@ impl std::fmt::Display for PluginPermission {
             Self::PaneMove => "pane-move",
             Self::TerminalInput => "terminal-input",
             Self::PaneLayout => "pane-layout",
+            Self::WindowClose => "window-close",
             Self::Secrets => "secrets",
         })
     }
@@ -129,6 +132,7 @@ impl std::str::FromStr for PluginPermission {
             "pane-move" => Ok(Self::PaneMove),
             "terminal-input" => Ok(Self::TerminalInput),
             "pane-layout" => Ok(Self::PaneLayout),
+            "window-close" => Ok(Self::WindowClose),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -600,6 +604,18 @@ impl PluginManifest {
         {
             bail!("pane-layout requires an API v18 persistent event handler");
         }
+        if self.permissions.contains(&PluginPermission::WindowClose)
+            && (self.api_version < 19
+                || self.commands.is_empty()
+                || self.event_handler.as_ref().is_none_or(|handler| {
+                    handler.mode != DeclarativeHandlerMode::Persistent
+                        || !handler
+                            .events
+                            .contains(&StructuredEventKind::CommandInvoked)
+                }))
+        {
+            bail!("window-close requires an API v19 persistent command-invoked event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -729,6 +745,7 @@ impl PluginRegistry {
                         | PluginPermission::PaneMove
                         | PluginPermission::TerminalInput
                         | PluginPermission::PaneLayout
+                        | PluginPermission::WindowClose
                 )
             }) {
                 bail!(
@@ -1175,6 +1192,10 @@ impl DeclarativePlugin {
                     allow_pane_layout: self.manifest.api_version >= 18
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && self.grants.contains(&PluginPermission::PaneLayout),
+                    allow_window_close: self.manifest.api_version >= 19
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && kind == StructuredEventKind::CommandInvoked
+                        && self.grants.contains(&PluginPermission::WindowClose),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -1939,6 +1960,25 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::TerminalInput
                 | PluginPermission::PaneLayout
         ),
+        19 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+                | PluginPermission::PaneMove
+                | PluginPermission::TerminalInput
+                | PluginPermission::PaneLayout
+                | PluginPermission::WindowClose
+        ),
         _ => false,
     }
 }
@@ -2612,6 +2652,33 @@ events = ["command-completed"]
         manifest
     }
 
+    fn window_close_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = event_grants(true);
+        grants.remove(&PluginPermission::UiActions);
+        grants.insert(PluginPermission::WindowClose);
+        grants
+    }
+
+    fn window_close_manifest() -> PluginManifest {
+        let mut manifest = workspace_query_manifest();
+        manifest.api_version = 19;
+        manifest.id = "window-closer".into();
+        manifest.permissions.remove(&PluginPermission::UiActions);
+        manifest.permissions.insert(PluginPermission::WindowClose);
+        manifest.commands.push(DeclarativeHandlerCommand {
+            id: "close-current-window".into(),
+            name: "Close Current Window".into(),
+            description: String::new(),
+        });
+        manifest
+            .event_handler
+            .as_mut()
+            .unwrap()
+            .events
+            .insert(StructuredEventKind::CommandInvoked);
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -2929,7 +2996,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 19");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 20");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -3399,6 +3466,36 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn checked_in_api_v19_window_closer_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/window-closer");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 19);
+        assert_eq!(manifest.id, "window-closer");
+        assert_eq!(manifest.commands.len(), 1);
+        assert_eq!(manifest.commands[0].id, "close-current-window");
+        assert_eq!(manifest.permissions, window_close_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        let registry = PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "window-closer".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: window_close_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        };
+        registry.validate().unwrap();
+    }
+
+    #[test]
     fn checked_in_api_v15_tab_pruner_example_is_a_valid_manifest() {
         let directory =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/tab-pruner");
@@ -3613,6 +3710,72 @@ events = ["command-invoked"]
         assert_eq!(installed.grants, pane_layout_grants());
         let (installed_manifest, _, _) =
             PluginManifest::from_directory(&root.join("pane-arranger")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
+    fn api_v19_window_close_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/window-closer")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let mut missing_window_close = window_close_grants();
+        missing_window_close.remove(&PluginPermission::WindowClose);
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: missing_window_close,
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("window-close"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: window_close_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "window-closer".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "window-closer")
+            .unwrap();
+        assert!(installed.enabled);
+        assert_eq!(installed.grants, window_close_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("window-closer")).unwrap();
         assert_eq!(installed_manifest.version, "1.1.0");
     }
 
@@ -4417,6 +4580,92 @@ events = ["command-invoked"]
             panic!("ungranted pane layout fixture did not create an invocation")
         };
         assert!(!invocation.allow_pane_layout);
+    }
+
+    #[test]
+    fn api_v19_window_close_requires_exact_grant_and_explicit_command_scope() {
+        let manifest = window_close_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &window_close_grants()).unwrap();
+        assert_eq!(PluginPermission::WindowClose.to_string(), "window-close");
+        assert_eq!(
+            "window-close".parse::<PluginPermission>().unwrap(),
+            PluginPermission::WindowClose
+        );
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 2,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, window_close_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "window-closer.close-current-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v19 window close command did not create an invocation")
+        };
+        assert!(invocation.allow_workspace_query);
+        assert!(invocation.allow_window_close);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) =
+            plugin.on_hook(&Hook::AppReady, &context)
+        else {
+            panic!("API v19 lifecycle fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_window_close);
+
+        let mut v18 = manifest.clone();
+        v18.api_version = 18;
+        assert!(v18.validate().unwrap_err().to_string().contains("API v19"));
+
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+
+        let mut no_command = manifest.clone();
+        no_command.commands.clear();
+        assert!(
+            no_command
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("command-invoked")
+        );
+
+        let mut grants = window_close_grants();
+        grants.remove(&PluginPermission::WindowClose);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: window-close")
+        );
+
+        let mut plugin = DeclarativePlugin::new(manifest, None, event_grants(true));
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "window-closer.close-current-window".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted window close fixture did not create an invocation")
+        };
+        assert!(!invocation.allow_window_close);
     }
 
     #[test]

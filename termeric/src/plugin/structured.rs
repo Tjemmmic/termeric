@@ -94,6 +94,10 @@ pub struct StructuredHandlerInvocation {
     /// Permit non-destructive same-tab pane layout changes in the current
     /// window. Its result clears every host-operation authority.
     pub allow_pane_layout: bool,
+    /// Permit scheduling closure of this exact window. This authority exists
+    /// only on an explicitly invoked plugin command and is cleared from the
+    /// final result request.
+    pub allow_window_close: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -185,6 +189,9 @@ pub enum StructuredResponseAction {
         action_id: String,
         tab_id: u64,
         preset: PluginPaneLayoutPreset,
+    },
+    CloseWindow {
+        action_id: String,
     },
 }
 
@@ -505,6 +512,7 @@ fn run_handler(
         invocation.allow_pane_move,
         invocation.allow_terminal_input,
         invocation.allow_pane_layout,
+        invocation.allow_window_close,
     )
 }
 
@@ -631,6 +639,7 @@ impl PersistentHandler {
         allow_pane_move: bool,
         allow_terminal_input: bool,
         allow_pane_layout: bool,
+        allow_window_close: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -686,7 +695,7 @@ impl PersistentHandler {
                 "structured plugin response exceeds {MAX_OUTPUT_BYTES} bytes"
             ));
         }
-        let actions = parse_persistent_response_with_host_mutation(
+        let actions = parse_persistent_response_with_window_close(
             &bytes,
             self.allow_ui_actions,
             allow_workspace_query,
@@ -700,6 +709,7 @@ impl PersistentHandler {
             allow_pane_move,
             allow_terminal_input,
             allow_pane_layout,
+            allow_window_close,
             request_id,
         )?;
         if let Some(status) = self
@@ -777,6 +787,7 @@ fn run_persistent_handler(
                 invocation.allow_pane_move,
                 invocation.allow_terminal_input,
                 invocation.allow_pane_layout,
+                invocation.allow_window_close,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -964,6 +975,7 @@ fn parse_response_with_host_creation(
         false,
         false,
         false,
+        false,
     )
 }
 
@@ -982,6 +994,7 @@ fn parse_response_with_host_mutation(
     allow_pane_move: bool,
     allow_terminal_input: bool,
     allow_pane_layout: bool,
+    allow_window_close: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -1005,6 +1018,7 @@ fn parse_response_with_host_mutation(
         allow_pane_move,
         allow_terminal_input,
         allow_pane_layout,
+        allow_window_close,
     )
 }
 
@@ -1066,6 +1080,7 @@ fn parse_persistent_response_with_host_creation(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn parse_persistent_response_with_host_mutation(
     bytes: &[u8],
     allow_ui_actions: bool,
@@ -1080,6 +1095,43 @@ fn parse_persistent_response_with_host_mutation(
     allow_pane_move: bool,
     allow_terminal_input: bool,
     allow_pane_layout: bool,
+    expected_request_id: u64,
+) -> Result<Vec<StructuredResponseAction>, String> {
+    parse_persistent_response_with_window_close(
+        bytes,
+        allow_ui_actions,
+        allow_workspace_query,
+        allow_workspace_actions,
+        allow_workspace_topology,
+        allow_terminal_query,
+        allow_pane_create,
+        allow_tab_create,
+        allow_pane_close,
+        allow_tab_close,
+        allow_pane_move,
+        allow_terminal_input,
+        allow_pane_layout,
+        false,
+        expected_request_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_persistent_response_with_window_close(
+    bytes: &[u8],
+    allow_ui_actions: bool,
+    allow_workspace_query: bool,
+    allow_workspace_actions: bool,
+    allow_workspace_topology: bool,
+    allow_terminal_query: bool,
+    allow_pane_create: bool,
+    allow_tab_create: bool,
+    allow_pane_close: bool,
+    allow_tab_close: bool,
+    allow_pane_move: bool,
+    allow_terminal_input: bool,
+    allow_pane_layout: bool,
+    allow_window_close: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1110,6 +1162,7 @@ fn parse_persistent_response_with_host_mutation(
         allow_pane_move,
         allow_terminal_input,
         allow_pane_layout,
+        allow_window_close,
     )
 }
 
@@ -1127,6 +1180,7 @@ fn validate_response_actions(
     allow_pane_move: bool,
     allow_terminal_input: bool,
     allow_pane_layout: bool,
+    allow_window_close: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1351,6 +1405,16 @@ fn validate_response_actions(
                 host_operations += 1;
                 validate_text("pane layout action id", action_id, MAX_ACTION_ID_BYTES)?;
             }
+            StructuredResponseAction::CloseWindow { action_id } => {
+                if !allow_window_close {
+                    return Err(
+                        "handler requested window closure without API v19 command-scoped persistent window-close authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text("window closure action id", action_id, MAX_ACTION_ID_BYTES)?;
+            }
         }
     }
     if host_operations > 1 {
@@ -1417,6 +1481,7 @@ mod tests {
             allow_pane_move: false,
             allow_terminal_input: false,
             allow_pane_layout: false,
+            allow_window_close: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -2439,6 +2504,69 @@ mod tests {
         );
     }
 
+    #[test]
+    fn window_close_is_typed_command_gated_strict_and_single_operation() {
+        let close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-window","action_id":"close-current-window"}]}"#;
+        assert_eq!(
+            parse_persistent_response_with_window_close(
+                close, false, false, false, false, false, false, false, false, false, false, false,
+                false, true, 9,
+            )
+            .unwrap(),
+            vec![StructuredResponseAction::CloseWindow {
+                action_id: "close-current-window".into(),
+            }]
+        );
+        assert!(
+            parse_persistent_response(close, false, false, false, false, false, 9)
+                .unwrap_err()
+                .contains("command-scoped")
+        );
+
+        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-window","action_id":"close-current-window","window_id":3}]}"#;
+        assert!(
+            parse_persistent_response_with_window_close(
+                unknown, false, false, false, false, false, false, false, false, false, false,
+                false, false, true, 9,
+            )
+            .unwrap_err()
+            .contains("unknown field")
+        );
+
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"close-window","action_id":"bad\naction"}]}"#;
+        assert!(
+            parse_persistent_response_with_window_close(
+                unsafe_id, false, false, false, false, false, false, false, false, false, false,
+                false, false, true, 9,
+            )
+            .unwrap_err()
+            .contains("control-safe")
+        );
+
+        let query_and_close = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-workspace","query_id":"inventory"},{"type":"close-window","action_id":"close-current-window"}]}"#;
+        assert!(
+            parse_persistent_response_with_window_close(
+                query_and_close,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                9,
+            )
+            .unwrap_err()
+            .contains("more than one host operation")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn persistent_workspace_query_round_trip_reuses_the_handler() {
@@ -2817,6 +2945,54 @@ done"#,
 
     #[cfg(unix)]
     #[test]
+    fn persistent_query_then_window_close_then_final_result_is_bounded() {
+        let mut invocation = persistent_fixture(
+            "window-close-fixture",
+            r#"count=0
+while IFS= read -r event; do
+  count=$((count + 1))
+  if [ "$count" -eq 1 ]; then
+    printf '{"schema_version":2,"request_id":1,"actions":[{"type":"query-workspace","query_id":"confirm-current-window"}]}\n'
+  elif [ "$count" -eq 2 ]; then
+    printf '{"schema_version":2,"request_id":2,"actions":[{"type":"close-window","action_id":"close-current-window"}]}\n'
+  else
+    printf '{"schema_version":2,"request_id":3,"actions":[]}\n'
+  fi
+done"#,
+        );
+        invocation.allow_workspace_query = true;
+        invocation.allow_window_close = true;
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+        assert!(matches!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap()[..],
+            [StructuredResponseAction::QueryWorkspace { .. }]
+        ));
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-query-result","query_id":"confirm-current-window"}}"#.into();
+        invocation.allow_workspace_query = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::CloseWindow {
+                action_id: "close-current-window".into(),
+            }]
+        );
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"workspace-action-result","action":"close-window","ok":true,"scheduled":true}}"#.into();
+        invocation.allow_window_close = false;
+        assert!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn persistent_query_then_action_then_result_reuses_one_bounded_handler() {
         let mut invocation = persistent_fixture(
             "workspace-action-fixture",
@@ -3163,6 +3339,7 @@ done"#,
             allow_pane_move: false,
             allow_terminal_input: false,
             allow_pane_layout: false,
+            allow_window_close: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -3204,6 +3381,7 @@ done"#,
             allow_pane_move: false,
             allow_terminal_input: false,
             allow_pane_layout: false,
+            allow_window_close: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -3232,6 +3410,7 @@ done"#,
             allow_pane_move: false,
             allow_terminal_input: false,
             allow_pane_layout: false,
+            allow_window_close: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

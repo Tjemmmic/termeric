@@ -4654,6 +4654,167 @@ fn structured_plugin_completions_require_a_live_generation_and_plugin() {
 
 #[cfg(unix)]
 #[test]
+fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+    tabs.new_tab_with_command(
+        "/bin/sh",
+        &["-c".into(), "sleep 2".into()],
+        None,
+        Some("close fixture"),
+        None,
+        HashMap::new(),
+    )
+    .unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+
+    let encoded = app
+        .structured_workspace_action_event(
+            "window-closer",
+            crate::plugin::structured::StructuredResponseAction::CloseWindow {
+                action_id: "close-current-window".into(),
+            },
+        )
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(envelope["plugin_id"], "window-closer");
+    assert_eq!(envelope["event"]["type"], "workspace-action-result");
+    assert_eq!(envelope["event"]["action"], "close-window");
+    assert_eq!(envelope["event"]["ok"], true);
+    assert_eq!(envelope["event"]["scheduled"], true);
+    assert_eq!(envelope["event"]["tab_count"], 1);
+    assert!(!app.should_exit);
+    assert!(app.pending_plugin_window_close.is_none());
+
+    let error = app
+        .continue_structured_workspace_operation(
+            "window-closer",
+            crate::plugin::structured::StructuredResponseAction::CloseWindow {
+                action_id: "submit-without-native-window".into(),
+            },
+            Some(crate::plugin::structured::StructuredHandlerInvocation {
+                plugin_id: "window-closer".into(),
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "exit 0".into()],
+                event_json: r#"{"schema_version":1}"#.into(),
+                allow_ui_actions: false,
+                allow_workspace_query: false,
+                allow_workspace_actions: false,
+                allow_workspace_topology: false,
+                allow_terminal_query: false,
+                allow_pane_create: false,
+                allow_tab_create: false,
+                allow_pane_close: false,
+                allow_tab_close: false,
+                allow_pane_move: false,
+                allow_terminal_input: false,
+                allow_pane_layout: false,
+                allow_window_close: true,
+                mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
+            }),
+        )
+        .unwrap_err();
+    assert!(error.contains("native window"));
+    assert!(!app.should_exit);
+    assert!(app.pending_plugin_window_close.is_none());
+
+    app.pending_plugin_window_close = Some(PendingPluginWindowClose {
+        plugin_id: "window-closer".into(),
+        plugin_generation: app.plugin_runtime_generation,
+        result_request_id: 9,
+    });
+    let duplicate: serde_json::Value = serde_json::from_str(
+        &app.structured_workspace_action_event(
+            "window-closer",
+            crate::plugin::structured::StructuredResponseAction::CloseWindow {
+                action_id: "duplicate".into(),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(duplicate["event"]["ok"], false);
+    assert_eq!(duplicate["event"]["scheduled"], false);
+    assert!(
+        duplicate["event"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("pending plugin closure")
+    );
+    assert!(!app.should_exit);
+}
+
+#[test]
+fn plugin_window_close_waits_for_only_the_exact_result_callback() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let generation = app.plugin_runtime_generation.wrapping_sub(1);
+    app.pending_plugin_window_close = Some(PendingPluginWindowClose {
+        plugin_id: "window-closer".into(),
+        plugin_generation: generation,
+        result_request_id: 41,
+    });
+    let completion = |request_id, result| crate::plugin::structured::StructuredHandlerCompletion {
+        window_id: winit::window::WindowId::dummy(),
+        plugin_generation: generation,
+        plugin_id: "window-closer".into(),
+        request_id,
+        continuation: None,
+        result,
+    };
+
+    app.handle_structured_plugin_completed(completion(40, Ok(Vec::new())));
+    assert!(!app.should_exit);
+    assert!(app.pending_plugin_window_close.is_some());
+
+    app.handle_structured_plugin_completed(completion(
+        41,
+        Ok(vec![
+            crate::plugin::structured::StructuredResponseAction::ShowMessage {
+                message: "must not render during teardown".into(),
+            },
+        ]),
+    ));
+    assert!(app.should_exit);
+    assert!(app.pending_plugin_window_close.is_none());
+    assert!(
+        app.toasts
+            .iter()
+            .all(|toast| toast.message != "must not render during teardown")
+    );
+}
+
+#[test]
+fn plugin_window_close_still_finishes_after_final_handler_failure() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.pending_plugin_window_close = Some(PendingPluginWindowClose {
+        plugin_id: "window-closer".into(),
+        plugin_generation: app.plugin_runtime_generation,
+        result_request_id: 73,
+    });
+    app.handle_structured_plugin_completed(
+        crate::plugin::structured::StructuredHandlerCompletion {
+            window_id: winit::window::WindowId::dummy(),
+            plugin_generation: app.plugin_runtime_generation,
+            plugin_id: "window-closer".into(),
+            request_id: 73,
+            continuation: None,
+            result: Err("fixture callback failed".into()),
+        },
+    );
+    assert!(app.should_exit);
+    assert!(app.pending_plugin_window_close.is_none());
+}
+
+#[cfg(unix)]
+#[test]
 fn structured_workspace_query_is_current_window_bounded_and_control_safe() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;

@@ -1027,6 +1027,12 @@ zoom contracts, balance idempotence, columns/rows/grid geometry, correlated
 state, same-process query-to-layout reuse, one-operation enforcement,
 authority removal, and a checked-in pane arranger. Only inert local shell/
 Python fixtures are used; no AI provider process or tokens are involved.
+API v19 adds exact window-close version/mode/grant/declared-command denial,
+command-only authority, strict targetless parsing, unavailable and duplicate
+refusal, submission-before-teardown behavior, exact plugin/generation/request
+correlation, stale/unloaded/error final callback handling, authority removal,
+and a checked-in window closer. Only inert local shell/Python fixtures are
+used; no AI provider process or tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

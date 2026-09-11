@@ -43,7 +43,7 @@ The practical position is therefore:
 | Persistence | Atomic schema-2 workspaces preserve mixed pane launch identity, topology, metadata, and bounded scrollback; legacy snapshots are separate | kitty session files describe startup layouts; WezTerm has workspaces/domains; Konsole can save tab layouts | Strong and unusually explicit, but relaunch is not process checkpointing |
 | Search and keyboard navigation | Cancellable full-history literal/regex search, filter mode, copy mode, configurable quick-select hints, prompt navigation | Alacritty exposes search, Vi mode, and regex hints; WezTerm exposes search, copy mode, and QuickSelect; kitty exposes searchable history and hints | Competitive, with stronger deterministic memory/latency boundaries than most published feature lists |
 | Multiplexing and remote work | Experimental daemon-owned PTYs, local/SSH domains, detach/reattach, topology mutation, GUI picker, bounded relays | WezTerm supports local Unix, SSH, and TLS domains plus an embedded SSH client; kitty provides SSH tooling and a powerful remote-control protocol | Promising but behind WezTerm in transport maturity and behind kitty in application automation |
-| Extensibility and automation | Fuzzy palette, custom commands, bounded declarative process profiles, and APIs v2-v18 for permissioned context/events, persistent handlers, current-window inventory, navigation/topology, namespaced commands, typed settings, presented-text reads, ordinary pane/tab lifecycle, cross-tab pane movement, guarded exact-pane input, and exact same-tab pane swap/balance/layout presets. The in-app manager exposes grants and typed settings; the domain and authenticated GUI CLIs provide a broader typed control surface. | kitty offers Python kittens, event watchers, and remote control; WezTerm exposes a large Lua configuration/action/event API; Konsole exposes desktop-oriented profiles/plugins | Gap narrowed again; plugin installation remains CLI-only, while process-global plugin queries, raw output/raw-byte input, arbitrary layout trees, window/final-tab closure, broader destructive actions, cross-window plugin topology, and render hooks remain absent |
+| Extensibility and automation | Fuzzy palette, custom commands, bounded declarative process profiles, and APIs v2-v19 for permissioned context/events, persistent handlers, current-window inventory, navigation/topology, namespaced commands, typed settings, presented-text reads, ordinary pane/tab lifecycle, cross-tab pane movement, guarded exact-pane input, same-tab layouts, and command-scoped exact-window closure. The in-app manager exposes grants and typed settings; the domain and authenticated GUI CLIs provide a broader typed control surface. | kitty offers Python kittens, event watchers, and remote control; WezTerm exposes a large Lua configuration/action/event API; Konsole exposes desktop-oriented profiles/plugins | Gap narrowed again; plugin installation remains CLI-only, while process-global plugin queries, raw output/raw-byte input, arbitrary layout trees, broader destructive actions, cross-window plugin topology, and render hooks remain absent |
 | Shell/developer workflows | Accepted OSC 7/133 for Bash/Zsh/Fish, acceptance-pending native Nushell wiring, opt-in Elvish module, Git status/completion/diff, transcripts, guarded plugin input, Harvest command history | kitty and Ghostty use shell integration for prompt navigation, cwd inheritance, command-output selection, and SSH helpers | Differentiated combination, but Nushell/Elvish PTY evidence, automatic Elvish setup, and real-provider/manual acceptance are incomplete |
 | Accessibility and input | AccessKit semantics for terminal/chrome/modals plus IME/preedit routing and tests | Ghostty emphasizes native platform UI; mainstream projects vary in screen-reader coverage | Architecturally serious, but remains Partial until Orca/real IME and desktop bridge acceptance exists |
 | Performance/resources | Event-driven scheduler, incremental row cache, persistent GPU buffers, compact byte-bounded history, allocation/RSS/latency/soak contracts, and a fail-closed external comparison runner | kitty, Ghostty, and Alacritty explicitly market performance; kitty publishes its own throughput tool | Optimized in several measured subsystems; one local Termeric/Ghostty artifact permits startup and PTY-response comparison, while its pixel mismatch correctly rejects RSS/idle ranking. No clean release or vendor-GPU artifact supports a fastest/best claim |
@@ -173,10 +173,12 @@ awaiting evidence:
   API v18 adds separately granted exact same-tab pane swap, balance, and
   columns/rows/grid presets while preserving terminal owners, pane identity,
   focus, and background-tab selection.
+  API v19 adds separately granted closure of the exact invoking window, only
+  from a declared plugin command and only after its correlated final callback.
   There are still no process-global terminal queries,
   raw terminal-output events, kernel-sandboxed runtimes, raw-byte input,
-  arbitrary layout trees, window/final-tab closure, broader destructive
-  actions, cross-window plugin topology, or render decorations. This remains a
+  arbitrary layout trees, broader destructive actions, cross-window plugin
+  topology, or render decorations. This remains a
   substantial gap against kittens and Lua and belongs in future separately
   permissioned slices.
 - **Quick-access/drop-down terminal.** Termeric now exposes a one-command,
@@ -249,7 +251,7 @@ awaiting evidence:
    #31/#32/#33/#35; do not add more default-on surface area before this gate.
 2. Preserve #29's implemented request-correlated live-domain mutation and
    resumable-transfer authority while gathering native remote-host evidence.
-3. Continue #34/#36/#37/#39/#40/#41/#42/#43 from the bounded API v18 current-window
+3. Continue #34/#36/#37/#39/#40/#41/#42/#43/#44 from the bounded API v19 current-window
    query/navigation/topology/handler-command/configuration/presented-text and
    pane/tab-create surface toward only demonstrably useful, separately
    permissioned actions.

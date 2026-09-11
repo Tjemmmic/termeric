@@ -1,6 +1,6 @@
 # Declarative third-party plugins
 
-Termeric plugin APIs v1 through v18 are constrained local extension formats.
+Termeric plugin APIs v1 through v19 are constrained local extension formats.
 They turn a reviewed TOML manifest into command-palette launch profiles; they
 do not load native libraries, execute manifest scripts in the UI process, or
 download anything. API v2 can additionally pass one explicitly granted, bounded,
@@ -43,6 +43,10 @@ visible exact-destination confirmation.
 API v18 adds an independent `pane-layout` grant for swapping two exact panes,
 balancing dividers, or applying a columns, rows, or grid preset within one
 ordinary current-window split tab without recreating its terminals.
+API v19 adds an independent `window-close` grant for the exact window in which
+a declared plugin command was invoked. It delivers one final correlated result
+before normal window teardown and grants neither a window identifier nor
+lifecycle-triggered closure.
 Installation, validation, configuration, live enable/disable, update,
 diagnostics, and removal require no rebuild.
 
@@ -82,6 +86,8 @@ The API v17 terminal-input sample is
 [`examples/plugins/terminal-writer/termeric-plugin.toml`](../examples/plugins/terminal-writer/termeric-plugin.toml).
 The API v18 pane-layout sample is
 [`examples/plugins/pane-arranger/termeric-plugin.toml`](../examples/plugins/pane-arranger/termeric-plugin.toml).
+The API v19 window-closure sample is
+[`examples/plugins/window-closer/termeric-plugin.toml`](../examples/plugins/window-closer/termeric-plugin.toml).
 
 ## Install and manage
 
@@ -1373,6 +1379,57 @@ pane creation/closure/movement, cross-tab or cross-window changes, live-domain
 topology control, terminal input/output, process signals, or arbitrary layout
 trees.
 
+## Manifest API v19 exact window closure
+
+API v19 preserves every earlier contract and adds the independent
+`window-close` permission. It is intentionally narrower than ordinary
+lifecycle subscriptions: only an API v19 persistent handler subscribed to
+`command-invoked`, with at least one declared command and the exact retained
+grant, can receive closure authority. Review and install the sample with:
+
+```bash
+termeric plugin validate examples/plugins/window-closer
+termeric plugin install examples/plugins/window-closer \
+  --allow process-spawn --allow workspace-query \
+  --allow window-close --allow event-subscribe --enable
+```
+
+The sample contributes **Window Closer: Close Current Window**. Its first
+response queries the invoking window, and the query result may return exactly
+this host operation:
+
+```json
+{"type":"close-window","action_id":"close-current-window"}
+```
+
+There is deliberately no `window_id`. The command dispatch and persistent
+continuation already belong to one exact `App` and native window, preventing
+active-window drift and cross-window selection. App-ready, tab lifecycle, and
+command-completed invocations always receive `allow_window_close = false`, even
+when the plugin has the grant. The same applies to undeclared or differently
+owned commands.
+
+Termeric revalidates that the window has initialized tab owners, is not already
+closing, and has no pending plugin closure. A success result has
+`action = "close-window"`, `scheduled = true`, and the current `tab_count`.
+The window remains alive while this bounded event is submitted to the same
+persistent handler. Only the exact plugin ID, plugin generation, and returned
+worker request ID can finish the schedule. After that callback succeeds or
+fails, Termeric marks the exact window for its ordinary teardown path; sibling
+windows remain alive and the process exits only if none survive. Informational
+or host actions returned by this final callback are ignored because teardown
+has begun.
+
+If the result event cannot be encoded or submitted, closure is not armed and
+the window stays open. Once submission succeeds, later plugin unload or
+generation cancellation cannot strand an accepted close: the matching failed
+callback still completes teardown. Duplicate requests and already-closing or
+uninitialized windows return `scheduled = false` with a bounded sanitized
+error. The result clears every host-operation authority, so it cannot close a
+second window, query again, or create a mutation loop. API v19 does not grant
+process-global targeting, arbitrary window IDs, background lifecycle closure,
+terminal-input confirmation bypass, or control of another application window.
+
 ## Permissions and isolation
 
 | Capability | Public API status |
@@ -1395,6 +1452,7 @@ trees.
 | `pane-move` | API v16+, after `--allow pane-move`; permits moving one exact ordinary pane between distinct tabs in the originating window through a persistent handler, preserves its live PTY, and returns the fresh destination-local identity. |
 | `terminal-input` | API v17+, after `--allow terminal-input`; permits at most 8 KiB of bounded UTF-8 text to one exact current-window terminal through a persistent handler, additionally requires `security.allow_gui_control_input = true`, and preserves destructive-command confirmation. |
 | `pane-layout` | API v18+, after `--allow pane-layout`; permits exact same-tab pane swap, divider balancing, and columns/rows/grid presets for one ordinary current-window split through a persistent handler, preserving live terminal owners and focus. |
+| `window-close` | API v19+, after `--allow window-close`; permits only a declared command invocation to schedule closure of its exact originating window through a persistent handler, after delivery of one correlated final result. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
 
 Requested and granted sets are independent. Installation may retain a disabled
@@ -1402,7 +1460,7 @@ manifest with denied capabilities for inspection, but enabling fails until all
 requests are explicitly granted. API v1 refuses every capability except
 `process-spawn`; API v2 refuses every capability except `process-spawn` and
 `workspace-query`; API v3 additionally permits `event-subscribe` and
-`ui-actions`; API v4 through v18 may also request `terminal-text` for
+`ui-actions`; API v4 through v19 may also request `terminal-text` for
 `command-completed`. API v5 and v6 add no new grant; API v6 gives the existing
 `workspace-query` grant a separately gated live-query operation. API v7 adds
 only `workspace-actions`, independently of query, UI, or terminal-text grants.
@@ -1433,6 +1491,10 @@ clipboard, or secret access.
 API v18 adds only `pane-layout`, independently of query, navigation, topology,
 terminal text/input, creation, closure, movement, UI, filesystem, network,
 clipboard, or secret access.
+API v19 adds only `window-close`, independently of query, navigation, topology,
+terminal text/input, pane/tab lifecycle, movement, layout, UI, filesystem,
+network, clipboard, or secret access. Runtime authority is further limited to
+exact-owner declared command invocations.
 Updates that add a permission do not silently migrate the
 old grant or replace the working installed copy, even while the plugin is
 disabled; the operator must use the explicit reviewed reinstall/replace flow.
@@ -1542,6 +1604,12 @@ Before distributing a local directory:
     unsplit/closed/closing/live-domain/serial refusal, PTY/focus/zoom identity,
     divider balance idempotence, preset geometry, one-host-operation rejection,
     correlated state fields, and complete result-authority removal.
+23. For API v19, test exact grant/version/mode/declared-command denial,
+    command-only authority, strict targetless action shape and action-ID bounds,
+    unavailable/already-closing/duplicate refusal, no close before result
+    submission, exact plugin/generation/request correlation, stale and unloaded
+    final callback handling, final success/error teardown, sibling preservation,
+    one-host-operation rejection, and complete result-authority removal.
 
 Termeric's own tests cover schema/API mismatch, permission denial, forbidden
 capabilities, fingerprint and symlink substitution, administrative temporary
@@ -1617,6 +1685,12 @@ zoom identity preservation, balanced and rebuilt geometry, correlated state,
 same-process query-to-layout reuse, one-operation enforcement, authority
 removal, and a checked-in pane arranger. Its PTYs run only inert local shell
 fixtures; no provider runs or AI tokens are consumed.
+API v19 adds exact permission/version/mode/command gating, strict targetless
+closure parsing, command-only runtime authority, bounded scheduled results,
+submission-before-teardown behavior, exact final-callback correlation,
+stale/unloaded/error completion, duplicate refusal, one-operation enforcement,
+authority removal, and a checked-in window closer. All coverage is hermetic;
+no provider runs or AI tokens are consumed.
 
 Install also rejects a symlinked plugin root. Removal first atomically renames a
 real installation into a same-root quarantine, then commits the registry
@@ -1634,10 +1708,10 @@ palette namespace checks, `PluginAction::OpenTab`, PTY ownership, and workspace
 restore dispatch as declarative plugins. Moving them entirely onto the public
 layer would either remove those reviewed features or prematurely grant
 third-party access to arbitrary terminal state, filesystem mutation, clipboard,
-and secrets. API v18's current-window inventory/navigation/topology, exact
+and secrets. API v19's current-window inventory/navigation/topology, exact
 presented-text, separately granted ordinary pane/tab creation and closure,
 separately granted pane movement, bounded terminal input, and same-tab pane
-layouts, persistent lifetime, namespaced handler
+layouts, command-scoped exact-window closure, persistent lifetime, namespaced handler
 commands, and non-secret settings, plus
 the narrowly granted completed-region snapshot, are not
 enough to represent those privileged workflows; broader migration waits for a
@@ -1696,6 +1770,10 @@ API v18 adds separately granted exact same-tab pane swapping, balancing, and
 columns/rows/grid presets for ordinary split tabs, preserves live owners and
 focus, returns resulting pane/zoom state, and removes every host-operation
 authority from the result.
+API v19 adds separately granted exact current-window closure only to declared
+command invocations. It has no target ID, returns a bounded scheduled result,
+waits for the exactly correlated final handler callback, and then uses normal
+window teardown while preserving siblings.
 Any other API or registry value fails before registration. Additive optional
 fields require a documented Termeric release;
 removals or semantic changes require a new API version plus an explicit

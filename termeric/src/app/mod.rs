@@ -691,6 +691,21 @@ struct PendingRuntimePluginManagement {
     view: RuntimePluginManagerView,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingPluginWindowClose {
+    plugin_id: String,
+    plugin_generation: u64,
+    result_request_id: u64,
+}
+
+impl PendingPluginWindowClose {
+    fn matches(&self, completion: &crate::plugin::structured::StructuredHandlerCompletion) -> bool {
+        self.plugin_id == completion.plugin_id
+            && self.plugin_generation == completion.plugin_generation
+            && self.result_request_id == completion.request_id
+    }
+}
+
 #[derive(Debug, Clone)]
 enum RuntimePluginManagerView {
     List {
@@ -1100,6 +1115,8 @@ pub struct App {
     structured_plugin_worker: crate::plugin::structured::StructuredPluginWorker,
     /// Invalidates responses queued before a plugin registry/config reload.
     plugin_runtime_generation: u64,
+    /// Exact plugin result request that must finish before this window closes.
+    pending_plugin_window_close: Option<PendingPluginWindowClose>,
     /// Command palette
     command_palette: CommandPalette,
     /// Local/saved-SSH live-domain discovery and attachment palette.
@@ -1325,6 +1342,7 @@ impl App {
             structured_plugin_worker: crate::plugin::structured::StructuredPluginWorker::new()
                 .map_err(anyhow::Error::msg)?,
             plugin_runtime_generation: 1,
+            pending_plugin_window_close: None,
             command_palette: CommandPalette::new(),
             domain_picker: DomainPicker::new(),
             shortcuts_panel: ShortcutsPanel::new(),

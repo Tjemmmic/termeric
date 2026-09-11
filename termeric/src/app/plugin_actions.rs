@@ -7,6 +7,23 @@ impl App {
         &mut self,
         completion: crate::plugin::structured::StructuredHandlerCompletion,
     ) {
+        if self
+            .pending_plugin_window_close
+            .as_ref()
+            .is_some_and(|pending| pending.matches(&completion))
+        {
+            self.pending_plugin_window_close = None;
+            if let Err(error) = &completion.result {
+                log::warn!(
+                    "Plugin {:?} window-close result callback {} failed before teardown: {}",
+                    completion.plugin_id,
+                    completion.request_id,
+                    error
+                );
+            }
+            self.should_exit = true;
+            return;
+        }
         if completion.plugin_generation != self.plugin_runtime_generation
             || !self.plugin_manager.contains(&completion.plugin_id)
         {
@@ -95,6 +112,9 @@ impl App {
                     }
                     | crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
                         ..
+                    }
+                    | crate::plugin::structured::StructuredResponseAction::CloseWindow {
+                        ..
                     }) => {
                         workspace_operation = Some(action);
                         None
@@ -155,6 +175,9 @@ impl App {
                 crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout { .. } => {
                     "apply-pane-layout"
                 }
+                crate::plugin::structured::StructuredResponseAction::CloseWindow { .. } => {
+                    "close-window"
+                }
                 _ => unreachable!("only workspace operations are retained"),
             };
             let result = self.continue_structured_workspace_operation(
@@ -178,7 +201,7 @@ impl App {
         self.execute_plugin_actions(actions);
     }
 
-    fn continue_structured_workspace_operation(
+    pub(super) fn continue_structured_workspace_operation(
         &mut self,
         plugin_id: &str,
         operation: crate::plugin::structured::StructuredResponseAction,
@@ -187,6 +210,10 @@ impl App {
         let mut invocation = continuation.ok_or_else(|| {
             "workspace operations require a live persistent handler continuation".to_string()
         })?;
+        let schedules_window_close = matches!(
+            operation,
+            crate::plugin::structured::StructuredResponseAction::CloseWindow { .. }
+        ) && self.validate_plugin_window_close().is_ok();
         match operation {
             crate::plugin::structured::StructuredResponseAction::QueryWorkspace { query_id } => {
                 invocation.event_json =
@@ -225,6 +252,7 @@ impl App {
                 invocation.allow_pane_move = false;
                 invocation.allow_terminal_input = false;
                 invocation.allow_pane_layout = false;
+                invocation.allow_window_close = false;
             }
             action @ (crate::plugin::structured::StructuredResponseAction::SelectTab { .. }
             | crate::plugin::structured::StructuredResponseAction::FocusPane { .. }
@@ -246,6 +274,9 @@ impl App {
             }
             | crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
                 ..
+            }
+            | crate::plugin::structured::StructuredResponseAction::CloseWindow {
+                ..
             }) => {
                 invocation.event_json =
                     self.structured_workspace_action_event(plugin_id, action)?;
@@ -261,10 +292,20 @@ impl App {
                 invocation.allow_pane_move = false;
                 invocation.allow_terminal_input = false;
                 invocation.allow_pane_layout = false;
+                invocation.allow_window_close = false;
             }
             _ => return Err("structured response did not contain a workspace operation".into()),
         }
-        self.submit_structured_handler(invocation).map(|_| ())
+        let plugin_generation = self.plugin_runtime_generation;
+        let result_request_id = self.submit_structured_handler(invocation)?;
+        if schedules_window_close {
+            self.pending_plugin_window_close = Some(PendingPluginWindowClose {
+                plugin_id: plugin_id.to_string(),
+                plugin_generation,
+                result_request_id,
+            });
+        }
+        Ok(())
     }
 
     fn submit_structured_handler(
@@ -866,6 +907,33 @@ impl App {
                     }
                 }
             }
+            crate::plugin::structured::StructuredResponseAction::CloseWindow { action_id } => {
+                match self.validate_plugin_window_close() {
+                    Ok(tab_count) => serde_json::json!({
+                        "type": "workspace-action-result",
+                        "action_id": action_id,
+                        "action": "close-window",
+                        "ok": true,
+                        "scheduled": true,
+                        "tab_count": tab_count,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "workspace-action-result",
+                            "action_id": action_id,
+                            "action": "close-window",
+                            "ok": false,
+                            "scheduled": false,
+                            "tab_count": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
             _ => return Err("structured response did not contain a workspace action".into()),
         };
         let envelope = serde_json::json!({
@@ -882,6 +950,22 @@ impl App {
             ));
         }
         Ok(encoded)
+    }
+
+    fn validate_plugin_window_close(&self) -> Result<u16, String> {
+        if self.should_exit {
+            return Err("current window is already closing".into());
+        }
+        if self.pending_plugin_window_close.is_some() {
+            return Err("current window already has a pending plugin closure".into());
+        }
+        let tab_count = self
+            .tabs
+            .as_ref()
+            .map(|tabs| tabs.all_tabs().len())
+            .filter(|count| *count > 0)
+            .ok_or_else(|| "current window has no initialized tab owners".to_string())?;
+        u16::try_from(tab_count).map_err(|_| "current window tab count is unsupported".into())
     }
 
     #[allow(clippy::too_many_arguments)]
