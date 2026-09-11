@@ -117,6 +117,9 @@ pub struct StructuredHandlerInvocation {
     /// Permit one ordinary local tab in an exact live window owned by this
     /// Termeric process. Its result clears every host operation authority.
     pub allow_process_tab_create: bool,
+    /// Permit one ordinary pane split at an exact live process-owned pane.
+    /// Its result clears every host operation authority.
+    pub allow_process_pane_create: bool,
     pub mode: StructuredHandlerMode,
 }
 
@@ -167,6 +170,13 @@ pub enum StructuredResponseAction {
     CreateProcessTab {
         action_id: String,
         window_id: u64,
+    },
+    CreateProcessPane {
+        action_id: String,
+        window_id: u64,
+        tab_id: u64,
+        pane_id: u32,
+        direction: crate::control::protocol::SplitDirection,
     },
     QueryTerminal {
         query_id: String,
@@ -572,6 +582,7 @@ fn run_handler(
         invocation.allow_process_terminal_text,
         invocation.allow_process_terminal_input,
         invocation.allow_process_tab_create,
+        invocation.allow_process_pane_create,
     )
 }
 
@@ -704,6 +715,7 @@ impl PersistentHandler {
         allow_process_terminal_text: bool,
         allow_process_terminal_input: bool,
         allow_process_tab_create: bool,
+        allow_process_pane_create: bool,
         shutdown: &AtomicBool,
         active_generation: &AtomicU64,
         expected_generation: u64,
@@ -779,6 +791,7 @@ impl PersistentHandler {
             allow_process_terminal_text,
             allow_process_terminal_input,
             allow_process_tab_create,
+            allow_process_pane_create,
             request_id,
         )?;
         if let Some(status) = self
@@ -862,6 +875,7 @@ fn run_persistent_handler(
                 invocation.allow_process_terminal_text,
                 invocation.allow_process_terminal_input,
                 invocation.allow_process_tab_create,
+                invocation.allow_process_pane_create,
                 shutdown,
                 active_generation,
                 expected_generation,
@@ -1055,6 +1069,7 @@ fn parse_response_with_host_creation(
         false,
         false,
         false,
+        false,
     )
 }
 
@@ -1079,6 +1094,7 @@ fn parse_response_with_host_mutation(
     allow_process_terminal_text: bool,
     allow_process_terminal_input: bool,
     allow_process_tab_create: bool,
+    allow_process_pane_create: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: StructuredResponse = serde_json::from_slice(bytes)
         .map_err(|error| bounded_error(&format!("invalid handler response JSON: {error}")))?;
@@ -1108,6 +1124,7 @@ fn parse_response_with_host_mutation(
         allow_process_terminal_text,
         allow_process_terminal_input,
         allow_process_tab_create,
+        allow_process_pane_create,
     )
 }
 
@@ -1206,6 +1223,7 @@ fn parse_persistent_response_with_host_mutation(
         false,
         false,
         false,
+        false,
         expected_request_id,
     )
 }
@@ -1231,6 +1249,7 @@ fn parse_persistent_response_with_window_close(
     allow_process_terminal_text: bool,
     allow_process_terminal_input: bool,
     allow_process_tab_create: bool,
+    allow_process_pane_create: bool,
     expected_request_id: u64,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     let response: PersistentStructuredResponse = serde_json::from_slice(bytes)
@@ -1267,6 +1286,7 @@ fn parse_persistent_response_with_window_close(
         allow_process_terminal_text,
         allow_process_terminal_input,
         allow_process_tab_create,
+        allow_process_pane_create,
     )
 }
 
@@ -1290,6 +1310,7 @@ fn validate_response_actions(
     allow_process_terminal_text: bool,
     allow_process_terminal_input: bool,
     allow_process_tab_create: bool,
+    allow_process_pane_create: bool,
 ) -> Result<Vec<StructuredResponseAction>, String> {
     if actions.len() > MAX_ACTIONS {
         return Err(format!(
@@ -1401,6 +1422,20 @@ fn validate_response_actions(
                 host_operations += 1;
                 validate_text(
                     "process tab creation action id",
+                    action_id,
+                    MAX_ACTION_ID_BYTES,
+                )?;
+            }
+            StructuredResponseAction::CreateProcessPane { action_id, .. } => {
+                if !allow_process_pane_create {
+                    return Err(
+                        "handler requested process pane creation without API v25 persistent process-pane-create authority"
+                            .into(),
+                    );
+                }
+                host_operations += 1;
+                validate_text(
+                    "process pane creation action id",
                     action_id,
                     MAX_ACTION_ID_BYTES,
                 )?;
@@ -1685,6 +1720,7 @@ mod tests {
             allow_process_terminal_text: false,
             allow_process_terminal_input: false,
             allow_process_tab_create: false,
+            allow_process_pane_create: false,
             mode: StructuredHandlerMode::Persistent,
         }
     }
@@ -1778,7 +1814,7 @@ mod tests {
         assert_eq!(
             parse_persistent_response_with_window_close(
                 query, false, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, 9,
+                false, false, true, false, false, false, false, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::QueryProcess {
@@ -1795,7 +1831,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 duplicate, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, true, false, false, false, false, 9,
+                false, false, false, true, false, false, false, false, false, 9,
             )
             .unwrap_err()
             .contains("more than one host operation")
@@ -1805,7 +1841,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 mixed, false, true, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, 9,
+                false, false, true, false, false, false, false, false, 9,
             )
             .unwrap_err()
             .contains("more than one host operation")
@@ -1815,7 +1851,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                false, false, false, true, false, false, false, false, 9,
+                false, false, false, true, false, false, false, false, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -1847,6 +1883,7 @@ mod tests {
             false, // process terminal text
             false, // process terminal input
             false, // process tab create
+            false, // process pane create
             9,
         )
     }
@@ -1877,6 +1914,7 @@ mod tests {
             allow_process_terminal_text,
             false, // process terminal input
             false, // process tab create
+            false, // process pane create
             9,
         )
     }
@@ -1908,6 +1946,7 @@ mod tests {
             allow_process_terminal_text,
             allow_process_terminal_input,
             false, // process tab create
+            false, // process pane create
             9,
         )
     }
@@ -1937,6 +1976,37 @@ mod tests {
             false, // process terminal text
             false, // process terminal input
             allow_process_tab_create,
+            false, // process pane create
+            9,
+        )
+    }
+
+    fn parse_process_pane_create_response(
+        bytes: &[u8],
+        allow_process_query: bool,
+        allow_process_pane_create: bool,
+    ) -> Result<Vec<StructuredResponseAction>, String> {
+        parse_persistent_response_with_window_close(
+            bytes,
+            false, // ui actions
+            false, // workspace query
+            false, // workspace actions
+            false, // workspace topology
+            false, // terminal query
+            false, // pane create
+            false, // tab create
+            false, // pane close
+            false, // tab close
+            false, // pane move
+            false, // terminal input
+            false, // pane layout
+            false, // window close
+            allow_process_query,
+            false, // process actions
+            false, // process terminal text
+            false, // process terminal input
+            false, // process tab create
+            allow_process_pane_create,
             9,
         )
     }
@@ -2192,6 +2262,63 @@ mod tests {
         let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-tab","action_id":"one","window_id":7},{"type":"create-process-tab","action_id":"two","window_id":7}]}"#;
         assert!(
             parse_process_tab_create_response(duplicate, false, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
+    }
+
+    #[test]
+    fn process_pane_creation_requires_v25_authority_and_strict_bounded_shape() {
+        let create = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split-sibling-task","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
+        assert_eq!(
+            parse_process_pane_create_response(create, false, true).unwrap(),
+            vec![StructuredResponseAction::CreateProcessPane {
+                action_id: "split-sibling-task".into(),
+                window_id: 7,
+                tab_id: 12,
+                pane_id: 3,
+                direction: crate::control::protocol::SplitDirection::Vertical,
+            }]
+        );
+        assert!(
+            parse_process_pane_create_response(create, true, false)
+                .unwrap_err()
+                .contains("API v25")
+        );
+
+        let horizontal = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"horizontal"}]}"#;
+        assert!(matches!(
+            parse_process_pane_create_response(horizontal, false, true).unwrap()[..],
+            [StructuredResponseAction::CreateProcessPane {
+                direction: crate::control::protocol::SplitDirection::Horizontal,
+                ..
+            }]
+        ));
+        let unknown = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical","ratio":0.5}]}"#;
+        assert!(
+            parse_process_pane_create_response(unknown, false, true)
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        let malformed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":"7","tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
+        assert!(parse_process_pane_create_response(malformed, false, true).is_err());
+        let bad_direction = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"diagonal"}]}"#;
+        assert!(parse_process_pane_create_response(bad_direction, false, true).is_err());
+        let unsafe_id = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"two\nlines","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
+        assert!(
+            parse_process_pane_create_response(unsafe_id, false, true)
+                .unwrap_err()
+                .contains("control-safe")
+        );
+        let mixed = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"query-process","query_id":"inventory"},{"type":"create-process-pane","action_id":"split","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"}]}"#;
+        assert!(
+            parse_process_pane_create_response(mixed, true, true)
+                .unwrap_err()
+                .contains("more than one host operation")
+        );
+        let duplicate = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"create-process-pane","action_id":"one","window_id":7,"tab_id":12,"pane_id":3,"direction":"vertical"},{"type":"create-process-pane","action_id":"two","window_id":7,"tab_id":12,"pane_id":3,"direction":"horizontal"}]}"#;
+        assert!(
+            parse_process_pane_create_response(duplicate, false, true)
                 .unwrap_err()
                 .contains("more than one host operation")
         );
@@ -3138,7 +3265,7 @@ mod tests {
         assert_eq!(
             parse_persistent_response_with_window_close(
                 close, false, false, false, false, false, false, false, false, false, false, false,
-                false, true, false, false, false, false, false, 9,
+                false, true, false, false, false, false, false, false, 9,
             )
             .unwrap(),
             vec![StructuredResponseAction::CloseWindow {
@@ -3155,7 +3282,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unknown, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, false, 9,
+                false, false, true, false, false, false, false, false, false, 9,
             )
             .unwrap_err()
             .contains("unknown field")
@@ -3165,7 +3292,7 @@ mod tests {
         assert!(
             parse_persistent_response_with_window_close(
                 unsafe_id, false, false, false, false, false, false, false, false, false, false,
-                false, false, true, false, false, false, false, false, 9,
+                false, false, true, false, false, false, false, false, false, 9,
             )
             .unwrap_err()
             .contains("control-safe")
@@ -3188,6 +3315,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 false,
                 false,
                 false,
@@ -3823,6 +3951,7 @@ done"#,
             allow_process_terminal_text: true,
             allow_process_terminal_input: false,
             allow_process_tab_create: false,
+            allow_process_pane_create: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -3906,6 +4035,7 @@ done"#,
             allow_process_terminal_text: false,
             allow_process_terminal_input: true,
             allow_process_tab_create: false,
+            allow_process_pane_create: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -3985,6 +4115,7 @@ done"#,
             allow_process_terminal_text: false,
             allow_process_terminal_input: false,
             allow_process_tab_create: true,
+            allow_process_pane_create: false,
             mode: StructuredHandlerMode::Persistent,
         };
         let mut handlers = HashMap::new();
@@ -4018,6 +4149,88 @@ done"#,
             vec![StructuredResponseAction::ShowNotice {
                 title: "Process tab builder".into(),
                 lines: vec!["Created tab 12.".into(), "Window: 7".into()],
+            }]
+        );
+        assert_eq!(handlers.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_in_process_pane_builder_completes_a_hermetic_three_event_conversation() {
+        if !std::path::Path::new("/usr/bin/python3").is_file()
+            && !std::path::Path::new("/bin/python3").is_file()
+        {
+            return;
+        }
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-pane-builder");
+        let (manifest, _, _) =
+            crate::plugin::runtime::PluginManifest::from_directory(&directory).unwrap();
+        let handler = manifest.event_handler.unwrap();
+        let mut invocation = StructuredHandlerInvocation {
+            plugin_id: manifest.id,
+            program: handler.program,
+            args: handler.args,
+            event_json: r#"{"schema_version":1,"event":{"type":"command-invoked"}}"#.into(),
+            allow_ui_actions: true,
+            allow_workspace_query: false,
+            allow_workspace_actions: false,
+            allow_workspace_topology: false,
+            allow_terminal_query: false,
+            allow_pane_create: false,
+            allow_tab_create: false,
+            allow_pane_close: false,
+            allow_tab_close: false,
+            allow_pane_move: false,
+            allow_terminal_input: false,
+            allow_pane_layout: false,
+            allow_window_close: false,
+            allow_process_query: true,
+            allow_process_actions: false,
+            allow_process_terminal_text: false,
+            allow_process_terminal_input: false,
+            allow_process_tab_create: false,
+            allow_process_pane_create: true,
+            mode: StructuredHandlerMode::Persistent,
+        };
+        let mut handlers = HashMap::new();
+        let shutdown = AtomicBool::new(false);
+        let generation = AtomicU64::new(1);
+
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 1, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::QueryProcess {
+                query_id: "pane-creation-targets".into(),
+            }]
+        );
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-query-result","origin_window_id":2,"windows":[{"id":2,"tabs":[]},{"id":7,"tabs":[{"id":12,"closed":false,"panes":[{"id":3,"closed":false}]}]}]}}"#.into();
+        invocation.allow_process_query = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 2, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::CreateProcessPane {
+                action_id: "split-sibling-task".into(),
+                window_id: 7,
+                tab_id: 12,
+                pane_id: 3,
+                direction: crate::control::protocol::SplitDirection::Vertical,
+            }]
+        );
+
+        invocation.event_json = r#"{"schema_version":1,"event":{"type":"process-action-result","action":"create-process-pane","ok":true,"window_id":7,"tab_id":12,"pane_id":3,"created_pane_id":4}}"#.into();
+        invocation.allow_process_pane_create = false;
+        assert_eq!(
+            run_persistent_handler(&mut handlers, &invocation, 3, &shutdown, &generation, 1)
+                .unwrap(),
+            vec![StructuredResponseAction::ShowNotice {
+                title: "Process pane builder".into(),
+                lines: vec![
+                    "Created pane 4.".into(),
+                    "Window: 7".into(),
+                    "Tab: 12".into(),
+                ],
             }]
         );
         assert_eq!(handlers.len(), 1);
@@ -4326,6 +4539,7 @@ done"#,
             allow_process_terminal_text: false,
             allow_process_terminal_input: false,
             allow_process_tab_create: false,
+            allow_process_pane_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         assert_eq!(
@@ -4373,6 +4587,7 @@ done"#,
             allow_process_terminal_text: false,
             allow_process_terminal_input: false,
             allow_process_tab_create: false,
+            allow_process_pane_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let started = Instant::now();
@@ -4407,6 +4622,7 @@ done"#,
             allow_process_terminal_text: false,
             allow_process_terminal_input: false,
             allow_process_tab_create: false,
+            allow_process_pane_create: false,
             mode: StructuredHandlerMode::ProcessPerEvent,
         };
         let generation = Arc::new(AtomicU64::new(1));

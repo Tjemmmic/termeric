@@ -4677,6 +4677,7 @@ fn process_query_retains_only_independent_process_followups_and_results_revoke_a
         allow_process_terminal_text: true,
         allow_process_terminal_input: true,
         allow_process_tab_create: true,
+        allow_process_pane_create: true,
         mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
     };
 
@@ -4687,6 +4688,7 @@ fn process_query_retains_only_independent_process_followups_and_results_revoke_a
     assert!(process_query_result.allow_process_terminal_text);
     assert!(process_query_result.allow_process_terminal_input);
     assert!(process_query_result.allow_process_tab_create);
+    assert!(process_query_result.allow_process_pane_create);
     assert!(!process_query_result.allow_workspace_query);
     assert!(!process_query_result.allow_workspace_actions);
     assert!(!process_query_result.allow_workspace_topology);
@@ -4721,6 +4723,7 @@ fn process_query_retains_only_independent_process_followups_and_results_revoke_a
     assert!(!invocation.allow_process_terminal_text);
     assert!(!invocation.allow_process_terminal_input);
     assert!(!invocation.allow_process_tab_create);
+    assert!(!invocation.allow_process_pane_create);
 }
 
 #[cfg(unix)]
@@ -4794,6 +4797,7 @@ fn plugin_window_close_result_is_scheduled_without_premature_teardown() {
                 allow_process_terminal_text: false,
                 allow_process_terminal_input: false,
                 allow_process_tab_create: false,
+                allow_process_pane_create: false,
                 mode: crate::plugin::structured::StructuredHandlerMode::Persistent,
             }),
         )

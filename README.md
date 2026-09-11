@@ -176,6 +176,12 @@ process-owned window using the stable identity returned by API v20. The action
 does not activate the native window or dispatch a derived `tab-created` hook,
 and stale, closing, live-domain, uninitialized, or capacity-limited targets fail
 without fallback; the correlated result cannot chain another host operation.
+API v25 adds separately granted cross-window ordinary-pane creation. A
+persistent handler can split one exact pane in one exact process-owned window
+using strict window/tab/pane identities and a horizontal or vertical direction.
+The existing ordinary split path preserves launch/cwd inheritance and target
+validation without activating the native window; the correlated fresh pane ID
+cannot chain another host operation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

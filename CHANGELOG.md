@@ -8,11 +8,24 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v25 adds an independent `process-pane-create` grant
+  for splitting one exact ordinary pane in one exact live process-owned
+  window. Complete stable window/tab/pane identity and split direction are
+  revalidated at execution without focus fallback or native activation;
+  closing, stale, capacity-limited, live-domain, serial, terminal-less, and
+  uninitialized targets fail atomically with a bounded correlated result. The
+  existing API v12 split path preserves launch/cwd inheritance plus per-tab and
+  process pane ceilings, and returns the fresh destination-local pane identity
+  before removing all host authority.
+  Strict parsing, routing, grant retention, install/update behavior, and the
+  checked-in process-pane-builder sample are tested hermetically without
+  provider execution or AI-token use.
+
 - Declarative plugin API v24 adds an independent `process-tab-create` grant
   for creating and selecting one ordinary local shell tab in one exact live
   process-owned window. The process-lifetime window identity is revalidated at
   execution without focus fallback or native activation; closing, stale,
-  capacity-limited, uninitialized, and live-domain destinations fail with a
+  capacity-limited, process-cap-limited, uninitialized, and live-domain destinations fail with a
   bounded correlated result. The existing non-recursive tab creation path
   suppresses derived lifecycle hooks, and every result removes all host
   authority. Strict parsing, routing, grant retention, install/update behavior,

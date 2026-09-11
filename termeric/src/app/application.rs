@@ -41,6 +41,27 @@ pub struct Application {
 const MAX_CONTROL_REPLAYS: usize = 256;
 const MAX_PENDING_DOMAIN_CONTROLS: usize = 32;
 const MAX_PENDING_DOMAIN_WAITERS: usize = 16;
+
+fn validate_process_tab_creation_capacity(total_tabs: usize) -> std::result::Result<(), String> {
+    if total_tabs >= crate::control::protocol::MAX_TOTAL_TABS {
+        return Err(format!(
+            "GUI process tab limit of {} reached",
+            crate::control::protocol::MAX_TOTAL_TABS
+        ));
+    }
+    Ok(())
+}
+
+fn validate_process_pane_creation_capacity(total_panes: usize) -> std::result::Result<(), String> {
+    if total_panes >= crate::control::protocol::MAX_TOTAL_PANES {
+        return Err(format!(
+            "GUI process pane limit of {} reached",
+            crate::control::protocol::MAX_TOTAL_PANES
+        ));
+    }
+    Ok(())
+}
+
 type ControlResponder =
     std::sync::mpsc::SyncSender<std::result::Result<crate::control::protocol::Response, String>>;
 
@@ -470,15 +491,29 @@ impl Application {
                 action_id,
                 window_id,
             } => {
-                let result = self
-                    .control_native_window_id(window_id)
-                    .and_then(|native_id| {
-                        self.windows
-                            .get_mut(&native_id)
-                            .filter(|window| !window.should_exit)
-                            .ok_or_else(|| format!("GUI window {window_id} is closing"))?
-                            .create_plugin_tab()
-                    });
+                let total_tabs = self
+                    .windows
+                    .values()
+                    .map(|window| {
+                        window
+                            .tabs
+                            .as_ref()
+                            .map_or(0, crate::tabs::TabManager::count)
+                    })
+                    .sum::<usize>();
+                let result = if let Err(error) = validate_process_tab_creation_capacity(total_tabs)
+                {
+                    Err(error)
+                } else {
+                    self.control_native_window_id(window_id)
+                        .and_then(|native_id| {
+                            self.windows
+                                .get_mut(&native_id)
+                                .filter(|window| !window.should_exit)
+                                .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                                .create_plugin_tab()
+                        })
+                };
                 match result {
                     Ok(tab_id) => serde_json::json!({
                         "type": "process-action-result",
@@ -505,6 +540,81 @@ impl Application {
                             "window_id": window_id,
                             "tab_id": null,
                             "selected": null,
+                            "error": error,
+                            "error_truncated": error_truncated,
+                        })
+                    }
+                }
+            }
+            crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                action_id,
+                window_id,
+                tab_id,
+                pane_id,
+                direction,
+            } => {
+                let pane_direction = match direction {
+                    crate::control::protocol::SplitDirection::Horizontal => {
+                        crate::panes::SplitDirection::Horizontal
+                    }
+                    crate::control::protocol::SplitDirection::Vertical => {
+                        crate::panes::SplitDirection::Vertical
+                    }
+                };
+                let total_panes = self
+                    .windows
+                    .values()
+                    .filter_map(|window| window.tabs.as_ref())
+                    .flat_map(|tabs| tabs.all_tabs())
+                    .map(|tab| {
+                        tab.pane_manager
+                            .as_ref()
+                            .map_or(1, crate::panes::PaneManager::pane_count)
+                    })
+                    .sum::<usize>();
+                let result =
+                    if let Err(error) = validate_process_pane_creation_capacity(total_panes) {
+                        Err(error)
+                    } else {
+                        self.control_native_window_id(window_id)
+                            .and_then(|native_id| {
+                                self.windows
+                                    .get_mut(&native_id)
+                                    .filter(|window| !window.should_exit)
+                                    .ok_or_else(|| format!("GUI window {window_id} is closing"))?
+                                    .create_control_pane(tab_id, pane_id, pane_direction)
+                            })
+                    };
+                match result {
+                    Ok(created_pane_id) => serde_json::json!({
+                        "type": "process-action-result",
+                        "action_id": action_id,
+                        "action": "create-process-pane",
+                        "ok": true,
+                        "process_id": std::process::id(),
+                        "origin_window_id": origin_window_id,
+                        "window_id": window_id,
+                        "tab_id": tab_id,
+                        "pane_id": pane_id,
+                        "direction": direction,
+                        "created_pane_id": created_pane_id,
+                        "error": null,
+                    }),
+                    Err(error) => {
+                        let mut budget = MAX_ACTION_ERROR_BYTES;
+                        let (error, error_truncated) = super::control_metadata(&error, &mut budget);
+                        serde_json::json!({
+                            "type": "process-action-result",
+                            "action_id": action_id,
+                            "action": "create-process-pane",
+                            "ok": false,
+                            "process_id": std::process::id(),
+                            "origin_window_id": origin_window_id,
+                            "window_id": window_id,
+                            "tab_id": tab_id,
+                            "pane_id": pane_id,
+                            "direction": direction,
+                            "created_pane_id": null,
                             "error": error,
                             "error_truncated": error_truncated,
                         })
@@ -765,6 +875,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                            ..
+                        }
                 )
             })
         });
@@ -816,6 +929,9 @@ impl Application {
                     crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
                         ..
                     } => continuation.allow_process_tab_create,
+                    crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                        ..
+                    } => continuation.allow_process_pane_create,
                     _ => false,
                 });
         if !has_continuation_authority {
@@ -917,6 +1033,14 @@ impl Application {
                     process_operation.clone(),
                 ),
             ),
+            crate::plugin::structured::StructuredResponseAction::CreateProcessPane { .. } => (
+                "pane-create",
+                self.plugin_process_action_event(
+                    &plugin_id,
+                    origin_window_id,
+                    process_operation.clone(),
+                ),
+            ),
             _ => unreachable!("only process operations are intercepted"),
         };
         let continuation = completion.continuation.take();
@@ -940,6 +1064,9 @@ impl Application {
                         | crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
                             ..
                         }
+                        | crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                            ..
+                        }
                 )
             });
         }
@@ -956,6 +1083,9 @@ impl Application {
                     ..
                 }
                 | crate::plugin::structured::StructuredResponseAction::CreateProcessTab {
+                    ..
+                }
+                | crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
                     ..
                 } => window.continue_structured_process_action(event_json, continuation),
                 crate::plugin::structured::StructuredResponseAction::QueryProcessTerminal {
@@ -1779,12 +1909,7 @@ impl Application {
                     .map_or(0, crate::tabs::TabManager::count)
             })
             .sum::<usize>();
-        if total_tabs >= crate::control::protocol::MAX_TOTAL_TABS {
-            return Err(format!(
-                "GUI process tab limit of {} reached",
-                crate::control::protocol::MAX_TOTAL_TABS
-            ));
-        }
+        validate_process_tab_creation_capacity(total_tabs)?;
         let tab_id = self
             .windows
             .get_mut(&native_id)
@@ -1826,12 +1951,7 @@ impl Application {
                     .map_or(1, crate::panes::PaneManager::pane_count)
             })
             .sum::<usize>();
-        if total_panes >= crate::control::protocol::MAX_TOTAL_PANES {
-            return Err(format!(
-                "GUI process pane limit of {} reached",
-                crate::control::protocol::MAX_TOTAL_PANES
-            ));
-        }
+        validate_process_pane_creation_capacity(total_panes)?;
         let direction = match direction {
             crate::control::protocol::SplitDirection::Horizontal => {
                 crate::panes::SplitDirection::Horizontal
@@ -4460,6 +4580,284 @@ mod tests {
         assert!(
             created.to_string().len()
                 <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+        );
+        assert!(
+            validate_process_tab_creation_capacity(crate::control::protocol::MAX_TOTAL_TABS)
+                .unwrap_err()
+                .contains("process tab limit")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_process_pane_creation_is_exact_atomic_and_non_activating() {
+        if !std::path::Path::new("/bin/sh").is_file() {
+            return;
+        }
+
+        let shell = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "exit 0".into()],
+            env: Default::default(),
+        };
+        let mut tabs = crate::tabs::TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+        let tab_id = tabs.new_tab().unwrap();
+        let tab = tabs.tab_mut_by_id(tab_id).unwrap();
+        let owner = tab.take_terminal_owner().unwrap();
+        let mut panes = crate::panes::PaneManager::from_existing(
+            owner,
+            shell,
+            1_000,
+            8 * 1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        );
+        panes
+            .split(crate::panes::SplitDirection::Horizontal)
+            .unwrap();
+        tab.pane_manager = Some(panes);
+
+        let mut target = App::new_headless(Config::default()).unwrap();
+        target.tabs = Some(tabs);
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        application.windows.insert(native_id, target);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let created = application
+            .plugin_process_action_event(
+                "process-pane-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                    action_id: "split-sibling-task".into(),
+                    window_id: 7,
+                    tab_id: tab_id as u64,
+                    pane_id: 0,
+                    direction: crate::control::protocol::SplitDirection::Vertical,
+                },
+            )
+            .unwrap();
+        let created: serde_json::Value = serde_json::from_str(&created).unwrap();
+        assert_eq!(created["plugin_id"], "process-pane-builder");
+        assert_eq!(created["event"]["action"], "create-process-pane");
+        assert_eq!(created["event"]["action_id"], "split-sibling-task");
+        assert_eq!(created["event"]["ok"], true);
+        assert_eq!(created["event"]["origin_window_id"], 9);
+        assert_eq!(created["event"]["window_id"], 7);
+        assert_eq!(created["event"]["tab_id"], tab_id as u64);
+        assert_eq!(created["event"]["pane_id"], 0);
+        assert_eq!(created["event"]["direction"], "vertical");
+        let created_pane = created["event"]["created_pane_id"].as_u64().unwrap() as u32;
+        let target = &application.windows[&native_id];
+        assert!(target.window.is_none());
+        assert_eq!(target.tabs.as_ref().unwrap().active_tab_id(), Some(tab_id));
+        let manager = target
+            .tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(tab_id)
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap();
+        assert_eq!(manager.pane_count(), 3);
+        assert!(
+            manager
+                .get_pane(crate::panes::PaneId(created_pane))
+                .is_some()
+        );
+        assert_eq!(manager.focused_id(), crate::panes::PaneId(created_pane));
+
+        let created_same_window = application
+            .plugin_process_action_event(
+                "process-pane-builder",
+                7,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                    action_id: "split-current-task".into(),
+                    window_id: 7,
+                    tab_id: tab_id as u64,
+                    pane_id: 0,
+                    direction: crate::control::protocol::SplitDirection::Horizontal,
+                },
+            )
+            .unwrap();
+        let created_same_window: serde_json::Value =
+            serde_json::from_str(&created_same_window).unwrap();
+        assert_eq!(created_same_window["event"]["ok"], true);
+        assert_eq!(created_same_window["event"]["origin_window_id"], 7);
+        assert_eq!(created_same_window["event"]["window_id"], 7);
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .tab_by_id(tab_id)
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .pane_count(),
+            4
+        );
+
+        let stale_window = application
+            .plugin_process_action_event(
+                "process-pane-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                    action_id: "stale-window".into(),
+                    window_id: 8,
+                    tab_id: tab_id as u64,
+                    pane_id: 0,
+                    direction: crate::control::protocol::SplitDirection::Vertical,
+                },
+            )
+            .unwrap();
+        let stale_window: serde_json::Value = serde_json::from_str(&stale_window).unwrap();
+        assert_eq!(stale_window["event"]["ok"], false);
+        assert!(
+            stale_window["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not exist")
+        );
+
+        let stale_pane = application
+            .plugin_process_action_event(
+                "process-pane-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                    action_id: "stale-pane".into(),
+                    window_id: 7,
+                    tab_id: tab_id as u64,
+                    pane_id: u32::MAX,
+                    direction: crate::control::protocol::SplitDirection::Vertical,
+                },
+            )
+            .unwrap();
+        let stale_pane: serde_json::Value = serde_json::from_str(&stale_pane).unwrap();
+        assert_eq!(stale_pane["event"]["ok"], false);
+        assert!(stale_pane["event"]["created_pane_id"].is_null());
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .tab_by_id(tab_id)
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .pane_count(),
+            4
+        );
+
+        let tab = application
+            .windows
+            .get_mut(&native_id)
+            .unwrap()
+            .tabs
+            .as_mut()
+            .unwrap()
+            .tab_mut_by_id(tab_id)
+            .unwrap();
+        tab.live_domain = Some(crate::tabs::LiveDomainTab {
+            domain_id: "fake-domain".into(),
+            tab_id: 12,
+            pane_ids: HashMap::new(),
+        });
+        let live_domain = application
+            .plugin_process_action_event(
+                "process-pane-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                    action_id: "live-domain".into(),
+                    window_id: 7,
+                    tab_id: tab_id as u64,
+                    pane_id: 0,
+                    direction: crate::control::protocol::SplitDirection::Vertical,
+                },
+            )
+            .unwrap();
+        let live_domain: serde_json::Value = serde_json::from_str(&live_domain).unwrap();
+        assert_eq!(live_domain["event"]["ok"], false);
+        assert!(
+            live_domain["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("live-domain")
+        );
+
+        let tab = application
+            .windows
+            .get_mut(&native_id)
+            .unwrap()
+            .tabs
+            .as_mut()
+            .unwrap()
+            .tab_mut_by_id(tab_id)
+            .unwrap();
+        tab.live_domain = None;
+        tab.tab_type = crate::tabs::TabType::Serial {
+            name: "fixture".into(),
+        };
+        let serial = application
+            .plugin_process_action_event(
+                "process-pane-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                    action_id: "serial".into(),
+                    window_id: 7,
+                    tab_id: tab_id as u64,
+                    pane_id: 0,
+                    direction: crate::control::protocol::SplitDirection::Vertical,
+                },
+            )
+            .unwrap();
+        let serial: serde_json::Value = serde_json::from_str(&serial).unwrap();
+        assert_eq!(serial["event"]["ok"], false);
+        assert!(
+            serial["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Serial")
+        );
+
+        application.windows.get_mut(&native_id).unwrap().should_exit = true;
+        let closing = application
+            .plugin_process_action_event(
+                "process-pane-builder",
+                9,
+                crate::plugin::structured::StructuredResponseAction::CreateProcessPane {
+                    action_id: "closing-window".into(),
+                    window_id: 7,
+                    tab_id: tab_id as u64,
+                    pane_id: 0,
+                    direction: crate::control::protocol::SplitDirection::Vertical,
+                },
+            )
+            .unwrap();
+        let closing: serde_json::Value = serde_json::from_str(&closing).unwrap();
+        assert_eq!(closing["event"]["ok"], false);
+        assert!(
+            closing["event"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("closing")
+        );
+        assert!(
+            created.to_string().len()
+                <= crate::plugin::structured::MAX_PERSISTENT_SOURCE_EVENT_BYTES
+        );
+        assert!(
+            validate_process_pane_creation_capacity(crate::control::protocol::MAX_TOTAL_PANES)
+                .unwrap_err()
+                .contains("process pane limit")
         );
     }
 
