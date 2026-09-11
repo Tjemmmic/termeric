@@ -850,7 +850,7 @@ impl PluginManifest {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstalledPlugin {
     pub id: String,
@@ -1014,6 +1014,44 @@ pub struct RuntimePluginProfileSummary {
     pub description: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginUpdatePreview {
+    pub id: String,
+    pub name: String,
+    pub source: PathBuf,
+    pub current_version: String,
+    pub candidate_version: String,
+    pub current_source_fingerprint: String,
+    pub candidate_source_fingerprint: String,
+    pub current_permissions: BTreeSet<PluginPermission>,
+    pub candidate_permissions: BTreeSet<PluginPermission>,
+    pub current_grants: BTreeSet<PluginPermission>,
+    pub enabled: bool,
+    pub current_profile_count: usize,
+    pub candidate_profile_count: usize,
+    pub current_command_count: usize,
+    pub candidate_command_count: usize,
+    pub configured_default_profile: Option<String>,
+    pub default_profile_will_be_cleared: bool,
+    pub(crate) expected_installed: InstalledPlugin,
+}
+
+impl PluginUpdatePreview {
+    pub(crate) fn command(
+        &self,
+        grants: BTreeSet<PluginPermission>,
+        enable: bool,
+    ) -> PluginAdminCommand {
+        PluginAdminCommand::UpdateReviewed {
+            id: self.id.clone(),
+            expected_candidate_fingerprint: self.candidate_source_fingerprint.clone(),
+            expected_installed: self.expected_installed.clone(),
+            grants,
+            enable,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimePluginStatus {
     pub id: String,
@@ -1039,6 +1077,60 @@ pub struct RuntimePluginStatus {
 pub fn discover_runtime_plugins() -> Result<(Vec<DeclarativePlugin>, Vec<RuntimePluginStatus>)> {
     let registry = PluginRegistry::load().context("third-party plugin registry rejected")?;
     Ok(discover_from_registry(&registry, &plugins_dir()))
+}
+
+pub(crate) fn preview_update(id: &str) -> Result<PluginUpdatePreview> {
+    preview_update_at(id, &registry_path(), &plugins_dir())
+}
+
+pub(crate) fn preview_update_at(
+    id: &str,
+    registry_path: &Path,
+    root: &Path,
+) -> Result<PluginUpdatePreview> {
+    validate_identifier("plugin id", id)?;
+    let registry = PluginRegistry::load_from(registry_path)?;
+    let installed = registry
+        .plugins
+        .iter()
+        .find(|plugin| plugin.id == id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("plugin {id:?} is not installed"))?;
+    let current = load_installed(&installed, root)?;
+    let (candidate, source, bytes) = PluginManifest::from_directory(&installed.source)?;
+    if candidate.id != id {
+        bail!(
+            "updated source changed plugin id from {id:?} to {:?}",
+            candidate.id
+        );
+    }
+    effective_settings(&candidate, &installed.settings).context(
+        "updated plugin settings are incompatible; unset or reset the stored overrides first",
+    )?;
+    let default_profile_will_be_cleared = installed
+        .default_profile
+        .as_ref()
+        .is_some_and(|id| !candidate.profiles.iter().any(|profile| &profile.id == id));
+    Ok(PluginUpdatePreview {
+        id: candidate.id.clone(),
+        name: candidate.name.clone(),
+        source,
+        current_version: current.version,
+        candidate_version: candidate.version,
+        current_source_fingerprint: installed.source_fingerprint.clone(),
+        candidate_source_fingerprint: fingerprint(&bytes),
+        current_permissions: current.permissions,
+        candidate_permissions: candidate.permissions,
+        current_grants: installed.grants.clone(),
+        enabled: installed.enabled,
+        current_profile_count: current.profiles.len(),
+        candidate_profile_count: candidate.profiles.len(),
+        current_command_count: current.commands.len(),
+        candidate_command_count: candidate.commands.len(),
+        configured_default_profile: installed.default_profile.clone(),
+        default_profile_will_be_cleared,
+        expected_installed: installed,
+    })
 }
 
 #[cfg(test)]
@@ -1604,6 +1696,13 @@ pub enum PluginAdminCommand {
     Update {
         id: String,
     },
+    UpdateReviewed {
+        id: String,
+        expected_candidate_fingerprint: String,
+        expected_installed: InstalledPlugin,
+        grants: BTreeSet<PluginPermission>,
+        enable: bool,
+    },
     Enable {
         id: String,
     },
@@ -1731,6 +1830,48 @@ pub(crate) fn execute_admin_at(
                 bytes,
                 installed.grants,
                 installed.enabled,
+                true,
+            )
+        }
+        PluginAdminCommand::UpdateReviewed {
+            id,
+            expected_candidate_fingerprint,
+            expected_installed,
+            grants,
+            enable,
+        } => {
+            validate_identifier("plugin id", &id)?;
+            let installed = registry
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("plugin {id:?} is not installed"))?;
+            if installed != expected_installed {
+                bail!("plugin {id:?} changed after review; review the update again");
+            }
+            let (manifest, source, bytes) = PluginManifest::from_directory(&installed.source)?;
+            if manifest.id != id {
+                bail!(
+                    "updated source changed plugin id from {id:?} to {:?}",
+                    manifest.id
+                );
+            }
+            let candidate_fingerprint = fingerprint(&bytes);
+            if candidate_fingerprint != expected_candidate_fingerprint {
+                bail!(
+                    "plugin update source changed after review (expected {expected_candidate_fingerprint}, found {candidate_fingerprint}); review it again"
+                );
+            }
+            install_manifest(
+                &mut registry,
+                registry_path,
+                root,
+                manifest,
+                source,
+                bytes,
+                grants,
+                enable,
                 true,
             )
         }
@@ -9018,6 +9159,223 @@ events = ["command-invoked"]
     }
 
     #[test]
+    fn reviewed_update_handles_added_and_removed_permissions_explicitly() {
+        let (_temp, source, root, registry_path) = fixture();
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_grant(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("2.0.0", ", \"workspace-query\"", "sample-v2").replacen(
+                "api_version = 1",
+                "api_version = 2",
+                1,
+            ),
+        )
+        .unwrap();
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        assert_eq!(preview.current_version, "1.0.0");
+        assert_eq!(preview.candidate_version, "2.0.0");
+        assert_eq!(preview.current_permissions, process_grant());
+        assert_eq!(preview.candidate_permissions, structured_grants());
+        execute_admin_at(
+            preview.command(process_grant(), false),
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(statuses[0].version, "2.0.0");
+        assert_eq!(statuses[0].granted, process_grant());
+        assert!(!statuses[0].enabled);
+
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("2.1.0", ", \"workspace-query\"", "sample-v2-1").replacen(
+                "api_version = 1",
+                "api_version = 2",
+                1,
+            ),
+        )
+        .unwrap();
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        execute_admin_at(
+            preview.command(structured_grants(), true),
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(statuses[0].version, "2.1.0");
+        assert_eq!(statuses[0].granted, structured_grants());
+        assert!(statuses[0].enabled);
+
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("3.0.0", "", "sample-v3").replacen("api_version = 1", "api_version = 2", 1),
+        )
+        .unwrap();
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        let retained_grants = preview
+            .current_grants
+            .intersection(&preview.candidate_permissions)
+            .copied()
+            .collect();
+        assert_eq!(retained_grants, process_grant());
+        execute_admin_at(
+            preview.command(retained_grants, true),
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(statuses[0].version, "3.0.0");
+        assert_eq!(statuses[0].requested, process_grant());
+        assert_eq!(statuses[0].granted, process_grant());
+        assert!(statuses[0].enabled);
+    }
+
+    #[test]
+    fn reviewed_update_rejects_source_and_registry_drift_without_partial_commit() {
+        let (_temp, source, root, registry_path) = fixture();
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_grant(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("2.0.0", "", "sample-v2"),
+        )
+        .unwrap();
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        let installed_manifest = root.join("sample-tools").join(MANIFEST_NAME);
+        let installed_before = fs::read(&installed_manifest).unwrap();
+        let registry_before = fs::read(&registry_path).unwrap();
+
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("2.0.1", "", "drifted-source"),
+        )
+        .unwrap();
+        let error = execute_admin_at(
+            preview.command(process_grant(), true),
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("source changed after review"));
+        assert_eq!(fs::read(&installed_manifest).unwrap(), installed_before);
+        assert_eq!(fs::read(&registry_path).unwrap(), registry_before);
+
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Disable {
+                id: "sample-tools".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let registry_after_disable = fs::read(&registry_path).unwrap();
+        let error = execute_admin_at(
+            preview.command(process_grant(), true),
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("changed after review"));
+        assert_eq!(fs::read(&installed_manifest).unwrap(), installed_before);
+        assert_eq!(fs::read(&registry_path).unwrap(), registry_after_disable);
+    }
+
+    #[test]
+    fn reviewed_update_preserves_or_clears_the_configured_profile_truthfully() {
+        let (_temp, source, root, registry_path) = fixture();
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_grant(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Configure {
+                id: "sample-tools".into(),
+                change: PluginConfigurationChange::DefaultProfile("quiet".into()),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest("2.0.0", "", "sample-v2"),
+        )
+        .unwrap();
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        assert_eq!(preview.configured_default_profile.as_deref(), Some("quiet"));
+        assert!(!preview.default_profile_will_be_cleared);
+        execute_admin_at(
+            preview.command(process_grant(), true),
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(
+            statuses[0].configured_default_profile.as_deref(),
+            Some("quiet")
+        );
+
+        let candidate = manifest("3.0.0", "", "sample-v3").replace(
+            r#"
+[[profiles]]
+id = "quiet"
+name = "Quiet Sample"
+program = "sample-v3"
+args = ["--quiet"]
+working_directory = "inherit"
+"#,
+            "",
+        );
+        fs::write(source.join(MANIFEST_NAME), candidate).unwrap();
+        let preview = preview_update_at("sample-tools", &registry_path, &root).unwrap();
+        assert!(preview.default_profile_will_be_cleared);
+        execute_admin_at(
+            preview.command(process_grant(), true),
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        let (_, statuses) = discover_runtime_plugins_at(&registry_path, &root).unwrap();
+        assert_eq!(statuses[0].version, "3.0.0");
+        assert!(statuses[0].configured_default_profile.is_none());
+    }
+
+    #[test]
     fn api_v10_update_preserves_compatible_settings_and_rejects_schema_loss() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
@@ -9060,6 +9418,9 @@ default = "local"
             "",
         );
         fs::write(source.join(MANIFEST_NAME), removed_label).unwrap();
+        let preview_error =
+            preview_update_at("configurable-tool", &registry_path, &root).unwrap_err();
+        assert!(format!("{preview_error:#}").contains("incompatible"));
         let error = execute_admin_at(
             PluginAdminCommand::Update {
                 id: "configurable-tool".into(),

@@ -221,9 +221,10 @@ process-owned window. It reuses authenticated GUI control policy, succeeds
 without another request when already focused, refuses hidden/minimized and
 Wayland targets explicitly, and never claims compositor-confirmed activation.
 Settings includes an installed-plugin manager with source/permission inspection,
-enable/disable, confirmed update, confirmed settings reset, and confirmed
-managed-copy removal. It can also review and install a local plugin from an
-absolute directory path with explicit grants; enabling is offered only after
+enable/disable, reviewed permission-aware update, confirmed settings reset, and
+confirmed managed-copy removal. It can also review and install a local plugin
+from an absolute directory path with explicit grants; installation or update can
+remain disabled with a permission subset, while enabling is offered only after
 every requested permission is granted. Typed settings are editable in-app.
 The manager also shows, selects, and clears each plugin's default launch profile.
 Replacement installs remain an explicit CLI operation.

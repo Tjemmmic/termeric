@@ -191,13 +191,21 @@ choice or manifest order. Its bounded profile picker selects by stable profile
 ID and can clear an explicit choice back to the first-profile manifest-order
 fallback; event-only and unhealthy plugins do not expose the picker. It can
 edit every declared Boolean, integer, text, and choice setting, restore one
-manifest default, enable or disable immediately, and use request-scoped
-confirmations before updating from source, resetting all overrides, or removing
-the managed copy. Integer/text editing is single-line, UTF-8-safe, bounded, and
-available to keyboard, pointer, IME, and screen-reader input. Every save is
-revalidated through the same atomic registry path as the CLI, and an editor
-whose plugin schema changed after opening fails closed. A removal never deletes
-the recorded original source directory.
+manifest default, enable or disable immediately, and review an update from its
+canonical source before committing it. Update review shows current and candidate
+versions and fingerprints, profile/command counts, added and removed permissions,
+and any configured default profile that the candidate removes. Existing grants
+start as their intersection with candidate requests; the update may remain
+disabled with a subset, while enabling requires every candidate permission.
+Commit revalidates both the reviewed source fingerprint and the exact installed
+registry record, so source or configuration drift requires a fresh review.
+Compatible settings remain intact, removed permissions cannot leave stale grants,
+and a removed configured profile falls back to manifest order. Settings reset and
+managed-copy removal retain request-scoped confirmations. Integer/text editing is
+single-line, UTF-8-safe, bounded, and available to keyboard, pointer, IME, and
+screen-reader input. Every save is revalidated through the same atomic registry
+path as the CLI, and an editor whose plugin schema changed after opening fails
+closed. A removal never deletes the recorded original source directory.
 
 Replacement installation and relative-path interpretation remain explicit CLI
 operations. Default-profile selection/reset and typed setting set/unset are
@@ -210,6 +218,8 @@ termeric plugin disable task-runner
 termeric plugin enable task-runner
 
 # Re-read the canonical source directory recorded at installation.
+# This CLI path is intentionally conservative: newly requested permissions are
+# refused. Use the in-app review to inspect and explicitly grant a changed set.
 termeric plugin update task-runner
 
 # Or deliberately replace from another reviewed local directory.
@@ -223,10 +233,11 @@ Install copies only `termeric-plugin.toml` into the Termeric configuration
 directory. The registry records the canonical source directory and a
 deterministic content fingerprint. The fingerprint is change detection, not a
 cryptographic signature; provenance is the exact local path shown before and
-after installation. The in-app review binds installation to that displayed
-manifest fingerprint, so a source edit requires a fresh review. Modifying the
-installed copy outside this flow makes the
-plugin fail closed. The registry, installed plugin directory, manifest, rollback
+after installation. The in-app reviews bind installation and update to their
+displayed manifest fingerprints; update also binds the exact installed registry
+record. A source or configuration edit therefore requires a fresh review.
+Modifying the installed copy outside this flow makes the plugin fail closed. The
+registry, installed plugin directory, manifest, rollback
 copy, and administrative temporary files must be real files/directories rather
 than symlinks; replacement and removal reject unexpected file types before
 following or mutating them. Remote installation, a marketplace, automatic

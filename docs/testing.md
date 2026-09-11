@@ -983,9 +983,12 @@ Plugin tests use isolated temporary registries and installed-copy directories.
 They cover the complete local lifecycle, version/schema mismatch, permission
 denial, forbidden capabilities, source fingerprint tamper, fingerprint-bound
 in-app installation review, explicit grant/enable gating, permission pagination,
-duplicate-ID refusal, source drift without mutation, in-app default-profile
-origin/selection/reset, maximum-profile pagination, event-only refusal, stale-ID
-revalidation, CLI reset parsing, profile and command
+duplicate-ID refusal, source drift without mutation, permission-aware in-app
+update review, added/removed permission migration, retained-grant intersection,
+enabled-update gating, update permission pagination, exact candidate/registry
+drift rejection without partial commit, in-app default-profile origin/selection/
+reset, maximum-profile pagination, event-only refusal, stale-ID revalidation,
+CLI reset parsing, profile and command
 conflicts, installed-directory and administrative-file symlink substitution,
 bounded hook dispatch, crash/timeout child profiles, resource ceilings,
 explicit update behavior, and default-profile configuration. API v2 cases also

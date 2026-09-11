@@ -735,6 +735,12 @@ enum RuntimePluginManagerView {
         grants: std::collections::BTreeSet<crate::plugin::runtime::PluginPermission>,
         permission_page: usize,
     },
+    ReviewUpdate {
+        page: usize,
+        preview: Box<crate::plugin::runtime::PluginUpdatePreview>,
+        grants: std::collections::BTreeSet<crate::plugin::runtime::PluginPermission>,
+        permission_page: usize,
+    },
     Detail {
         plugin_id: String,
         page: usize,
@@ -771,7 +777,6 @@ enum RuntimePluginManagerView {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimePluginOperation {
-    Update,
     ResetSettings,
     Remove,
 }
