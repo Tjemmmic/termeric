@@ -676,6 +676,11 @@ impl App {
             TerminalEvent::CursorVisibilityChanged(_) => {
                 // Cursor visibility is handled in render
             }
+            TerminalEvent::PointerShapeChanged => {
+                if self.active_terminal_origin() == Some(origin) {
+                    self.refresh_terminal_pointer_cursor();
+                }
+            }
             TerminalEvent::PtyWrite(_) => {
                 // Consumed by the originating tab/pane poller. Reaching App
                 // would be a routing invariant violation.
@@ -727,6 +732,18 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .filter(|tab| matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }))?;
+        Some(if let Some(panes) = &tab.pane_manager {
+            crate::tabs::TerminalEventOrigin::Pane {
+                tab_id: tab.id,
+                pane_id: panes.focused_id(),
+            }
+        } else {
+            crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
+        })
+    }
+
+    fn active_terminal_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
+        let tab = self.tabs.as_ref().and_then(TabManager::active_tab)?;
         Some(if let Some(panes) = &tab.pane_manager {
             crate::tabs::TerminalEventOrigin::Pane {
                 tab_id: tab.id,

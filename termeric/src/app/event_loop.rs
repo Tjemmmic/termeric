@@ -255,16 +255,12 @@ impl ApplicationHandler<AppEvent> for App {
 
             WindowEvent::HoveredFileCancelled => {
                 self.file_drop_hovered = false;
-                if let Some(window) = &self.window {
-                    window.set_cursor(winit::window::CursorIcon::Default);
-                }
+                self.refresh_terminal_pointer_cursor();
             }
 
             WindowEvent::DroppedFile(path) => {
                 self.file_drop_hovered = false;
-                if let Some(window) = &self.window {
-                    window.set_cursor(winit::window::CursorIcon::Default);
-                }
+                self.refresh_terminal_pointer_cursor();
                 self.handle_dropped_path(&path);
             }
 

@@ -13,7 +13,7 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 - **Unicode character picker** — bounded Unicode 17.0 canonical-name discovery, friendly common-symbol/emoji aliases, and exact `U+`, `0x`, or bare-hex scalar entry
 - **Modern input and accessibility** — pane-positioned IME preedit, native color emoji, F6 keyboard chrome, and AccessKit screen-reader semantics
 - **Visual accessibility preferences** — live reduced-motion and high-contrast application chrome without rewriting terminal colors
-- **Modern terminal negotiation** — pane-local Kitty plus xterm keyboard/cursor/function/keypad/modifier/special/other-key resources with CSI-27/CSI-u formatting, DECRQSS/DECRQM status replies, UTF-8-safe C1 framing, and application-controlled cursor shape/blink
+- **Modern terminal negotiation** — pane-local Kitty plus xterm keyboard/cursor/function/keypad/modifier/special/other-key resources with CSI-27/CSI-u formatting, DECRQSS/DECRQM status replies, UTF-8-safe C1 framing, application-controlled text-cursor shape/blink, and bounded Kitty/xterm OSC 22 mouse-pointer shapes
 - **Command palette** (Ctrl+P) with fuzzy search, plus a customizable keyboard shortcuts panel
 - **Developer integrations** — experimental built-in Claude Code, Codex, Git, diff review, and context workflows; authenticated provider checks require explicit operator consent
 - **Hyperlinks and shell semantics** — OSC 8 links, URL detection, OSC 7 working directories, accepted Bash/Zsh/Fish OSC 133 semantics, acceptance-pending native Nushell and opt-in Elvish semantics, and bidirectional prompt navigation through retained scrollback on Linux
@@ -38,7 +38,8 @@ ligatures follow the [row-run shaping policy](docs/ligature-rendering.md).
 Platform IME, color-font, keyboard-chrome, and screen-reader behavior follows
 the [modern input and accessibility policy](docs/accessibility-and-input.md). See the
 [OSC integration policy](docs/osc-integration.md) for terminal-controlled
-titles, working directories, clipboard access, and dynamic colors. See the
+titles, working directories, clipboard access, dynamic colors, and mouse
+pointer shapes. See the
 [feature-support matrix](docs/feature-support.md) for exact boundaries rather
 than inferring support from a parser, setting, or UI entry.
 

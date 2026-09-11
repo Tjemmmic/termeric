@@ -278,6 +278,16 @@ both reply widths and keeps resize/status-line mutations disabled.
 Cursor-style tests prove application shape/blink overrides reach presentation
 state and remain isolated behind synchronized-output boundaries.
 
+OSC 22 mouse-pointer tests cover all 30 canonical names, strict casing and
+alphabet validation, plain and `=` replacement, empty reset, atomic multi-push,
+pop/underflow, fixed 16-entry oldest-first eviction, primary/alternate-screen
+isolation, DECSTR/RIS reset behavior, special and capability queries, 7/8-bit
+reply framing, and rejection of oversized payloads and lists. The shared
+terminal-event bridge proves shape changes remain app-facing while queries are
+written only to their owner PTY, and an exhaustive app test maps every shape to
+its corresponding Winit icon. Native appearance under actual X11/Wayland
+cursor themes is intentionally left to manual release acceptance.
+
 Fragmented CSI tests cover byte-exact DECRQM/DECRPM replies for every
 authoritatively represented ANSI and DEC mode, status 0 for unknown modes, and
 rejection of malformed plural/subparameter requests. The same cross-layer lane

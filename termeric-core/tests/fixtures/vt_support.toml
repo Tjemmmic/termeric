@@ -538,6 +538,16 @@ evidence = ["fixture:notifications"]
 notes = "Emits typed notification events; desktop delivery is separately unverified."
 
 [[sequence]]
+id = "osc-pointer-shapes"
+family = "OSC"
+syntax = "OSC 22 Kitty/xterm mouse pointer shapes"
+layer = "app"
+status = "partial"
+evidence = ["test:src/ansi/processor.rs#osc22_pointer_shapes_are_bounded_queryable_screen_local_and_resettable", "test:src/term/pointer.rs#all_required_shapes_round_trip", "test:src/term/pointer.rs#stack_set_push_pop_and_overflow_are_bounded", "test:../termeric/src/terminal/events.rs#pointer_shape_changes_are_forwarded_but_queries_stay_with_the_owner", "test:../termeric/src/app/mouse.rs#every_protocol_pointer_shape_has_an_exact_native_mapping"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/69"
+notes = "All 30 required CSS-derived names, bounded screen-local stack operations, current/default/grabbed and capability queries, 7/8-bit owner replies, focused-origin events, and exact Winit mappings are implemented. Native X11/Wayland cursor-theme appearance and legacy X11 cursor-font aliases are not claimed."
+
+[[sequence]]
 id = "osc-clipboard"
 family = "OSC"
 syntax = "OSC 52"

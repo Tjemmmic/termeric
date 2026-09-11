@@ -976,6 +976,7 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
             TerminalEvent::DynamicColor(operation) => format!("dynamic-color:{operation:?}"),
             TerminalEvent::HyperlinkActivated(url) => format!("hyperlink:{url}"),
             TerminalEvent::CursorVisibilityChanged(visible) => format!("cursor:{visible}"),
+            TerminalEvent::PointerShapeChanged => "pointer-shape-changed".to_string(),
             TerminalEvent::Exit => "exit".to_string(),
         })
         .collect()

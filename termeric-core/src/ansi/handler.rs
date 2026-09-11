@@ -1358,6 +1358,14 @@ impl Perform for Handler<'_> {
                 }
             }
 
+            // Kitty/xterm mouse pointer shapes. Keep the payload intact so
+            // comma-separated stack/query operations remain atomic.
+            22 => {
+                if params.len() == 2 {
+                    self.terminal.handle_pointer_shape_osc(params[1]);
+                }
+            }
+
             110..=112 => {
                 if let Some(target) = dynamic_default_target(command - 100) {
                     self.terminal.push_event(TerminalEvent::DynamicColor(

@@ -51,6 +51,6 @@ pub use grid::{
 pub use pty::Pty;
 pub use shell::{CommandRegion, PromptMark, ShellIntegration};
 pub use term::{
-    DynamicColors, Point, ReportedWorkingDirectory, Selection, SelectionType, Terminal,
-    TerminalMemoryUsage,
+    DynamicColors, Point, PointerShape, ReportedWorkingDirectory, Selection, SelectionType,
+    Terminal, TerminalMemoryUsage,
 };

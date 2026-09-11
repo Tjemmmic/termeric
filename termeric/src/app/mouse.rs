@@ -548,6 +548,7 @@ impl App {
                     content_top,
                     padding,
                 ) {
+                    self.refresh_terminal_pointer_cursor();
                     return;
                 }
                 if button == MouseButton::Left {
@@ -613,6 +614,8 @@ impl App {
                 // The selection in terminal remains, but mouse_state no longer tracks it
             }
         }
+
+        self.refresh_terminal_pointer_cursor();
 
         // Request redraw to show selection changes
         if let Some(window) = &self.window {
@@ -954,6 +957,8 @@ impl App {
             return;
         }
 
+        self.refresh_terminal_pointer_cursor();
+
         if self.try_report_mouse_motion(position, cell_width, cell_height, content_top, padding) {
             return;
         }
@@ -1220,6 +1225,43 @@ impl App {
         .is_some()
     }
 
+    /// Restore the protocol-selected cursor when no Termeric-owned pointer
+    /// interaction currently has precedence.
+    pub(super) fn refresh_terminal_pointer_cursor(&self) {
+        if self.file_drop_hovered
+            || self.divider_dragging.is_some()
+            || self.scrollbar_dragging
+            || self.tab_dragging.is_some()
+            || self.info_overlay.is_active()
+            || self.diff_review.is_active()
+            || self.context_picker.is_active()
+            || self.domain_picker.is_active()
+            || self.unicode_picker.is_active()
+            || self.guardrail.is_active()
+            || self.command_palette.is_active()
+            || self.shortcuts_panel.is_active()
+            || self.settings_panel.is_active()
+            || self.commands_panel.is_open()
+            || self.session_panel.is_open()
+            || self.session_dropdown_open
+        {
+            return;
+        }
+        let Some(window) = &self.window else {
+            return;
+        };
+        let icon = if !self.pointer_is_over_focused_terminal() {
+            winit::window::CursorIcon::Default
+        } else if self.mouse_pressed {
+            winit::window::CursorIcon::Text
+        } else if let Some(terminal) = self.active_terminal() {
+            native_pointer_icon(terminal.effective_pointer_shape())
+        } else {
+            winit::window::CursorIcon::Default
+        };
+        window.set_cursor(icon);
+    }
+
     /// Convert a physical cursor position to a visible, zero-based cell in
     /// the focused terminal. Protocol coordinates never include scrollback.
     fn protocol_grid_position(
@@ -1435,6 +1477,7 @@ impl App {
         }
         self.git_watcher.invalidate();
         self.reset_cursor_blink();
+        self.refresh_terminal_pointer_cursor();
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -1541,6 +1584,90 @@ fn report_button(button: MouseButton) -> Option<crate::input::MouseReportButton>
         MouseButton::Middle => Some(crate::input::MouseReportButton::Middle),
         MouseButton::Right => Some(crate::input::MouseReportButton::Right),
         MouseButton::Back | MouseButton::Forward | MouseButton::Other(_) => None,
+    }
+}
+
+pub(super) const fn native_pointer_icon(
+    shape: termeric_core::PointerShape,
+) -> winit::window::CursorIcon {
+    use termeric_core::PointerShape;
+    use winit::window::CursorIcon;
+
+    match shape {
+        PointerShape::Alias => CursorIcon::Alias,
+        PointerShape::Cell => CursorIcon::Cell,
+        PointerShape::Copy => CursorIcon::Copy,
+        PointerShape::Crosshair => CursorIcon::Crosshair,
+        PointerShape::Default => CursorIcon::Default,
+        PointerShape::EResize => CursorIcon::EResize,
+        PointerShape::EwResize => CursorIcon::EwResize,
+        PointerShape::Grab => CursorIcon::Grab,
+        PointerShape::Grabbing => CursorIcon::Grabbing,
+        PointerShape::Help => CursorIcon::Help,
+        PointerShape::Move => CursorIcon::Move,
+        PointerShape::NResize => CursorIcon::NResize,
+        PointerShape::NeResize => CursorIcon::NeResize,
+        PointerShape::NeswResize => CursorIcon::NeswResize,
+        PointerShape::NoDrop => CursorIcon::NoDrop,
+        PointerShape::NotAllowed => CursorIcon::NotAllowed,
+        PointerShape::NsResize => CursorIcon::NsResize,
+        PointerShape::NwResize => CursorIcon::NwResize,
+        PointerShape::NwseResize => CursorIcon::NwseResize,
+        PointerShape::Pointer => CursorIcon::Pointer,
+        PointerShape::Progress => CursorIcon::Progress,
+        PointerShape::SResize => CursorIcon::SResize,
+        PointerShape::SeResize => CursorIcon::SeResize,
+        PointerShape::SwResize => CursorIcon::SwResize,
+        PointerShape::Text => CursorIcon::Text,
+        PointerShape::VerticalText => CursorIcon::VerticalText,
+        PointerShape::WResize => CursorIcon::WResize,
+        PointerShape::Wait => CursorIcon::Wait,
+        PointerShape::ZoomIn => CursorIcon::ZoomIn,
+        PointerShape::ZoomOut => CursorIcon::ZoomOut,
+    }
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::native_pointer_icon;
+    use termeric_core::PointerShape;
+    use winit::window::CursorIcon;
+
+    #[test]
+    fn every_protocol_pointer_shape_has_an_exact_native_mapping() {
+        let expected = [
+            CursorIcon::Alias,
+            CursorIcon::Cell,
+            CursorIcon::Copy,
+            CursorIcon::Crosshair,
+            CursorIcon::Default,
+            CursorIcon::EResize,
+            CursorIcon::EwResize,
+            CursorIcon::Grab,
+            CursorIcon::Grabbing,
+            CursorIcon::Help,
+            CursorIcon::Move,
+            CursorIcon::NResize,
+            CursorIcon::NeResize,
+            CursorIcon::NeswResize,
+            CursorIcon::NoDrop,
+            CursorIcon::NotAllowed,
+            CursorIcon::NsResize,
+            CursorIcon::NwResize,
+            CursorIcon::NwseResize,
+            CursorIcon::Pointer,
+            CursorIcon::Progress,
+            CursorIcon::SResize,
+            CursorIcon::SeResize,
+            CursorIcon::SwResize,
+            CursorIcon::Text,
+            CursorIcon::VerticalText,
+            CursorIcon::WResize,
+            CursorIcon::Wait,
+            CursorIcon::ZoomIn,
+            CursorIcon::ZoomOut,
+        ];
+        assert_eq!(PointerShape::ALL.map(native_pointer_icon), expected);
     }
 }
 

@@ -36,6 +36,7 @@ expected_text = "A─q\n\n"
 expected_cursor = [0, 3]
 expected_modes_all = ["AUTOWRAP", "CURSOR_VISIBLE", "LINEFEED_NEWLINE", "MOUSE_TRACKING", "BRACKETED_PASTE"]
 expected_modes_none = ["INSERT", "CURSOR_KEYS_APPLICATION", "ORIGIN", "KEYPAD_APPLICATION"]
+expected_events = ["pointer-shape-changed"]
 
 [[case]]
 id = "delete-characters"
@@ -347,6 +348,7 @@ rows = 4
 input_hex = "1b 5b 3f 31 68 1b 3d 1b 5b 3f 36 68 1b 5b 3f 39 68 1b 5b 3f 31 30 30 30 68 1b 5b 3f 31 30 30 32 68 1b 5b 3f 31 30 30 33 68 1b 5b 3f 31 30 30 35 68 1b 5b 3f 31 30 30 36 68 1b 5b 3f 31 30 30 34 68 1b 5b 3f 31 30 30 37 68 1b 5b 3f 32 30 30 34 68"
 chunks = [2, 1, 4, 3, 5]
 expected_modes_all = ["CURSOR_KEYS_APPLICATION", "KEYPAD_APPLICATION", "ORIGIN", "MOUSE_X10", "MOUSE_TRACKING", "MOUSE_BUTTON_EVENT", "MOUSE_ANY_EVENT", "MOUSE_UTF8", "MOUSE_SGR", "FOCUS_EVENTS", "ALTERNATE_SCROLL", "BRACKETED_PASTE"]
+expected_events = ["pointer-shape-changed"]
 
 [[case]]
 id = "alternate-screen"

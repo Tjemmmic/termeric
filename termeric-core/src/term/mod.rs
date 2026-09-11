@@ -6,6 +6,7 @@
 mod cursor;
 mod keyboard;
 mod mode;
+mod pointer;
 mod selection;
 
 pub use cursor::{SavedCursor, TerminalCursorShape, TerminalCursorStyle};
@@ -17,6 +18,9 @@ pub use keyboard::{
     XtermUserDefinedKeys,
 };
 pub use mode::TerminalMode;
+#[cfg(test)]
+pub(crate) use pointer::MAX_POINTER_SHAPE_PAYLOAD_BYTES;
+pub use pointer::{POINTER_SHAPE_STACK_DEPTH, PointerShape};
 pub use selection::{Point, Selection, SelectionType};
 
 use crate::ansi::Processor;
@@ -630,6 +634,9 @@ pub struct Terminal {
     /// Kitty keyboard negotiation is independent for the main and alternate screens.
     keyboard: keyboard::KittyKeyboardState,
     alt_keyboard: keyboard::KittyKeyboardState,
+    /// Kitty OSC 22 pointer-shape stacks are independent per screen.
+    pointer_shapes: pointer::PointerShapeStack,
+    alt_pointer_shapes: pointer::PointerShapeStack,
     /// Xterm's global keyboard type. DECSET 1060/1061 selects a historical
     /// profile; resetting either mode returns to the normal type.
     xterm_keyboard_type: XtermKeyboardType,
@@ -784,6 +791,8 @@ impl Terminal {
             cursor_blink_override: None,
             keyboard: keyboard::KittyKeyboardState::default(),
             alt_keyboard: keyboard::KittyKeyboardState::default(),
+            pointer_shapes: pointer::PointerShapeStack::default(),
+            alt_pointer_shapes: pointer::PointerShapeStack::default(),
             xterm_keyboard_type: XtermKeyboardType::default(),
             initial_xterm_keyboard_type: XtermKeyboardType::default(),
             saved_xterm_keyboard_type: None,
@@ -983,6 +992,119 @@ impl Terminal {
     /// Get terminal mode flags
     pub fn mode(&self) -> TerminalMode {
         self.mode
+    }
+
+    /// Current application-selected mouse pointer shape for the active screen.
+    pub fn pointer_shape(&self) -> Option<PointerShape> {
+        if self.alt_screen_active {
+            self.alt_pointer_shapes.current()
+        } else {
+            self.pointer_shapes.current()
+        }
+    }
+
+    /// Pointer shape presented when no Termeric-owned interaction overrides
+    /// the terminal. Mouse-reporting mode uses the documented grabbed policy.
+    pub fn effective_pointer_shape(&self) -> PointerShape {
+        self.pointer_shape().unwrap_or_else(|| {
+            if self.mode.has_mouse_mode() {
+                PointerShape::Default
+            } else {
+                PointerShape::Text
+            }
+        })
+    }
+
+    fn active_pointer_shapes_mut(&mut self) -> &mut pointer::PointerShapeStack {
+        if self.alt_screen_active {
+            &mut self.alt_pointer_shapes
+        } else {
+            &mut self.pointer_shapes
+        }
+    }
+
+    fn emit_pointer_shape_change(&mut self, previous: PointerShape) {
+        if self.effective_pointer_shape() != previous {
+            self.push_event(TerminalEvent::PointerShapeChanged);
+        }
+    }
+
+    /// Apply one bounded Kitty OSC 22 pointer-shape operation.
+    pub(crate) fn handle_pointer_shape_osc(&mut self, payload: &[u8]) {
+        use std::fmt::Write as _;
+
+        if payload.len() > pointer::MAX_POINTER_SHAPE_PAYLOAD_BYTES {
+            return;
+        }
+        match payload.first().copied() {
+            Some(b'?') => {
+                let query = &payload[1..];
+                if query.is_empty() {
+                    return;
+                }
+                let mut response = String::with_capacity(
+                    query
+                        .len()
+                        .min(pointer::MAX_POINTER_SHAPE_LIST_ENTRIES.saturating_mul(14)),
+                );
+                for (count, name) in query.split(|byte| *byte == b',').enumerate() {
+                    if count == pointer::MAX_POINTER_SHAPE_LIST_ENTRIES
+                        || !pointer::valid_query_name(name)
+                    {
+                        return;
+                    }
+                    if count > 0 {
+                        response.push(',');
+                    }
+                    match name {
+                        b"__current__" => {
+                            response.push_str(self.pointer_shape().map_or("0", PointerShape::name))
+                        }
+                        b"__default__" => response.push_str(PointerShape::Text.name()),
+                        b"__grabbed__" => response.push_str(PointerShape::Default.name()),
+                        _ => response.push(if PointerShape::from_name(name).is_some() {
+                            '1'
+                        } else {
+                            '0'
+                        }),
+                    }
+                }
+                let mut reply = String::with_capacity(response.len().saturating_add(9));
+                let _ = write!(reply, "\x1b]22;{response}\x1b\\");
+                self.push_event(TerminalEvent::PtyWrite(reply.into_bytes()));
+            }
+            Some(b'>') => {
+                let Some((shapes, len)) = pointer::parse_shape_list(&payload[1..]) else {
+                    return;
+                };
+                let previous = self.effective_pointer_shape();
+                for shape in &shapes[..len] {
+                    self.active_pointer_shapes_mut().push(*shape);
+                }
+                self.emit_pointer_shape_change(previous);
+            }
+            Some(b'<') => {
+                let previous = self.effective_pointer_shape();
+                self.active_pointer_shapes_mut().pop();
+                self.emit_pointer_shape_change(previous);
+            }
+            Some(b'=') => {
+                self.set_or_reset_pointer_shape(&payload[1..]);
+            }
+            _ => self.set_or_reset_pointer_shape(payload),
+        }
+    }
+
+    fn set_or_reset_pointer_shape(&mut self, name: &[u8]) {
+        let previous = self.effective_pointer_shape();
+        if name.is_empty() {
+            self.active_pointer_shapes_mut().clear();
+        } else if let Some(shape) = PointerShape::from_name(name) {
+            self.active_pointer_shapes_mut().set(shape);
+        } else {
+            return;
+        }
+        self.emit_pointer_shape_change(previous);
     }
 
     /// Get the application-selected cursor presentation, if any.
@@ -4085,6 +4207,7 @@ impl Terminal {
 
     /// Switch to alternate screen buffer
     pub fn enter_alt_screen(&mut self) {
+        let previous_pointer_shape = self.effective_pointer_shape();
         self.mode.insert(TerminalMode::ALT_SCREEN);
         if !self.alt_screen_active {
             self.graphics.clear_screen_all(true);
@@ -4092,15 +4215,18 @@ impl Terminal {
             self.alt_grid.clear();
             self.alt_grid.clear_scrollback();
         }
+        self.emit_pointer_shape_change(previous_pointer_shape);
     }
 
     /// Switch back to primary screen buffer
     pub fn exit_alt_screen(&mut self) {
+        let previous_pointer_shape = self.effective_pointer_shape();
         self.mode.remove(TerminalMode::ALT_SCREEN);
         if self.alt_screen_active {
             self.graphics.clear_screen_all(true);
             self.alt_screen_active = false;
         }
+        self.emit_pointer_shape_change(previous_pointer_shape);
     }
 
     /// Save cursor position
@@ -4196,11 +4322,13 @@ impl Terminal {
             }
             return;
         }
+        let previous_pointer_shape = self.effective_pointer_shape();
         if enable {
             self.mode.insert(mode);
         } else {
             self.mode.remove(mode);
         }
+        self.emit_pointer_shape_change(previous_pointer_shape);
     }
 
     /// Soft terminal reset (DECSTR).
@@ -4212,6 +4340,9 @@ impl Terminal {
     /// xterm, autowrap returns to this terminal's startup default (enabled),
     /// rather than the VT420 hardware default (disabled).
     pub fn soft_reset(&mut self) {
+        let previous_pointer_shape = self.effective_pointer_shape();
+        self.pointer_shapes.clear();
+        self.alt_pointer_shapes.clear();
         self.mode.remove(
             TerminalMode::INSERT
                 | TerminalMode::CURSOR_KEYS_APPLICATION
@@ -4252,10 +4383,12 @@ impl Terminal {
         } else {
             self.saved_cursor = saved;
         }
+        self.emit_pointer_shape_change(previous_pointer_shape);
     }
 
     /// Full reset (RIS)
     pub fn reset(&mut self) {
+        let previous_pointer_shape = self.effective_pointer_shape();
         if self.rows > 0 {
             self.shell.prompt_tracker.retire_content_in_rows(
                 0,
@@ -4279,6 +4412,9 @@ impl Terminal {
         self.cursor_blink_override = None;
         self.keyboard = keyboard::KittyKeyboardState::default();
         self.alt_keyboard = keyboard::KittyKeyboardState::default();
+        self.pointer_shapes.clear();
+        self.alt_pointer_shapes.clear();
+        self.emit_pointer_shape_change(previous_pointer_shape);
         self.xterm_keyboard_type = self.initial_xterm_keyboard_type;
         self.saved_xterm_keyboard_type = None;
         self.xterm_user_defined_keys.clear();

@@ -35,6 +35,9 @@ pub enum TerminalEvent {
     /// The cursor visibility changed
     CursorVisibilityChanged(bool),
 
+    /// The active screen's OSC 22 mouse pointer shape changed.
+    PointerShapeChanged,
+
     /// Desktop notification request (OSC 9, OSC 777)
     Notification(NotificationRequest),
 

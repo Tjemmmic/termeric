@@ -126,12 +126,47 @@ the pane viewport; OSC 12 affects that terminal's cursor. Each mutation advances
 a terminal-local generation used by the row cache. Resets reveal the current
 theme, and theme reloads update that base without deleting active overrides.
 
+## Mouse pointer shapes
+
+OSC 22 implements the [Kitty pointer-shape protocol][kitty-pointer-shapes] and
+its xterm-compatible plain single-name
+form. Termeric accepts all 30 required CSS-derived names. A plain name or
+`=name` replaces the current stack entry, an empty payload clears the active
+stack, `>` atomically pushes a comma-separated list, and `<` pops one entry.
+Each terminal owns independent primary- and alternate-screen stacks backed by
+fixed 16-entry arrays; pushing past the limit evicts the oldest entry. DECSTR
+and RIS clear both stacks.
+
+Queries beginning with `?` return `1` or `0` for supported or unknown valid
+names. `__current__` returns the current name or `0`, `__default__` returns
+`text`, and `__grabbed__` returns `default`. Replies use ST, follow the
+requesting terminal's S7C1T/S8C1T framing, and are consumed by that exact PTY
+owner rather than forwarded as terminal text. Payloads above 1,024 bytes,
+lists above 64 entries, malformed list members, non-canonical case, invalid
+bytes, and unsupported set/push names are rejected atomically.
+
+All required names map one-to-one onto Winit cursor icons. The empty-stack
+runtime policy is the text-selection cursor for an ordinary terminal and the
+native default cursor while mouse reporting is active. Termeric-owned selection,
+pane-divider resizing, and native file drag-and-drop may temporarily override
+the requested shape; the terminal shape is restored when that interaction
+ends. Only the focused visible terminal may update the OS cursor, while
+background tabs and panes retain their own state. Automated tests cover the
+parser, stacks, replies, event bridge, and exhaustive mapping. Native
+X11/Wayland visual confirmation for every desktop cursor theme remains a
+deferred release-acceptance row; legacy X11 cursor-font aliases are not
+implemented.
+
+[kitty-pointer-shapes]: https://sw.kovidgoyal.net/kitty/pointer-shapes/
+
 ## Verification
 
 Unit tests cover BEL/ST and chunked parsing, empty fields, semicolon titles and
 directories, OSC 7 percent decoding/authority policy, invalid
 UTF-8/base64/color data, hard limits and recovery, query formatting, security
-defaults, reset/generation behavior, and theme/override resolution.
+defaults, reset/generation behavior, theme/override resolution, and bounded
+OSC 22 set/push/pop/query and primary/alternate-screen behavior. The app test
+rail additionally exhausts all 30 protocol-to-Winit pointer mappings.
 Application integration tests apply distinct title and palette operations to
 two pane origins on an inactive tab, while the existing real-PTY route fixture
 proves an OSC 52 denial reply returns only to its requesting pane.

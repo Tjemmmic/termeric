@@ -1164,6 +1164,144 @@ mod tests {
     }
 
     #[test]
+    fn osc22_pointer_shapes_are_bounded_queryable_screen_local_and_resettable() {
+        use crate::event::TerminalEvent;
+        use crate::term::{POINTER_SHAPE_STACK_DEPTH, PointerShape};
+
+        let mut processor = Processor::new();
+        let mut terminal = Terminal::new(10, 2);
+
+        processor.process(
+            &mut terminal,
+            b"\x1b]22;text\x1b\\\x1b]22;>pointer,wait\x1b\\\x1b]22;?__current__,text,no-such-name\x1b\\",
+        );
+        assert_eq!(terminal.pointer_shape(), Some(PointerShape::Wait));
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PtyWrite(b"\x1b]22;wait,1,0\x1b\\".to_vec()),
+            ]
+        );
+
+        // Set replaces only the current entry, so pop restores the entry
+        // below it. Repeating a value emits no redundant native event.
+        processor.process(
+            &mut terminal,
+            b"\x1b]22;=progress\x1b\\\x1b]22;progress\x1b\\\x1b]22;<ignored,names\x1b\\\x1b]22;?__current__\x1b\\",
+        );
+        assert_eq!(terminal.pointer_shape(), Some(PointerShape::Pointer));
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PtyWrite(b"\x1b]22;pointer\x1b\\".to_vec()),
+            ]
+        );
+
+        // Invalid set/push/query operations are rejected atomically.
+        let mut invalid = b"\x1b]22;>text,no-such-name\x1b\\\x1b]22;Pointer\x1b\\\x1b]22;?text,,wait\x1b\\\x1b]22;>".to_vec();
+        invalid.extend(std::iter::repeat_n(
+            b'x',
+            crate::term::MAX_POINTER_SHAPE_PAYLOAD_BYTES + 1,
+        ));
+        invalid.extend_from_slice(b"\x1b\\");
+        processor.process(&mut terminal, &invalid);
+        assert_eq!(terminal.pointer_shape(), Some(PointerShape::Pointer));
+        assert!(terminal.drain_events().is_empty());
+
+        // Overflow evicts the oldest entry from the fixed 16-slot stack.
+        processor.process(&mut terminal, b"\x1b]22;\x1b\\");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![TerminalEvent::PointerShapeChanged]
+        );
+        let names = PointerShape::ALL[..=POINTER_SHAPE_STACK_DEPTH]
+            .iter()
+            .map(|shape| shape.name())
+            .collect::<Vec<_>>()
+            .join(",");
+        terminal.process(format!("\x1b]22;>{names}\x1b\\\x1b]22;<\x1b\\").as_bytes());
+        assert_eq!(
+            terminal.pointer_shape(),
+            Some(PointerShape::ALL[POINTER_SHAPE_STACK_DEPTH - 1])
+        );
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PointerShapeChanged,
+            ]
+        );
+
+        // Primary and alternate stacks remain independent across switches.
+        terminal.process(b"\x1b]22;text\x1b\\");
+        terminal.drain_events();
+        terminal.process(
+            b"\x1b[?1049h\x1b]22;?__current__\x1b\\\x1b]22;wait\x1b\\\x1b[?1049l\x1b]22;?__current__\x1b\\",
+        );
+        assert_eq!(terminal.pointer_shape(), Some(PointerShape::Text));
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                TerminalEvent::PtyWrite(b"\x1b]22;0\x1b\\".to_vec()),
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PtyWrite(b"\x1b]22;text\x1b\\".to_vec()),
+            ]
+        );
+
+        // DECSTR is a terminal reset for this protocol and clears both
+        // stacks without changing the active screen. RIS does the same and
+        // returns to the primary screen.
+        terminal.process(
+            b"\x1b[?1049h\x1b[!p\x1b]22;?__current__\x1b\\\x1b[?1049l\x1b]22;?__current__\x1b\\",
+        );
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PtyWrite(b"\x1b]22;0\x1b\\".to_vec()),
+                TerminalEvent::PtyWrite(b"\x1b]22;0\x1b\\".to_vec()),
+            ]
+        );
+        terminal.process(b"\x1b]22;zoom-in\x1b\\\x1bc\x1b]22;?__current__\x1b\\");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PointerShapeChanged,
+                TerminalEvent::PtyWrite(b"\x1b]22;0\x1b\\".to_vec()),
+            ]
+        );
+
+        // Special policy queries and ordinary support queries share the
+        // terminal-local S8C1T framing contract.
+        terminal.process(b"\x1b G\x1b]22;?__default__,__grabbed__,pointer,missing\x1b\\");
+        assert_eq!(
+            terminal.drain_events(),
+            vec![TerminalEvent::PtyWrite(
+                b"\x9d22;text,default,1,0\x9c".to_vec()
+            )]
+        );
+
+        terminal.process(b"\x1b[?1000h");
+        assert_eq!(terminal.effective_pointer_shape(), PointerShape::Default);
+        assert_eq!(
+            terminal.drain_events(),
+            vec![TerminalEvent::PointerShapeChanged]
+        );
+        terminal.process(b"\x1b[?1000l");
+        assert_eq!(terminal.effective_pointer_shape(), PointerShape::Text);
+        assert_eq!(
+            terminal.drain_events(),
+            vec![TerminalEvent::PointerShapeChanged]
+        );
+    }
+
+    #[test]
     fn xterm_modify_other_keys_is_bounded_queryable_and_resettable() {
         let mut processor = Processor::new();
         let mut terminal = Terminal::new(10, 2);

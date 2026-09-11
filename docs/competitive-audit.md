@@ -284,8 +284,12 @@ awaiting evidence:
 
 ### Emerging/niche protocols
 
-- kitty's text-sizing, drag/drop, multiple-cursor, file-transfer, desktop
-  notification, and mouse-pointer-shape extensions are not implemented. The
+- Kitty/xterm OSC 22 mouse-pointer shapes now cover the complete 30-name
+  vocabulary, bounded screen-local stack operations, queries, exact pane
+  routing, and native Winit mappings. Cross-desktop visual acceptance remains
+  pending, so this is partial rather than a parity claim.
+- kitty's text-sizing, drag/drop, multiple-cursor, file-transfer, and desktop
+  notification extensions are not implemented. The
   [kitty protocol index](https://sw.kovidgoyal.net/kitty/protocol-extensions/)
   is the moving reference. These should be demand-driven after the beta gates;
   implementing every new private protocol is not a prerequisite for terminal
