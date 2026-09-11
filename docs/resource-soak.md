@@ -150,10 +150,10 @@ python3 -m unittest scripts.test_run_soak
 ```
 
 `python3 -m unittest scripts.test_ci_resource_contract` separately fails if the
-native macOS/Windows build-and-unit matrix, either 30-second Linux soak, either
-scheduled 600-second soak, or the always-uploaded failure artifacts disappear
-from CI. It verifies wiring, not a green remote run; actual job history remains
-required evidence.
+native macOS/Windows build/unit plus PTY-lifecycle matrix, either 30-second
+Linux soak, either scheduled 600-second soak, or the always-uploaded failure
+artifacts disappear from CI. It verifies wiring, not a green remote run; actual
+job history remains required evidence.
 
 These tests prove the evaluator rejects the relevant monotonic-growth shapes;
 they do not intentionally leak resources from the test runner process.
@@ -226,7 +226,8 @@ evidence, not a scheduled-CI or real-desktop result.
 The core soak still does not create a window; the new native lane does
 so under a private software-rendered compositor. Neither measures vendor GPU
 memory, substitutes for a long real-desktop observation, validates macOS/
-Windows runtime behavior, or proves every terminal protocol. The native lane is
-now locally exercised, but those remaining boundaries stay separate
-platform/manual rows in [platform-support.md](platform-support.md) and
+Windows beyond the separate bounded native-PTY smoke, or proves every terminal
+protocol. The native lane is now locally exercised, but those remaining
+boundaries stay separate platform/manual rows in
+[platform-support.md](platform-support.md) and
 [release-acceptance.md](release-acceptance.md).

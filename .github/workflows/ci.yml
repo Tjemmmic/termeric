@@ -213,7 +213,7 @@ jobs:
           if-no-files-found: error
 
   portable-build-and-unit-tests:
-    name: Build and unit test (${{ matrix.os }})
+    name: Build, unit test, and native PTY smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -223,6 +223,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Exercise native PTY input, resize, exit, and cleanup
+        env:
+          TERMERIC_REQUIRE_NATIVE_PTY_SMOKE: "1"
+        run: cargo test -p termeric-core --locked native_pty_round_trip_when_requested -- --nocapture
       - run: cargo test --workspace --locked
       - run: cargo build --workspace --locked
 

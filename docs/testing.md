@@ -63,9 +63,27 @@ visible-only semantic content, scrolling actions, and rejection of replaced
 profile choices. Fixture choices are inert identifiers: tests never launch a
 plugin, apply a real AI profile, access the network, or consume provider tokens.
 
-macOS and Windows run the same workspace build and unit-test commands in CI,
-but that tier is source-portability evidence rather than a native runtime claim.
-See [`platform-support.md`](platform-support.md) for promotion requirements.
+macOS and Windows run the same workspace build and unit-test commands in CI.
+Each runner also opts into the hermetic `native_pty_round_trip_when_requested`
+probe: the test executable relaunches itself through the platform-native PTY,
+then verifies output, input, exact resize state, process exit, and handle
+cleanup without depending on a shell. This is bounded native-PTY evidence, not
+a native window, input-stack, GPU, packaging, or soak claim. See
+[`platform-support.md`](platform-support.md) for promotion requirements.
+
+Run the same probe on a Unix host with:
+
+```bash
+TERMERIC_REQUIRE_NATIVE_PTY_SMOKE=1 cargo test -p termeric-core --locked \
+  native_pty_round_trip_when_requested -- --nocapture
+```
+
+Or from PowerShell on Windows:
+
+```powershell
+$env:TERMERIC_REQUIRE_NATIVE_PTY_SMOKE = "1"
+cargo test -p termeric-core --locked native_pty_round_trip_when_requested -- --nocapture
+```
 
 ## Linux software-renderer smoke lane
 

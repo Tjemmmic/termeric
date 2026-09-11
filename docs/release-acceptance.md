@@ -187,12 +187,13 @@ errors. It was produced from the dirty roadmap tree before the report embedded
 dirty-state and binary SHA-256 provenance, so it does not replace a clean
 scheduled-candidate artifact.
 
-The working tree now also configures a 30-second and scheduled ten-minute
-private-Sway displayed-process soak. It continuously renders real PTY output,
-resizes the compositor output, churns split panes with exact routing, samples
-the application PID, and checks normal native close plus complete child cleanup.
-No accepted artifact exists yet, so this narrows the prior visible-window gap
-without closing the release-duration, real-desktop, or vendor-GPU rows.
+The repository also configures a 30-second and scheduled ten-minute private-
+Sway displayed-process soak. It continuously renders real PTY output, resizes
+the compositor output, churns split panes with exact routing, samples the
+application PID, and checks normal native close plus complete child cleanup.
+Clean commit `a53d097` supplies the local schema-2 ten-minute evidence described
+in [resource-soak.md](resource-soak.md); accepted scheduled-CI history, a long
+real-desktop observation, and vendor-GPU measurements remain open.
 
 ## Current Debian package-lifecycle gate
 
@@ -273,7 +274,7 @@ silently become a pass:
 
 | Disposition | Current scope |
 |---|---|
-| Automated | Workspace quality, conformance/fuzz, headless GPU, native X11/Wayland acceptance, performance budgets, Debian/Arch archive checks, short/scheduled Linux resource soak, and macOS/Windows build/unit CI. |
+| Automated | Workspace quality, conformance/fuzz, headless GPU, native X11/Wayland acceptance, performance budgets, Debian/Arch archive checks, short/scheduled Linux resource soak, and macOS/Windows build/unit plus bounded native-PTY lifecycle CI. |
 | Manual | Real-compositor visual quality and policy, SGR font/decorations and fallback quality, vendor-GPU behavior, assistive technology, audible output, and authenticated plugin workflows. |
 | Unavailable | Shells, tools, hardware counters, accounts, or native runners absent from the evidence host; record the exact absence. |
 | Accepted limitation | An explicitly approved partial/experimental/unsupported boundary allowed by the release gates; never re-label it as a pass. |
@@ -319,6 +320,8 @@ fresh candidate-bound artifacts before promotion:
   top/left tabs, panes/chrome/resize, replacement failure, renderer recovery,
   and memory ceilings.
 - The configured ten-minute core and private-Sway displayed-process soaks.
+- The configured macOS and Windows build/unit plus native-PTY lifecycle jobs;
+  the checked-in wiring is not accepted green runner history.
 - Fresh-host Debian install, synthetic-predecessor upgrade, non-GUI probe,
   uninstall cleanup, and user-state retention, including its generated
   dependency field verified by `dpkg-shlibdeps`; the configured Arch lane also

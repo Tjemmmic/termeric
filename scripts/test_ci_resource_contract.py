@@ -29,6 +29,8 @@ class CiResourceContractTests(unittest.TestCase):
     def test_portable_tiers_build_and_test_on_native_runners(self) -> None:
         block = job_block(self.workflow, "portable-build-and-unit-tests")
         self.assertIn("os: [macos-latest, windows-latest]", block)
+        self.assertIn('TERMERIC_REQUIRE_NATIVE_PTY_SMOKE: "1"', block)
+        self.assertIn("native_pty_round_trip_when_requested", block)
         self.assertIn("cargo test --workspace --locked", block)
         self.assertIn("cargo build --workspace --locked", block)
 

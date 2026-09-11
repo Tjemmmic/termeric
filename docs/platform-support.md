@@ -10,13 +10,13 @@ terminal.
 |---|---|---|---|
 | Linux Wayland | Developer-preview release target | Workspace/core gates, headless Vulkan, resource soaks, private Weston native launch/first-render/PTY/close acceptance, and clean local headless-Sway keyboard/copy/paste/pane-routing, two-window fullscreen/PTY-resize isolation, renderer recovery, plus separate 30-second displayed-process evidence | Real-compositor input, scale, visual quality, desktop policy, portable vendor-GPU memory, clean scheduled history, and closure or acceptance of remaining correctness blockers |
 | Linux X11 | Developer-preview release target | Workspace/core gates plus recorded Xvfb/twm native input, resize, tabs/panes, clipboard/link, Vim/less/tmux, surface recovery, visual-signature, and close acceptance; the revised Openbox lane and its two-window fullscreen/resize scenario await their first green artifact | Real-compositor visual quality, desktop policy, vendor GPU behavior, and closure or acceptance of remaining correctness blockers |
-| macOS | Build-and-unit CI only | Stable Rust workspace build and tests are configured on `macos-latest` | A green CI history plus native PTY, keyboard/IME, clipboard, window, GPU, scale, lifecycle, install, and soak acceptance |
-| Windows | Build-and-unit CI only | Stable Rust workspace build and tests are configured on `windows-latest` | A green CI history plus ConPTY, keyboard/IME, clipboard, window, GPU, scale, lifecycle, install, and soak acceptance |
+| macOS | Build/unit plus bounded PTY CI | Stable Rust workspace build/tests and a shell-independent native PTY output/input/resize/exit/cleanup smoke are configured on `macos-latest` | Green CI history for the configured PTY lane plus native keyboard/IME, clipboard, window, GPU, scale, lifecycle, install, and soak acceptance |
+| Windows | Build/unit plus bounded ConPTY CI | Stable Rust workspace build/tests and a shell-independent native ConPTY output/input/resize/exit/cleanup smoke are configured on `windows-latest` | Green CI history for the configured ConPTY lane plus native keyboard/IME, clipboard, window, GPU, scale, lifecycle, install, and soak acceptance |
 
-macOS and Windows remain **Unverified** in the feature matrix until their new CI
-jobs actually pass and the runtime rows above are exercised. A compile failure
-on either runner is a portability defect, but a compile success is not a
-runtime-support claim.
+macOS and Windows remain **Unverified** in the feature matrix until their CI
+jobs actually pass and the broader runtime rows above are exercised. A compile
+failure or native-PTY smoke failure on either runner is a portability defect,
+but a compile plus bounded PTY success is not a full runtime-support claim.
 
 ## Release checklist classification
 
@@ -37,10 +37,11 @@ limitation when the release policy permits that choice.
 
 Pushes and pull requests run Linux quality/package, GPU, native X11/Wayland,
 performance, parser-fuzz, and 30-second resource-soak lanes plus macOS/Windows
-workspace build/unit tests. The Linux package lane also installs a synthetic
-predecessor, upgrades it to the candidate, and removes it on the disposable
-runner without launching the GUI. Weekly and manual runs add longer fuzzing and a
-ten-minute soak. Native GUI logs, PTY transcripts, diagnostic captures, fixture
+workspace build/unit tests and platform-native PTY lifecycle smoke. The Linux
+package lane also installs a synthetic predecessor, upgrades it to the
+candidate, and removes it on the disposable runner without launching the GUI.
+Weekly and manual runs add longer fuzzing and a ten-minute soak. Native GUI
+logs, PTY transcripts, diagnostic captures, fixture
 files, and the focused renderer PNG are uploaded; see
 [gui-acceptance.md](gui-acceptance.md). CI still cannot establish subjective
 quality or real desktop policy, and macOS/Windows remain below runtime status.
