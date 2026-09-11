@@ -1,0 +1,92 @@
+api_version = 26
+id = "process-pane-mover"
+name = "Process Pane Mover"
+version = "1.0.0"
+description = "Demonstrates exact ordinary-pane movement across process-owned windows"
+permissions = ["process-spawn", "process-query", "process-pane-move", "event-subscribe", "ui-actions"]
+
+[[commands]]
+id = "move-pane-between-windows"
+name = "Move Pane Between Windows"
+description = "Move an available pane from the current window into a sibling window"
+
+[event_handler]
+program = "python3"
+args = ["-u", "-c", """
+import json
+import sys
+
+for line in sys.stdin:
+    request = json.loads(line)
+    event = request["event"]
+    if event["type"] == "command-invoked":
+        actions = [{
+            "type": "query-process",
+            "query_id": "pane-move-targets",
+        }]
+    elif event["type"] == "process-query-result":
+        origin = event["origin_window_id"]
+        source = next(
+            (
+                (window, tab, pane)
+                for window in event["windows"] if window["id"] == origin
+                for tab in window["tabs"] if not tab["closed"]
+                if len([pane for pane in tab["panes"] if not pane["closed"]]) > 1
+                for pane in tab["panes"] if not pane["closed"]
+            ),
+            None,
+        )
+        destination = next(
+            (
+                (window, tab, pane)
+                for window in event["windows"] if window["id"] != origin
+                for tab in window["tabs"] if not tab["closed"]
+                for pane in tab["panes"] if not pane["closed"]
+            ),
+            None,
+        )
+        if source is None or destination is None:
+            actions = [{
+                "type": "show-notice",
+                "title": "Process pane mover",
+                "lines": ["A movable source pane and sibling destination pane are required."],
+            }]
+        else:
+            source_window, source_tab, source_pane = source
+            destination_window, destination_tab, target_pane = destination
+            actions = [{
+                "type": "move-process-pane",
+                "action_id": "move-sibling-task",
+                "source_window_id": source_window["id"],
+                "source_tab_id": source_tab["id"],
+                "pane_id": source_pane["id"],
+                "destination_window_id": destination_window["id"],
+                "destination_tab_id": destination_tab["id"],
+                "target_pane_id": target_pane["id"],
+                "direction": "vertical",
+            }]
+    elif event["type"] == "process-action-result" and event["action"] == "move-process-pane":
+        if event["ok"]:
+            lines = [
+                f"Moved pane {event['source_pane_id']} as pane {event['destination_pane_id']}.",
+                f"Destination window: {event['destination_window_id']}",
+                f"Destination tab: {event['destination_tab_id']}",
+            ]
+        else:
+            lines = ["Pane movement failed: " + event["error"]]
+        actions = [{
+            "type": "show-notice",
+            "title": "Process pane mover",
+            "lines": lines,
+        }]
+    else:
+        actions = []
+    response = {
+        "schema_version": 2,
+        "request_id": request["request_id"],
+        "actions": actions,
+    }
+    print(json.dumps(response, separators=(",", ":")), flush=True)
+"""]
+mode = "persistent"
+events = ["command-invoked"]

@@ -25,6 +25,7 @@
 //! API v23 adds guarded exact cross-window terminal input.
 //! API v24 adds exact cross-window ordinary-tab creation.
 //! API v25 adds exact cross-window ordinary-pane creation.
+//! API v26 adds exact cross-window ordinary-pane movement.
 
 use super::hooks::{Hook, HookResponse, Plugin, PluginAction, PluginCommand, PluginContext};
 use super::structured::{
@@ -37,7 +38,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const PLUGIN_API_VERSION: u32 = 25;
+pub const PLUGIN_API_VERSION: u32 = 26;
 pub const MIN_PLUGIN_API_VERSION: u32 = 1;
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
 pub const MANIFEST_NAME: &str = "termeric-plugin.toml";
@@ -89,6 +90,7 @@ pub enum PluginPermission {
     ProcessTerminalInput,
     ProcessTabCreate,
     ProcessPaneCreate,
+    ProcessPaneMove,
     Secrets,
 }
 
@@ -121,6 +123,7 @@ impl std::fmt::Display for PluginPermission {
             Self::ProcessTerminalInput => "process-terminal-input",
             Self::ProcessTabCreate => "process-tab-create",
             Self::ProcessPaneCreate => "process-pane-create",
+            Self::ProcessPaneMove => "process-pane-move",
             Self::Secrets => "secrets",
         })
     }
@@ -157,6 +160,7 @@ impl std::str::FromStr for PluginPermission {
             "process-terminal-input" => Ok(Self::ProcessTerminalInput),
             "process-tab-create" => Ok(Self::ProcessTabCreate),
             "process-pane-create" => Ok(Self::ProcessPaneCreate),
+            "process-pane-move" => Ok(Self::ProcessPaneMove),
             "secrets" => Ok(Self::Secrets),
             _ => bail!("unknown plugin permission {value:?}"),
         }
@@ -702,6 +706,17 @@ impl PluginManifest {
         {
             bail!("process-pane-create requires an API v25 persistent event handler");
         }
+        if self
+            .permissions
+            .contains(&PluginPermission::ProcessPaneMove)
+            && (self.api_version < 26
+                || self
+                    .event_handler
+                    .as_ref()
+                    .is_none_or(|handler| handler.mode != DeclarativeHandlerMode::Persistent))
+        {
+            bail!("process-pane-move requires an API v26 persistent event handler");
+        }
         if self.permissions.contains(&PluginPermission::TerminalText)
             && self.api_version >= 4
             && self.event_handler.as_ref().is_none_or(|handler| {
@@ -838,6 +853,7 @@ impl PluginRegistry {
                         | PluginPermission::ProcessTerminalInput
                         | PluginPermission::ProcessTabCreate
                         | PluginPermission::ProcessPaneCreate
+                        | PluginPermission::ProcessPaneMove
                 )
             }) {
                 bail!(
@@ -1308,6 +1324,9 @@ impl DeclarativePlugin {
                     allow_process_pane_create: self.manifest.api_version >= 25
                         && handler.mode == DeclarativeHandlerMode::Persistent
                         && self.grants.contains(&PluginPermission::ProcessPaneCreate),
+                    allow_process_pane_move: self.manifest.api_version >= 26
+                        && handler.mode == DeclarativeHandlerMode::Persistent
+                        && self.grants.contains(&PluginPermission::ProcessPaneMove),
                     mode: match handler.mode {
                         DeclarativeHandlerMode::ProcessPerEvent => {
                             StructuredHandlerMode::ProcessPerEvent
@@ -2226,6 +2245,32 @@ fn permission_supported(api_version: u32, permission: PluginPermission) -> bool 
                 | PluginPermission::ProcessTabCreate
                 | PluginPermission::ProcessPaneCreate
         ),
+        26 => matches!(
+            permission,
+            PluginPermission::ProcessSpawn
+                | PluginPermission::WorkspaceQuery
+                | PluginPermission::WorkspaceActions
+                | PluginPermission::WorkspaceTopology
+                | PluginPermission::EventSubscribe
+                | PluginPermission::UiActions
+                | PluginPermission::TerminalText
+                | PluginPermission::TerminalQuery
+                | PluginPermission::PaneCreate
+                | PluginPermission::TabCreate
+                | PluginPermission::PaneClose
+                | PluginPermission::TabClose
+                | PluginPermission::PaneMove
+                | PluginPermission::TerminalInput
+                | PluginPermission::PaneLayout
+                | PluginPermission::WindowClose
+                | PluginPermission::ProcessQuery
+                | PluginPermission::ProcessActions
+                | PluginPermission::ProcessTerminalText
+                | PluginPermission::ProcessTerminalInput
+                | PluginPermission::ProcessTabCreate
+                | PluginPermission::ProcessPaneCreate
+                | PluginPermission::ProcessPaneMove
+        ),
         _ => false,
     }
 }
@@ -3041,6 +3086,24 @@ events = ["command-completed"]
         manifest
     }
 
+    fn process_pane_move_grants() -> BTreeSet<PluginPermission> {
+        let mut grants = process_query_grants();
+        grants.insert(PluginPermission::ProcessPaneMove);
+        grants
+    }
+
+    fn process_pane_move_manifest() -> PluginManifest {
+        let mut manifest = process_query_manifest();
+        manifest.api_version = 26;
+        manifest.id = "process-pane-mover".into();
+        manifest
+            .permissions
+            .insert(PluginPermission::ProcessPaneMove);
+        manifest.commands[0].id = "move-pane-between-windows".into();
+        manifest.commands[0].name = "Move Pane Between Windows".into();
+        manifest
+    }
+
     fn workspace_action_grants() -> BTreeSet<PluginPermission> {
         let mut grants = event_grants(true);
         grants.insert(PluginPermission::WorkspaceActions);
@@ -3358,7 +3421,7 @@ events = ["command-invoked"]
     fn version_schema_tamper_and_resource_limits_fail_closed() {
         let (_temp, source, root, registry_path) = fixture();
         let invalid_api =
-            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 26");
+            manifest("1.0.0", "", "sample").replace("api_version = 1", "api_version = 27");
         fs::write(source.join(MANIFEST_NAME), invalid_api).unwrap();
         assert!(PluginManifest::from_directory(&source).is_err());
 
@@ -4030,6 +4093,36 @@ events = ["command-invoked"]
                 source,
                 source_fingerprint: "fnv1a64:0123456789abcdef".into(),
                 grants: process_pane_create_grants(),
+                default_profile: None,
+                settings: BTreeMap::new(),
+            }],
+        };
+        registry.validate().unwrap();
+    }
+
+    #[test]
+    fn checked_in_api_v26_process_pane_mover_example_is_a_valid_manifest() {
+        let directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/process-pane-mover");
+        let (manifest, source, _) = PluginManifest::from_directory(&directory).unwrap();
+        assert_eq!(manifest.api_version, 26);
+        assert_eq!(manifest.id, "process-pane-mover");
+        assert_eq!(manifest.commands.len(), 1);
+        assert_eq!(manifest.commands[0].id, "move-pane-between-windows");
+        assert_eq!(manifest.permissions, process_pane_move_grants());
+        assert_eq!(
+            manifest.event_handler.unwrap().mode,
+            DeclarativeHandlerMode::Persistent
+        );
+        assert_eq!(source, directory.canonicalize().unwrap());
+        let registry = PluginRegistry {
+            schema_version: REGISTRY_SCHEMA_VERSION,
+            plugins: vec![InstalledPlugin {
+                id: "process-pane-mover".into(),
+                enabled: true,
+                source,
+                source_fingerprint: "fnv1a64:0123456789abcdef".into(),
+                grants: process_pane_move_grants(),
                 default_profile: None,
                 settings: BTreeMap::new(),
             }],
@@ -4714,6 +4807,72 @@ events = ["command-invoked"]
         assert_eq!(installed.grants, process_pane_create_grants());
         let (installed_manifest, _, _) =
             PluginManifest::from_directory(&root.join("process-pane-builder")).unwrap();
+        assert_eq!(installed_manifest.version, "1.1.0");
+    }
+
+    #[test]
+    fn api_v26_process_pane_move_installs_and_updates_only_with_the_retained_grant() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let root = temp.path().join("installed");
+        let registry_path = temp.path().join("plugins.toml");
+        fs::create_dir(&source).unwrap();
+        let checked_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/process-pane-mover")
+            .join(MANIFEST_NAME);
+        let manifest = fs::read_to_string(checked_in).unwrap();
+        fs::write(source.join(MANIFEST_NAME), &manifest).unwrap();
+
+        let mut missing_pane_move = process_pane_move_grants();
+        missing_pane_move.remove(&PluginPermission::ProcessPaneMove);
+        let error = execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: missing_pane_move,
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("process-pane-move"));
+
+        execute_admin_at(
+            PluginAdminCommand::Install {
+                directory: source.clone(),
+                grants: process_pane_move_grants(),
+                enable: true,
+                replace: false,
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANIFEST_NAME),
+            manifest.replace("version = \"1.0.0\"", "version = \"1.1.0\""),
+        )
+        .unwrap();
+        execute_admin_at(
+            PluginAdminCommand::Update {
+                id: "process-pane-mover".into(),
+            },
+            &registry_path,
+            &root,
+        )
+        .unwrap();
+
+        let registry = PluginRegistry::load_from(&registry_path).unwrap();
+        let installed = registry
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == "process-pane-mover")
+            .unwrap();
+        assert!(installed.enabled);
+        assert_eq!(installed.grants, process_pane_move_grants());
+        let (installed_manifest, _, _) =
+            PluginManifest::from_directory(&root.join("process-pane-mover")).unwrap();
         assert_eq!(installed_manifest.version, "1.1.0");
     }
 
@@ -6057,6 +6216,84 @@ events = ["command-invoked"]
         };
         assert!(invocation.allow_process_query);
         assert!(!invocation.allow_process_pane_create);
+    }
+
+    #[test]
+    fn api_v26_process_pane_movement_requires_persistent_mode_and_exact_grant() {
+        let manifest = process_pane_move_manifest();
+        manifest.validate().unwrap();
+        validate_grants(&manifest, &process_pane_move_grants()).unwrap();
+        assert_eq!(
+            PluginPermission::ProcessPaneMove.to_string(),
+            "process-pane-move"
+        );
+        assert_eq!(
+            "process-pane-move".parse::<PluginPermission>().unwrap(),
+            PluginPermission::ProcessPaneMove
+        );
+        let context = PluginContext {
+            cwd: None,
+            tab_count: 2,
+            active_tab: 0,
+            terminal_size: (80, 24),
+        };
+        let mut plugin = DeclarativePlugin::new(manifest.clone(), None, process_pane_move_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-pane-mover.move-pane-between-windows".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("API v26 process pane movement command did not create an invocation")
+        };
+        assert!(invocation.allow_process_query);
+        assert!(!invocation.allow_process_actions);
+        assert!(!invocation.allow_process_terminal_text);
+        assert!(!invocation.allow_process_terminal_input);
+        assert!(!invocation.allow_process_tab_create);
+        assert!(!invocation.allow_process_pane_create);
+        assert!(invocation.allow_process_pane_move);
+        assert_eq!(invocation.mode, StructuredHandlerMode::Persistent);
+
+        let mut v25 = manifest.clone();
+        v25.api_version = 25;
+        assert!(v25.validate().unwrap_err().to_string().contains("API v26"));
+
+        let mut process_per_event = manifest.clone();
+        process_per_event.event_handler.as_mut().unwrap().mode =
+            DeclarativeHandlerMode::ProcessPerEvent;
+        assert!(
+            process_per_event
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("persistent")
+        );
+
+        let mut grants = process_pane_move_grants();
+        grants.remove(&PluginPermission::ProcessPaneMove);
+        assert!(
+            validate_grants(&manifest, &grants)
+                .unwrap_err()
+                .to_string()
+                .contains("permissions denied: process-pane-move")
+        );
+
+        let mut plugin = DeclarativePlugin::new(manifest, None, process_query_grants());
+        let HookResponse::Action(PluginAction::InvokeStructuredHandler { invocation }) = plugin
+            .on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "process-pane-mover.move-pane-between-windows".into(),
+                },
+                &context,
+            )
+        else {
+            panic!("ungranted process pane movement fixture did not create an invocation")
+        };
+        assert!(invocation.allow_process_query);
+        assert!(!invocation.allow_process_pane_move);
     }
 
     #[test]

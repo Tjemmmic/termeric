@@ -1118,6 +1118,14 @@ bounded correlated results, process-query authority reduction, complete
 process-action result authority removal, retained-grant updates, and a
 checked-in process pane builder. All fixtures are local and inert; no AI
 provider process or tokens are involved.
+API v26 adds exact process-pane-move version/mode/grant denial, strict
+source/destination path and direction parsing, one-operation enforcement,
+same- and sibling-window exact routing, stale-target refusal before detach,
+live PTY and metadata preservation, fresh destination-local identity,
+non-activation, bounded correlated results, process-query authority reduction,
+complete result-authority removal, retained-grant updates, and a checked-in
+process pane mover. All fixtures are local and inert; no AI provider process or
+tokens are involved.
 In-app management cases use temporary registries and non-executed
 fake profile names to cover the Settings action row, keyboard and pointer
 routing, AccessKit button semantics, bounded pagination, stale overlay

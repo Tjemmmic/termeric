@@ -182,6 +182,13 @@ using strict window/tab/pane identities and a horizontal or vertical direction.
 The existing ordinary split path preserves launch/cwd inheritance and target
 validation without activating the native window; the correlated fresh pane ID
 cannot chain another host operation.
+API v26 adds separately granted cross-window ordinary-pane movement. A
+persistent handler can move one exact live ordinary pane onto one exact target
+pane in another process-owned tab or window using strict source and destination
+identities plus a horizontal or vertical direction. The existing atomic
+transfer path preserves the live PTY, title, history, and launch state, returns
+the fresh destination-local pane ID, never activates a native window, and
+cannot chain another host operation.
 Settings includes an installed-plugin manager with source/permission inspection,
 enable/disable, confirmed update, confirmed settings reset, and confirmed
 managed-copy removal; installation and typed value entry remain explicit CLI

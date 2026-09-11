@@ -8,6 +8,18 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Declarative plugin API v26 adds an independent `process-pane-move` grant for
+  moving one exact ordinary pane between exact live process-owned tabs and
+  windows. Source and destination window/tab/pane identities plus split
+  direction are revalidated before the atomic mutation; stale, closing,
+  live-domain, serial, terminal-less, or last-pane paths fail without
+  detaching the source. Success preserves the live PTY, title, history, and
+  launch state, returns a fresh destination-local pane ID without native
+  activation, and removes all host authority. Strict parsing, cross-window
+  routing/refusal, grant retention, install/update behavior, and the checked-in
+  process-pane-mover sample are tested hermetically without provider execution
+  or AI-token use.
+
 - Declarative plugin API v25 adds an independent `process-pane-create` grant
   for splitting one exact ordinary pane in one exact live process-owned
   window. Complete stable window/tab/pane identity and split direction are
