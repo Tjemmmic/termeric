@@ -1246,11 +1246,11 @@ mod tests {
         #[cfg(target_os = "linux")]
         let expected_query_events = vec![
             crate::event::TerminalEvent::PtyWrite(
-                b"\x1b]99;i=query-7:p=?;p=title,body,close,alive,buttons:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
+                b"\x1b]99;i=query-7:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
                     .to_vec(),
             ),
             crate::event::TerminalEvent::PtyWrite(
-                b"\x9d99;i=query-8:p=?;p=title,body,close,alive,buttons:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x9c"
+                b"\x9d99;i=query-8:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x9c"
                     .to_vec(),
             ),
         ];

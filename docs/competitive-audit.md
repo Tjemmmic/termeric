@@ -297,9 +297,11 @@ awaiting evidence:
   application/type/icon-name metadata, Linux urgency routing, origin-scoped
   native-ID replacement and close, bounded terminal-enforced expiry, requested
   native close reports, requested default/button activation reports, bounded
-  buttons, and exact-owner alive queries are now implemented. Native focus,
-  standard sound/silence policy is also implemented. Native focus, transmitted
-  icons/cache, and occasion filtering remain gaps. Kitty OSC 66 text sizing now has bounded multicell parsing,
+  buttons, exact-owner alive queries, standard sound/silence policy, and
+  bounded transmitted PNG/JPEG/GIF icons with process-wide cache reuse are now
+  implemented. Ordered local theme names take priority over transmitted data.
+  Native focus and occasion filtering remain gaps; notification-daemon icon
+  presentation is deferred manual acceptance. Kitty OSC 66 text sizing now has bounded multicell parsing,
   grid/edit/reflow/history/domain semantics, scaled shaping, alignment, and
   cursor geometry; native font-quality and client acceptance remain deferred.
   Kitty's terminal file-transfer and multiple-cursor extensions remain

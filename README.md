@@ -42,7 +42,8 @@ titles, working directories, clipboard access, dynamic colors, and mouse
 pointer shapes, including bounded application-owned title/icon queries and the
 xterm title stack, plus capability-negotiated Kitty OSC 99 desktop notifications
 with bounded application/category/icon-name metadata, Linux urgency routing,
-and origin-scoped replacement, close, expiry, close/activation reports, button
+transmitted PNG/JPEG/GIF icons with a process-wide bounded cache, and
+origin-scoped replacement, close, expiry, close/activation reports, button
 actions, sound policy, and alive queries.
 Kitty OSC 66 text sizing and explicit cell widths have bounded
 automated coverage, with native visual acceptance still pending. See the

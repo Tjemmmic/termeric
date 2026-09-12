@@ -77,6 +77,7 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 # XDG Desktop Portal accessibility preference monitoring.
 zbus = "5.19"
+freedesktop-icons = "0.4"
 # Bounded cancellation for the asynchronous notification-signal listener.
 async-channel = "2"
 futures-lite = "2"

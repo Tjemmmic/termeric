@@ -114,6 +114,10 @@ pub struct NotificationRequest {
     pub notification_types: Vec<String>,
     /// Ordered icon-name candidates supplied by Kitty OSC 99 `n` metadata.
     pub icon_names: Vec<String>,
+    /// Optional Kitty OSC 99 cache identifier for transmitted icon data.
+    pub icon_cache_id: Option<String>,
+    /// Optional base64-decoded PNG/JPEG/GIF bytes from Kitty OSC 99 `p=icon`.
+    pub icon_data: Option<Box<[u8]>>,
     /// Optional Kitty OSC 99 urgency. Absence retains the desktop default.
     pub urgency: Option<NotificationUrgency>,
     /// Kitty OSC 99 expiry policy.

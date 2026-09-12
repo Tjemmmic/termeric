@@ -3,6 +3,8 @@
 //! Handles terminal bell (BEL character) with visual and audio feedback.
 
 #[cfg(target_os = "linux")]
+mod icon;
+#[cfg(target_os = "linux")]
 mod tracked;
 
 use std::process::{Child, Command};
@@ -406,8 +408,8 @@ impl Notifications {
     }
 
     /// Route a terminal-owned notification, using tracked native handles when
-    /// its identity, expiry, reporting, or button policy requires lifecycle
-    /// state.
+    /// its identity, expiry, reporting, button, sound, or transmitted-icon
+    /// policy requires bounded worker state.
     pub fn notify_terminal(
         &mut self,
         origin: crate::tabs::TerminalEventOrigin,
@@ -552,6 +554,8 @@ fn requires_tracked_notification(request: &NotificationRequest) -> bool {
         || request.report_activation
         || !request.buttons.is_empty()
         || !matches!(request.sound, termeric_core::NotificationSound::System)
+        || request.icon_cache_id.is_some()
+        || request.icon_data.is_some()
 }
 
 fn default_notification_command() -> Option<String> {
@@ -786,5 +790,20 @@ mod tests {
                 ..NotificationRequest::default()
             }));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn anonymous_transmitted_icons_use_the_bounded_tracked_route() {
+        assert!(requires_tracked_notification(&NotificationRequest {
+            title: Some("Title".into()),
+            icon_data: Some(vec![1, 2, 3].into_boxed_slice()),
+            ..NotificationRequest::default()
+        }));
+        assert!(requires_tracked_notification(&NotificationRequest {
+            title: Some("Title".into()),
+            icon_cache_id: Some("cached".into()),
+            ..NotificationRequest::default()
+        }));
     }
 }

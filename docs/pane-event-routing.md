@@ -43,7 +43,8 @@ preserving request/response correctness.
 Forwarded bells and ordinary notifications enter their existing global rate
 limits, then submit platform helpers to a separate 16-request worker queue with
 an eight-child ceiling. Identified, explicitly expiring, reporting, buttoned,
-or non-default-sound Linux OSC 99 requests instead enter a 64-request worker
+non-default-sound, or transmitted-icon Linux OSC 99 requests instead enter a
+64-request worker
 and retain at most 64
 origin-scoped native handles plus 64 pending close reports. One bounded ordered
 native signal listener feeds `ActionInvoked` and `NotificationClosed` back

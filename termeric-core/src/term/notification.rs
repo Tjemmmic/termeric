@@ -14,6 +14,7 @@ pub const MAX_NOTIFICATION_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_NOTIFICATION_METADATA_VALUE_BYTES: usize = 256;
 pub const MAX_NOTIFICATION_TYPES: usize = 8;
 pub const MAX_NOTIFICATION_ICON_NAMES: usize = 8;
+pub const MAX_NOTIFICATION_ICON_BYTES: usize = 192 * 1024;
 pub const MAX_NOTIFICATION_BUTTONS: usize = 8;
 pub const MAX_NOTIFICATION_BUTTON_LABEL_BYTES: usize = 256;
 pub const MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES: usize = 4 * 1024;
@@ -29,6 +30,7 @@ enum PayloadKind {
     Query,
     Alive,
     Buttons,
+    Icon,
     Close,
     Unsupported,
 }
@@ -42,6 +44,7 @@ struct Metadata {
     application_name: Option<String>,
     notification_types: Vec<String>,
     icon_names: Vec<String>,
+    icon_cache_id: Option<String>,
     urgency: Option<NotificationUrgency>,
     expiry: Option<NotificationExpiry>,
     sound: Option<NotificationSound>,
@@ -77,7 +80,25 @@ impl PendingField {
         self.encoded_tail.extend_from_slice(bytes);
         if done || bytes.ends_with(b"=") {
             self.finish_encoded(limit)?;
+        } else {
+            self.finish_complete_groups(limit)?;
         }
+        Ok(())
+    }
+
+    fn finish_complete_groups(&mut self, limit: usize) -> Result<(), ()> {
+        let complete_len = self.encoded_tail.len() / 4 * 4;
+        if complete_len == 0 {
+            return Ok(());
+        }
+        let decoded = STANDARD
+            .decode(&self.encoded_tail[..complete_len])
+            .map_err(|_| ())?;
+        if self.decoded.len().saturating_add(decoded.len()) > limit {
+            return Err(());
+        }
+        self.decoded.extend_from_slice(&decoded);
+        self.encoded_tail.drain(..complete_len);
         Ok(())
     }
 
@@ -110,9 +131,11 @@ struct PendingNotification {
     title: PendingField,
     body: PendingField,
     buttons: PendingField,
+    icon: PendingField,
     application_name: Option<String>,
     notification_types: Vec<String>,
     icon_names: Vec<String>,
+    icon_cache_id: Option<String>,
     urgency: Option<NotificationUrgency>,
     expiry: NotificationExpiry,
     sound: NotificationSound,
@@ -126,6 +149,7 @@ impl PendingNotification {
             + self.title.retained_bytes()
             + self.body.retained_bytes()
             + self.buttons.retained_bytes()
+            + self.icon.retained_bytes()
             + self.application_name.as_ref().map_or(0, String::len)
             + self
                 .notification_types
@@ -133,6 +157,7 @@ impl PendingNotification {
                 .map(String::len)
                 .sum::<usize>()
             + self.icon_names.iter().map(String::len).sum::<usize>()
+            + self.icon_cache_id.as_ref().map_or(0, String::len)
     }
 
     fn apply_metadata(&mut self, metadata: Metadata) -> Result<(), ()> {
@@ -149,6 +174,9 @@ impl PendingNotification {
             metadata.icon_names,
             MAX_NOTIFICATION_ICON_NAMES,
         )?;
+        if let Some(icon_cache_id) = metadata.icon_cache_id {
+            self.icon_cache_id = Some(icon_cache_id);
+        }
         if metadata.urgency.is_some() {
             self.urgency = metadata.urgency;
         }
@@ -175,9 +203,12 @@ impl PendingNotification {
         self.buttons
             .finish_encoded(MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES)
             .ok()?;
+        self.icon.finish_encoded(MAX_NOTIFICATION_ICON_BYTES).ok()?;
         let mut title = String::from_utf8(self.title.decoded).ok()?;
         let mut body = String::from_utf8(self.body.decoded).ok()?;
         let buttons = parse_buttons(self.buttons.decoded)?;
+        let icon_data =
+            (!self.icon.decoded.is_empty()).then(|| self.icon.decoded.into_boxed_slice());
         if title.is_empty() {
             if body.is_empty() {
                 return None;
@@ -191,6 +222,8 @@ impl PendingNotification {
             application_name: self.application_name,
             notification_types: self.notification_types,
             icon_names: self.icon_names,
+            icon_cache_id: self.icon_cache_id,
+            icon_data,
             urgency: self.urgency,
             expiry: self.expiry,
             sound: self.sound,
@@ -270,8 +303,14 @@ impl NotificationProtocol {
         }
         if !matches!(
             metadata.payload,
-            PayloadKind::Title | PayloadKind::Body | PayloadKind::Buttons
+            PayloadKind::Title | PayloadKind::Body | PayloadKind::Buttons | PayloadKind::Icon
         ) {
+            return Osc99Action::None;
+        }
+        if metadata.payload == PayloadKind::Icon && !metadata.encoded {
+            if let Some(identifier) = metadata.identifier.as_deref() {
+                self.remove(identifier);
+            }
             return Osc99Action::None;
         }
         if !metadata.done && metadata.identifier.is_none() {
@@ -299,6 +338,7 @@ impl NotificationProtocol {
                 &mut notification.buttons,
                 MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES,
             ),
+            PayloadKind::Icon => (&mut notification.icon, MAX_NOTIFICATION_ICON_BYTES),
             _ => unreachable!(),
         };
         let appended = if encoded {
@@ -391,7 +431,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
         let key = key[0];
         let singular = matches!(
             key,
-            b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a' | b'f' | b'u' | b'w' | b's'
+            b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a' | b'f' | b'u' | b'w' | b's' | b'g'
         );
         if singular && std::mem::replace(&mut seen[key as usize], true) {
             return Err(());
@@ -410,6 +450,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                     b"?" => PayloadKind::Query,
                     b"alive" => PayloadKind::Alive,
                     b"buttons" => PayloadKind::Buttons,
+                    b"icon" => PayloadKind::Icon,
                     b"close" => PayloadKind::Close,
                     _ => PayloadKind::Unsupported,
                 };
@@ -429,7 +470,17 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                 if metadata.icon_names.len() >= MAX_NOTIFICATION_ICON_NAMES {
                     return Err(());
                 }
-                metadata.icon_names.push(decode_metadata_text(value)?);
+                let name = decode_metadata_text(value)?;
+                if name.starts_with('.') || name.contains('/') || name.contains('\\') {
+                    return Err(());
+                }
+                metadata.icon_names.push(name);
+            }
+            b'g' => {
+                if !valid_identifier(value) {
+                    return Err(());
+                }
+                metadata.icon_cache_id = Some(String::from_utf8(value.to_vec()).map_err(|_| ())?);
             }
             b'u' => {
                 metadata.urgency = Some(match value {
@@ -745,6 +796,8 @@ mod tests {
                 application_name: Some("build-agent".into()),
                 notification_types: vec!["build.complete".into(), "ci".into()],
                 icon_names: vec!["warning".into(), "my-app".into()],
+                icon_cache_id: None,
+                icon_data: None,
                 urgency: Some(NotificationUrgency::Critical),
                 expiry: NotificationExpiry::System,
                 sound: NotificationSound::System,
@@ -763,6 +816,8 @@ mod tests {
                 application_name: Some("monitor".into()),
                 notification_types: Vec::new(),
                 icon_names: vec!["info".into()],
+                icon_cache_id: None,
+                icon_data: None,
                 urgency: Some(NotificationUrgency::Low),
                 expiry: NotificationExpiry::System,
                 sound: NotificationSound::System,
@@ -1027,6 +1082,139 @@ mod tests {
                 Osc99Action::None
             );
         }
+    }
+
+    #[test]
+    fn transmitted_icons_are_encoded_bounded_and_cache_identified() {
+        let mut protocol = NotificationProtocol::default();
+        assert_eq!(
+            protocol.handle(&parts(b"i=icon:d=0:p=icon:e=1:g=shared-icon", b"AA")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=icon:d=0:p=icon:e=1", b"EC")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=icon", b"With icon")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("With icon".into()),
+                identifier: Some("icon".into()),
+                icon_cache_id: Some("shared-icon".into()),
+                icon_data: Some(vec![0, 1, 2].into_boxed_slice()),
+                ..NotificationRequest::default()
+            })
+        );
+
+        let mut padded = NotificationProtocol::default();
+        assert_eq!(
+            padded.handle(&parts(b"i=padded:d=0:p=icon:e=1:g=cached", b"AA==")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            padded.handle(&parts(b"i=padded:d=0:p=icon:e=1", b"AQ==")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            padded.handle(&parts(b"i=padded", b"Padded")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Padded".into()),
+                identifier: Some("padded".into()),
+                icon_cache_id: Some("cached".into()),
+                icon_data: Some(vec![0, 1].into_boxed_slice()),
+                ..NotificationRequest::default()
+            })
+        );
+
+        let mut cached = NotificationProtocol::default();
+        assert_eq!(
+            cached.handle(&parts(b"i=reuse:g=shared-icon", b"Reuse")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Reuse".into()),
+                identifier: Some("reuse".into()),
+                icon_cache_id: Some("shared-icon".into()),
+                ..NotificationRequest::default()
+            })
+        );
+
+        for metadata in [
+            b"i=plain:d=0:p=icon".as_slice(),
+            b"i=bad-g:d=0:p=icon:e=1:g=../escape".as_slice(),
+            b"i=path-name:d=0:n=L3RtcC9pY29uLnBuZw==".as_slice(),
+        ] {
+            let mut rejected = NotificationProtocol::default();
+            assert_eq!(
+                rejected.handle(&parts(metadata, b"AA==")),
+                Osc99Action::None
+            );
+        }
+
+        let oversized = vec![0_u8; MAX_NOTIFICATION_ICON_BYTES + 1];
+        let oversized = STANDARD.encode(oversized);
+        let mut rejected = NotificationProtocol::default();
+        assert_eq!(
+            rejected.handle(&parts(b"i=large:d=0:p=icon:e=1", oversized.as_bytes(),)),
+            Osc99Action::None
+        );
+    }
+
+    #[test]
+    fn transmitted_icon_aggregate_byte_limit_is_exact() {
+        let exact_encoded = STANDARD.encode(vec![0_u8; MAX_NOTIFICATION_ICON_BYTES]);
+        let mut exact = PendingField::default();
+        for chunk in exact_encoded
+            .as_bytes()
+            .chunks(MAX_OSC99_ENCODED_CHUNK_BYTES)
+        {
+            exact
+                .append_encoded(chunk, false, MAX_NOTIFICATION_ICON_BYTES)
+                .unwrap();
+        }
+        exact.finish_encoded(MAX_NOTIFICATION_ICON_BYTES).unwrap();
+        assert_eq!(exact.decoded.len(), MAX_NOTIFICATION_ICON_BYTES);
+
+        let mut protocol = NotificationProtocol::default();
+        for chunk in exact_encoded
+            .as_bytes()
+            .chunks(MAX_OSC99_ENCODED_CHUNK_BYTES)
+        {
+            assert_eq!(
+                protocol.handle(&parts(b"i=exact:d=0:p=icon:e=1:g=exact-cache", chunk)),
+                Osc99Action::None
+            );
+        }
+        match protocol.handle(&parts(b"i=exact", b"Exact limit")) {
+            Osc99Action::Notify(request) => {
+                assert_eq!(request.icon_cache_id.as_deref(), Some("exact-cache"));
+                assert_eq!(
+                    request.icon_data.as_deref().map(<[u8]>::len),
+                    Some(MAX_NOTIFICATION_ICON_BYTES)
+                );
+            }
+            action => panic!("expected exact-limit notification, got {action:?}"),
+        }
+
+        let oversized_encoded = STANDARD.encode(vec![0_u8; MAX_NOTIFICATION_ICON_BYTES + 1]);
+        let mut oversized = PendingField::default();
+        let mut rejected = false;
+        for chunk in oversized_encoded
+            .as_bytes()
+            .chunks(MAX_OSC99_ENCODED_CHUNK_BYTES)
+        {
+            if oversized
+                .append_encoded(chunk, false, MAX_NOTIFICATION_ICON_BYTES)
+                .is_err()
+            {
+                rejected = true;
+                break;
+            }
+        }
+        assert!(
+            rejected
+                || oversized
+                    .finish_encoded(MAX_NOTIFICATION_ICON_BYTES)
+                    .is_err()
+        );
     }
 
     #[test]

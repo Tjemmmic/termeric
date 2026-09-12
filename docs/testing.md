@@ -958,6 +958,10 @@ warning per failing integration. The native X11 spies continue to prove exact
 unit fixtures. Pure Linux argument fixtures additionally prove that OSC 99
 application identity, categories, semantic icon mapping, and urgency remain
 separate arguments even when title/body text contains shell metacharacters.
+Separate hermetic fixtures decode bounded PNG/JPEG/GIF icon data, enforce both
+LRU cache rails, preserve a prior cache value after invalid replacement data,
+verify ordered local-name selection, and assert the exact freedesktop
+`(iiibiiay)` image-data signature without contacting D-Bus.
 
 The OSC 99 conformance fixture fragments two interleaved notification IDs,
 plain and base64 title/body payloads, completion, and a capability query under
@@ -969,8 +973,9 @@ deduplication, per-value/per-list ceilings, strict `w` expiry parsing,
 payload-free identified `p=close`, and Linux-only close/expiry/urgency
 discovery. The same fixtures strictly parse `c=0/1`, reject malformed close
 policy and alive payloads, strictly parse `a=report`/`focus` combinations,
-bound plain/base64 `p=buttons` labels, and advertise Linux `c=1`, `a=report`,
-`p=alive`, `p=buttons`, and the exact standard `s` vocabulary. The same metadata
+bound plain/base64 `p=buttons` labels, assemble encoded-only `p=icon` data and
+strict cache IDs, and advertise Linux `c=1`, `a=report`, `p=alive`, `p=buttons`,
+`p=icon`, and the exact standard `s` vocabulary. The same metadata
 fixtures validate bounded base64-only sound names and reject
 plain, unknown, duplicated, control-bearing, and oversized values. Pure Linux
 hint tests prove that system policy emits no override, silence uses a boolean

@@ -971,6 +971,12 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
                 if !request.buttons.is_empty() {
                     policies.push(format!("buttons={}", request.buttons.len()));
                 }
+                if let Some(cache_id) = request.icon_cache_id {
+                    policies.push(format!("icon-cache={cache_id}"));
+                }
+                if let Some(icon_data) = request.icon_data {
+                    policies.push(format!("icon-bytes={}", icon_data.len()));
+                }
                 let policies = if policies.is_empty() {
                     String::new()
                 } else {

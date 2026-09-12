@@ -61,7 +61,7 @@ pub(super) struct ProtocolReply {
 enum TrackedCommand {
     Show {
         key: TrackedKey,
-        request: NotificationRequest,
+        request: Box<NotificationRequest>,
     },
     Close {
         key: TrackedKey,
@@ -102,6 +102,10 @@ trait TrackedNotificationBackend: Send + 'static {
 
     fn close(&mut self, desktop_id: u32) -> Result<(), String>;
 
+    fn take_warning(&mut self) -> Option<String> {
+        None
+    }
+
     fn shutdown(&mut self) {}
 }
 
@@ -131,13 +135,20 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
     fn show(&mut self, key: TrackedKey, request: NotificationRequest) -> Vec<String> {
         let replaces_id = self.entries.get(&key).map_or(0, |entry| entry.desktop_id);
         let button_action_keys = self.allocate_button_action_keys(request.buttons.len());
-        let desktop_id = match self
+        let desktop_result = self
             .backend
-            .show(&request, replaces_id, &button_action_keys)
-        {
+            .show(&request, replaces_id, &button_action_keys);
+        let mut warnings = self.backend.take_warning().into_iter().collect::<Vec<_>>();
+        let desktop_id = match desktop_result {
             Ok(desktop_id) if desktop_id != 0 => desktop_id,
-            Ok(_) => return vec!["notification service returned invalid desktop ID 0".into()],
-            Err(error) => return vec![format!("could not display tracked notification: {error}")],
+            Ok(_) => {
+                warnings.push("notification service returned invalid desktop ID 0".into());
+                return warnings;
+            }
+            Err(error) => {
+                warnings.push(format!("could not display tracked notification: {error}"));
+                return warnings;
+            }
         };
         let displayed_at = Instant::now();
         let expires_at = match request.expiry {
@@ -173,7 +184,8 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
                 reply_uses_8bit_controls: request.reply_uses_8bit_controls,
             },
         );
-        self.enforce_capacity()
+        warnings.extend(self.enforce_capacity());
+        warnings
     }
 
     fn allocate_button_action_keys(&mut self, count: usize) -> Vec<String> {
@@ -491,6 +503,44 @@ fn freedesktop_sound_hint(sound: NotificationSound) -> Option<FreedesktopSoundHi
     }
 }
 
+fn freedesktop_image_data_value(
+    icon: &super::icon::DecodedNotificationIcon,
+) -> zbus::zvariant::Value<'_> {
+    zbus::zvariant::Value::from((
+        icon.width,
+        icon.height,
+        icon.rowstride,
+        true,
+        8_i32,
+        4_i32,
+        icon.data.as_slice(),
+    ))
+}
+
+fn freedesktop_app_icon(
+    request: &NotificationRequest,
+    named_icon: Option<&str>,
+    has_transmitted_icon: bool,
+) -> String {
+    if let Some(named_icon) = named_icon {
+        return named_icon.to_owned();
+    }
+    if has_transmitted_icon {
+        return String::new();
+    }
+    request
+        .icon_names
+        .iter()
+        .find(|name| super::icon::is_safe_icon_name(name))
+        .map(|name| super::freedesktop_icon_name(name))
+        .or(request
+            .application_name
+            .as_deref()
+            .filter(|name| super::icon::is_safe_icon_name(name)))
+        .unwrap_or("")
+        .to_owned()
+}
+
 pub(super) struct TrackedNotifications {
     commands: SyncSender<TrackedCommand>,
     completions: Receiver<TrackedCompletion>,
@@ -544,7 +594,7 @@ impl TrackedNotifications {
         );
         self.send(TrackedCommand::Show {
             key: TrackedKey { origin, identifier },
-            request,
+            request: Box::new(request),
         })
     }
 
@@ -627,7 +677,7 @@ fn tracked_worker<B: TrackedNotificationBackend>(
         match commands.recv_timeout(wait) {
             Ok(TrackedCommand::Show { key, request }) => {
                 let failures = match state.backend.prepare(command_sender.clone()) {
-                    Ok(()) => state.show(key, request),
+                    Ok(()) => state.show(key, *request),
                     Err(error) => vec![format!(
                         "could not prepare notification close tracking: {error}"
                     )],
@@ -720,6 +770,7 @@ struct FreedesktopBackend {
     signal_stop: Option<async_channel::Sender<()>>,
     signal_thread: Option<std::thread::JoinHandle<()>>,
     signal_alive: Option<Arc<AtomicBool>>,
+    last_warning: Option<String>,
 }
 
 impl FreedesktopBackend {
@@ -812,6 +863,12 @@ impl TrackedNotificationBackend for FreedesktopBackend {
         replaces_id: u32,
         button_action_keys: &[String],
     ) -> Result<u32, String> {
+        let (transmitted_icon, warning) = super::icon::resolve_transmitted_icon(
+            request.icon_cache_id.as_deref(),
+            request.icon_data.as_deref(),
+        );
+        self.last_warning = warning;
+        let named_icon = super::icon::first_available_icon_name(&request.icon_names);
         let connection = self.connection()?;
         (|| {
             use std::collections::HashMap;
@@ -826,12 +883,8 @@ impl TrackedNotificationBackend for FreedesktopBackend {
             )
             .map_err(|error| format!("notification interface is unavailable: {error}"))?;
             let app_name = request.application_name.as_deref().unwrap_or("Termeric");
-            let app_icon = request
-                .icon_names
-                .first()
-                .map(|name| super::freedesktop_icon_name(name))
-                .or(request.application_name.as_deref())
-                .unwrap_or("");
+            let app_icon =
+                freedesktop_app_icon(request, named_icon.as_deref(), transmitted_icon.is_some());
             let summary = escape_markup(request.title.as_deref().unwrap_or("Terminal"));
             let body = escape_markup(&request.body);
             let actions = freedesktop_actions(request, button_action_keys);
@@ -857,6 +910,11 @@ impl TrackedNotificationBackend for FreedesktopBackend {
                     hints.insert("sound-name", Value::from(name));
                 }
             }
+            if named_icon.is_none()
+                && let Some(icon) = transmitted_icon.as_ref()
+            {
+                hints.insert("image-data", freedesktop_image_data_value(icon));
+            }
             let expire_timeout = match request.expiry {
                 NotificationExpiry::System => -1,
                 NotificationExpiry::Never => 0,
@@ -868,7 +926,7 @@ impl TrackedNotificationBackend for FreedesktopBackend {
                     &(
                         app_name,
                         replaces_id,
-                        app_icon,
+                        app_icon.as_str(),
                         summary.as_str(),
                         body.as_str(),
                         actions,
@@ -894,6 +952,10 @@ impl TrackedNotificationBackend for FreedesktopBackend {
                 .call("CloseNotification", &(desktop_id,))
                 .map_err(|error| format!("CloseNotification call failed: {error}"))
         })()
+    }
+
+    fn take_warning(&mut self) -> Option<String> {
+        self.last_warning.take()
     }
 
     fn shutdown(&mut self) {
@@ -1490,6 +1552,43 @@ mod tests {
                 Some(FreedesktopSoundHint::Name(name))
             );
         }
+    }
+
+    #[test]
+    fn freedesktop_image_data_has_the_standard_exact_tuple_signature() {
+        let icon = crate::notifications::icon::DecodedNotificationIcon {
+            width: 2,
+            height: 1,
+            rowstride: 8,
+            data: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        };
+        let value = freedesktop_image_data_value(&icon);
+        assert_eq!(value.value_signature().to_string(), "(iiibiiay)");
+    }
+
+    #[test]
+    fn freedesktop_local_names_win_before_transmitted_fallback_without_paths() {
+        let request = NotificationRequest {
+            icon_names: vec!["warning".into()],
+            application_name: Some("org.example.App".into()),
+            ..NotificationRequest::default()
+        };
+        assert_eq!(
+            freedesktop_app_icon(&request, Some("dialog-warning"), true),
+            "dialog-warning"
+        );
+        assert_eq!(freedesktop_app_icon(&request, None, true), "");
+        assert_eq!(
+            freedesktop_app_icon(&request, None, false),
+            "dialog-warning"
+        );
+
+        let unsafe_request = NotificationRequest {
+            icon_names: vec!["/tmp/untrusted.png".into()],
+            application_name: Some("../untrusted.png".into()),
+            ..NotificationRequest::default()
+        };
+        assert_eq!(freedesktop_app_icon(&unsafe_request, None, false), "");
     }
 
     #[test]

@@ -24,9 +24,9 @@ pub use mode::TerminalMode;
 pub use multicell::MAX_OSC66_TEXT_BYTES;
 use multicell::Osc66Command;
 pub use notification::{
-    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES, MAX_NOTIFICATION_TITLE_BYTES,
-    MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES, MAX_PENDING_NOTIFICATION_BYTES,
-    MAX_PENDING_NOTIFICATIONS,
+    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_ICON_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES,
+    MAX_NOTIFICATION_TITLE_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES,
+    MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS,
 };
 use notification::{NotificationProtocol, Osc99Action};
 #[cfg(test)]
@@ -36,6 +36,8 @@ pub use selection::{Point, Selection, SelectionType};
 pub(crate) use title::MAX_TITLE_BYTES;
 pub use title::XTERM_TITLE_STACK_DEPTH;
 use title::{ApplicationTitles, TitleTarget};
+
+const MAX_PENDING_NOTIFICATION_ICON_EVENT_BYTES: usize = 2 * MAX_NOTIFICATION_ICON_BYTES;
 
 use crate::ansi::Processor;
 use crate::event::TerminalEvent;
@@ -777,6 +779,7 @@ pub struct Terminal {
     prompt_navigation: Option<PromptNavigationState>,
     /// Pending events to be handled by the application
     pending_events: Vec<TerminalEvent>,
+    pending_notification_icon_event_bytes: usize,
     dynamic_colors: DynamicColors,
     synchronized_output_snapshot: Option<SynchronizedOutputSnapshot>,
 }
@@ -879,6 +882,7 @@ impl Terminal {
             shell: ShellIntegration::new(),
             prompt_navigation: None,
             pending_events: Vec::new(),
+            pending_notification_icon_event_bytes: 0,
             dynamic_colors: DynamicColors::default(),
             synchronized_output_snapshot: None,
         }
@@ -943,7 +947,7 @@ impl Terminal {
             Osc99Action::None => {}
             Osc99Action::Query(identifier) => {
                 #[cfg(target_os = "linux")]
-                let capabilities = "p=title,body,close,alive,buttons:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1";
+                let capabilities = "p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1";
                 #[cfg(not(target_os = "linux"))]
                 let capabilities = "p=title,body:o=always";
                 let response = format!("\x1b]99;i={identifier}:p=?;{capabilities}\x1b\\");
@@ -1975,6 +1979,21 @@ impl Terminal {
     pub fn push_event(&mut self, event: TerminalEvent) {
         let event = match event {
             TerminalEvent::PtyWrite(reply) => TerminalEvent::PtyWrite(self.frame_pty_reply(&reply)),
+            TerminalEvent::Notification(mut request) => {
+                if let Some(icon) = request.icon_data.as_ref() {
+                    if self
+                        .pending_notification_icon_event_bytes
+                        .saturating_add(icon.len())
+                        > MAX_PENDING_NOTIFICATION_ICON_EVENT_BYTES
+                    {
+                        request.icon_data = None;
+                        request.icon_cache_id = None;
+                    } else {
+                        self.pending_notification_icon_event_bytes += icon.len();
+                    }
+                }
+                TerminalEvent::Notification(request)
+            }
             event => event,
         };
         self.pending_events.push(event);
@@ -2062,6 +2081,7 @@ impl Terminal {
 
     /// Drain all pending events
     pub fn drain_events(&mut self) -> Vec<TerminalEvent> {
+        self.pending_notification_icon_event_bytes = 0;
         std::mem::take(&mut self.pending_events)
     }
 
@@ -8906,5 +8926,45 @@ mod tests {
             .completed_region(1)
             .unwrap();
         assert_eq!(recovered.exit_code, None);
+    }
+
+    #[test]
+    fn completed_notification_icons_have_a_separate_pending_event_byte_ceiling() {
+        let mut term = Terminal::new(8, 2);
+        for index in 0..3 {
+            term.push_event(TerminalEvent::Notification(
+                crate::event::NotificationRequest {
+                    title: Some(format!("icon-{index}")),
+                    icon_cache_id: Some(format!("cache-{index}")),
+                    icon_data: Some(
+                        vec![index as u8; MAX_NOTIFICATION_ICON_BYTES].into_boxed_slice(),
+                    ),
+                    ..crate::event::NotificationRequest::default()
+                },
+            ));
+        }
+        let events = term.drain_events();
+        assert_eq!(events.len(), 3);
+        assert!(
+            matches!(&events[0], TerminalEvent::Notification(request) if request.icon_data.is_some())
+        );
+        assert!(
+            matches!(&events[1], TerminalEvent::Notification(request) if request.icon_data.is_some())
+        );
+        assert!(
+            matches!(&events[2], TerminalEvent::Notification(request) if request.icon_data.is_none() && request.icon_cache_id.is_none())
+        );
+
+        term.push_event(TerminalEvent::Notification(
+            crate::event::NotificationRequest {
+                title: Some("after-drain".into()),
+                icon_data: Some(vec![0; MAX_NOTIFICATION_ICON_BYTES].into_boxed_slice()),
+                ..crate::event::NotificationRequest::default()
+            },
+        ));
+        assert!(matches!(
+            term.drain_events().as_slice(),
+            [TerminalEvent::Notification(request)] if request.icon_data.is_some()
+        ));
     }
 }

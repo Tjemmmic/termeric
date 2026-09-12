@@ -123,7 +123,7 @@ a freedesktop notification service. They do not invoke an AI provider.
    Repeat by clicking the notification body rather than a button. The
    activation reply should then have an empty payload after the semicolon.
    Optionally query `p=?` first and confirm the response includes
-   `p=title,body,close,alive,buttons` and `a=report`.
+   `p=title,body,close,alive,buttons,icon` and `a=report`.
 
 8. With desktop notification sounds enabled, compare the default, silent, and
    error policies. The first follows daemon policy, the second must request
@@ -139,6 +139,30 @@ a freedesktop notification service. They do not invoke an AI provider.
    A daemon may ignore named sounds; record its name/version and advertised
    sound capability. `p=?` should still report Termeric's exact bounded
    `s=system,silent,error,warn,warning,info,question` vocabulary.
+
+9. Exercise transmitted-icon delivery and cache reuse. This resizes the large
+   repository icon in memory, emits legal 4-KiB base64 protocol chunks, and
+   does not invoke an AI provider:
+
+   ```bash
+   ffmpeg -v error -i assets/icons/termeric.png -vf scale=256:-1 \
+     -f image2pipe -vcodec png - |
+     base64 -w0 |
+     fold -w 4096 |
+     while IFS= read -r chunk; do
+       printf '\033]99;i=termeric-icon:d=0:p=icon:e=1:g=termeric-logo;%s\033\\' "$chunk"
+     done
+   printf '\033]99;i=termeric-icon:g=termeric-logo;Fresh transmitted icon\033\\'
+   printf '\033]99;i=termeric-icon-reuse:g=termeric-logo;Cached transmitted icon\033\\'
+   printf '\033]99;i=termeric-icon-name:g=termeric-logo:n=aW5mbw==;Local name wins\033\\'
+   ```
+
+   The first two notifications should show the Termeric logo without terminal
+   output or scrolling. The third should use the desktop's local informational
+   icon instead, proving that a resolvable local name has priority over cached
+   transmitted pixels. Record the daemon result if it ignores `image-data` or
+   substitutes its own icon; that is a native-policy limitation, not a reason
+   to block the remaining roadmap work.
 
 Record the desktop environment and notification-daemon version, whether each
 observation passed, and a screenshot or short recording. A visible warning

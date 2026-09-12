@@ -142,8 +142,8 @@ desktop helper.
 
 Termeric also implements a bounded subset of Kitty's
 [OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
-`d`, `e`, `w`, `c`, `a`, and `s` provide strict identifiers,
-title/body/close/alive/buttons selection, completion, plain or RFC 4648 base64
+`d`, `e`, `w`, `c`, `a`, `s`, and `g` provide strict identifiers,
+title/body/close/alive/buttons/icon selection, completion, plain or RFC 4648 base64
 payloads, expiry policy, and close/activation-report requests. The `f`, `t`,
 and `n` keys add base64-encoded
 application identity, ordered notification types, and ordered icon-name
@@ -156,6 +156,12 @@ The singular `s` value is bounded base64 UTF-8 and accepts `system`, `silent`,
 Assembled titles and bodies retain at most 4 KiB and 16 KiB respectively.
 Button payloads retain at most 4 KiB before decoding into at most eight
 non-empty labels of 256 UTF-8 bytes each, separated by U+2028.
+`p=icon` is encoded-only and retains at most 192 KiB of decoded binary input;
+plain icon data is rejected. Its optional `g` value is a strict 128-byte cache
+identifier. Completed-but-undrained terminal events retain at most 384 KiB of
+icon bytes; excess events keep their notification text and non-icon metadata
+but discard the binary icon payload and its cache update instead of reusing a
+stale cache value.
 
 Up to 16 identified notifications may be incomplete at once under a 256 KiB
 aggregate payload ceiling. Interleaved identifiers remain isolated, the least
@@ -184,12 +190,12 @@ C0/C1 controls.
 
 `OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
 terminal's S7C1T/S8C1T framing. Linux responds with
-`p=title,body,close,alive,buttons:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1`; other targets respond with
+`p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1`; other targets respond with
 `p=title,body:o=always`. The platform split keeps lifecycle and urgency
 discovery truthful.
 Application/type/icon-name metadata has no capability-query key. Non-`always`
-occasion requirements are rejected. Native focus, application-side filtering,
-transmitted icon data and icon caching are not advertised or claimed.
+occasion requirements are rejected. Native focus and application-side
+filtering are not advertised or claimed.
 
 Unidentified requests with desktop-default expiry enter the existing
 rate-limited helper path. On Linux, requests needing lifecycle semantics use a
@@ -227,6 +233,26 @@ the boolean freedesktop `suppress-sound` hint; error, warning, information, and
 question become the corresponding `dialog-*` sound-theme name. `system` emits
 no override and leaves policy to the notification service. These hints are
 advisory at the native boundary, and no separate audio helper is launched.
+
+Transmitted icon data also selects the tracked Linux path. The decoder accepts
+only PNG, JPEG, and GIF, takes one static frame, and converts it to consistent
+RGBA pixels. Input is rejected above 512 pixels in either dimension or 1 MiB
+of decoded pixel data. The process-wide `g` namespace is shared by all Termeric
+windows for the process lifetime and uses deterministic least-recently-used
+eviction at either 64 entries or 16 MiB of retained pixel data. A valid fresh
+icon atomically replaces its cache entry; invalid replacement data leaves the
+previous valid entry usable. A `g`-only request reuses and refreshes an existing
+entry, while a miss or decode failure preserves the notification and reports a
+bounded warning.
+
+Ordered local `n` icon candidates take priority over transmitted data. If none
+resolves, the decoded pixels are sent directly in the standard freedesktop
+`image-data` `(iiibiiay)` tuple with no temporary file. Client-supplied
+path-like icon names are rejected; a safe application name remains only a
+legacy fallback when no transmitted icon exists. Theme lookup and decoding
+happen on the bounded worker, not the render/input path. Linux capability
+replies therefore include `p=icon`; other targets continue to omit it.
+Animated GIF timing is intentionally not retained or played.
 
 D-Bus methods have a two-second timeout, and evicting the oldest handle makes a
 best-effort close. Repeated worker failures are deduplicated until a successful
