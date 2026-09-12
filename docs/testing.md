@@ -645,13 +645,15 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 30 --gpu-smoke \
   --output target/soak/local.json \
   --log target/soak/local.log
+python3 scripts/validate_soak.py target/soak/local.json --source .
 ```
 
-Run `python3 -m unittest scripts.test_run_soak` to prove deliberate RSS,
-thread, fd, transcript-backlog, incomplete-drain, dropped-entry, missing-
-metric, malformed/mismatched inventory, bounded-label, and category-summary
-fixtures fail or summarize exactly as required. Exact scenario boundaries,
-ceilings, artifact fields, and known blind spots are documented in
+Run `python3 -m unittest scripts.test_run_soak scripts.test_validate_soak` to
+prove deliberate RSS, thread, fd, transcript-backlog, incomplete-drain,
+dropped-entry, missing-metric, malformed/mismatched inventory, bounded-label,
+category-summary, and serialized-record tampering fixtures fail or summarize
+exactly as required. Exact scenario boundaries, ceilings, artifact fields, and
+known blind spots are documented in
 [`resource-soak.md`](resource-soak.md).
 
 The separate `scripts/run_native_gui_soak.py` runner samples the displayed

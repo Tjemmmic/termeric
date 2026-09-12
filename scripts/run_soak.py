@@ -18,7 +18,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_SOAK_SCHEMA_VERSION = 2
+CORE_SOAK_SCHEMA_VERSION = 3
+CORE_SOAK_RECORD_KIND = "termeric-core-resource-soak"
 SOAK_PREFIX = "TERMERIC_SOAK "
 TRANSCRIPT_ENTRIES_PER_ITERATION = 68
 MAX_PROCESS_LABEL_CHARACTERS = 32
@@ -55,6 +56,28 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def relative_file_path(root: Path, path: Path, context: str) -> str:
+    """Return a regular file path confined beneath ``root``."""
+    root = root.resolve()
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"{context} must be inside {root}: {path}") from error
+    if path.is_symlink() or not resolved.is_file():
+        raise ValueError(f"{context} must be a regular non-symlink file: {path}")
+    return relative.as_posix()
+
+
+def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def build_test_binary() -> Path:
@@ -479,6 +502,87 @@ def evaluate_progress_ceilings(
     ]
 
 
+def evaluate_outcome_checks(
+    *,
+    gpu_smoke_requested: bool,
+    gpu_exit_status: int | None,
+    scenario_exit_status: int,
+    completion_markers: int,
+    remaining_observed_children: int,
+    gpu_error_count: int,
+) -> list[dict[str, Any]]:
+    """Build checks from the terminal outcomes retained in the record."""
+    return [
+        {
+            "name": "headless GPU smoke exit status",
+            "actual": gpu_exit_status if gpu_smoke_requested else "not requested",
+            "max": 0 if gpu_smoke_requested else "not requested",
+            "passed": not gpu_smoke_requested or gpu_exit_status == 0,
+        },
+        {
+            "name": "scenario exit status",
+            "actual": scenario_exit_status,
+            "max": 0,
+            "passed": scenario_exit_status == 0,
+        },
+        {
+            "name": "scenario emitted completion marker",
+            "actual": completion_markers,
+            "max": 1,
+            "passed": completion_markers == 1,
+        },
+        {
+            "name": "child processes cleaned up after scenario",
+            "actual": remaining_observed_children,
+            "max": 0,
+            "passed": remaining_observed_children == 0,
+        },
+        {
+            "name": "GPU validation/device errors",
+            "actual": gpu_error_count,
+            "max": 0,
+            "passed": gpu_error_count == 0,
+        },
+    ]
+
+
+def build_core_soak_checks(
+    samples: list[dict[str, Any]],
+    progress: list[dict[str, Any]],
+    thresholds: dict[str, Any],
+    outcomes: dict[str, Any],
+    *,
+    gpu_smoke_requested: bool,
+) -> list[dict[str, Any]]:
+    """Reconstruct every core-soak check from retained raw inputs."""
+    checks = evaluate_resource_ceilings(
+        samples,
+        max_rss_kib=thresholds["max_rss_kib"],
+        max_rss_growth_kib=thresholds["max_rss_growth_kib"],
+        max_thread_growth=thresholds["max_thread_growth"],
+        max_fd_growth=thresholds["max_fd_growth"],
+        max_children=thresholds["max_children"],
+        minimum_samples=thresholds["minimum_resource_samples"],
+    )
+    checks.extend(
+        evaluate_progress_ceilings(
+            progress,
+            max_transcript_queue_bytes=thresholds["max_transcript_queue_bytes"],
+        )
+    )
+    checks.extend(
+        evaluate_outcome_checks(
+            gpu_smoke_requested=gpu_smoke_requested,
+            gpu_exit_status=outcomes["gpu_exit_status"],
+            scenario_exit_status=outcomes["scenario_exit_status"],
+            completion_markers=outcomes["completion_markers"],
+            remaining_observed_children=outcomes["remaining_observed_children"],
+            gpu_error_count=outcomes["gpu_error_count"],
+        )
+    )
+    return checks
+
+
 def parse_progress(log_path: Path) -> list[dict[str, Any]]:
     progress = []
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -518,8 +622,25 @@ def main() -> None:
         args.duration_seconds < 1
         or args.sample_interval <= 0
         or args.max_transcript_queue_mib <= 0
+        or args.max_rss_mib <= 0
+        or args.max_rss_growth_mib < 0
+        or args.max_thread_growth < 0
+        or args.max_fd_growth < 0
+        or args.max_children < 0
     ):
-        parser.error("duration, sample interval, and queue ceiling must be positive")
+        parser.error(
+            "duration and absolute ceilings must be positive; "
+            "growth ceilings must be non-negative"
+        )
+
+    output_path = args.output.resolve()
+    log_path = args.log.resolve()
+    if output_path == log_path:
+        parser.error("the report and scenario log must use different paths")
+    try:
+        log_path.relative_to(output_path.parent)
+    except ValueError:
+        parser.error("the scenario log must be inside the report directory")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
@@ -580,68 +701,74 @@ def main() -> None:
         exit_status = process.returncode
 
     progress = parse_progress(args.log)
-    minimum_samples = minimum_sample_count(
-        args.duration_seconds, args.sample_interval
-    )
-    checks = evaluate_resource_ceilings(
-        samples,
-        max_rss_kib=args.max_rss_mib * 1024,
-        max_rss_growth_kib=args.max_rss_growth_mib * 1024,
-        max_thread_growth=args.max_thread_growth,
-        max_fd_growth=args.max_fd_growth,
-        max_children=args.max_children,
-        minimum_samples=minimum_samples,
-    )
+    minimum_samples = minimum_sample_count(args.duration_seconds, args.sample_interval)
     max_transcript_queue_bytes = int(args.max_transcript_queue_mib * 1024 * 1024)
-    checks.extend(
-        evaluate_progress_ceilings(
-            progress,
-            max_transcript_queue_bytes=max_transcript_queue_bytes,
-        )
-    )
-    checks.extend(
-        [
-            {
-                "name": "headless GPU smoke exit status",
-                "actual": gpu_exit_status if args.gpu_smoke else "not requested",
-                "max": 0 if args.gpu_smoke else "not requested",
-                "passed": not args.gpu_smoke or gpu_exit_status == 0,
-            },
-            {
-                "name": "scenario exit status",
-                "actual": exit_status,
-                "max": 0,
-                "passed": exit_status == 0,
-            },
-            {
-                "name": "scenario emitted completion marker",
-                "actual": sum(1 for item in progress if item.get("complete")),
-                "max": 1,
-                "passed": any(item.get("complete") for item in progress),
-            },
-            {
-                "name": "child processes cleaned up after scenario",
-                "actual": sum(child_still_exists(pid) for pid in observed_children),
-                "max": 0,
-                "passed": not any(child_still_exists(pid) for pid in observed_children),
-            },
-        ]
-    )
     log_text = args.log.read_text(encoding="utf-8", errors="replace").lower()
     gpu_errors = sum(
         log_text.count(pattern)
         for pattern in ["validation error", "device lost", "device removed"]
     )
-    checks.append(
-        {
-            "name": "GPU validation/device errors",
-            "actual": gpu_errors,
-            "max": 0,
-            "passed": gpu_errors == 0,
-        }
+    thresholds = {
+        "max_rss_kib": args.max_rss_mib * 1024,
+        "max_rss_growth_kib": args.max_rss_growth_mib * 1024,
+        "max_thread_growth": args.max_thread_growth,
+        "max_fd_growth": args.max_fd_growth,
+        "max_children": args.max_children,
+        "max_transcript_queue_bytes": max_transcript_queue_bytes,
+        "minimum_resource_samples": minimum_samples,
+        "transcript_entries_per_iteration": TRANSCRIPT_ENTRIES_PER_ITERATION,
+        "max_inventory_labels_per_dimension": MAX_INVENTORY_LABELS,
+        "max_process_label_characters": MAX_PROCESS_LABEL_CHARACTERS,
+    }
+    outcomes = {
+        "gpu_exit_status": gpu_exit_status,
+        "scenario_exit_status": exit_status,
+        "completion_markers": sum(1 for item in progress if item.get("complete") is True),
+        "remaining_observed_children": sum(
+            child_still_exists(pid) for pid in observed_children
+        ),
+        "gpu_error_count": gpu_errors,
+    }
+    checks = build_core_soak_checks(
+        samples,
+        progress,
+        thresholds,
+        outcomes,
+        gpu_smoke_requested=args.gpu_smoke,
     )
+    passed = all(check["passed"] for check in checks)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        check=True,
+    ).stdout.strip()
+    worktree_dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.strip()
+    )
+    candidate_eligible = passed and not worktree_dirty
+    eligibility = (
+        "candidate"
+        if candidate_eligible
+        else "dirty-dry-run"
+        if passed
+        else "failed"
+    )
+    binary_relative = relative_file_path(ROOT, binary, "test binary")
+    log_relative = relative_file_path(args.output.parent, args.log, "scenario log")
     report = {
         "schema_version": CORE_SOAK_SCHEMA_VERSION,
+        "kind": CORE_SOAK_RECORD_KIND,
+        "status": "pass" if passed else "fail",
+        "candidate_eligible": candidate_eligible,
+        "eligibility": eligibility,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "platform": platform.platform(),
@@ -653,22 +780,8 @@ def main() -> None:
                 stdout=subprocess.PIPE,
                 check=True,
             ).stdout.strip(),
-            "commit": subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=ROOT,
-                text=True,
-                stdout=subprocess.PIPE,
-                check=True,
-            ).stdout.strip(),
-            "worktree_dirty": bool(
-                subprocess.run(
-                    ["git", "status", "--porcelain"],
-                    cwd=ROOT,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    check=True,
-                ).stdout.strip()
-            ),
+            "commit": commit,
+            "worktree_dirty": worktree_dirty,
             "wgpu_backend": environment.get("WGPU_BACKEND"),
         },
         "duration_seconds": args.duration_seconds,
@@ -676,31 +789,31 @@ def main() -> None:
         "minimum_resource_samples": minimum_samples,
         "maximum_transcript_queue_bytes": max_transcript_queue_bytes,
         "gpu_smoke_requested": args.gpu_smoke,
-        "test_binary": str(binary),
-        "test_binary_sha256": file_sha256(binary),
-        "thresholds": {
-            "max_rss_kib": args.max_rss_mib * 1024,
-            "max_rss_growth_kib": args.max_rss_growth_mib * 1024,
-            "max_thread_growth": args.max_thread_growth,
-            "max_fd_growth": args.max_fd_growth,
-            "max_children": args.max_children,
-            "max_transcript_queue_bytes": max_transcript_queue_bytes,
-            "minimum_resource_samples": minimum_samples,
-            "transcript_entries_per_iteration": TRANSCRIPT_ENTRIES_PER_ITERATION,
-            "max_inventory_labels_per_dimension": MAX_INVENTORY_LABELS,
-            "max_process_label_characters": MAX_PROCESS_LABEL_CHARACTERS,
+        "test_binary": {
+            "path": binary_relative,
+            "bytes": binary.stat().st_size,
+            "sha256": file_sha256(binary),
         },
+        "artifacts": {
+            "scenario_log": {
+                "path": log_relative,
+                "bytes": args.log.stat().st_size,
+                "sha256": file_sha256(args.log),
+            }
+        },
+        "thresholds": thresholds,
+        "outcomes": outcomes,
         "samples": samples,
-        "resource_inventory_summary": summarize_resource_inventories(samples),
         "progress": progress,
+        "resource_inventory_summary": summarize_resource_inventories(samples),
         "checks": checks,
     }
-    args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(args.output, report)
     for check in checks:
         label = "PASS" if check["passed"] else "FAIL"
         boundary = check.get("max", check.get("min"))
         print(f"{label}: {check['name']} (actual={check['actual']}, boundary={boundary})")
-    if not all(check["passed"] for check in checks):
+    if not passed:
         raise SystemExit("resource soak ceilings failed")
 
 

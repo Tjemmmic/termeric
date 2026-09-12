@@ -71,6 +71,7 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 30 --gpu-smoke \
   --output target/soak/local.json \
   --log target/soak/local.log
+python3 scripts/validate_soak.py target/soak/local.json --source .
 ```
 
 The weekly and manually dispatched CI lane runs for ten minutes. For a release
@@ -81,7 +82,22 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 600 --gpu-smoke \
   --output target/soak/release.json \
   --log target/soak/release.log
+python3 scripts/validate_soak.py target/soak/release.json --source .
 ```
+
+The log must be inside the report directory because the schema records its
+confined relative path, exact byte length, and SHA-256 digest. The independent
+validator rejects missing or unknown fields, unsafe or symlinked paths,
+non-finite/type-confused values, altered log or binary contents, candidate
+identity drift, malformed samples/progress, non-reconciling inventories, and
+any stored summary or check that differs from a fresh reconstruction. CI runs
+this command after both core-soak durations, even if the runner failed, before
+uploading the evidence bundle.
+
+A passing run from a dirty worktree is deliberately classified as a
+`dirty-dry-run` and the validator rejects it by default. Use
+`--allow-ineligible` only to inspect an internally consistent dirty or failed
+diagnostic record; that flag cannot turn it into candidate evidence.
 
 ## Displayed Wayland process soak
 
@@ -146,13 +162,15 @@ sample do not define the growth result. Tighten these budgets only with repeated
 artifacts from the same class of runner; do not hide a regression by raising
 them without an investigation.
 
-The schema-2 core runner JSON records UTC time, commit plus dirty-worktree
-disclosure, WGPU backend, test-binary path and SHA-256, every raw sample,
-scenario progress, resource-category summaries, explicit thresholds, and each
-pass/fail result. The companion log contains the Rust test output and optional
-headless GPU smoke. CI uploads both even when a
-ceiling fails. A dirty local report is implementation evidence, not an exact
-candidate record even when its commit field matches the candidate branch.
+The schema-3 core runner JSON records UTC time, commit plus dirty-worktree
+disclosure, explicit pass/eligibility state, WGPU backend, a source-relative
+test-binary path with byte length and SHA-256, every raw sample, reconstructable
+terminal outcomes, scenario progress, resource-category summaries, explicit
+thresholds, and each pass/fail result. The companion log contains the Rust test
+output and optional headless GPU smoke and is itself sealed into the JSON. CI
+uploads both even when a ceiling fails. A dirty local report is implementation
+evidence, not an exact candidate record even when its commit field matches the
+candidate branch.
 
 ## Regression-detector tests
 
@@ -165,8 +183,12 @@ separately proves that children of non-leader threads are included exactly
 once:
 
 ```bash
-python3 -m unittest scripts.test_run_soak
+python3 -m unittest scripts.test_run_soak scripts.test_validate_soak
 ```
+
+The validator tests deliberately alter samples, thresholds, outcomes, stored
+checks, summaries, binary/log bytes, paths, numeric types, and source identity.
+They establish fail-closed record handling; they are not performance runs.
 
 `python3 -m unittest scripts.test_ci_resource_contract` separately fails if the
 native macOS/Windows build/unit plus PTY-lifecycle matrix, either 30-second
@@ -176,6 +198,17 @@ job history remains required evidence.
 
 These tests prove the evaluator rejects the relevant monotonic-growth shapes;
 they do not intentionally leak resources from the test runner process.
+
+### Evidence portability boundary
+
+The validator intentionally binds a report to the exact Git checkout and test
+binary that produced it. Validate before the build tree is cleaned and retain
+the JSON plus its scenario log. The ordinary CI upload does not include the
+often-large test executable, so a downloaded JSON/log pair preserves the
+recorded candidate identity and log integrity but cannot, by itself, re-prove
+the binary bytes on another host. Portable binary bundling or signed provenance
+is future work. The schema-3 displayed/native report uses a different contract
+and is not validated by `validate_soak.py`.
 
 ## Evidence and limitations
 

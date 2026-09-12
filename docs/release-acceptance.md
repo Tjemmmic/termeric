@@ -160,10 +160,12 @@ feeds mixed ASCII/Unicode/styled output, resizes and searches bounded
 scrollback, replaces images, creates and closes real PTY-backed panes/tabs,
 saves sessions, and durably closes bounded transcript writers. Its runner
 samples RSS, threads, file descriptors, and children, and scans a companion GPU
-smoke log for validation/device-loss errors. Current schema-2 core and schema-3
-displayed reports additionally reconcile privacy-safe descriptor/thread/child
-inventories and summarize category quartile growth and peaks without retaining
-paths, arguments, or environment data.
+smoke log for validation/device-loss errors. The current schema-3 core record
+seals that log, binds the tested binary and exact clean source candidate, and is
+independently validated by reconstructing every check and summary. The separate
+schema-3 displayed report is not yet sealed. Both reports reconcile privacy-safe
+descriptor/thread/child inventories and summarize category quartile growth and
+peaks without retaining paths, arguments, or environment data.
 
 A 30-second local change-gate run plus headless Vulkan smoke on 2026-08-25
 completed 322 iterations and all ten configured checks. It peaked at 33.9 MiB

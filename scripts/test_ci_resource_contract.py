@@ -39,6 +39,11 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("github.event_name == 'push'", core)
         self.assertIn("github.event_name == 'pull_request'", core)
         self.assertIn("scripts/run_soak.py --duration-seconds 30 --gpu-smoke", core)
+        self.assertIn("scripts/validate_soak.py target/soak/ci-smoke.json", core)
+        self.assertRegex(
+            core,
+            r"Validate 30-second resource soak evidence\n\s+if: always\(\)",
+        )
         self.assertIn("if: always()", core)
         self.assertIn("if-no-files-found: error", core)
 
@@ -61,6 +66,11 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("github.event_name == 'schedule'", block)
         self.assertIn("github.event_name == 'workflow_dispatch'", block)
         self.assertIn("scripts/run_soak.py --duration-seconds 600 --gpu-smoke", block)
+        self.assertIn("scripts/validate_soak.py target/soak/scheduled.json", block)
+        self.assertRegex(
+            block,
+            r"Validate 10-minute resource soak evidence\n\s+if: always\(\)",
+        )
         self.assertIn("scripts/run_native_gui_soak.py", block)
         self.assertIn("--duration-seconds 600", block)
         self.assertIn("--require-clean", block)

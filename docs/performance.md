@@ -417,6 +417,12 @@ in [resource-soak.md](resource-soak.md). Vendor GPU memory utilization and
 long real-desktop surface/compositor soaks remain manual platform
 evidence.
 
+Core-soak evidence is only accepted after
+`scripts/validate_soak.py <report> --source .` re-hashes its log and tested
+binary, verifies the exact clean checkout, and reconstructs all summaries and
+checks. The displayed/native runner currently has a separate, not-yet-sealed
+artifact contract; do not imply that the core validator covers it.
+
 See [event-driven-rendering.md](event-driven-rendering.md) for scheduler design,
 frame-reason diagnostics, and the measured Wayland/X11 before-and-after result.
 See [incremental-rendering.md](incremental-rendering.md) for row-cache and GPU

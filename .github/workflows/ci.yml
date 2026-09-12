@@ -352,6 +352,11 @@ jobs:
           python3 scripts/run_soak.py --duration-seconds 30 --gpu-smoke
           --output target/soak/ci-smoke.json
           --log target/soak/ci-smoke.log
+      - name: Validate 30-second resource soak evidence
+        if: always()
+        run: >-
+          python3 scripts/validate_soak.py target/soak/ci-smoke.json
+          --source .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -380,6 +385,11 @@ jobs:
           python3 scripts/run_soak.py --duration-seconds 600 --gpu-smoke
           --output target/soak/scheduled.json
           --log target/soak/scheduled.log
+      - name: Validate 10-minute resource soak evidence
+        if: always()
+        run: >-
+          python3 scripts/validate_soak.py target/soak/scheduled.json
+          --source .
       - name: Build the native application
         run: cargo build -p termeric --locked
       - name: Run 10-minute displayed Wayland resource soak

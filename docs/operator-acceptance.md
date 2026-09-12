@@ -323,6 +323,7 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 30 --gpu-smoke \
   --output target/soak/local.json \
   --log target/soak/local.log
+python3 scripts/validate_soak.py target/soak/local.json --source .
 
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 30 \
@@ -338,6 +339,7 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --duration-seconds 600 --gpu-smoke \
   --output target/soak/release.json \
   --log target/soak/release.log
+python3 scripts/validate_soak.py target/soak/release.json --source .
 
 WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --duration-seconds 600 \

@@ -11,6 +11,7 @@ from scripts.run_soak import (
     bounded_process_label,
     classify_file_descriptor,
     counted_labels,
+    evaluate_outcome_checks,
     evaluate_progress_ceilings,
     evaluate_resource_ceilings,
     file_sha256,
@@ -40,7 +41,7 @@ def sample(index: int, *, rss: float = 100_000, threads: int = 4, fds: int = 12)
 
 class SoakCeilingTests(unittest.TestCase):
     def test_report_schema_is_versioned_for_resource_inventories(self):
-        self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 2)
+        self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 3)
 
     def test_binary_digest_is_exact_and_content_bound(self):
         with TemporaryDirectory() as directory:
@@ -274,6 +275,20 @@ class SoakCeilingTests(unittest.TestCase):
             )
         }
         self.assertFalse(checks["malformed scenario progress records"]["passed"])
+
+    def test_outcome_checks_require_exactly_one_completion_marker(self):
+        checks = {
+            check["name"]: check
+            for check in evaluate_outcome_checks(
+                gpu_smoke_requested=False,
+                gpu_exit_status=None,
+                scenario_exit_status=0,
+                completion_markers=2,
+                remaining_observed_children=0,
+                gpu_error_count=0,
+            )
+        }
+        self.assertFalse(checks["scenario emitted completion marker"]["passed"])
 
 
 if __name__ == "__main__":
