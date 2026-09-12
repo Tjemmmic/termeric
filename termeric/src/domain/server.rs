@@ -4144,15 +4144,23 @@ mod tests {
             )
             .unwrap_err();
         assert!(format!("{wrong_prefix:#}").contains("retained prefix"));
-        let Response::Uploads { uploads } = client.request(Request::ListUploads).unwrap() else {
-            panic!("expected retained upload list");
-        };
-        assert!(uploads.iter().any(|upload| {
-            upload.upload_id == resumable_id
-                && upload.bytes_received == 3
-                && upload.retention == UploadRetention::Manual
-                && !upload.active
-        }));
+        let mut observed_uploads = Vec::new();
+        assert!(
+            wait_for(Duration::from_secs(2), || {
+                let Ok(Response::Uploads { uploads }) = client.request(Request::ListUploads) else {
+                    return false;
+                };
+                let retained = uploads.iter().any(|upload| {
+                    upload.upload_id == resumable_id
+                        && upload.bytes_received == 3
+                        && upload.retention == UploadRetention::Manual
+                        && !upload.active
+                });
+                observed_uploads = uploads;
+                retained
+            }),
+            "retained upload did not become inactive: {observed_uploads:?}"
+        );
 
         let cancellation = AtomicBool::new(false);
         let mut resume_progress = Vec::new();
