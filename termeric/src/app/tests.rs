@@ -500,13 +500,20 @@ fn native_frame_stats_publish_the_latest_complete_counter_atomically() {
 #[cfg(target_os = "linux")]
 #[test]
 fn desktop_helper_spawn_failures_become_deduplicated_visible_toasts() {
-    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut config = Config::default();
+    config.shell.program = Some("/bin/sh".into());
+    config.shell.args = vec!["-c".into(), "sleep 2".into()];
+    let mut app = App::new_headless(config).unwrap();
+    app.allow_auto_restore = false;
+    app.init_tabs().unwrap();
     app.bell.set_audio(true);
     app.bell
         .set_audio_command_for_test("/definitely/missing/termeric-audio-helper");
     app.notifications
         .set_command_for_test("/definitely/missing/termeric-notify-helper");
-    let origin = TerminalEventOrigin::Tab { tab_id: 999 };
+    let origin = TerminalEventOrigin::Tab {
+        tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+    };
 
     app.handle_terminal_event(RoutedTerminalEvent {
         origin,
@@ -540,6 +547,115 @@ fn desktop_helper_spawn_failures_become_deduplicated_visible_toasts() {
         }),
     });
     assert_eq!(app.toasts.iter().count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn notification_occasions_use_exact_tab_pane_zoom_focus_and_visibility_state() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    use termeric_core::NotificationOccasion::{Always, Invisible, Unfocused};
+
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let split_tab_id = tabs.new_tab().unwrap();
+    let split_tab = tabs.tab_mut_by_id(split_tab_id).unwrap();
+    let owner = split_tab.take_terminal_owner().unwrap();
+    let mut panes = PaneManager::from_existing(
+        owner,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    panes.split(SplitDirection::Vertical).unwrap();
+    assert_eq!(panes.focused_id(), PaneId(1));
+    split_tab.pane_manager = Some(panes);
+    let active_tab_id = tabs.new_tab().unwrap();
+
+    let split_visible = TerminalEventOrigin::Pane {
+        tab_id: split_tab_id,
+        pane_id: PaneId(0),
+    };
+    let split_focused = TerminalEventOrigin::Pane {
+        tab_id: split_tab_id,
+        pane_id: PaneId(1),
+    };
+    let active_tab = TerminalEventOrigin::Tab {
+        tab_id: active_tab_id,
+    };
+    let stale = TerminalEventOrigin::Tab { tab_id: usize::MAX };
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+
+    assert!(app.should_present_terminal_notification(active_tab, Always));
+    assert!(!app.should_present_terminal_notification(active_tab, Unfocused));
+    assert!(!app.should_present_terminal_notification(active_tab, Invisible));
+    assert!(app.should_present_terminal_notification(split_visible, Unfocused));
+    assert!(app.should_present_terminal_notification(split_visible, Invisible));
+    assert!(!app.should_present_terminal_notification(stale, Always));
+
+    app.tabs.as_mut().unwrap().switch_to(0);
+    assert!(!app.should_present_terminal_notification(split_focused, Unfocused));
+    assert!(!app.should_present_terminal_notification(split_focused, Invisible));
+    assert!(app.should_present_terminal_notification(split_visible, Unfocused));
+    assert!(!app.should_present_terminal_notification(split_visible, Invisible));
+
+    assert!(
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .pane_manager
+            .as_mut()
+            .unwrap()
+            .toggle_zoom()
+    );
+    assert!(app.should_present_terminal_notification(split_visible, Invisible));
+
+    app.window_focused = false;
+    assert!(app.should_present_terminal_notification(split_focused, Unfocused));
+    assert!(!app.should_present_terminal_notification(split_focused, Invisible));
+    app.window_occluded = true;
+    assert!(app.should_present_terminal_notification(split_focused, Invisible));
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+#[test]
+fn suppressed_notification_has_no_delivery_or_tracked_worker_side_effects() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let mut config = Config::default();
+    config.shell.program = Some("/bin/sh".into());
+    config.shell.args = vec!["-c".into(), "sleep 2".into()];
+    let mut app = App::new_headless(config).unwrap();
+    app.allow_auto_restore = false;
+    app.init_tabs().unwrap();
+    let origin = TerminalEventOrigin::Tab {
+        tab_id: app.tabs.as_ref().unwrap().active_tab_id().unwrap(),
+    };
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin,
+        event: TerminalEvent::Notification(termeric_core::NotificationRequest {
+            title: Some("Suppressed".into()),
+            occasion: termeric_core::NotificationOccasion::Unfocused,
+            report_close: true,
+            icon_data: Some(Box::from([1_u8, 2, 3])),
+            ..termeric_core::NotificationRequest::default()
+        }),
+    });
+    assert!(!app.notifications.has_delivery_state_for_test());
+    assert_eq!(app.toasts.iter().count(), 0);
 }
 use crate::config::ShellConfig;
 use crate::panes::{PaneManager, SplitDirection};

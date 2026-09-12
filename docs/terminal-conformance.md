@@ -116,7 +116,9 @@ tests add malformed cleanup, both base64 chunking forms, reset lifecycle,
 owner routing, retained-memory ceilings, bounded encoded `p=icon` data and
 cache identifiers, strict expiry metadata, explicit
 identified close, strict close/activation-report policy, bounded plain/base64
-button lists, bounded typed base64 sound policy, and empty alive queries.
+button lists, bounded typed base64 sound policy, strict typed occasion policy,
+and empty alive queries. A replayable fixture records non-default occasion
+metadata, while app tests cover exact tab/pane/zoom/window filtering.
 App-layer in-memory backend tests separately prove Linux
 replacement/close/expiry lifecycle, requested native
 close and default/button activation reports, owner-scoped alive snapshots,

@@ -544,6 +544,20 @@ impl Notifications {
         self.command = Some(program.into());
         self.rate_limit = Duration::ZERO;
     }
+
+    #[cfg(test)]
+    pub(crate) fn has_delivery_state_for_test(&self) -> bool {
+        self.last_notification.is_some() || {
+            #[cfg(target_os = "linux")]
+            {
+                self.tracked.is_some()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

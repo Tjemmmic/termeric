@@ -40,6 +40,12 @@ bell/notification flood are deliberately discarded and logged once per owner;
 terminal pending vectors are still fully drained. This bounds the bridge while
 preserving request/response correctness.
 
+Kitty OSC 99 occasion policy is evaluated against the event's exact origin.
+Active/focused state, sibling-pane visibility, zoom, and native window
+focus/occlusion determine `unfocused` and `invisible`; stale origins are
+discarded. Suppression happens before either notification worker, rate-limit
+state, icon decoding/cache work, or lifecycle tracking is touched.
+
 Forwarded bells and ordinary notifications enter their existing global rate
 limits, then submit platform helpers to a separate 16-request worker queue with
 an eight-child ceiling. Identified, explicitly expiring, reporting, buttoned,

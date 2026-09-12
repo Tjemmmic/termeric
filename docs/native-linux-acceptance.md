@@ -164,6 +164,31 @@ a freedesktop notification service. They do not invoke an AI provider.
    substitutes its own icon; that is a native-policy limitation, not a reason
    to block the remaining roadmap work.
 
+10. Exercise exact-origin occasion filtering. These observations are deferred
+    operator evidence and do not block continued roadmap implementation:
+
+    - In the active focused terminal, run
+      `printf '\033]99;i=occasion-focused:o=unfocused;Must stay hidden\033\\'`.
+      No desktop notification should appear.
+    - In one tab, run
+      `(sleep 3; printf '\033]99;i=occasion-tab:o=invisible;Inactive tab\033\\') &`,
+      then switch to another tab before the delay expires. The notification
+      should appear.
+    - With two visible panes, run a delayed `o=invisible` notification in one
+      pane and focus its sibling before it fires. It must stay hidden because
+      the origin remains visible. Repeat with `o=unfocused`; it should appear.
+    - Run a delayed `o=invisible` notification in one pane, then focus and zoom
+      its sibling before it fires. The now-hidden origin should produce the
+      notification.
+    - Run a delayed `o=invisible` notification and minimize or fully occlude
+      the Termeric window before it fires. It should appear. An unfocused but
+      still visible window satisfies `o=unfocused` but not `o=invisible`.
+
+    Optionally query `p=?` and confirm the reply includes
+    `o=always,unfocused,invisible`. Each notification must be attributed only
+    to its exact originating tab or pane; closing that origin before delivery
+    must not fall back to the currently focused terminal.
+
 Record the desktop environment and notification-daemon version, whether each
 observation passed, and a screenshot or short recording. A visible warning
 toast is the expected failure mode if the session bus or notification service

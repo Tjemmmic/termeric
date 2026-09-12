@@ -40,7 +40,8 @@ pub mod unicode;
 // Re-export commonly used types
 pub use event::{
     ClipboardRequest, DynamicColorOperation, DynamicColorTarget, NotificationExpiry,
-    NotificationRequest, NotificationSound, NotificationUrgency, TerminalEvent,
+    NotificationOccasion, NotificationRequest, NotificationSound, NotificationUrgency,
+    TerminalEvent,
 };
 pub use graphics::{
     GraphicsManager, IMAGE_PLACEHOLDER, ImageId, ImagePlacement, PresentationImage, StoredImage,

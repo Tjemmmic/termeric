@@ -142,7 +142,7 @@ desktop helper.
 
 Termeric also implements a bounded subset of Kitty's
 [OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
-`d`, `e`, `w`, `c`, `a`, `s`, and `g` provide strict identifiers,
+`d`, `e`, `w`, `c`, `a`, `s`, `o`, and `g` provide strict identifiers,
 title/body/close/alive/buttons/icon selection, completion, plain or RFC 4648 base64
 payloads, expiry policy, and close/activation-report requests. The `f`, `t`,
 and `n` keys add base64-encoded
@@ -188,14 +188,24 @@ payload-free `p=alive` query is completed immediately; payload-bearing or
 continued alive queries are rejected. Button labels reject empty entries and
 C0/C1 controls.
 
+The singular `o` value accepts exactly `always` (the default), `unfocused`, or
+`invisible`. Termeric resolves the request's exact originating tab or pane and
+filters before rate limiting, icon work, native delivery, or tracked lifecycle
+state is created. `unfocused` presents unless that exact origin is the focused
+terminal in the active, focused, non-occluded native window. `invisible`
+additionally requires the origin to be hidden: an inactive tab, a pane hidden
+by zoom, or an occluded/minimized window. A visible sibling pane is unfocused
+but not invisible. Closed or stale origins fail closed rather than falling
+back to whichever terminal is focused.
+
 `OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
 terminal's S7C1T/S8C1T framing. Linux responds with
-`p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1`; other targets respond with
-`p=title,body:o=always`. The platform split keeps lifecycle and urgency
+`p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1`; other targets respond with
+`p=title,body:o=always,unfocused,invisible`. The platform split keeps lifecycle and urgency
 discovery truthful.
-Application/type/icon-name metadata has no capability-query key. Non-`always`
-occasion requirements are rejected. Native focus and application-side
-filtering are not advertised or claimed.
+Application/type/icon-name metadata has no capability-query key.
+Application-requested focus through `a=focus` remains unadvertised and
+unsupported.
 
 Unidentified requests with desktop-default expiry enter the existing
 rate-limited helper path. On Linux, requests needing lifecycle semantics use a

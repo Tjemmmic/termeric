@@ -1239,28 +1239,28 @@ mod tests {
               \x1b G\x1b]99;i=query-8:p=?;\x1b\\\
               \x1b]99;i=bad=:p=?;\x1b\\\
               \x1b]99;c=2;ignored\x1b\\\
-              \x1b]99;o=unfocused;ignored\x1b\\\
+              \x1b]99;o=sometimes;ignored\x1b\\\
               \x1b]99;e=1;%%%\x1b\\\
               \x1b]99;p=future;ignored\x1b\\",
         );
         #[cfg(target_os = "linux")]
         let expected_query_events = vec![
             crate::event::TerminalEvent::PtyWrite(
-                b"\x1b]99;i=query-7:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
+                b"\x1b]99;i=query-7:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
                     .to_vec(),
             ),
             crate::event::TerminalEvent::PtyWrite(
-                b"\x9d99;i=query-8:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x9c"
+                b"\x9d99;i=query-8:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x9c"
                     .to_vec(),
             ),
         ];
         #[cfg(not(target_os = "linux"))]
         let expected_query_events = vec![
             crate::event::TerminalEvent::PtyWrite(
-                b"\x1b]99;i=query-7:p=?;p=title,body:o=always\x1b\\".to_vec(),
+                b"\x1b]99;i=query-7:p=?;p=title,body:o=always,unfocused,invisible\x1b\\".to_vec(),
             ),
             crate::event::TerminalEvent::PtyWrite(
-                b"\x9d99;i=query-8:p=?;p=title,body:o=always\x9c".to_vec(),
+                b"\x9d99;i=query-8:p=?;p=title,body:o=always,unfocused,invisible\x9c".to_vec(),
             ),
         ];
         assert_eq!(terminal.drain_events(), expected_query_events);

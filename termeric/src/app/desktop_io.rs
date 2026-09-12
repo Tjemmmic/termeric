@@ -25,7 +25,66 @@ struct ValidatedUploadSource {
     identity: Option<(u64, u64)>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NotificationOriginPresentation {
+    keyboard_focused: bool,
+    visible: bool,
+}
+
 impl App {
+    fn notification_origin_presentation(
+        &self,
+        origin: crate::tabs::TerminalEventOrigin,
+    ) -> Option<NotificationOriginPresentation> {
+        let tabs = self.tabs.as_ref()?;
+        tabs.terminal_for_origin(origin)?;
+        let tab_id = match origin {
+            crate::tabs::TerminalEventOrigin::Tab { tab_id }
+            | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id,
+        };
+        let tab = tabs.tab_by_id(tab_id)?;
+        if tab.closed || tab.is_closing() {
+            return None;
+        }
+        let active = tabs.active_tab_id() == Some(tab_id);
+        let (terminal_focused, terminal_visible) = match origin {
+            crate::tabs::TerminalEventOrigin::Tab { .. } => (true, true),
+            crate::tabs::TerminalEventOrigin::Pane { pane_id, .. } => {
+                let panes = tab.pane_manager.as_ref()?;
+                let pane = panes.get_pane(pane_id)?;
+                if pane.closed {
+                    return None;
+                }
+                (
+                    panes.focused_id() == pane_id,
+                    panes.zoomed_id().is_none_or(|zoomed| zoomed == pane_id),
+                )
+            }
+        };
+        let native_interactive = self.window_focused && !self.window_occluded;
+        Some(NotificationOriginPresentation {
+            keyboard_focused: native_interactive && active && terminal_focused,
+            visible: !self.window_occluded && active && terminal_visible,
+        })
+    }
+
+    pub(super) fn should_present_terminal_notification(
+        &self,
+        origin: crate::tabs::TerminalEventOrigin,
+        occasion: termeric_core::NotificationOccasion,
+    ) -> bool {
+        let Some(presentation) = self.notification_origin_presentation(origin) else {
+            return false;
+        };
+        match occasion {
+            termeric_core::NotificationOccasion::Always => true,
+            termeric_core::NotificationOccasion::Unfocused => !presentation.keyboard_focused,
+            termeric_core::NotificationOccasion::Invisible => {
+                !presentation.keyboard_focused && !presentation.visible
+            }
+        }
+    }
+
     /// Validate and quote one compositor-provided local path without reading
     /// file contents or crossing a terminal/domain/plugin trust boundary.
     #[cfg(test)]
@@ -569,6 +628,13 @@ impl App {
                 }
             }
             TerminalEvent::Notification(req) => {
+                if !self.should_present_terminal_notification(origin, req.occasion) {
+                    log::debug!(
+                        "Suppressed OSC notification from {origin:?} for {:?} occasion",
+                        req.occasion
+                    );
+                    return;
+                }
                 if let Some(error) = self.notifications.notify_terminal(origin, req) {
                     self.toasts.warning(error);
                 }

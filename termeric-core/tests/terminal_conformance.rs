@@ -968,6 +968,15 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
                 if request.report_activation {
                     policies.push("report-activation".to_string());
                 }
+                match request.occasion {
+                    termeric_core::NotificationOccasion::Always => {}
+                    termeric_core::NotificationOccasion::Unfocused => {
+                        policies.push("occasion=unfocused".to_string());
+                    }
+                    termeric_core::NotificationOccasion::Invisible => {
+                        policies.push("occasion=invisible".to_string());
+                    }
+                }
                 if !request.buttons.is_empty() {
                     policies.push(format!("buttons={}", request.buttons.len()));
                 }

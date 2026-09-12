@@ -98,6 +98,18 @@ pub enum NotificationExpiry {
     AfterMillis(u32),
 }
 
+/// Presentation condition from Kitty OSC 99 `o` metadata.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NotificationOccasion {
+    /// Present regardless of the originating terminal's focus or visibility.
+    #[default]
+    Always,
+    /// Present only when the originating terminal lacks keyboard focus.
+    Unfocused,
+    /// Present only when the originating terminal is both unfocused and hidden.
+    Invisible,
+}
+
 /// Desktop notification request
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NotificationRequest {
@@ -122,6 +134,8 @@ pub struct NotificationRequest {
     pub urgency: Option<NotificationUrgency>,
     /// Kitty OSC 99 expiry policy.
     pub expiry: NotificationExpiry,
+    /// Kitty OSC 99 presentation occasion.
+    pub occasion: NotificationOccasion,
     /// Kitty OSC 99 sound policy.
     pub sound: NotificationSound,
     /// Whether Kitty OSC 99 requested an asynchronous close report with `c=1`.

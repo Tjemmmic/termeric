@@ -198,10 +198,11 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         let expected_reply =
-            b"\x1b]99;i=capability:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
+            b"\x1b]99;i=capability:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
                 .as_slice();
         #[cfg(not(target_os = "linux"))]
-        let expected_reply = b"\x1b]99;i=capability:p=?;p=title,body:o=always\x1b\\".as_slice();
+        let expected_reply =
+            b"\x1b]99;i=capability:p=?;p=title,body:o=always,unfocused,invisible\x1b\\".as_slice();
         assert_eq!(replies, expected_reply);
         assert_eq!(result.protocol_replies, 1);
         assert_eq!(result.dropped_app_events, 0);

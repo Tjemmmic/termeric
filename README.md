@@ -44,7 +44,9 @@ xterm title stack, plus capability-negotiated Kitty OSC 99 desktop notifications
 with bounded application/category/icon-name metadata, Linux urgency routing,
 transmitted PNG/JPEG/GIF icons with a process-wide bounded cache, and
 origin-scoped replacement, close, expiry, close/activation reports, button
-actions, sound policy, and alive queries.
+actions, sound policy, alive queries, and exact-origin `always`, `unfocused`,
+and `invisible` presentation filtering across tabs, panes, zoom, and native
+window focus/occlusion state.
 Kitty OSC 66 text sizing and explicit cell widths have bounded
 automated coverage, with native visual acceptance still pending. See the
 [feature-support matrix](docs/feature-support.md) for exact boundaries rather

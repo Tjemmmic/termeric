@@ -1,7 +1,8 @@
 //! Bounded terminal-local state for Kitty's OSC 99 notification protocol.
 
 use crate::event::{
-    NotificationExpiry, NotificationRequest, NotificationSound, NotificationUrgency,
+    NotificationExpiry, NotificationOccasion, NotificationRequest, NotificationSound,
+    NotificationUrgency,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
@@ -47,6 +48,7 @@ struct Metadata {
     icon_cache_id: Option<String>,
     urgency: Option<NotificationUrgency>,
     expiry: Option<NotificationExpiry>,
+    occasion: Option<NotificationOccasion>,
     sound: Option<NotificationSound>,
     report_close: Option<bool>,
     report_activation: Option<bool>,
@@ -138,6 +140,7 @@ struct PendingNotification {
     icon_cache_id: Option<String>,
     urgency: Option<NotificationUrgency>,
     expiry: NotificationExpiry,
+    occasion: NotificationOccasion,
     sound: NotificationSound,
     report_close: bool,
     report_activation: bool,
@@ -183,6 +186,9 @@ impl PendingNotification {
         if let Some(expiry) = metadata.expiry {
             self.expiry = expiry;
         }
+        if let Some(occasion) = metadata.occasion {
+            self.occasion = occasion;
+        }
         if let Some(sound) = metadata.sound {
             self.sound = sound;
         }
@@ -226,6 +232,7 @@ impl PendingNotification {
             icon_data,
             urgency: self.urgency,
             expiry: self.expiry,
+            occasion: self.occasion,
             sound: self.sound,
             report_close: self.report_close,
             report_activation: self.report_activation,
@@ -520,8 +527,14 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
             }
             b'c' => metadata.report_close = Some(parse_bool(value)?),
             b'a' => metadata.report_activation = Some(parse_activation_policy(value)?),
-            b'o' if value == b"always" => {}
-            b'o' => return Err(()),
+            b'o' => {
+                metadata.occasion = Some(match value {
+                    b"always" => NotificationOccasion::Always,
+                    b"unfocused" => NotificationOccasion::Unfocused,
+                    b"invisible" => NotificationOccasion::Invisible,
+                    _ => return Err(()),
+                });
+            }
             // Unknown keys are deliberately ignored for protocol extension.
             _ => {}
         }
@@ -800,6 +813,7 @@ mod tests {
                 icon_data: None,
                 urgency: Some(NotificationUrgency::Critical),
                 expiry: NotificationExpiry::System,
+                occasion: NotificationOccasion::Always,
                 sound: NotificationSound::System,
                 report_close: false,
                 report_activation: false,
@@ -820,6 +834,7 @@ mod tests {
                 icon_data: None,
                 urgency: Some(NotificationUrgency::Low),
                 expiry: NotificationExpiry::System,
+                occasion: NotificationOccasion::Always,
                 sound: NotificationSound::System,
                 report_close: false,
                 report_activation: false,
@@ -1080,6 +1095,69 @@ mod tests {
             assert_eq!(
                 protocol.handle(&parts(metadata.as_bytes(), b"ignored")),
                 Osc99Action::None
+            );
+        }
+    }
+
+    #[test]
+    fn occasion_policy_is_typed_fragmented_and_fail_closed() {
+        let mut protocol = NotificationProtocol::default();
+        assert_eq!(
+            protocol.handle(&parts(b"i=hidden:d=0:o=invisible", b"Build")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=other:d=0:o=unfocused", b"Other")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=hidden:p=body", b"done")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Build".into()),
+                body: "done".into(),
+                identifier: Some("hidden".into()),
+                occasion: NotificationOccasion::Invisible,
+                ..NotificationRequest::default()
+            })
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=other", b" ready")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Other ready".into()),
+                identifier: Some("other".into()),
+                occasion: NotificationOccasion::Unfocused,
+                ..NotificationRequest::default()
+            })
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"o=always", b"Always")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Always".into()),
+                ..NotificationRequest::default()
+            })
+        );
+
+        for metadata in [
+            b"i=bad:o=unknown".as_slice(),
+            b"i=bad:o=always:o=unfocused".as_slice(),
+            b"i=bad:o=".as_slice(),
+        ] {
+            let mut rejected = NotificationProtocol::default();
+            assert_eq!(
+                rejected.handle(&parts(b"i=bad:d=0", b"stale")),
+                Osc99Action::None
+            );
+            assert_eq!(
+                rejected.handle(&parts(metadata, b"ignored")),
+                Osc99Action::None
+            );
+            assert_eq!(
+                rejected.handle(&parts(b"i=bad", b"fresh")),
+                Osc99Action::Notify(NotificationRequest {
+                    title: Some("fresh".into()),
+                    identifier: Some("bad".into()),
+                    ..NotificationRequest::default()
+                })
             );
         }
     }
@@ -1359,7 +1437,7 @@ mod tests {
             Osc99Action::None
         );
         assert_eq!(
-            protocol.handle(&parts(b"o=unfocused", b"unsupported-filter")),
+            protocol.handle(&parts(b"o=sometimes", b"unsupported-filter")),
             Osc99Action::None
         );
 
