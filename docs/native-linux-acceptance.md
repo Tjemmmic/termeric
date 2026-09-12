@@ -125,6 +125,21 @@ a freedesktop notification service. They do not invoke an AI provider.
    Optionally query `p=?` first and confirm the response includes
    `p=title,body,close,alive,buttons` and `a=report`.
 
+8. With desktop notification sounds enabled, compare the default, silent, and
+   error policies. The first follows daemon policy, the second must request
+   suppression, and the third should use the desktop's error sound when the
+   daemon supports notification sounds:
+
+   ```bash
+   printf '\033]99;i=sound-default:s=c3lzdGVt;System sound policy\033\\'
+   printf '\033]99;i=sound-silent:s=c2lsZW50;This notification is silent\033\\'
+   printf '\033]99;i=sound-error:s=ZXJyb3I=;Error sound policy\033\\'
+   ```
+
+   A daemon may ignore named sounds; record its name/version and advertised
+   sound capability. `p=?` should still report Termeric's exact bounded
+   `s=system,silent,error,warn,warning,info,question` vocabulary.
+
 Record the desktop environment and notification-daemon version, whether each
 observation passed, and a screenshot or short recording. A visible warning
 toast is the expected failure mode if the session bus or notification service

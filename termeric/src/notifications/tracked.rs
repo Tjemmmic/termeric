@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
-use termeric_core::{NotificationExpiry, NotificationRequest, NotificationUrgency};
+use termeric_core::{
+    NotificationExpiry, NotificationRequest, NotificationSound, NotificationUrgency,
+};
 
 const TRACKED_COMMAND_CAPACITY: usize = 64;
 const MAX_TRACKED_NOTIFICATIONS: usize = 64;
@@ -472,6 +474,23 @@ fn freedesktop_actions(
     actions
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FreedesktopSoundHint {
+    Suppress,
+    Name(&'static str),
+}
+
+fn freedesktop_sound_hint(sound: NotificationSound) -> Option<FreedesktopSoundHint> {
+    match sound {
+        NotificationSound::System => None,
+        NotificationSound::Silent => Some(FreedesktopSoundHint::Suppress),
+        NotificationSound::Error => Some(FreedesktopSoundHint::Name("dialog-error")),
+        NotificationSound::Warning => Some(FreedesktopSoundHint::Name("dialog-warning")),
+        NotificationSound::Information => Some(FreedesktopSoundHint::Name("dialog-information")),
+        NotificationSound::Question => Some(FreedesktopSoundHint::Name("dialog-question")),
+    }
+}
+
 pub(super) struct TrackedNotifications {
     commands: SyncSender<TrackedCommand>,
     completions: Receiver<TrackedCompletion>,
@@ -829,6 +848,15 @@ impl TrackedNotificationBackend for FreedesktopBackend {
                 };
                 hints.insert("urgency", Value::from(urgency));
             }
+            match freedesktop_sound_hint(request.sound) {
+                None => {}
+                Some(FreedesktopSoundHint::Suppress) => {
+                    hints.insert("suppress-sound", Value::from(true));
+                }
+                Some(FreedesktopSoundHint::Name(name)) => {
+                    hints.insert("sound-name", Value::from(name));
+                }
+            }
             let expire_timeout = match request.expiry {
                 NotificationExpiry::System => -1,
                 NotificationExpiry::Never => 0,
@@ -1018,6 +1046,7 @@ mod tests {
         next_id: u32,
         shows: Vec<(Option<String>, u32, NotificationExpiry)>,
         shown_action_keys: Vec<Vec<String>>,
+        shown_sounds: Vec<NotificationSound>,
         closes: Vec<u32>,
         show_error: Option<String>,
         show_delay: Duration,
@@ -1039,6 +1068,7 @@ mod tests {
             self.shows
                 .push((request.identifier.clone(), replaces_id, request.expiry));
             self.shown_action_keys.push(button_action_keys.to_vec());
+            self.shown_sounds.push(request.sound);
             if replaces_id != 0 {
                 return Ok(replaces_id);
             }
@@ -1439,6 +1469,51 @@ mod tests {
         assert_eq!(
             freedesktop_actions(&no_report, &[button_action_key(8, 1)]),
             vec!["termeric-button-8-1", "Still visible"]
+        );
+    }
+
+    #[test]
+    fn freedesktop_sound_hints_are_typed_and_deterministic() {
+        assert_eq!(freedesktop_sound_hint(NotificationSound::System), None);
+        assert_eq!(
+            freedesktop_sound_hint(NotificationSound::Silent),
+            Some(FreedesktopSoundHint::Suppress)
+        );
+        for (sound, name) in [
+            (NotificationSound::Error, "dialog-error"),
+            (NotificationSound::Warning, "dialog-warning"),
+            (NotificationSound::Information, "dialog-information"),
+            (NotificationSound::Question, "dialog-question"),
+        ] {
+            assert_eq!(
+                freedesktop_sound_hint(sound),
+                Some(FreedesktopSoundHint::Name(name))
+            );
+        }
+    }
+
+    #[test]
+    fn failed_replacement_does_not_claim_a_new_sound_policy() {
+        let event_origin = origin(1, 1);
+        let tracked_key = key(event_origin, "sound");
+        let mut state = TrackedState::new(FakeBackend::default());
+        let mut first = request("sound", NotificationExpiry::System);
+        first.sound = NotificationSound::Silent;
+        assert!(state.show(tracked_key.clone(), first).is_empty());
+
+        state.backend.show_error = Some("synthetic replacement failure".into());
+        let mut failed = request("sound", NotificationExpiry::System);
+        failed.sound = NotificationSound::Error;
+        assert_eq!(state.show(tracked_key.clone(), failed).len(), 1);
+        assert_eq!(state.backend.shown_sounds, vec![NotificationSound::Silent]);
+
+        state.backend.show_error = None;
+        let mut replacement = request("sound", NotificationExpiry::System);
+        replacement.sound = NotificationSound::Information;
+        assert!(state.show(tracked_key, replacement).is_empty());
+        assert_eq!(
+            state.backend.shown_sounds,
+            vec![NotificationSound::Silent, NotificationSound::Information]
         );
     }
 

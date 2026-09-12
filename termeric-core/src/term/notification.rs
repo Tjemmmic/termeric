@@ -1,6 +1,8 @@
 //! Bounded terminal-local state for Kitty's OSC 99 notification protocol.
 
-use crate::event::{NotificationExpiry, NotificationRequest, NotificationUrgency};
+use crate::event::{
+    NotificationExpiry, NotificationRequest, NotificationSound, NotificationUrgency,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
 
@@ -42,6 +44,7 @@ struct Metadata {
     icon_names: Vec<String>,
     urgency: Option<NotificationUrgency>,
     expiry: Option<NotificationExpiry>,
+    sound: Option<NotificationSound>,
     report_close: Option<bool>,
     report_activation: Option<bool>,
 }
@@ -112,6 +115,7 @@ struct PendingNotification {
     icon_names: Vec<String>,
     urgency: Option<NotificationUrgency>,
     expiry: NotificationExpiry,
+    sound: NotificationSound,
     report_close: bool,
     report_activation: bool,
 }
@@ -151,6 +155,9 @@ impl PendingNotification {
         if let Some(expiry) = metadata.expiry {
             self.expiry = expiry;
         }
+        if let Some(sound) = metadata.sound {
+            self.sound = sound;
+        }
         if let Some(report_close) = metadata.report_close {
             self.report_close = report_close;
         }
@@ -186,6 +193,7 @@ impl PendingNotification {
             icon_names: self.icon_names,
             urgency: self.urgency,
             expiry: self.expiry,
+            sound: self.sound,
             report_close: self.report_close,
             report_activation: self.report_activation,
             buttons,
@@ -383,7 +391,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
         let key = key[0];
         let singular = matches!(
             key,
-            b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a' | b'f' | b'u' | b'w'
+            b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a' | b'f' | b'u' | b'w' | b's'
         );
         if singular && std::mem::replace(&mut seen[key as usize], true) {
             return Err(());
@@ -446,6 +454,17 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                         }
                         NotificationExpiry::AfterMillis(milliseconds)
                     }
+                });
+            }
+            b's' => {
+                metadata.sound = Some(match decode_metadata_text(value)?.as_str() {
+                    "system" => NotificationSound::System,
+                    "silent" => NotificationSound::Silent,
+                    "error" => NotificationSound::Error,
+                    "warn" | "warning" => NotificationSound::Warning,
+                    "info" => NotificationSound::Information,
+                    "question" => NotificationSound::Question,
+                    _ => return Err(()),
                 });
             }
             b'c' => metadata.report_close = Some(parse_bool(value)?),
@@ -728,6 +747,7 @@ mod tests {
                 icon_names: vec!["warning".into(), "my-app".into()],
                 urgency: Some(NotificationUrgency::Critical),
                 expiry: NotificationExpiry::System,
+                sound: NotificationSound::System,
                 report_close: false,
                 report_activation: false,
                 buttons: Vec::new(),
@@ -745,6 +765,7 @@ mod tests {
                 icon_names: vec!["info".into()],
                 urgency: Some(NotificationUrgency::Low),
                 expiry: NotificationExpiry::System,
+                sound: NotificationSound::System,
                 report_close: false,
                 report_activation: false,
                 buttons: Vec::new(),
@@ -965,6 +986,47 @@ mod tests {
             protocol.handle(&parts(b"i=control", b"ignored")),
             Osc99Action::None
         );
+    }
+
+    #[test]
+    fn sound_policy_is_typed_base64_only_and_bounded() {
+        let cases = [
+            ("c3lzdGVt", NotificationSound::System),
+            ("c2lsZW50", NotificationSound::Silent),
+            ("ZXJyb3I=", NotificationSound::Error),
+            ("d2Fybg", NotificationSound::Warning),
+            ("d2FybmluZw==", NotificationSound::Warning),
+            ("aW5mbw==", NotificationSound::Information),
+            ("cXVlc3Rpb24=", NotificationSound::Question),
+        ];
+        for (index, (encoded, sound)) in cases.into_iter().enumerate() {
+            let mut protocol = NotificationProtocol::default();
+            let metadata = format!("i=sound-{index}:s={encoded}");
+            assert_eq!(
+                protocol.handle(&parts(metadata.as_bytes(), b"Alert")),
+                Osc99Action::Notify(NotificationRequest {
+                    title: Some("Alert".into()),
+                    identifier: Some(format!("sound-{index}")),
+                    sound,
+                    ..NotificationRequest::default()
+                })
+            );
+        }
+
+        let oversized = STANDARD.encode(vec![b'x'; MAX_NOTIFICATION_METADATA_VALUE_BYTES + 1]);
+        for metadata in [
+            "i=bad:s=system".to_string(),
+            "i=bad:s=dW5rbm93bg==".to_string(),
+            "i=bad:s=YmFkCg==".to_string(),
+            "i=bad:s=c3lzdGVt:s=c2lsZW50".to_string(),
+            format!("i=bad:s={oversized}"),
+        ] {
+            let mut protocol = NotificationProtocol::default();
+            assert_eq!(
+                protocol.handle(&parts(metadata.as_bytes(), b"ignored")),
+                Osc99Action::None
+            );
+        }
     }
 
     #[test]

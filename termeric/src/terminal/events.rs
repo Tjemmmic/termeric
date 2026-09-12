@@ -198,7 +198,7 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         let expected_reply =
-            b"\x1b]99;i=capability:p=?;p=title,body,close,alive,buttons:a=report:c=1:o=always:u=0,1,2:w=1\x1b\\"
+            b"\x1b]99;i=capability:p=?;p=title,body,close,alive,buttons:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
                 .as_slice();
         #[cfg(not(target_os = "linux"))]
         let expected_reply = b"\x1b]99;i=capability:p=?;p=title,body:o=always\x1b\\".as_slice();

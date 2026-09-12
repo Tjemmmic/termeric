@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use termeric_core::NotificationRequest;
 #[cfg(target_os = "linux")]
+#[cfg(all(test, target_os = "linux"))]
+use termeric_core::NotificationSound;
 use termeric_core::NotificationUrgency;
 
 const DESKTOP_COMMAND_QUEUE_CAPACITY: usize = 16;
@@ -415,12 +417,7 @@ impl Notifications {
             return None;
         }
         #[cfg(target_os = "linux")]
-        if request.identifier.is_some()
-            || !matches!(request.expiry, termeric_core::NotificationExpiry::System)
-            || request.report_close
-            || request.report_activation
-            || !request.buttons.is_empty()
-        {
+        if requires_tracked_notification(&request) {
             let tracked = match self.tracked.as_mut() {
                 Some(tracked) => tracked,
                 None => {
@@ -545,6 +542,16 @@ impl Notifications {
         self.command = Some(program.into());
         self.rate_limit = Duration::ZERO;
     }
+}
+
+#[cfg(target_os = "linux")]
+fn requires_tracked_notification(request: &NotificationRequest) -> bool {
+    request.identifier.is_some()
+        || !matches!(request.expiry, termeric_core::NotificationExpiry::System)
+        || request.report_close
+        || request.report_activation
+        || !request.buttons.is_empty()
+        || !matches!(request.sound, termeric_core::NotificationSound::System)
 }
 
 fn default_notification_command() -> Option<String> {
@@ -755,6 +762,29 @@ mod tests {
                 ..NotificationRequest::default()
             };
             assert!(notification_args(&request, "Title").contains(&expected.to_string()));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn anonymous_nondefault_sound_uses_the_bounded_tracked_route() {
+        let ordinary = NotificationRequest {
+            title: Some("Title".into()),
+            ..NotificationRequest::default()
+        };
+        assert!(!requires_tracked_notification(&ordinary));
+        for sound in [
+            NotificationSound::Silent,
+            NotificationSound::Error,
+            NotificationSound::Warning,
+            NotificationSound::Information,
+            NotificationSound::Question,
+        ] {
+            assert!(requires_tracked_notification(&NotificationRequest {
+                title: Some("Title".into()),
+                sound,
+                ..NotificationRequest::default()
+            }));
         }
     }
 }

@@ -68,6 +68,24 @@ pub enum NotificationUrgency {
     Critical,
 }
 
+/// Desktop sound policy from Kitty OSC 99 `s` metadata.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NotificationSound {
+    /// Defer to the desktop notification service.
+    #[default]
+    System,
+    /// Suppress notification sound.
+    Silent,
+    /// Error-associated sound.
+    Error,
+    /// Warning-associated sound (`warn` and `warning`).
+    Warning,
+    /// Informational sound.
+    Information,
+    /// Question-associated sound.
+    Question,
+}
+
 /// Desktop expiry policy from Kitty OSC 99 `w` metadata.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NotificationExpiry {
@@ -100,6 +118,8 @@ pub struct NotificationRequest {
     pub urgency: Option<NotificationUrgency>,
     /// Kitty OSC 99 expiry policy.
     pub expiry: NotificationExpiry,
+    /// Kitty OSC 99 sound policy.
+    pub sound: NotificationSound,
     /// Whether Kitty OSC 99 requested an asynchronous close report with `c=1`.
     pub report_close: bool,
     /// Whether Kitty OSC 99 requested activation/button reports with

@@ -298,8 +298,8 @@ awaiting evidence:
   native-ID replacement and close, bounded terminal-enforced expiry, requested
   native close reports, requested default/button activation reports, bounded
   buttons, and exact-owner alive queries are now implemented. Native focus,
-  transmitted icons/cache, occasion filtering, and sound selection remain
-  gaps. Kitty OSC 66 text sizing now has bounded multicell parsing,
+  standard sound/silence policy is also implemented. Native focus, transmitted
+  icons/cache, and occasion filtering remain gaps. Kitty OSC 66 text sizing now has bounded multicell parsing,
   grid/edit/reflow/history/domain semantics, scaled shaping, alignment, and
   cursor geometry; native font-quality and client acceptance remain deferred.
   Kitty's terminal file-transfer and multiple-cursor extensions remain

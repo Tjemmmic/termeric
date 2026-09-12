@@ -142,7 +142,7 @@ desktop helper.
 
 Termeric also implements a bounded subset of Kitty's
 [OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
-`d`, `e`, `w`, `c`, and `a` provide strict identifiers,
+`d`, `e`, `w`, `c`, `a`, and `s` provide strict identifiers,
 title/body/close/alive/buttons selection, completion, plain or RFC 4648 base64
 payloads, expiry policy, and close/activation-report requests. The `f`, `t`,
 and `n` keys add base64-encoded
@@ -151,6 +151,8 @@ candidates; `u=0/1/2` is retained as typed low/normal/critical urgency. Plain
 chunks are limited to 2,048 bytes;
 encoded chunks are limited to 4,096 bytes and accept Kitty's encode-before-
 chunking and encode-after-chunking forms, including an unpadded final chunk.
+The singular `s` value is bounded base64 UTF-8 and accepts `system`, `silent`,
+`error`, `warn`, `warning`, `info`, or `question`.
 Assembled titles and bodies retain at most 4 KiB and 16 KiB respectively.
 Button payloads retain at most 4 KiB before decoding into at most eight
 non-empty labels of 256 UTF-8 bytes each, separated by U+2028.
@@ -182,13 +184,12 @@ C0/C1 controls.
 
 `OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
 terminal's S7C1T/S8C1T framing. Linux responds with
-`p=title,body,close,alive,buttons:a=report:c=1:o=always:u=0,1,2:w=1`; other targets respond with
+`p=title,body,close,alive,buttons:a=report:c=1:o=always:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1`; other targets respond with
 `p=title,body:o=always`. The platform split keeps lifecycle and urgency
 discovery truthful.
 Application/type/icon-name metadata has no capability-query key. Non-`always`
 occasion requirements are rejected. Native focus, application-side filtering,
-sound selection, transmitted icon data, and icon caching are not advertised or
-claimed.
+transmitted icon data and icon caching are not advertised or claimed.
 
 Unidentified requests with desktop-default expiry enter the existing
 rate-limited helper path. On Linux, requests needing lifecycle semantics use a
@@ -220,6 +221,12 @@ anonymous and already-closing entries are excluded. Stale terminal origins are
 dropped with no focused-terminal fallback. Native `ActivationToken` is
 deliberately ignored because compositor-authorized focus is not yet implemented
 or advertised.
+
+Non-default sound policy also selects the tracked Linux path. `silent` becomes
+the boolean freedesktop `suppress-sound` hint; error, warning, information, and
+question become the corresponding `dialog-*` sound-theme name. `system` emits
+no override and leaves policy to the notification service. These hints are
+advisory at the native boundary, and no separate audio helper is launched.
 
 D-Bus methods have a two-second timeout, and evicting the oldest handle makes a
 best-effort close. Repeated worker failures are deduplicated until a successful
