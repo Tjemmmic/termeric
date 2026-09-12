@@ -832,6 +832,10 @@ mod tests {
             args: vec!["%s".into(), "$HOME;🙂".into()],
             working_directory: Some("/tmp".into()),
             title: Some("exact window".into()),
+            environment: vec![protocol::EnvironmentVariable {
+                name: "WINDOW_MODE".into(),
+                value: "direct".into(),
+            }],
         };
         let (mut client, server) = UnixStream::pair().unwrap();
         let expected_request = launch.clone();
@@ -922,6 +926,10 @@ mod tests {
             args: vec!["%s".into(), "$HOME;🙂".into()],
             working_directory: Some("/tmp".into()),
             title: Some("exact".into()),
+            environment: vec![protocol::EnvironmentVariable {
+                name: "TAB_MODE".into(),
+                value: "direct".into(),
+            }],
         };
         let (mut client, server) = UnixStream::pair().unwrap();
         let expected_request = launch.clone();

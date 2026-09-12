@@ -218,7 +218,7 @@ impl App {
                             cwd.as_deref(),
                             spec.title.as_deref(),
                             None,
-                            std::collections::HashMap::new(),
+                            spec.environment.clone(),
                         )?;
                 }
                 crate::cli::LaunchTarget::TerminalProfile { name } => {

@@ -56,7 +56,7 @@ lock after crashes. Keeping one stable inode avoids PID-reuse and unlink races.
 An invocation that arrives during startup fails visibly and can be retried; it
 never races a second owner into existence.
 
-GUI control protocol v14 and JSON inventory schema 3 mark each window with
+GUI control protocol v15 and JSON inventory schema 3 mark each window with
 `visible` and `quick_access`. The launcher validates every discovered process
 inventory before acting. Multiple owners, truncated inventory, unsafe runtime
 paths, authentication failures, stale targets, or non-quick target IDs fail

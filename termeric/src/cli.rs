@@ -1,6 +1,7 @@
 //! Deterministic command-line parsing into window-local startup plans.
 
 use anyhow::Context;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -32,6 +33,9 @@ pub struct TabLaunch {
     pub working_directory: Option<PathBuf>,
     pub title: Option<String>,
     pub target: LaunchTarget,
+    /// Per-launch child environment overlay. Runtime control requests are
+    /// validated before populating this map; ordinary CLI plans leave it empty.
+    pub environment: HashMap<String, String>,
     pub splits: Vec<CliSplitDirection>,
 }
 
@@ -90,6 +94,7 @@ impl Default for TabLaunch {
             working_directory: None,
             title: None,
             target: LaunchTarget::Shell,
+            environment: HashMap::new(),
             splits: Vec::new(),
         }
     }
@@ -582,6 +587,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 args: launch.args.clone(),
                 working_directory: launch.working_directory.clone(),
                 title: launch.title.clone(),
+                environment: launch.environment.clone(),
             }
             .validate()
             .map_err(anyhow::Error::msg)?;
@@ -593,6 +599,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                     args: launch.args,
                     working_directory: launch.working_directory,
                     title: launch.title,
+                    environment: launch.environment,
                     request_id: launch.request_id,
                     json: launch.json,
                 },
@@ -622,6 +629,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 args: launch.args.clone(),
                 working_directory: launch.working_directory.clone(),
                 title: launch.title.clone(),
+                environment: launch.environment.clone(),
             }
             .validate()
             .map_err(anyhow::Error::msg)?;
@@ -633,6 +641,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                     args: launch.args,
                     working_directory: launch.working_directory,
                     title: launch.title,
+                    environment: launch.environment,
                     request_id: launch.request_id,
                     json: launch.json,
                 },
@@ -933,6 +942,7 @@ struct ParsedControlLaunch {
     args: Vec<String>,
     working_directory: Option<String>,
     title: Option<String>,
+    environment: Vec<crate::control::protocol::EnvironmentVariable>,
     request_id: Option<String>,
     json: bool,
 }
@@ -946,6 +956,7 @@ fn parse_control_launch(
     let mut title = None;
     let mut request_id = None;
     let mut json = false;
+    let mut environment = Vec::new();
     let command_index = loop {
         let option = domain_utf8(
             arguments.get(index),
@@ -966,6 +977,17 @@ fn parse_control_launch(
                     arguments.get(index),
                     "--title requires a title",
                 )?);
+            }
+            "--env" => {
+                index += 1;
+                let assignment = domain_utf8(arguments.get(index), "--env requires NAME=VALUE")?;
+                let (name, value) = assignment
+                    .split_once('=')
+                    .ok_or_else(|| anyhow::anyhow!("--env requires NAME=VALUE"))?;
+                environment.push(crate::control::protocol::EnvironmentVariable {
+                    name: name.to_string(),
+                    value: value.to_string(),
+                });
             }
             "--request-id" if request_id.is_none() => {
                 index += 1;
@@ -1003,6 +1025,7 @@ fn parse_control_launch(
         args,
         working_directory,
         title,
+        environment,
         request_id,
         json,
     })
@@ -1036,9 +1059,9 @@ Commands for already-running local GUI processes:\n  \
   get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
-  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv in a new window using the source window's configuration\n  \
+  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
   new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
-  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv directly in a local tab of one exact stable window\n  \
+  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
   split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
   focus-window PROCESS WINDOW [--request-id ID] [--json]\n      Request native focus for one exact stable window\n  \
   select-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Select one exact stable tab without focusing its native window\n  \
@@ -2220,6 +2243,10 @@ mod tests {
                     "/tmp/two words",
                     "--title",
                     "Exact 🙂",
+                    "--env",
+                    "EMPTY_VALUE=",
+                    "--env",
+                    "EXACT_VALUE== two words $HOME;🙂",
                     "--request-id",
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "--json",
@@ -2241,12 +2268,23 @@ mod tests {
                 args,
                 working_directory: Some(cwd),
                 title: Some(title),
+                environment,
                 request_id: Some(request_id),
                 json: true,
             }) if program == "/bin/printf"
                 && args == ["", "two words", "$HOME;🙂", "--json"]
                 && cwd == "/tmp/two words"
                 && title == "Exact 🙂"
+                && environment == [
+                    crate::control::protocol::EnvironmentVariable {
+                        name: "EMPTY_VALUE".into(),
+                        value: String::new(),
+                    },
+                    crate::control::protocol::EnvironmentVariable {
+                        name: "EXACT_VALUE".into(),
+                        value: "= two words $HOME;🙂".into(),
+                    },
+                ]
                 && request_id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ));
         assert!(matches!(
@@ -2260,6 +2298,8 @@ mod tests {
                     "/tmp/two words",
                     "--title",
                     "Exact window 🙂",
+                    "--env",
+                    "WINDOW_MODE=direct",
                     "--request-id",
                     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                     "--json",
@@ -2281,12 +2321,17 @@ mod tests {
                 args,
                 working_directory: Some(cwd),
                 title: Some(title),
+                environment,
                 request_id: Some(request_id),
                 json: true,
             }) if program == "/bin/printf"
                 && args == ["", "two words", "$HOME;🙂", "--json"]
                 && cwd == "/tmp/two words"
                 && title == "Exact window 🙂"
+                && environment == [crate::control::protocol::EnvironmentVariable {
+                    name: "WINDOW_MODE".into(),
+                    value: "direct".into(),
+                }]
                 && request_id == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         ));
         assert!(matches!(
@@ -2510,6 +2555,26 @@ mod tests {
                 "launch-window",
                 "42",
                 "7",
+                "--env",
+                "NO_EQUALS",
+                "--",
+                "ok",
+            ],
+            vec![
+                "control",
+                "launch-window",
+                "42",
+                "7",
+                "--env",
+                "TERM=unsafe",
+                "--",
+                "ok",
+            ],
+            vec![
+                "control",
+                "launch-window",
+                "42",
+                "7",
                 "--cwd",
                 "relative",
                 "--",
@@ -2530,6 +2595,18 @@ mod tests {
             vec!["control", "new-tab", "42", "7", "--json", "--json"],
             vec!["control", "launch-tab", "42", "7"],
             vec!["control", "launch-tab", "42", "7", "--", ""],
+            vec![
+                "control",
+                "launch-tab",
+                "42",
+                "7",
+                "--env",
+                "DUPLICATE=first",
+                "--env",
+                "DUPLICATE=second",
+                "--",
+                "ok",
+            ],
             vec![
                 "control",
                 "launch-tab",

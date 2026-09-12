@@ -2,8 +2,9 @@
 //!
 //! Inventory and bounded terminal-text queries are read-only; typed mutations
 //! are explicit and ID-targeted. Opt-in input accepts typed text only, while
-//! command launches accept bounded exact argv. Environment overrides,
-//! clipboard data, and plugin/provider credentials stay hidden.
+//! command launches accept bounded exact argv and non-secret environment
+//! overlays. Environment values stay out of inventory, responses, and logs;
+//! clipboard data and plugin/provider credentials stay hidden.
 
 pub mod protocol;
 
@@ -52,6 +53,7 @@ pub enum ControlCommand {
         args: Vec<String>,
         working_directory: Option<String>,
         title: Option<String>,
+        environment: Vec<protocol::EnvironmentVariable>,
         request_id: Option<String>,
         json: bool,
     },
@@ -68,6 +70,7 @@ pub enum ControlCommand {
         args: Vec<String>,
         working_directory: Option<String>,
         title: Option<String>,
+        environment: Vec<protocol::EnvironmentVariable>,
         request_id: Option<String>,
         json: bool,
     },
@@ -226,6 +229,7 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<String> {
                 args,
                 working_directory,
                 title,
+                environment,
                 request_id,
                 json,
             } => client::launch_window(
@@ -235,6 +239,7 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<String> {
                 args,
                 working_directory,
                 title,
+                environment,
                 request_id,
                 json,
             ),
@@ -251,6 +256,7 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<String> {
                 args,
                 working_directory,
                 title,
+                environment,
                 request_id,
                 json,
             } => client::launch_tab(
@@ -260,6 +266,7 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<String> {
                 args,
                 working_directory,
                 title,
+                environment,
                 request_id,
                 json,
             ),

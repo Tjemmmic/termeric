@@ -405,6 +405,7 @@ pub fn launch_window(
     args: Vec<String>,
     working_directory: Option<String>,
     title: Option<String>,
+    environment: Vec<protocol::EnvironmentVariable>,
     request_id: Option<String>,
     json: bool,
 ) -> anyhow::Result<String> {
@@ -416,14 +417,16 @@ pub fn launch_window(
         Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
         None => generate_request_id()?,
     };
-    let request_frame = Request::LaunchWindow {
+    let mut request_frame = Request::LaunchWindow {
         request_id: request_id.clone(),
         source_window,
         program,
         args,
         working_directory,
         title,
+        environment,
     };
+    request_frame.canonicalize();
     request_frame.validate().map_err(anyhow::Error::msg)?;
     let endpoint = ControlPaths::discover_all()?
         .into_iter()
@@ -538,6 +541,7 @@ pub fn launch_tab(
     args: Vec<String>,
     working_directory: Option<String>,
     title: Option<String>,
+    environment: Vec<protocol::EnvironmentVariable>,
     request_id: Option<String>,
     json: bool,
 ) -> anyhow::Result<String> {
@@ -549,14 +553,16 @@ pub fn launch_tab(
         Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
         None => generate_request_id()?,
     };
-    let request_frame = Request::LaunchTab {
+    let mut request_frame = Request::LaunchTab {
         request_id: request_id.clone(),
         window_id,
         program,
         args,
         working_directory,
         title,
+        environment,
     };
+    request_frame.canonicalize();
     request_frame.validate().map_err(anyhow::Error::msg)?;
     let endpoint = ControlPaths::discover_all()?
         .into_iter()

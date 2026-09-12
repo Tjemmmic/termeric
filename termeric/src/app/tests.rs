@@ -6985,6 +6985,7 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
                     program: "/bin/sh".into(),
                     args: vec!["-c".into(), "printf CLI_ARGV_28; sleep 1".into()],
                 },
+                environment: HashMap::new(),
                 splits: Vec::new(),
             },
         ],
@@ -7030,7 +7031,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
     let helper = temp.path().join("capture-argv.sh");
     std::fs::write(
         &helper,
-        "#!/bin/sh\nprintf '[%s]|[%s]|[%s]|[%s]\\n' \"$1\" \"$2\" \"$3\" \"$4\"\npwd\nsleep 1\n",
+        "#!/bin/sh\nprintf '[%s]|[%s]|[%s]|[%s]\\n' \"$1\" \"$2\" \"$3\" \"$4\"\nprintf 'ENV=[%s]|[%s]|[%s]\\n' \"${EMPTY_VALUE-unset}\" \"${EXACT_VALUE-unset}\" \"${UNICODE_VALUE-unset}\"\npwd\nsleep 1\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -7061,6 +7062,20 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
             ],
             Some(cwd),
             Some("Exact launch 🙂"),
+            &[
+                crate::control::protocol::EnvironmentVariable {
+                    name: "EMPTY_VALUE".into(),
+                    value: String::new(),
+                },
+                crate::control::protocol::EnvironmentVariable {
+                    name: "EXACT_VALUE".into(),
+                    value: "= two words $HOME;value".into(),
+                },
+                crate::control::protocol::EnvironmentVariable {
+                    name: "UNICODE_VALUE".into(),
+                    value: "line one\nENV_UNICODE_λ".into(),
+                },
+            ],
         )
         .unwrap();
     assert_eq!(exact_id, 0);
@@ -7070,6 +7085,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut exact_output = false;
+    let mut environment_output = false;
     let mut cwd_output = false;
     while Instant::now() < deadline {
         app.process_pty_events();
@@ -7091,7 +7107,21 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
                     .join("\n")
                     .contains(cwd)
             });
-        if exact_output && cwd_output {
+        environment_output = tabs_at(&app, 0)
+            .and_then(|tab| tab.focused_terminal())
+            .is_some_and(|terminal| {
+                terminal
+                    .grid()
+                    .export_scrollback_text()
+                    .join("\n")
+                    .contains("ENV=[]|[= two words $HOME;value]|[line one")
+                    && terminal
+                        .grid()
+                        .export_scrollback_text()
+                        .join("\n")
+                        .contains("ENV_UNICODE_λ")
+            });
+        if exact_output && environment_output && cwd_output {
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -7100,22 +7130,37 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
         exact_output,
         "exact argv output did not reach the command tab"
     );
+    assert!(
+        environment_output,
+        "exact environment output did not reach the command tab"
+    );
     assert!(cwd_output, "the command did not run in the requested cwd");
 
     let count = app.tabs.as_ref().unwrap().count();
-    assert!(
-        app.launch_control_tab(
+    let error = app
+        .launch_control_tab(
             "/definitely/missing/termeric-control-program",
             &[],
             Some(cwd),
             None,
+            &[crate::control::protocol::EnvironmentVariable {
+                name: "PRIVATE_BUILD_VALUE".into(),
+                value: "must-not-appear-in-errors".into(),
+            }],
         )
-        .is_err()
-    );
+        .unwrap_err();
+    assert!(!error.contains("PRIVATE_BUILD_VALUE"));
+    assert!(!error.contains("must-not-appear-in-errors"));
     assert_eq!(app.tabs.as_ref().unwrap().count(), count);
     assert!(
-        app.launch_control_tab(helper, &[], Some("/definitely/missing/termeric-cwd"), None)
-            .is_err()
+        app.launch_control_tab(
+            helper,
+            &[],
+            Some("/definitely/missing/termeric-cwd"),
+            None,
+            &[],
+        )
+        .is_err()
     );
     assert_eq!(app.tabs.as_ref().unwrap().count(), count);
 }

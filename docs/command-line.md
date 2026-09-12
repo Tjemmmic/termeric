@@ -68,9 +68,9 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `domain protocol-version [--json]` | Print the local executable's expected live-domain wire version without starting or contacting a daemon. |
 | `control list [--json]` | Inspect bounded metadata for every already-running local GUI process without opening a display. |
 | `control new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]` | Create a native window from an exact running source window; an explicit request ID safely retries an ambiguous recent result. |
-| `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector as the initial tab of a new source-configured native window and return both stable IDs. |
+| `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays as the initial tab of a new source-configured native window and return both stable IDs. |
 | `control new-tab PROCESS WINDOW [--request-id ID] [--json]` | Create a local shell tab in an exact running window and return its stable ID. |
-| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector directly in a new ordinary local tab and return its stable ID. |
+| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays directly in a new ordinary local tab and return its stable ID. |
 | `control split-pane PROCESS WINDOW TAB PANE horizontal\|vertical [--request-id ID] [--json]` | Split an exact local pane and return the new stable pane ID. |
 | `control focus-window PROCESS WINDOW [--request-id ID] [--json]` | Request focus for an exact native window on supported backends; Wayland fails explicitly. |
 | `control select-tab PROCESS WINDOW TAB [--request-id ID] [--json]` | Select an exact stable tab without activating its native window. |
@@ -131,8 +131,10 @@ ID. `termeric control launch-tab PROCESS WINDOW [options] -- PROGRAM [ARG ...]`
 instead creates an ordinary local tab, preserves exact UTF-8 argument
 boundaries without invoking a shell, optionally applies an existing absolute
 cwd and initial title, activates the tab, and returns its stable ID. It inherits
-the GUI process environment without accepting overrides and rejects an active
-live-domain target; use `domain spawn` for that authority. `termeric control
+the GUI process environment and applies each repeatable `--env NAME=VALUE`
+overlay exactly, then rejects an active live-domain target; use `domain spawn`
+for that authority. Literal values are not a secret-injection mechanism because
+shell history and process-argument inspection may expose them. `termeric control
 launch-window PROCESS SOURCE_WINDOW [options] -- PROGRAM [ARG ...]` applies the
 same exact-argv, cwd, title, environment, and replay contract to the sole initial
 tab of a new ordinary local window. The source supplies validated configuration
@@ -157,8 +159,9 @@ UTF-8 viewport. It can add at most 256 primary-screen history rows and returns
 the newest content within a caller-selected ceiling no larger than 64 KiB.
 Alternate-screen queries are viewport-only, and synchronized output that has
 not been presented remains hidden. GUI control does not expose existing argv,
-environment, clipboard, or provider data. A caller can supply bounded argv to
-`launch-tab`, but inventory and text reads cannot inspect existing process argv.
+environment, clipboard, or provider data. A caller can supply bounded argv and
+non-secret environment overlays to either direct launch action, but inventory
+and text reads cannot inspect existing process argv or environment.
 See the complete
 [running-GUI control contract](gui-control.md).
 

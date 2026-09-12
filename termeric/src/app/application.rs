@@ -1976,11 +1976,12 @@ impl Application {
     fn handle_control_request(
         &mut self,
         event_loop: &ActiveEventLoop,
-        request: crate::control::protocol::Request,
+        mut request: crate::control::protocol::Request,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         use crate::control::protocol::{Request, Response};
 
         request.validate()?;
+        request.canonicalize();
         if let Some(replay) = self.control_replays.replay(&request) {
             return replay;
         }
@@ -2010,6 +2011,7 @@ impl Application {
                 args,
                 working_directory,
                 title,
+                environment,
             } => self.launch_control_window(
                 event_loop,
                 request_id,
@@ -2018,6 +2020,7 @@ impl Application {
                 args,
                 working_directory.as_deref(),
                 title.as_deref(),
+                environment,
             ),
             Request::CreateTab {
                 request_id,
@@ -2030,6 +2033,7 @@ impl Application {
                 args,
                 working_directory,
                 title,
+                environment,
             } => self.launch_control_tab(
                 request_id,
                 *window_id,
@@ -2037,6 +2041,7 @@ impl Application {
                 args,
                 working_directory.as_deref(),
                 title.as_deref(),
+                environment,
             ),
             Request::SplitPane {
                 request_id,
@@ -2776,6 +2781,7 @@ impl Application {
         args: &[String],
         working_directory: Option<&str>,
         title: Option<&str>,
+        environment: &[crate::control::protocol::EnvironmentVariable],
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let result_index = self.prepare_control_launch_window(
             source_window,
@@ -2783,6 +2789,7 @@ impl Application {
             args,
             working_directory,
             title,
+            environment,
         )?;
         let creation = self
             .create_pending_windows(event_loop)
@@ -2804,6 +2811,7 @@ impl Application {
         args: &[String],
         working_directory: Option<&str>,
         title: Option<&str>,
+        environment: &[crate::control::protocol::EnvironmentVariable],
     ) -> std::result::Result<usize, String> {
         let total_tabs = process_tab_count(&self.windows);
         validate_control_window_creation_capacity(
@@ -2862,6 +2870,10 @@ impl Application {
                     program: program.to_string(),
                     args: args.to_vec(),
                 },
+                environment: environment
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.value.clone()))
+                    .collect(),
                 splits: Vec::new(),
             }],
             ..WindowLaunch::default()
@@ -2922,6 +2934,7 @@ impl Application {
         args: &[String],
         working_directory: Option<&str>,
         title: Option<&str>,
+        environment: &[crate::control::protocol::EnvironmentVariable],
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         let native_id = self
             .control_window_ids
@@ -2949,7 +2962,7 @@ impl Application {
             .windows
             .get_mut(&native_id)
             .expect("validated control window disappeared")
-            .launch_control_tab(program, args, working_directory, title)?;
+            .launch_control_tab(program, args, working_directory, title, environment)?;
         Ok(crate::control::protocol::Response::TabCreated {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -4339,6 +4352,10 @@ mod tests {
             args: vec!["%s".into(), "exact".into()],
             working_directory: Some("/tmp".into()),
             title: Some("build".into()),
+            environment: vec![crate::control::protocol::EnvironmentVariable {
+                name: "BUILD_MODE".into(),
+                value: "exact".into(),
+            }],
         };
         let launch_response = Ok(Response::TabCreated {
             process_id: 42,
@@ -4356,18 +4373,33 @@ mod tests {
                 args: vec!["%s".into(), "different".into()],
                 working_directory: Some("/tmp".into()),
                 title: Some("build".into()),
+                environment: vec![crate::control::protocol::EnvironmentVariable {
+                    name: "BUILD_MODE".into(),
+                    value: "exact".into(),
+                }],
             }),
             Some(Err(error)) if error.contains("different action")
         ));
 
-        let window_launch_request = Request::LaunchWindow {
+        let mut window_launch_request = Request::LaunchWindow {
             request_id: "3".repeat(32),
             source_window: 7,
             program: "/usr/bin/printf".into(),
             args: vec!["%s".into(), "exact".into()],
             working_directory: Some("/tmp".into()),
             title: Some("window build".into()),
+            environment: vec![
+                crate::control::protocol::EnvironmentVariable {
+                    name: "WINDOW_Z".into(),
+                    value: "last".into(),
+                },
+                crate::control::protocol::EnvironmentVariable {
+                    name: "WINDOW_A".into(),
+                    value: "exact".into(),
+                },
+            ],
         };
+        window_launch_request.canonicalize();
         let window_launch_response = Ok(Response::WindowLaunched {
             process_id: 42,
             request_id: "3".repeat(32),
@@ -4382,15 +4414,55 @@ mod tests {
             cache.replay(&window_launch_request),
             Some(window_launch_response)
         );
-        assert!(matches!(
-            cache.replay(&Request::LaunchWindow {
+        let mut reordered_window_launch_request = Request::LaunchWindow {
+            request_id: "3".repeat(32),
+            source_window: 7,
+            program: "/usr/bin/printf".into(),
+            args: vec!["%s".into(), "exact".into()],
+            working_directory: Some("/tmp".into()),
+            title: Some("window build".into()),
+            environment: vec![
+                crate::control::protocol::EnvironmentVariable {
+                    name: "WINDOW_A".into(),
+                    value: "exact".into(),
+                },
+                crate::control::protocol::EnvironmentVariable {
+                    name: "WINDOW_Z".into(),
+                    value: "last".into(),
+                },
+            ],
+        };
+        reordered_window_launch_request.canonicalize();
+        assert_eq!(
+            cache.replay(&reordered_window_launch_request),
+            Some(Ok(Response::WindowLaunched {
+                process_id: 42,
                 request_id: "3".repeat(32),
-                source_window: 7,
-                program: "/usr/bin/printf".into(),
-                args: vec!["%s".into(), "different".into()],
-                working_directory: Some("/tmp".into()),
-                title: Some("window build".into()),
-            }),
+                window_id: 9,
+                tab_id: 0,
+            }))
+        );
+        let mut changed_window_launch_request = Request::LaunchWindow {
+            request_id: "3".repeat(32),
+            source_window: 7,
+            program: "/usr/bin/printf".into(),
+            args: vec!["%s".into(), "exact".into()],
+            working_directory: Some("/tmp".into()),
+            title: Some("window build".into()),
+            environment: vec![
+                crate::control::protocol::EnvironmentVariable {
+                    name: "WINDOW_Z".into(),
+                    value: "last".into(),
+                },
+                crate::control::protocol::EnvironmentVariable {
+                    name: "WINDOW_A".into(),
+                    value: "different".into(),
+                },
+            ],
+        };
+        changed_window_launch_request.canonicalize();
+        assert!(matches!(
+            cache.replay(&changed_window_launch_request),
             Some(Err(error)) if error.contains("different action")
         ));
 
@@ -4573,6 +4645,7 @@ mod tests {
                 &["-c".into(), "sleep 1".into()],
                 None,
                 Some("wrong target"),
+                &[],
             )
             .unwrap_err();
         assert!(missing.contains("does not exist"), "{missing}");
@@ -4593,6 +4666,7 @@ mod tests {
                 &["-c".into(), "sleep 1".into()],
                 None,
                 Some("targeted"),
+                &[],
             )
             .unwrap();
         assert!(matches!(
@@ -4620,7 +4694,7 @@ mod tests {
         let helper = temp.path().join("capture-window-argv.sh");
         std::fs::write(
             &helper,
-            "#!/bin/sh\nprintf '[%s]|[%s]|[%s]|[%s]\\n' \"$1\" \"$2\" \"$3\" \"$4\"\npwd\nsleep 1\n",
+            "#!/bin/sh\nprintf '[%s]|[%s]|[%s]|[%s]\\n' \"$1\" \"$2\" \"$3\" \"$4\"\nprintf 'WINDOW_ENV=[%s]|[%s]\\n' \"${EMPTY_VALUE-unset}\" \"${WINDOW_VALUE-unset}\"\npwd\nsleep 1\n",
         )
         .unwrap();
         let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
@@ -4659,6 +4733,7 @@ mod tests {
                 &[],
                 Some("/definitely/missing/termeric-launch-window-cwd"),
                 None,
+                &[],
             )
             .unwrap_err();
         assert!(missing_cwd.contains("pass an existing absolute directory"));
@@ -4677,6 +4752,16 @@ mod tests {
                 ],
                 None,
                 Some("Exact window 🙂"),
+                &[
+                    crate::control::protocol::EnvironmentVariable {
+                        name: "EMPTY_VALUE".into(),
+                        value: String::new(),
+                    },
+                    crate::control::protocol::EnvironmentVariable {
+                        name: "WINDOW_VALUE".into(),
+                        value: "= exact $HOME;🙂".into(),
+                    },
+                ],
             )
             .unwrap();
         assert_eq!(result_index, 0);
@@ -4692,6 +4777,11 @@ mod tests {
         assert_eq!(tab.working_directory.as_deref(), Some(temp.path()));
         assert_eq!(tab.title.as_deref(), Some("Exact window 🙂"));
         assert!(tab.splits.is_empty());
+        assert_eq!(tab.environment.get("EMPTY_VALUE"), Some(&String::new()));
+        assert_eq!(
+            tab.environment.get("WINDOW_VALUE").map(String::as_str),
+            Some("= exact $HOME;🙂")
+        );
         assert!(matches!(
             &tab.target,
             crate::cli::LaunchTarget::Command { program, args }
@@ -4720,6 +4810,7 @@ mod tests {
                 .map(|terminal| terminal.grid().export_scrollback_text().join("\n"))
                 .unwrap_or_default();
             if output.contains("[]|[two words]|[$HOME;🙂]|[--json]")
+                && output.contains("WINDOW_ENV=[]|[= exact $HOME;🙂]")
                 && output.contains(temp.path().to_str().unwrap())
             {
                 return;
@@ -4742,6 +4833,10 @@ mod tests {
         application.window_order.push(native_id);
         application.control_window_ids.insert(native_id, 7);
 
+        let private_environment = [crate::control::protocol::EnvironmentVariable {
+            name: "PRIVATE_BUILD_VALUE".into(),
+            value: "must-not-appear-in-errors".into(),
+        }];
         let result_index = application
             .prepare_control_launch_window(
                 7,
@@ -4749,24 +4844,27 @@ mod tests {
                 &[],
                 temp.path().to_str(),
                 None,
+                &private_environment,
             )
             .unwrap();
         let mut prepared = application.pending.remove(result_index);
         let error = prepared.init_tabs().unwrap_err();
         let error = format!("{error:#}");
         assert!(error.contains("spawn"));
+        assert!(!error.contains("PRIVATE_BUILD_VALUE"));
+        assert!(!error.contains("must-not-appear-in-errors"));
         assert_eq!(prepared.tabs.as_ref().unwrap().count(), 0);
         assert!(application.pending.is_empty());
 
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
         let error = application
-            .prepare_control_launch_window(7, "/bin/true", &[], temp.path().to_str(), None)
+            .prepare_control_launch_window(7, "/bin/true", &[], temp.path().to_str(), None, &[])
             .unwrap_err();
         assert!(error.contains("closing"));
         assert!(application.pending.is_empty());
 
         let error = application
-            .prepare_control_launch_window(8, "/bin/true", &[], temp.path().to_str(), None)
+            .prepare_control_launch_window(8, "/bin/true", &[], temp.path().to_str(), None, &[])
             .unwrap_err();
         assert!(error.contains("does not exist"));
         assert!(application.pending.is_empty());
@@ -4919,7 +5017,7 @@ mod tests {
         );
         let domain_tab_count = window.tabs.as_ref().unwrap().count();
         let local_launch = window
-            .launch_control_tab("/bin/true", &[], None, Some("must not launch"))
+            .launch_control_tab("/bin/true", &[], None, Some("must not launch"), &[])
             .unwrap_err();
         assert!(local_launch.contains("domain spawn"), "{local_launch}");
         assert_eq!(window.tabs.as_ref().unwrap().count(), domain_tab_count);

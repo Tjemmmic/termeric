@@ -8,6 +8,15 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Running-GUI control protocol v15 adds repeatable bounded `--env NAME=VALUE`
+  overlays to `control launch-tab` and `control launch-window`. Children inherit
+  the GUI environment before exact NUL-free UTF-8 values are applied; portable
+  names, per-entry/aggregate ceilings, duplicate rejection, and reserved
+  terminal-identity variables fail before mutation. Canonical name ordering
+  makes equivalent retries order-independent without weakening collision
+  detection. Values stay out of inventory, responses, and logs; literal CLI
+  values are explicitly documented as unsuitable for secrets.
+
 - Running-GUI control protocol v14 adds `control launch-window` for launching
   bounded exact argv as the sole initial tab of a fresh native window cloned
   from one exact source configuration. Optional cwd and title follow the

@@ -2799,6 +2799,7 @@ impl App {
         args: &[String],
         working_directory: Option<&str>,
         title: Option<&str>,
+        environment: &[crate::control::protocol::EnvironmentVariable],
     ) -> std::result::Result<u64, String> {
         let tab_count = self.tabs.as_ref().map_or(0, TabManager::count);
         validate_ordinary_tab_creation_capacity(tab_count)?;
@@ -2831,7 +2832,10 @@ impl App {
                 working_directory,
                 title,
                 None,
-                std::collections::HashMap::new(),
+                environment
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.value.clone()))
+                    .collect(),
             )
             .map_err(|error| format!("Could not launch command tab: {error:#}"))?;
         self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });

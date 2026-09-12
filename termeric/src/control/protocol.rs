@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -26,6 +26,10 @@ pub const MAX_CONTROL_LAUNCH_ARGS: usize = 128;
 pub const MAX_CONTROL_LAUNCH_ARGV_BYTES: usize = 16 * 1024;
 pub const MAX_CONTROL_LAUNCH_CWD_BYTES: usize = 4 * 1024;
 pub const MAX_CONTROL_LAUNCH_TITLE_BYTES: usize = 256;
+pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES: usize = 64;
+pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES: usize = 128;
+pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES: usize = 8 * 1024;
+pub const MAX_CONTROL_LAUNCH_ENVIRONMENT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -67,6 +71,7 @@ pub enum Request {
         args: Vec<String>,
         working_directory: Option<String>,
         title: Option<String>,
+        environment: Vec<EnvironmentVariable>,
     },
     CreateTab {
         request_id: String,
@@ -79,6 +84,7 @@ pub enum Request {
         args: Vec<String>,
         working_directory: Option<String>,
         title: Option<String>,
+        environment: Vec<EnvironmentVariable>,
     },
     SplitPane {
         request_id: String,
@@ -159,6 +165,13 @@ pub enum Request {
 pub enum SplitDirection {
     Horizontal,
     Vertical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentVariable {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -484,6 +497,16 @@ pub enum ServerFrame {
 }
 
 impl Request {
+    pub fn canonicalize(&mut self) {
+        let environment = match self {
+            Self::LaunchWindow { environment, .. } | Self::LaunchTab { environment, .. } => {
+                environment
+            }
+            _ => return,
+        };
+        environment.sort_by(|left, right| left.name.cmp(&right.name));
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Inventory => Ok(()),
@@ -573,6 +596,7 @@ impl Request {
                 args,
                 working_directory,
                 title,
+                environment,
             } => {
                 if !valid_request_id(request_id) {
                     return Err(
@@ -587,6 +611,7 @@ impl Request {
                     args,
                     working_directory.as_deref(),
                     title.as_deref(),
+                    environment,
                 )
             }
             Self::LaunchWindow {
@@ -596,6 +621,7 @@ impl Request {
                 args,
                 working_directory,
                 title,
+                environment,
             } => {
                 if !valid_request_id(request_id) {
                     return Err(
@@ -610,6 +636,7 @@ impl Request {
                     args,
                     working_directory.as_deref(),
                     title.as_deref(),
+                    environment,
                 )
             }
             Self::SplitPane {
@@ -784,6 +811,7 @@ fn validate_control_launch(
     args: &[String],
     working_directory: Option<&str>,
     title: Option<&str>,
+    environment: &[EnvironmentVariable],
 ) -> Result<(), String> {
     if program.is_empty() || program.chars().any(unsafe_control_metadata_character) {
         return Err(
@@ -824,6 +852,59 @@ fn validate_control_launch(
     {
         return Err(format!(
             "GUI control launch title must be nonempty UTF-8 of at most {MAX_CONTROL_LAUNCH_TITLE_BYTES} bytes without control or bidirectional formatting text"
+        ));
+    }
+    validate_control_launch_environment(environment)?;
+    Ok(())
+}
+
+fn validate_control_launch_environment(environment: &[EnvironmentVariable]) -> Result<(), String> {
+    if environment.len() > MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES {
+        return Err(format!(
+            "GUI control launch environment is limited to {MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES} entries"
+        ));
+    }
+    let mut names = HashSet::with_capacity(environment.len());
+    let mut total_bytes = 0usize;
+    for entry in environment {
+        let mut bytes = entry.name.bytes();
+        let valid_name = bytes
+            .next()
+            .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+            && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric());
+        let reserved = matches!(
+            entry.name.as_str(),
+            "PWD"
+                | "TERM"
+                | "COLORTERM"
+                | "TERMINFO"
+                | "TERMINFO_DIRS"
+                | "TERM_PROGRAM"
+                | "TERM_PROGRAM_VERSION"
+        );
+        if !valid_name || entry.name.len() > MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES || reserved {
+            return Err(
+                "GUI control launch environment contains an invalid or reserved variable name"
+                    .into(),
+            );
+        }
+        if !names.insert(entry.name.as_str()) {
+            return Err("GUI control launch environment contains a duplicate variable name".into());
+        }
+        if entry.value.len() > MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES
+            || entry.value.contains('\0')
+        {
+            return Err(format!(
+                "GUI control launch environment values must be NUL-free UTF-8 of at most {MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES} bytes"
+            ));
+        }
+        total_bytes = total_bytes
+            .saturating_add(entry.name.len())
+            .saturating_add(entry.value.len());
+    }
+    if total_bytes > MAX_CONTROL_LAUNCH_ENVIRONMENT_BYTES {
+        return Err(format!(
+            "GUI control launch environment is limited to {MAX_CONTROL_LAUNCH_ENVIRONMENT_BYTES} UTF-8 bytes"
         ));
     }
     Ok(())
@@ -1238,6 +1319,10 @@ mod tests {
             ],
             working_directory: Some("/tmp/launch space".into()),
             title: Some("Exact launch 🙂".into()),
+            environment: vec![EnvironmentVariable {
+                name: "EXACT_VALUE".into(),
+                value: "= two words $HOME;🙂".into(),
+            }],
         };
         request.validate().unwrap();
         let frame = ClientFrame {
@@ -1266,6 +1351,7 @@ mod tests {
             args,
             working_directory,
             title,
+            environment: Vec::new(),
         };
         assert!(invalid("".into(), vec![], None, None).validate().is_err());
         assert!(
@@ -1340,6 +1426,10 @@ mod tests {
             args: vec!["".into(), "two words".into(), "$HOME;🙂".into()],
             working_directory: Some("/tmp/launch space".into()),
             title: Some("Exact window 🙂".into()),
+            environment: vec![EnvironmentVariable {
+                name: "EMPTY_VALUE".into(),
+                value: String::new(),
+            }],
         };
         request.validate().unwrap();
         let frame = ClientFrame {
@@ -1377,6 +1467,7 @@ mod tests {
                 args: Vec::new(),
                 working_directory: None,
                 title: None,
+                environment: Vec::new(),
             }
             .validate()
             .is_err()
@@ -1389,9 +1480,167 @@ mod tests {
                 args: vec!["x".into(); MAX_CONTROL_LAUNCH_ARGS + 1],
                 working_directory: None,
                 title: None,
+                environment: Vec::new(),
             }
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn launch_environment_is_bounded_unique_portable_and_identity_safe() {
+        let request = |environment: Vec<EnvironmentVariable>| Request::LaunchTab {
+            request_id: "0123456789abcdef0123456789abcdef".into(),
+            window_id: 7,
+            program: "/bin/true".into(),
+            args: Vec::new(),
+            working_directory: None,
+            title: None,
+            environment,
+        };
+        request(vec![
+            EnvironmentVariable {
+                name: "EMPTY_VALUE".into(),
+                value: String::new(),
+            },
+            EnvironmentVariable {
+                name: "EXACT_VALUE".into(),
+                value: "= two words\n$HOME;🙂".into(),
+            },
+        ])
+        .validate()
+        .unwrap();
+
+        for name in [
+            "PWD",
+            "TERM",
+            "COLORTERM",
+            "TERMINFO",
+            "TERMINFO_DIRS",
+            "TERM_PROGRAM",
+            "TERM_PROGRAM_VERSION",
+            "",
+            "9INVALID",
+            "INVALID-NAME",
+            "UNICODE_🙂",
+        ] {
+            let error = request(vec![EnvironmentVariable {
+                name: name.into(),
+                value: "private-value".into(),
+            }])
+            .validate()
+            .unwrap_err();
+            assert!(error.contains("invalid or reserved"), "{error}");
+            if !name.is_empty() {
+                assert!(!error.contains(name));
+            }
+            assert!(!error.contains("private-value"));
+        }
+        assert!(
+            request(vec![EnvironmentVariable {
+                name: "X".repeat(MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES + 1),
+                value: String::new(),
+            }])
+            .validate()
+            .is_err()
+        );
+        assert!(
+            request(vec![
+                EnvironmentVariable {
+                    name: "DUPLICATE".into(),
+                    value: "first".into(),
+                },
+                EnvironmentVariable {
+                    name: "DUPLICATE".into(),
+                    value: "second".into(),
+                },
+            ])
+            .validate()
+            .unwrap_err()
+            .contains("duplicate")
+        );
+        assert!(
+            request(vec![EnvironmentVariable {
+                name: "NUL_VALUE".into(),
+                value: "private\0value".into(),
+            }])
+            .validate()
+            .unwrap_err()
+            .contains("NUL-free")
+        );
+        assert!(
+            request(vec![EnvironmentVariable {
+                name: "LARGE_VALUE".into(),
+                value: "x".repeat(MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES + 1),
+            }])
+            .validate()
+            .is_err()
+        );
+        assert!(
+            request(
+                (0..=MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES)
+                    .map(|index| EnvironmentVariable {
+                        name: format!("ENTRY_{index}"),
+                        value: String::new(),
+                    })
+                    .collect()
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            request(
+                (0..8)
+                    .map(|index| EnvironmentVariable {
+                        name: format!("ENTRY_{index}"),
+                        value: "x".repeat(MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES),
+                    })
+                    .collect()
+            )
+            .validate()
+            .unwrap_err()
+            .contains("65536")
+        );
+    }
+
+    #[test]
+    fn launch_environment_canonicalization_is_name_ordered_and_value_preserving() {
+        let mut request = Request::LaunchWindow {
+            request_id: "0123456789abcdef0123456789abcdef".into(),
+            source_window: 7,
+            program: "/bin/true".into(),
+            args: Vec::new(),
+            working_directory: None,
+            title: None,
+            environment: vec![
+                EnvironmentVariable {
+                    name: "Z_VALUE".into(),
+                    value: "last".into(),
+                },
+                EnvironmentVariable {
+                    name: "A_VALUE".into(),
+                    value: "= first $HOME;🙂".into(),
+                },
+            ],
+        };
+        request.validate().unwrap();
+        request.canonicalize();
+
+        let Request::LaunchWindow { environment, .. } = request else {
+            unreachable!();
+        };
+        assert_eq!(
+            environment,
+            vec![
+                EnvironmentVariable {
+                    name: "A_VALUE".into(),
+                    value: "= first $HOME;🙂".into(),
+                },
+                EnvironmentVariable {
+                    name: "Z_VALUE".into(),
+                    value: "last".into(),
+                },
+            ]
         );
     }
 
