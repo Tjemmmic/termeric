@@ -106,6 +106,9 @@ The current suite measures:
 - a real `/bin/cat` PTY write/read round trip;
 - eight real PTY-backed tab creations;
 - 8-pane and 64-pane layout/divider calculation;
+- fresh structural/grapheme validation and warm natural-language lookup across
+  the pinned CLDR annotation plus Unicode canonical-name indexes, including
+  static annotation bytes and owned bounded result-state bytes;
 - controller construction, glyph cache warmup, offscreen rendered frames, and
   synthetic terminal-mutation-to-GPU-completion latency, plus the warmed
   representative glyph-set atlas hit rate;
@@ -166,14 +169,21 @@ regression rails. Deterministic CI primarily compares related workloads from the
 same run (100k/10k history, 100k/10k search, and 64/8 pane scaling), which is
 more stable than transplanting absolute nanoseconds between machines. Broad
 absolute safety rails remain for 10k/100k incremental search, 100k RSS,
-displayed idle RSS, compact ownership, repeated reflow, and offscreen frame
-completion. Search has
+displayed idle RSS, compact ownership, Unicode annotation validation/lookup,
+repeated reflow, and offscreen frame completion. Search has
 separate 10 ms p95 fresh-query keyboard-dispatch rails at 10k and 100k, 10/25
 ms completed-result extension rails, and broad 50/500 ms completion rails. This
 distinguishes total linear work from user-visible input blocking and catches
 candidate-copy/cleanup regressions that a scale ratio alone would hide. See
 [scrollback-memory.md](scrollback-memory.md) for the representation and its
 measured memory/CPU tradeoff.
+
+The Unicode picker has separate 25 ms p95 annotation-validation and 75 ms p95
+warm keyword-query rails. Its immutable CLDR binary must remain at or below
+768 KiB, and each final deduplicated result set must remain at or below 1 MiB
+of owned candidate/action/command storage. These are broad regression limits;
+the exact source, zero-copy format, normalization, and insertion semantics are
+documented in [cldr-annotations.md](cldr-annotations.md).
 
 Displayed idle RSS has a deliberately broad 512 MiB p95 rail. The row may be
 explicitly skipped with the whole display probe, but a present oversized sample

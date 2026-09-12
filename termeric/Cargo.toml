@@ -32,7 +32,7 @@ bytemuck = { version = "1.21", features = ["derive"] }
 
 # Text rendering (0.19+ fixes variable-font matching through the `wght` axis)
 cosmic-text = "0.19"
-unicode-segmentation = "1.12"
+unicode-segmentation = "=1.13.3"
 unicode_names2 = "=4.0.0"
 
 # Image loading for window icon
@@ -102,4 +102,5 @@ assets = [
     ["../assets/termeric.desktop", "usr/share/applications/", "644"],
     ["../assets/icons/termeric.png", "usr/share/icons/hicolor/1024x1024/apps/", "644"],
     ["../assets/terminfo/x/xterm-termeric", "usr/share/terminfo/x/", "644"],
+    ["THIRD_PARTY_NOTICES.md", "usr/share/doc/termeric/", "644"],
 ]

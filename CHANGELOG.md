@@ -8,6 +8,12 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Unicode character search now includes a pinned, zero-copy CLDR 48.0.0
+  English short-name and keyword index for 4,342 characters and emoji
+  sequences. Unicode Emoji 17.0 restores exact fully-qualified variation,
+  modifier, flag, and ZWJ bytes before insertion. The generated artifact,
+  result state, validation, and warm queries have explicit memory/latency
+  budgets; source hashes, regeneration, and Unicode-3.0 licensing are recorded.
 - Declarative plugin API v32 adds an independent `process-window-focus` grant
   for requesting native focus on one exact live process-owned window. It reuses
   the authenticated GUI control policy, reports already-focused and requested

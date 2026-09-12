@@ -1,6 +1,6 @@
 //! Terminal Unicode policy.
 //!
-//! Grapheme boundaries follow `unicode-segmentation` 1.12 (Unicode 16.0).
+//! Grapheme boundaries follow `unicode-segmentation` 1.13.3 (Unicode 17.0).
 //! Display width follows `unicode-width` 0.2 (Unicode 17.0), with East Asian
 //! ambiguous characters kept narrow. Width is clamped to the terminal cell
 //! model's supported range of zero through two columns.
@@ -30,7 +30,7 @@ mod tests {
 
     #[test]
     fn policy_versions_are_explicit() {
-        assert_eq!(SEGMENTATION_UNICODE_VERSION, (16, 0, 0));
+        assert_eq!(SEGMENTATION_UNICODE_VERSION, (17, 0, 0));
         assert_eq!(WIDTH_UNICODE_VERSION, (17, 0, 0));
     }
 

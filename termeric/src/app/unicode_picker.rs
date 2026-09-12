@@ -161,6 +161,45 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn cldr_sequence_selection_writes_every_qualified_byte_once() {
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let expected = "👩🏾‍⚖️";
+        let expected_hex = expected
+            .as_bytes()
+            .iter()
+            .map(|byte| format!(" {byte:02x}"))
+            .collect::<String>();
+        let script = format!(
+            "stty raw -echo; printf '\rREADY\r\n'; \
+             bytes=$(dd bs=1 count={} 2>/dev/null | od -An -v -tx1 | tr -d '\n'); \
+             printf '\runicode=%s\r\n' \"$bytes\"; sleep 1",
+            expected.len()
+        );
+        let mut app = shell_app(&script);
+        assert!(wait_for_text(&mut app, "READY"));
+
+        app.open_unicode_picker();
+        assert!(
+            app.unicode_picker
+                .accessibility_set_filter("woman judge medium dark skin tone")
+        );
+        let info = app.unicode_picker.build_info();
+        let entry = info
+            .entries
+            .iter()
+            .find(|entry| entry.title.starts_with(expected))
+            .unwrap();
+        let selection = app.unicode_picker.execute_command(&entry.id).unwrap();
+        assert_eq!(selection.text.as_bytes(), expected.as_bytes());
+        assert!(app.apply_unicode_picker_selection(selection));
+        assert!(wait_for_text(&mut app, &format!("unicode={expected_hex}")));
+        assert_eq!(app.input_line_buffer, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn changed_destination_refuses_insertion_instead_of_rerouting_it() {
         if !std::path::Path::new("/bin/sh").exists() {
             return;

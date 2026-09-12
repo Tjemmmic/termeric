@@ -460,6 +460,7 @@ fn release_benchmark_suite() {
     use crate::terminal::search::{
         MAX_RETAINED_SEARCH_MATCHES, MAX_SEARCH_RESULT_INDEX_BYTES, Search,
     };
+    use crate::ui::unicode_picker::benchmark_unicode_picker;
     use std::fmt::Write as _;
 
     require_release_profile();
@@ -476,6 +477,36 @@ fn release_benchmark_suite() {
         "ms",
         startup_samples,
         "construct application controller without window, PTY, or clipboard",
+        None,
+    );
+
+    let unicode_picker = benchmark_unicode_picker();
+    emit_benchmark(
+        "latency.unicode_annotation_index_validation",
+        "ms",
+        unicode_picker.annotation_validation_ms,
+        "zero-copy structural and Unicode 17 grapheme validation of the embedded CLDR 48 English annotation index",
+        None,
+    );
+    emit_benchmark(
+        "latency.unicode_picker_keyword_query",
+        "ms",
+        unicode_picker.keyword_query_ms,
+        "warm end-to-end Unicode canonical-name plus CLDR keyword queries with bounded ranking and deduplication",
+        None,
+    );
+    emit_benchmark(
+        "memory.unicode_annotation_static_bytes",
+        "bytes",
+        unicode_picker.annotation_static_bytes,
+        "complete zero-copy embedded CLDR annotation binary including header, offsets, and UTF-8 pool",
+        None,
+    );
+    emit_benchmark(
+        "memory.unicode_picker_keyword_results",
+        "bytes",
+        unicode_picker.result_owned_bytes,
+        "owned candidate/action/command bytes retained for each bounded CLDR keyword result set",
         None,
     );
 

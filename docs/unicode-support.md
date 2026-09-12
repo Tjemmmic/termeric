@@ -6,7 +6,7 @@ text support.
 
 ## Width and segmentation
 
-- Grapheme boundaries use `unicode-segmentation` 1.12 data for Unicode 16.0.
+- Grapheme boundaries use `unicode-segmentation` 1.13.3 data for Unicode 17.0.
 - Cell widths use `unicode-width` 0.2 data for Unicode 17.0.
 - East Asian ambiguous-width characters are narrow (one cell).
 - CJK and emoji-presentation clusters use two cells when the width table says
@@ -46,8 +46,11 @@ Unicode 17.0 database supplied by `unicode_names2` 4.0.0. Whole-name, token
 prefix, and token-substring matches have deterministic ranking; exact canonical
 names and Unicode name aliases follow UAX #44 loose matching. Curated names,
 displayed graphemes, friendly aliases, categories, and code points participate
-in that same search. Exact `U+XXXX`, `0xXXXX`, and four-to-six-digit bare
-hexadecimal queries address any valid non-control Unicode scalar.
+in that same search. A zero-copy 4,342-record CLDR 48.0.0 English index adds
+short-name and keyword discovery for ordinary emoji, skin-tone variants,
+flags, and ZWJ sequences. Unicode Emoji 17.0 maps CLDR's selector-free keys to
+exact fully-qualified insertion bytes. Exact `U+XXXX`, `0xXXXX`, and four-to-
+six-digit bare hexadecimal queries address any valid non-control Unicode scalar.
 
 The canonical-name index is built once after the picker opens and retains
 5,226,122 bytes in its compact name/offset representation on Unicode 17.0.
@@ -61,18 +64,29 @@ algorithmic queries under a 250 ms aggregate ceiling (48.8 ms observed on the
 September 2026 development host). This is a regression guard, not a universal
 hardware latency guarantee.
 
+The embedded CLDR header, fixed offset table, and UTF-8 pool occupy exactly
+475,510 static bytes under a 768 KiB cap and are structurally/grapheme-validated
+without copying the catalog to heap storage. Canonical, CLDR, and curated
+candidates are separately capped before exact-byte deduplication. The final
+256-row result state is shrunk and checked against a 1 MiB owned-memory limit.
+Separate release metrics cover fresh annotation validation, warm end-to-end
+keyword lookup, static bytes, and per-query result ownership. Source hashes,
+binary format, regeneration, ranking, and license are defined in
+[the CLDR annotation contract](cldr-annotations.md).
+
 The picker preserves complete curated grapheme sequences, including variation
 selectors and joiners, and inserts their exact UTF-8 once through the normal
 terminal-input path. It captures the opening tab/pane and refuses insertion if
 focus, writability, or broadcast state changes. Controls, surrogates, malformed
 hexadecimal, and values beyond `U+10FFFF` produce no executable result.
 
-Canonical names are English Unicode identifiers, not localized character
-descriptions or CLDR emoji annotations. Unassigned/private-use scalars and other
-values without canonical names remain reachable only by exact code point when
-they pass the non-control safety policy. Alias resolution never makes a control
-character executable. The picker does not guarantee that the configured fonts
-contain a glyph for the selected scalar.
+Canonical names are English Unicode identifiers, while the separately versioned
+CLDR annotations are also English-only and do not imply application
+localization. Unassigned/private-use scalars and other values without canonical
+names remain reachable only by exact code point when they pass the non-control
+safety policy. Alias resolution never makes a control character executable.
+The picker does not guarantee that the configured fonts contain a glyph for the
+selected scalar.
 
 Font choice can be refined with bounded inclusive `font.range_overrides`.
 Lookup uses the grapheme's first non-default-ignorable scalar, but the selected
@@ -98,7 +112,7 @@ at every byte boundary, a real PTY emits representative clusters, and the
 headless WGPU lane shapes and submits the full strings without scalar
 truncation.
 
-Bidirectional reordering, exhaustive system-font recommendations, localized
-character descriptions, and CLDR emoji keyword search remain outside this
-policy. IME/preedit, color emoji, and accessibility semantics are covered
+Bidirectional reordering, exhaustive system-font recommendations, and
+annotations beyond the bundled English CLDR data remain outside this policy.
+IME/preedit, color emoji, and accessibility semantics are covered
 by [modern text input and accessibility](accessibility-and-input.md).

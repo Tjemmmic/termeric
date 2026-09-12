@@ -5,6 +5,7 @@ pkgbase = termeric-git
 	url = https://github.com/Tjemmmic/termeric
 	arch = x86_64
 	license = MIT
+	license = Unicode-3.0
 	makedepends = cargo
 	makedepends = git
 	makedepends = ncurses

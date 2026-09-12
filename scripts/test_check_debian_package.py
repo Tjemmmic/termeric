@@ -49,12 +49,19 @@ class DebianPackageCheckTests(unittest.TestCase):
                     contents = b"\x89PNG\r\n\x1a\nfixture"
                 elif relative.endswith(".desktop"):
                     contents = DESKTOP_ENTRY.encode()
+                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
+                    contents = b"Unicode License v3\n"
                 else:
                     contents = b"fixture"
                 path.write_bytes(contents)
                 path.chmod(mode)
 
             validate_layout(root, exercise_native_tools=False)
+
+            notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
+            notice.write_text("missing license")
+            with self.assertRaisesRegex(CheckError, "Unicode License v3"):
+                validate_layout(root, exercise_native_tools=False)
 
     def test_layout_contract_rejects_an_executable_mode_regression(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -67,6 +74,8 @@ class DebianPackageCheckTests(unittest.TestCase):
                     contents = b"\x7fELFfixture"
                 elif relative.endswith(".png"):
                     contents = b"\x89PNG\r\n\x1a\nfixture"
+                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
+                    contents = b"Unicode License v3\n"
                 path.write_bytes(contents)
                 path.chmod(0o644 if relative == "usr/bin/termeric" else mode)
 

@@ -499,8 +499,8 @@ ignored because corpus artifacts may contain arbitrary terminal data.
 ## Release performance lane
 
 The versioned benchmark runner covers core, interaction, renderer, PTY,
-tab/pane, memory, and (when a display is available) real idle process CPU,
-rendered-frame deltas, RSS/PSS/private memory, plus native
+tab/pane, terminal and Unicode-picker search, memory, and (when a display is
+available) real idle process CPU, rendered-frame deltas, RSS/PSS/private memory, plus native
 key-event-to-surface-present metrics:
 
 ```bash
@@ -515,6 +515,19 @@ empty metric is a failure, not an optional-probe skip. Run
 strict Linux `status`/`smaps_rollup` parsing, displayed-memory context and skip
 dispositions, the broad idle-RSS rail, and budget fail-closed cases without
 executing the release workloads.
+
+CLDR data generation is separately hermetic. The generator accepts only the
+documented CLDR 48.0.0 and Emoji 17.0 SHA-256 identities, and its unit tests
+exercise duplicate/malformed input, qualification mapping, deterministic
+encoding, and size ceilings:
+
+```bash
+python3 -m unittest scripts.test_generate_cldr_annotations
+```
+
+See [`cldr-annotations.md`](cldr-annotations.md) for the exact download,
+generation, and byte-for-byte `--check` commands. No test fetches data at
+runtime.
 
 See [`performance.md`](performance.md) for workload boundaries, repeatability,
 baseline comparison, CI budgets, and heaptrack/DHAT/perf/flamegraph recipes.

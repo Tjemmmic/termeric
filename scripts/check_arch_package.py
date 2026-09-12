@@ -43,6 +43,7 @@ EXPECTED_FILES = {
     "usr/share/licenses/termeric-git/LICENSE": 0o644,
     "usr/share/doc/termeric/README.md": 0o644,
     "usr/share/doc/termeric/CHANGELOG.md": 0o644,
+    "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md": 0o644,
 }
 METADATA_FILES = {".BUILDINFO", ".MTREE", ".PKGINFO"}
 REQUIRED_DEPENDENCIES = {
@@ -57,6 +58,7 @@ REQUIRED_DEPENDENCIES = {
     "zlib",
     "zstd",
 }
+REQUIRED_LICENSES = {"MIT", "Unicode-3.0"}
 
 
 def require_tool(name: str) -> str:
@@ -201,8 +203,11 @@ def validate_package_metadata(fields: dict[str, list[str]]) -> dict[str, object]
         raise CheckError("package does not provide termeric")
     if "termeric" not in fields.get("conflict", []):
         raise CheckError("package does not conflict with termeric")
-    if "MIT" not in fields.get("license", []):
-        raise CheckError("package does not declare the MIT license")
+    missing_licenses = sorted(REQUIRED_LICENSES - set(fields.get("license", [])))
+    if missing_licenses:
+        raise CheckError(
+            "package metadata is missing licenses: " + ", ".join(missing_licenses)
+        )
     return {
         "name": name,
         "version": version,
@@ -229,6 +234,9 @@ def validate_layout(root: Path, *, exercise_native_tools: bool = True) -> None:
         raise CheckError("installed icon is not a PNG file")
     desktop = root / "usr/share/applications/termeric.desktop"
     validate_desktop_entry(desktop)
+    notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
+    if "Unicode License v3" not in notice.read_text(encoding="utf-8"):
+        raise CheckError("installed third-party notice omits the Unicode License v3")
     if not exercise_native_tools:
         return
     run([require_tool("desktop-file-validate"), str(desktop)])

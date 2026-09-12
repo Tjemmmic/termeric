@@ -7605,6 +7605,35 @@ mod tests {
     }
 
     #[test]
+    fn cldr_emoji_results_expose_exact_sequence_names_and_retire_stale_nodes() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.unicode_picker.open();
+        assert!(
+            app.unicode_picker
+                .accessibility_set_filter("flag united states")
+        );
+        let snapshot = app.accessibility_snapshot();
+        let command = "unicode-picker.cldr.1f1fa-1f1f8";
+        let node_id = *app.accessibility.unicode_nodes.get(command).unwrap();
+        let node = snapshot
+            .nodes
+            .iter()
+            .find(|(candidate, _)| *candidate == node_id)
+            .map(|(_, node)| node)
+            .unwrap();
+        assert!(node.label().is_some_and(|label| {
+            label.contains("🇺🇸") && label.contains("flag: United States")
+        }));
+        assert!(node.description().is_some_and(|description| {
+            description.contains("CLDR 48.0.0 en") && description.contains("U+1F1FA U+1F1F8")
+        }));
+
+        assert!(app.unicode_picker.accessibility_set_filter("party pinata"));
+        app.accessibility_snapshot();
+        assert!(!app.accessibility.unicode_nodes.contains_key(command));
+    }
+
+    #[test]
     fn pending_domain_picker_exposes_read_only_live_status() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.domain_picker.open(&app.config.domains);

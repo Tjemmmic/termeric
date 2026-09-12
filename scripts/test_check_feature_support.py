@@ -1,6 +1,11 @@
 import unittest
 
-from scripts.check_feature_support import ROOT, validate, validate_release_dry_run
+from scripts.check_feature_support import (
+    ROOT,
+    validate,
+    validate_benchmark_metric_count,
+    validate_release_dry_run,
+)
 
 
 class FeatureSupportContractTests(unittest.TestCase):
@@ -9,6 +14,7 @@ class FeatureSupportContractTests(unittest.TestCase):
         cls.readme = (ROOT / "README.md").read_text(encoding="utf-8")
         cls.matrix = (ROOT / "docs/feature-support.md").read_text(encoding="utf-8")
         cls.release = (ROOT / "docs/release-acceptance.md").read_text(encoding="utf-8")
+        cls.metrics = (ROOT / "benchmarks/metrics.toml").read_bytes()
 
     def test_repository_contract_passes(self):
         self.assertEqual(validate(self.readme, self.matrix), [])
@@ -57,6 +63,20 @@ class FeatureSupportContractTests(unittest.TestCase):
             any(
                 "gates 1 through 9" in failure
                 for failure in validate_release_dry_run(changed)
+            )
+        )
+
+    def test_benchmark_metric_count_matches_manifest(self):
+        self.assertEqual(
+            validate_benchmark_metric_count(self.matrix, self.metrics), []
+        )
+
+    def test_benchmark_metric_count_rejects_documentation_drift(self):
+        changed = self.matrix.replace("62-metric contract", "61-metric contract")
+        self.assertTrue(
+            any(
+                "manifest contains 62" in failure
+                for failure in validate_benchmark_metric_count(changed, self.metrics)
             )
         )
 

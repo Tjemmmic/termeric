@@ -13,6 +13,7 @@ from scripts.check_arch_package import (
     LIFECYCLE_OPT_IN,
     METADATA_FILES,
     REQUIRED_DEPENDENCIES,
+    REQUIRED_LICENSES,
     SYNTHETIC_PREDECESSOR_VERSION,
     exercise_system_lifecycle,
     normalize_member_name,
@@ -65,7 +66,7 @@ def valid_metadata() -> dict[str, list[str]]:
         "pkgname": ["termeric-git"],
         "pkgver": ["0.1.0.r42.gabcdef0-1"],
         "arch": ["x86_64"],
-        "license": ["MIT"],
+        "license": sorted(REQUIRED_LICENSES),
         "provides": ["termeric"],
         "conflict": ["termeric"],
         "depend": sorted(REQUIRED_DEPENDENCIES),
@@ -117,6 +118,7 @@ class ArchPackageCheckTests(unittest.TestCase):
             "pkgver = 0.1.0.r42.gabcdef0-1",
             "arch = x86_64",
             "license = MIT",
+            "license = Unicode-3.0",
             "provides = termeric",
             "conflict = termeric",
         ]
@@ -134,6 +136,10 @@ class ArchPackageCheckTests(unittest.TestCase):
         fields = valid_metadata()
         fields["pkgname"] = ["wrong"]
         with self.assertRaisesRegex(CheckError, "expected 'termeric-git'"):
+            validate_package_metadata(fields)
+        fields = valid_metadata()
+        fields["license"].remove("Unicode-3.0")
+        with self.assertRaisesRegex(CheckError, "Unicode-3.0"):
             validate_package_metadata(fields)
 
     def test_metadata_rejects_pacman_invalid_tilde_version(self):
@@ -277,11 +283,18 @@ class ArchPackageCheckTests(unittest.TestCase):
                     contents = b"\x89PNG\r\n\x1a\nfixture"
                 elif relative.endswith(".desktop"):
                     contents = DESKTOP_ENTRY.encode()
+                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
+                    contents = b"Unicode License v3\n"
                 else:
                     contents = b"fixture"
                 path.write_bytes(contents)
                 path.chmod(mode)
             validate_layout(root, exercise_native_tools=False)
+
+            notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
+            notice.write_text("missing license")
+            with self.assertRaisesRegex(CheckError, "Unicode License v3"):
+                validate_layout(root, exercise_native_tools=False)
 
     def test_layout_rejects_mode_and_file_type_regressions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -294,6 +307,8 @@ class ArchPackageCheckTests(unittest.TestCase):
                     contents = b"\x7fELFfixture"
                 elif relative.endswith(".png"):
                     contents = b"\x89PNG\r\n\x1a\nfixture"
+                elif relative.endswith("THIRD_PARTY_NOTICES.md"):
+                    contents = b"Unicode License v3\n"
                 path.write_bytes(contents)
                 path.chmod(0o777 if relative == "usr/bin/termeric" else mode)
             with self.assertRaisesRegex(CheckError, "mode 777, expected 755"):

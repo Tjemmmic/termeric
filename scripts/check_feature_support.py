@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -70,6 +71,7 @@ RELEASE_GATE_TERMS = {
     "manual evidence": "manual evidence",
 }
 RELEASE_DRY_RUN_ROW = re.compile(r"^\|\s*([1-9])\s*\|", re.MULTILINE)
+BENCHMARK_COUNT = re.compile(r"fail-closed (\d+)-metric contract")
 
 
 def table_cells(line: str) -> list[str]:
@@ -197,6 +199,29 @@ def validate_release_dry_run(release_acceptance: str) -> list[str]:
     return failures
 
 
+def validate_benchmark_metric_count(matrix: str, manifest: bytes) -> list[str]:
+    matches = BENCHMARK_COUNT.findall(matrix)
+    if len(matches) != 1:
+        return [
+            "feature-support.md: expected exactly one fail-closed benchmark metric count"
+        ]
+    try:
+        parsed = tomllib.loads(manifest.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        return [f"benchmarks/metrics.toml: could not parse metric manifest: {error}"]
+    metrics = parsed.get("metric")
+    if not isinstance(metrics, list):
+        return ["benchmarks/metrics.toml: metric manifest has no metric array"]
+    documented = int(matches[0])
+    actual = len(metrics)
+    if documented != actual:
+        return [
+            "feature-support.md: documented benchmark metric count "
+            f"is {documented}, manifest contains {actual}"
+        ]
+    return []
+
+
 def main() -> int:
     failures = validate(
         (ROOT / "README.md").read_text(encoding="utf-8"),
@@ -207,12 +232,19 @@ def main() -> int:
             (ROOT / "docs/release-acceptance.md").read_text(encoding="utf-8")
         )
     )
+    failures.extend(
+        validate_benchmark_metric_count(
+            (ROOT / "docs/feature-support.md").read_text(encoding="utf-8"),
+            (ROOT / "benchmarks/metrics.toml").read_bytes(),
+        )
+    )
     if failures:
         print("Feature-support contract failures:", file=sys.stderr)
         print("\n".join(failures), file=sys.stderr)
         return 1
     print(
-        "Validated feature-support statuses, README highlights, release gates, dry run, and issue links"
+        "Validated feature-support statuses, README highlights, release gates, "
+        "benchmark count, dry run, and issue links"
     )
     return 0
 

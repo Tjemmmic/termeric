@@ -10,7 +10,7 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 - **Safe file drops** — local quoted-path insertion plus confirmed, bounded file/directory, progress-visible, cancellable, authenticated cross-process-resumable, atomic no-overwrite live-domain upload; neither presses Enter
 - **Search** with regex and filter modes across scrollback
 - **Keyboard copy mode and quick select** for mouse-free history navigation, selection, links, paths, and configured matches
-- **Unicode character picker** — bounded Unicode 17.0 canonical-name discovery, friendly common-symbol/emoji aliases, and exact `U+`, `0x`, or bare-hex scalar entry
+- **Unicode character picker** — bounded Unicode 17.0 canonical-name discovery, CLDR 48 English emoji names/keywords with exact qualified sequences, and exact `U+`, `0x`, or bare-hex scalar entry
 - **Modern input and accessibility** — pane-positioned IME preedit, native color emoji, F6 keyboard chrome, and AccessKit screen-reader semantics
 - **Visual accessibility preferences** — live reduced-motion and high-contrast application chrome without rewriting terminal colors
 - **Modern terminal negotiation** — pane-local Kitty plus xterm keyboard/cursor/function/keypad/modifier/special/other-key resources with CSI-27/CSI-u formatting, DECRQSS/DECRQM status replies, UTF-8-safe C1 framing, application-controlled text-cursor shape/blink, and bounded Kitty/xterm OSC 22 mouse-pointer shapes
@@ -467,6 +467,8 @@ termeric-core/      Library crate — terminal emulation
 - [`AGENTS.md`](AGENTS.md) — rules and conventions for AI agents working in this repo
 - [`CHANGELOG.md`](CHANGELOG.md) — release-facing changes and known limitations
 - [`docs/feature-support.md`](docs/feature-support.md) — authoritative capability status and release gates
+- [`docs/cldr-annotations.md`](docs/cldr-annotations.md) — pinned CLDR/Emoji inputs, deterministic generation, ranking, memory limits, and licensing
+- [`termeric/THIRD_PARTY_NOTICES.md`](termeric/THIRD_PARTY_NOTICES.md) — notices for bundled Unicode data
 - [`docs/terminfo.md`](docs/terminfo.md) — terminal identity, installation, compatibility fallback, and remote use
 - [`docs/integration-acceptance.md`](docs/integration-acceptance.md) — AI, shell, Harvest, and native desktop acceptance boundaries
 - [`docs/operator-acceptance.md`](docs/operator-acceptance.md) — native tool installation, ordered release commands, and manual provider checklist

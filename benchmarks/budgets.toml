@@ -29,6 +29,30 @@ statistic = "p95"
 max = 50.0
 
 [[metric_budget]]
+name = "embedded CLDR annotation validation rail"
+metric = "latency.unicode_annotation_index_validation"
+statistic = "p95"
+max = 25.0
+
+[[metric_budget]]
+name = "warm Unicode picker CLDR keyword query rail"
+metric = "latency.unicode_picker_keyword_query"
+statistic = "p95"
+max = 75.0
+
+[[metric_budget]]
+name = "embedded CLDR annotation data stays within its static byte ceiling"
+metric = "memory.unicode_annotation_static_bytes"
+statistic = "max"
+max = 786432.0
+
+[[metric_budget]]
+name = "Unicode picker keyword result state stays bounded"
+metric = "memory.unicode_picker_keyword_results"
+statistic = "max"
+max = 1048576.0
+
+[[metric_budget]]
 name = "100k cooperative search completion rail"
 metric = "interaction.search.100k"
 statistic = "p95"

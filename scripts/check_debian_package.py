@@ -31,6 +31,7 @@ SYNTHETIC_PREDECESSOR_VERSION = "0~termeric-lifecycle"
 EXPECTED_FILES = {
     "usr/bin/termeric": 0o755,
     "usr/share/doc/termeric/copyright": 0o644,
+    "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md": 0o644,
     "usr/share/applications/termeric.desktop": 0o644,
     "usr/share/icons/hicolor/1024x1024/apps/termeric.png": 0o644,
     "usr/share/terminfo/x/xterm-termeric": 0o644,
@@ -131,6 +132,9 @@ def validate_layout(root: Path, *, exercise_native_tools: bool = True) -> None:
 
     desktop = root / "usr/share/applications/termeric.desktop"
     validate_desktop_entry(desktop)
+    notice = root / "usr/share/doc/termeric/THIRD_PARTY_NOTICES.md"
+    if "Unicode License v3" not in notice.read_text(encoding="utf-8"):
+        raise CheckError("installed third-party notice omits the Unicode License v3")
     if not exercise_native_tools:
         return
 

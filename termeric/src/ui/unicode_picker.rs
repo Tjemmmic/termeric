@@ -1,14 +1,19 @@
 //! Bounded Unicode character selection built on the shared palette component.
 
+mod annotations;
+
+use self::annotations::{Annotation, CLDR_LOCALE, CLDR_VERSION};
 use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
 use crate::ui::command_palette::{CommandPalette, PaletteInfo, PaletteLayout, PaletteResult};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
+use std::mem::size_of;
 use std::sync::{Once, OnceLock};
 
 const UNICODE_DATA_VERSION: &str = "17.0";
 const UNICODE_SEARCH_RESULT_LIMIT: usize = 256;
 const UNICODE_SEARCH_MEMORY_BUDGET: usize = 8 * 1024 * 1024;
+const UNICODE_RESULT_MEMORY_BUDGET: usize = 1024 * 1024;
 const UNICODE_NAME_BYTES_CAPACITY: usize = 4_000_000;
 const UNICODE_RECORD_CAPACITY: usize = 160_000;
 
@@ -312,6 +317,7 @@ fn prewarm_unicode_name_index() {
     UNICODE_PREWARM.call_once(|| {
         std::thread::spawn(|| {
             UNICODE_NAME_INDEX.get_or_init(UnicodeNameIndex::build);
+            annotations::index();
         });
     });
 }
@@ -376,6 +382,28 @@ fn search_unicode_characters(query: &str) -> Vec<RankedCharacter> {
         })
         .collect::<Vec<_>>();
 
+    if !terms.is_empty() {
+        let annotations = annotations::index();
+        assert!(annotations.static_bytes() <= annotations::CLDR_STATIC_BYTES_BUDGET);
+        let mut best = BinaryHeap::<Reverse<(u32, Reverse<u32>)>>::new();
+        for position in 0..annotations.len() {
+            let annotation = annotations.annotation(position);
+            let Some(score) = score_cldr_annotation(annotation, query, &terms) else {
+                continue;
+            };
+            retain_rank(
+                &mut best,
+                (
+                    score,
+                    Reverse(u32::try_from(position).expect("CLDR index exceeded u32")),
+                ),
+            );
+        }
+        ranked.extend(best.into_iter().map(|Reverse((score, Reverse(position)))| {
+            cldr_result(annotations.annotation(position as usize), score)
+        }));
+    }
+
     for (position, entry) in CURATED_CHARACTERS.iter().enumerate() {
         if let Some(score) = score_curated_character(entry, query, &terms) {
             ranked.push(curated_result(entry, score, position));
@@ -390,6 +418,8 @@ fn search_unicode_characters(query: &str) -> Vec<RankedCharacter> {
     let mut seen = HashSet::with_capacity(UNICODE_SEARCH_RESULT_LIMIT);
     ranked.retain(|result| seen.insert(result.selection.text.clone()));
     ranked.truncate(UNICODE_SEARCH_RESULT_LIMIT);
+    ranked.shrink_to_fit();
+    assert!(ranked_results_owned_bytes(&ranked) <= UNICODE_RESULT_MEMORY_BUDGET);
     ranked
 }
 
@@ -405,14 +435,14 @@ fn retain_rank(best: &mut BinaryHeap<Reverse<(u32, Reverse<u32>)>>, rank: (u32, 
 fn normalize_name_query(query: &str) -> String {
     let mut normalized = String::with_capacity(query.len());
     let mut separator = false;
-    for byte in query.bytes() {
-        if byte.is_ascii_alphanumeric() {
+    for character in query.chars() {
+        if character.is_alphanumeric() {
             if separator && !normalized.is_empty() {
                 normalized.push(' ');
             }
-            normalized.push((byte as char).to_ascii_uppercase());
+            normalized.extend(character.to_uppercase());
             separator = false;
-        } else if byte.is_ascii() {
+        } else {
             separator = true;
         }
     }
@@ -435,11 +465,24 @@ fn score_unicode_name(name: &str, terms: &[&str]) -> Option<u32> {
     Some(score + compact_query_len * 100 + length_bonus)
 }
 
+fn score_cldr_annotation(annotation: Annotation<'_>, query: &str, terms: &[&str]) -> Option<u32> {
+    if annotation.short_name.eq_ignore_ascii_case(query) {
+        return Some(3_750_000);
+    }
+    score_unicode_name(annotation.searchable, terms).map(|score| score + 250_000)
+}
+
 fn name_has_term(name: &str, term: &str, require_right_boundary: bool) -> bool {
     name.match_indices(term).any(|(start, _)| {
-        let left_boundary = start == 0 || !name.as_bytes()[start - 1].is_ascii_alphanumeric();
+        let left_boundary = name[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|character| !character.is_alphanumeric());
         let end = start + term.len();
-        let right_boundary = end == name.len() || !name.as_bytes()[end].is_ascii_alphanumeric();
+        let right_boundary = name[end..]
+            .chars()
+            .next()
+            .is_none_or(|character| !character.is_alphanumeric());
         left_boundary && (!require_right_boundary || right_boundary)
     })
 }
@@ -488,6 +531,102 @@ fn named_result(character: char, name: &str, score: u32) -> RankedCharacter {
             source: CommandSource::Core,
             destructive: false,
         },
+    }
+}
+
+fn cldr_result(annotation: Annotation<'_>, score: u32) -> RankedCharacter {
+    let id = stable_character_id("cldr", annotation.text);
+    RankedCharacter {
+        score,
+        tie_break: format!("cldr-{}", display_codepoints(annotation.text)),
+        selection: UnicodePickerSelection {
+            id: id.clone(),
+            text: annotation.text.into(),
+        },
+        command: RegisteredCommand {
+            id,
+            title: format!("{}  {}", annotation.text, annotation.short_name),
+            category: format!(
+                "CLDR {CLDR_VERSION} {CLDR_LOCALE} · {}",
+                display_codepoints(annotation.text)
+            ),
+            shortcut: None,
+            icon: None,
+            source: CommandSource::Core,
+            destructive: false,
+        },
+    }
+}
+
+fn ranked_results_owned_bytes(results: &Vec<RankedCharacter>) -> usize {
+    results.capacity() * size_of::<RankedCharacter>()
+        + results
+            .iter()
+            .map(|result| {
+                result.tie_break.capacity()
+                    + result.selection.id.capacity()
+                    + result.selection.text.capacity()
+                    + result.command.id.capacity()
+                    + result.command.title.capacity()
+                    + result.command.category.capacity()
+                    + result.command.shortcut.as_ref().map_or(0, String::capacity)
+                    + match &result.command.source {
+                        CommandSource::Plugin(plugin) => plugin.capacity(),
+                        CommandSource::Core | CommandSource::LaunchProfiles => 0,
+                    }
+            })
+            .sum::<usize>()
+}
+
+#[cfg(test)]
+pub(crate) struct UnicodePickerBenchmark {
+    pub annotation_validation_ms: Vec<f64>,
+    pub keyword_query_ms: Vec<f64>,
+    pub annotation_static_bytes: Vec<f64>,
+    pub result_owned_bytes: Vec<f64>,
+}
+
+#[cfg(test)]
+pub(crate) fn benchmark_unicode_picker() -> UnicodePickerBenchmark {
+    let mut annotation_validation_ms = Vec::with_capacity(5);
+    let mut annotation_static_bytes = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        let index = annotations::validate_embedded_index();
+        std::hint::black_box(index.annotation(index.len() - 1));
+        annotation_validation_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+        annotation_static_bytes.push(index.static_bytes() as f64);
+    }
+
+    unicode_name_index();
+    annotations::index();
+    let mut keyword_query_ms = Vec::with_capacity(5);
+    let mut result_owned_bytes = Vec::with_capacity(5);
+    for (query, expected) in [
+        ("heart blue", "💙"),
+        ("party pinata", "🪅"),
+        ("thumb medium skin tone", "👍🏽"),
+        ("flag united states", "🇺🇸"),
+        ("woman judge medium dark skin tone", "👩🏾‍⚖️"),
+    ] {
+        let started = std::time::Instant::now();
+        let results = search_unicode_characters(query);
+        keyword_query_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+        assert!(
+            results
+                .iter()
+                .any(|result| result.selection.text == expected),
+            "benchmark query {query:?} missed {expected:?}"
+        );
+        result_owned_bytes.push(ranked_results_owned_bytes(&results) as f64);
+        std::hint::black_box(results);
+    }
+
+    UnicodePickerBenchmark {
+        annotation_validation_ms,
+        keyword_query_ms,
+        annotation_static_bytes,
+        result_owned_bytes,
     }
 }
 
@@ -1351,6 +1490,82 @@ mod tests {
     }
 
     #[test]
+    fn cldr_keywords_find_exact_single_and_multi_scalar_emoji() {
+        for (query, expected) in [
+            ("good thumb yes", "👍"),
+            ("thumb medium skin tone", "👍🏽"),
+            ("flag united states", "🇺🇸"),
+            ("woman judge medium dark skin tone", "👩🏾‍⚖️"),
+            ("transgender flag", "🏳️‍⚧️"),
+            ("party pinata", "🪅"),
+        ] {
+            let mut picker = UnicodePicker::new();
+            picker.open();
+            let info = filter(&mut picker, query);
+            let entry = info
+                .entries
+                .iter()
+                .find(|entry| entry.title.starts_with(expected))
+                .unwrap_or_else(|| panic!("{query:?} did not find {expected:?}"));
+            let selection = picker.execute_command(&entry.id).unwrap();
+            assert_eq!(selection.text.as_bytes(), expected.as_bytes(), "{query}");
+            assert_eq!(selection.id, stable_character_id("cldr", expected));
+        }
+    }
+
+    #[test]
+    fn canonical_curated_and_exact_scalar_precedence_remains_stable() {
+        let mut picker = UnicodePicker::new();
+        picker.open();
+        assert_eq!(
+            filter(&mut picker, "snowman").entries[0].id,
+            "unicode-picker.named.2603"
+        );
+        assert_eq!(
+            filter(&mut picker, "technologist").entries[0].id,
+            "unicode-picker.curated.1f9d1-200d-1f4bb"
+        );
+        assert_eq!(
+            filter(&mut picker, "U+2764").entries[0].id,
+            "unicode-picker.codepoint.2764"
+        );
+        assert_eq!(picker.activate().unwrap().text, "❤");
+    }
+
+    #[test]
+    fn cldr_search_state_is_deduplicated_and_memory_bounded() {
+        let annotations = annotations::index();
+        assert_eq!(annotations.len(), annotations::CLDR_RECORD_COUNT);
+        assert_eq!(annotations.static_bytes(), 475_510);
+        assert!(annotations.static_bytes() <= annotations::CLDR_STATIC_BYTES_BUDGET);
+
+        for query in ["heart", "flag", "woman", "party", "piñata"] {
+            let results = search_unicode_characters(query);
+            assert!(!results.is_empty(), "{query}");
+            assert!(results.len() <= UNICODE_SEARCH_RESULT_LIMIT, "{query}");
+            assert!(
+                ranked_results_owned_bytes(&results) <= UNICODE_RESULT_MEMORY_BUDGET,
+                "{query}"
+            );
+            let unique = results
+                .iter()
+                .map(|result| result.selection.text.as_str())
+                .collect::<HashSet<_>>();
+            assert_eq!(unique.len(), results.len(), "{query}");
+        }
+    }
+
+    #[test]
+    fn unicode_letters_do_not_create_false_token_boundaries() {
+        let score = score_unicode_name("PIÑATA PARTY", &["ATA"]).unwrap();
+        assert!(
+            score < 1_500_000,
+            "substring was promoted to a token: {score}"
+        );
+        assert!(score_unicode_name("PIÑATA PARTY", &["PIÑATA"]).unwrap() >= 2_000_000);
+    }
+
+    #[test]
     fn empty_query_restores_only_the_curated_catalog() {
         let mut picker = UnicodePicker::new();
         picker.open();
@@ -1397,7 +1612,7 @@ mod tests {
         let mut picker = UnicodePicker::new();
         picker.open();
         let info = filter(&mut picker, "technologist");
-        assert_eq!(info.total_entries, 1);
+        assert!(info.total_entries >= 1);
         let id = info.entries[0].id.clone();
         assert_eq!(id, "unicode-picker.curated.1f9d1-200d-1f4bb");
         assert_eq!(

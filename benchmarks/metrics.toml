@@ -149,6 +149,30 @@ producer = "application"
 samples = 5
 
 [[metric]]
+name = "latency.unicode_annotation_index_validation"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "latency.unicode_picker_keyword_query"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "memory.unicode_annotation_static_bytes"
+unit = "bytes"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "memory.unicode_picker_keyword_results"
+unit = "bytes"
+producer = "application"
+samples = 5
+
+[[metric]]
 name = "interaction.search.10k"
 unit = "ms"
 producer = "application"
