@@ -27,7 +27,7 @@ or change external state. The authoritative product status remains
 | OSC 8 and detected links | Native Ctrl+click routed to an `xdg-open` spy | **Pass (automated X11)** | Real browser/portal choice remains manual. |
 | Visual/audio bell | Native BEL, captured flash, and `paplay` spy | **Implemented; next CI/native result pending** | Real sound-device policy remains manual. |
 | OSC 777 notification | Native PTY event routed to a `notify-send` spy | **Implemented; next CI/native result pending** | Real notification-daemon permission and presentation remain manual. |
-| Kitty OSC 99 title/body notifications | Fragmented, interleaved, bounded core protocol and exact owner-routed capability response; completed event uses the existing notification path | **Hermetic pass; native presentation not run** | Advanced replacement/action/close/icon/urgency/expiry/sound semantics are truthfully unadvertised; real notification-daemon presentation remains manual. |
+| Kitty OSC 99 notifications | Fragmented, interleaved, bounded core protocol and exact owner-routed capability response; in-memory Linux backend proves stable origin-scoped replacement/close IDs and bounded expiry without contacting D-Bus | **Hermetic pass; native presentation/lifecycle not run** | Activation/focus, buttons, close/alive reports, transmitted icons/cache, occasion filtering, and sound remain unadvertised; real notification-daemon behavior remains manual. |
 | Wayland lifecycle | Private Weston launch, render, terminal identity, PTY exit, and normal close | **Pass (automated private compositor)** | Interactive clipboard/portal/notification policy on a real compositor remains manual. |
 
 The passing shell versions above describe the local acceptance run. CI installs

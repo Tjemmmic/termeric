@@ -2,6 +2,9 @@
 //!
 //! Handles terminal bell (BEL character) with visual and audio feedback.
 
+#[cfg(target_os = "linux")]
+mod tracked;
+
 use std::process::{Child, Command};
 use std::sync::OnceLock;
 use std::sync::mpsc::{self, SyncSender, TryRecvError, TrySendError};
@@ -327,6 +330,8 @@ pub struct Notifications {
     rate_limit: Duration,
     command: Option<String>,
     last_delivery_failure: Option<String>,
+    #[cfg(target_os = "linux")]
+    tracked: Option<tracked::TrackedNotifications>,
 }
 
 impl Default for Notifications {
@@ -344,6 +349,8 @@ impl Notifications {
             rate_limit: Duration::from_secs(1),
             command: default_notification_command(),
             last_delivery_failure: None,
+            #[cfg(target_os = "linux")]
+            tracked: None,
         }
     }
 
@@ -386,6 +393,90 @@ impl Notifications {
 
         log::debug!("Sent notification: {title:?} - {:?}", request.body);
         None
+    }
+
+    /// Route a terminal-owned notification, using tracked native handles when
+    /// its identifier or expiry policy requires lifecycle semantics.
+    pub fn notify_terminal(
+        &mut self,
+        origin: crate::tabs::TerminalEventOrigin,
+        request: NotificationRequest,
+    ) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        #[cfg(target_os = "linux")]
+        if request.identifier.is_some()
+            || !matches!(request.expiry, termeric_core::NotificationExpiry::System)
+        {
+            let tracked = match self.tracked.as_mut() {
+                Some(tracked) => tracked,
+                None => {
+                    self.tracked = match tracked::TrackedNotifications::new() {
+                        Ok(tracked) => Some(tracked),
+                        Err(error) => {
+                            let message =
+                                bounded_delivery_error("Desktop notification unavailable", &error);
+                            return report_new_failure(&mut self.last_delivery_failure, message);
+                        }
+                    };
+                    self.tracked
+                        .as_mut()
+                        .expect("tracked worker was initialized")
+                }
+            };
+            return tracked.show(origin, request).err().and_then(|error| {
+                let message = bounded_delivery_error("Desktop notification unavailable", &error);
+                report_new_failure(&mut self.last_delivery_failure, message)
+            });
+        }
+        self.notify_request(&request)
+    }
+
+    /// Close one exact origin-owned tracked notification.
+    pub fn close_terminal(
+        &mut self,
+        origin: crate::tabs::TerminalEventOrigin,
+        identifier: String,
+    ) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        {
+            let tracked = self.tracked.as_ref()?;
+            tracked.close(origin, identifier).err().and_then(|error| {
+                let message = bounded_delivery_error("Desktop notification unavailable", &error);
+                report_new_failure(&mut self.last_delivery_failure, message)
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (origin, identifier);
+            None
+        }
+    }
+
+    /// Drain asynchronous lifecycle failures for visible app reporting.
+    pub fn drain_failures(&mut self) -> Vec<String> {
+        #[cfg(target_os = "linux")]
+        let completions = self
+            .tracked
+            .as_ref()
+            .map_or_else(Vec::new, tracked::TrackedNotifications::drain_completions);
+        #[cfg(not(target_os = "linux"))]
+        let completions: Vec<Result<(), String>> = Vec::new();
+        completions
+            .into_iter()
+            .filter_map(|completion| match completion {
+                Ok(()) => {
+                    self.last_delivery_failure = None;
+                    None
+                }
+                Err(error) => {
+                    let message =
+                        bounded_delivery_error("Desktop notification unavailable", &error);
+                    report_new_failure(&mut self.last_delivery_failure, message)
+                }
+            })
+            .collect()
     }
 
     #[cfg(test)]
@@ -538,6 +629,7 @@ mod tests {
             notification_types: vec!["build.complete".into(), "ci".into()],
             icon_names: vec!["warning".into(), "unused-second-choice".into()],
             urgency: Some(NotificationUrgency::Critical),
+            ..NotificationRequest::default()
         };
         assert_eq!(
             notification_args(&request, request.title.as_deref().unwrap()),

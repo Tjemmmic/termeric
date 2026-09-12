@@ -1603,10 +1603,15 @@ impl App {
 
     /// Process PTY events for all tabs and panes
     fn process_pty_events(&mut self) -> bool {
+        let lifecycle_failures = self.notifications.drain_failures();
+        let lifecycle_changed = !lifecycle_failures.is_empty();
+        for error in lifecycle_failures {
+            self.toasts.warning(error);
+        }
         // Process events and collect results
         let (had_output, events, quick_exits) = {
             let Some(tabs) = &mut self.tabs else {
-                return false;
+                return lifecycle_changed;
             };
             let (had_output, events) = tabs.poll_events();
 
@@ -1624,7 +1629,7 @@ impl App {
 
         let (persistence_notices, user_notices, topology_changed, should_exit) = {
             let Some(tabs) = &mut self.tabs else {
-                return false;
+                return lifecycle_changed;
             };
             let auto_save = self.automatic_persistence
                 && self.config.session.enabled
@@ -1644,7 +1649,8 @@ impl App {
         if topology_changed {
             self.reconcile_broadcast_state();
         }
-        let mut changed = had_output
+        let mut changed = lifecycle_changed
+            || had_output
             || had_terminal_events
             || !quick_exits.is_empty()
             || !persistence_notices.is_empty()

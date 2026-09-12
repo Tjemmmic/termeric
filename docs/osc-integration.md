@@ -142,8 +142,8 @@ desktop helper.
 
 Termeric also implements a bounded subset of Kitty's
 [OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
-`d`, and `e` provide strict identifiers, title/body selection, completion, and
-plain or RFC 4648 base64 payloads. The `f`, `t`, and `n` keys add base64-encoded
+`d`, `e`, and `w` provide strict identifiers, title/body/close selection,
+completion, plain or RFC 4648 base64 payloads, and expiry policy. The `f`, `t`, and `n` keys add base64-encoded
 application identity, ordered notification types, and ordered icon-name
 candidates; `u=0/1/2` is retained as typed low/normal/critical urgency. Plain
 chunks are limited to 2,048 bytes;
@@ -165,27 +165,40 @@ retained per request, in first-seen order; repeated values are deduplicated.
 Metadata allocations count toward the aggregate pending-state ceiling. Invalid
 base64, UTF-8, C0/C1 controls, invalid urgency, duplicate singular keys, and
 per-list overflow fail closed and retire only the affected identified assembly.
+Expiry accepts exactly `-1` for desktop policy, `0` for no automatic expiry, or
+a positive millisecond value no greater than `2147483647`. A completed,
+payload-free `p=close` request requires an identifier and also retires any
+incomplete parser assembly carrying that identifier.
 
 `OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
 terminal's S7C1T/S8C1T framing. Linux responds with
-`p=title,body:o=always:u=0,1,2`; other targets respond with
+`p=title,body,close:o=always:u=0,1,2:w=1`; other targets respond with
 `p=title,body:o=always`. The platform split keeps urgency discovery truthful.
 Application/type/icon-name metadata has no capability-query key. Non-`always`
-occasion requirements and close-event requests are rejected. Replacement,
-activation/focus, buttons, close/alive reports, application-side filtering,
-expiry, sound selection, transmitted icon data, and icon caching are not
-advertised or claimed.
+occasion requirements are rejected. Activation/focus, buttons, close/alive
+reports, application-side filtering, sound selection, transmitted icon data,
+and icon caching are not advertised or claimed.
 
-Completed OSC 99 requests enter the same rate-limited, bounded background
-desktop-helper path as legacy notifications. On Linux, `f`, `t`, the first `n`
-candidate, and `u` become separate `notify-send` app-name, category, icon, and
-urgency arguments. Kitty's universal semantic icon names are mapped to common
-freedesktop names; other names are delegated to the desktop icon resolver. If
-`n` is absent, `f` is also offered to that resolver as the icon name.
-macOS retains title/body behavior and ignores metadata without a reliable
-`osascript` equivalent. Parser/helper tests do not claim that a real notification
-daemon displayed them; real-compositor permission and presentation remain
-manual acceptance.
+Unidentified requests with desktop-default expiry enter the existing
+rate-limited helper path. On Linux, requests needing lifecycle semantics use a
+dedicated bounded worker and the freedesktop D-Bus `Notify` and
+`CloseNotification` methods. Stable desktop IDs provide replacement and exact
+close authority scoped to the originating tab/pane; equal client IDs from two
+origins cannot affect each other. Positive expiry starts after `Notify` returns,
+is also passed to the service, and makes up to three terminal-side close
+attempts. The command and completion queues and tracked-handle set are each
+capped at 64, D-Bus methods have a two-second timeout, and evicting the oldest
+handle makes a best-effort close. Repeated worker failures are deduplicated until
+a successful operation recovers the path. Notification text is markup-escaped
+before it reaches the service.
+
+Legacy Linux helper delivery still maps `f`, `t`, the first `n` candidate, and
+`u` to separate `notify-send` app-name, category, icon, and urgency arguments.
+Kitty's universal semantic icon names are mapped to common freedesktop names;
+other names are delegated to the desktop icon resolver. macOS retains
+title/body helper behavior but does not advertise lifecycle support. Hermetic
+tests use an in-memory backend and do not contact a notification service;
+real-compositor permission and presentation remain manual acceptance.
 
 [kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
 

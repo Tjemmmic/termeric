@@ -965,6 +965,9 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
                 request.title.unwrap_or_default(),
                 request.body
             ),
+            TerminalEvent::NotificationClose { identifier } => {
+                format!("notification-close:{identifier}")
+            }
             TerminalEvent::TitleChanged(title) => format!("title:{title}"),
             TerminalEvent::ClipboardRequest {
                 selection,

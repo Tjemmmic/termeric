@@ -1,6 +1,6 @@
 //! Bounded terminal-local state for Kitty's OSC 99 notification protocol.
 
-use crate::event::{NotificationRequest, NotificationUrgency};
+use crate::event::{NotificationExpiry, NotificationRequest, NotificationUrgency};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::collections::VecDeque;
 
@@ -22,6 +22,7 @@ enum PayloadKind {
     Title,
     Body,
     Query,
+    Close,
     Unsupported,
 }
 
@@ -35,6 +36,7 @@ struct Metadata {
     notification_types: Vec<String>,
     icon_names: Vec<String>,
     urgency: Option<NotificationUrgency>,
+    expiry: Option<NotificationExpiry>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -94,18 +96,19 @@ impl PendingField {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PendingNotification {
-    identifier: String,
+    identifier: Option<String>,
     title: PendingField,
     body: PendingField,
     application_name: Option<String>,
     notification_types: Vec<String>,
     icon_names: Vec<String>,
     urgency: Option<NotificationUrgency>,
+    expiry: NotificationExpiry,
 }
 
 impl PendingNotification {
     fn retained_bytes(&self) -> usize {
-        self.identifier.len()
+        self.identifier.as_ref().map_or(0, String::len)
             + self.title.retained_bytes()
             + self.body.retained_bytes()
             + self.application_name.as_ref().map_or(0, String::len)
@@ -134,6 +137,9 @@ impl PendingNotification {
         if metadata.urgency.is_some() {
             self.urgency = metadata.urgency;
         }
+        if let Some(expiry) = metadata.expiry {
+            self.expiry = expiry;
+        }
         Ok(())
     }
 
@@ -153,10 +159,12 @@ impl PendingNotification {
         Some(NotificationRequest {
             title: Some(title),
             body,
+            identifier: self.identifier,
             application_name: self.application_name,
             notification_types: self.notification_types,
             icon_names: self.icon_names,
             urgency: self.urgency,
+            expiry: self.expiry,
         })
     }
 }
@@ -166,6 +174,7 @@ pub(super) enum Osc99Action {
     None,
     Query(String),
     Notify(NotificationRequest),
+    Close(String),
 }
 
 /// Pending OSC 99 notifications are global to one terminal owner. The deque
@@ -208,6 +217,17 @@ impl NotificationProtocol {
             }
             return Osc99Action::Query(metadata.identifier.unwrap_or_else(|| "0".into()));
         }
+        if metadata.payload == PayloadKind::Close {
+            let Some(identifier) = metadata.identifier else {
+                return Osc99Action::None;
+            };
+            if !metadata.done || !payload.is_empty() {
+                self.remove(&identifier);
+                return Osc99Action::None;
+            }
+            self.remove(&identifier);
+            return Osc99Action::Close(identifier);
+        }
         if !matches!(metadata.payload, PayloadKind::Title | PayloadKind::Body) {
             return Osc99Action::None;
         }
@@ -223,7 +243,7 @@ impl NotificationProtocol {
             .as_deref()
             .and_then(|identifier| self.take(identifier))
             .unwrap_or_else(|| PendingNotification {
-                identifier: identifier.unwrap_or_default(),
+                identifier,
                 ..PendingNotification::default()
             });
         if notification.apply_metadata(metadata).is_err() {
@@ -261,7 +281,7 @@ impl NotificationProtocol {
         let index = self
             .pending
             .iter()
-            .position(|notification| notification.identifier == identifier)?;
+            .position(|notification| notification.identifier.as_deref() == Some(identifier))?;
         self.pending.remove(index)
     }
 
@@ -324,7 +344,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
         let key = key[0];
         let singular = matches!(
             key,
-            b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a' | b'f' | b'u'
+            b'i' | b'p' | b'd' | b'e' | b'c' | b'o' | b'a' | b'f' | b'u' | b'w'
         );
         if singular && std::mem::replace(&mut seen[key as usize], true) {
             return Err(());
@@ -341,6 +361,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                     b"title" => PayloadKind::Title,
                     b"body" => PayloadKind::Body,
                     b"?" => PayloadKind::Query,
+                    b"close" => PayloadKind::Close,
                     _ => PayloadKind::Unsupported,
                 };
             }
@@ -367,6 +388,23 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                     b"1" => NotificationUrgency::Normal,
                     b"2" => NotificationUrgency::Critical,
                     _ => return Err(()),
+                });
+            }
+            b'w' => {
+                metadata.expiry = Some(match value {
+                    b"-1" => NotificationExpiry::System,
+                    b"0" => NotificationExpiry::Never,
+                    _ => {
+                        if !value.iter().all(u8::is_ascii_digit) {
+                            return Err(());
+                        }
+                        let text = std::str::from_utf8(value).map_err(|_| ())?;
+                        let milliseconds = text.parse::<u32>().map_err(|_| ())?;
+                        if milliseconds == 0 || milliseconds > i32::MAX as u32 {
+                            return Err(());
+                        }
+                        NotificationExpiry::AfterMillis(milliseconds)
+                    }
                 });
             }
             b'c' if value == b"0" => {}
@@ -562,6 +600,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("hello".into()),
                 body: "world".into(),
+                identifier: Some("first".into()),
                 ..NotificationRequest::default()
             })
         );
@@ -570,6 +609,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("other title".into()),
                 body: String::new(),
+                identifier: Some("second".into()),
                 ..NotificationRequest::default()
             })
         );
@@ -600,10 +640,12 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("Build".into()),
                 body: "finished".into(),
+                identifier: Some("job".into()),
                 application_name: Some("build-agent".into()),
                 notification_types: vec!["build.complete".into(), "ci".into()],
                 icon_names: vec!["warning".into(), "my-app".into()],
                 urgency: Some(NotificationUrgency::Critical),
+                expiry: NotificationExpiry::System,
             })
         );
         assert_eq!(
@@ -611,11 +653,86 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("Other done".into()),
                 body: String::new(),
+                identifier: Some("other".into()),
                 application_name: Some("monitor".into()),
                 notification_types: Vec::new(),
                 icon_names: vec!["info".into()],
                 urgency: Some(NotificationUrgency::Low),
+                expiry: NotificationExpiry::System,
             })
+        );
+    }
+
+    #[test]
+    fn identifiers_expiry_and_explicit_close_have_strict_lifecycle() {
+        let mut protocol = NotificationProtocol::default();
+        assert_eq!(
+            protocol.handle(&parts(b"i=job:d=0:w=250", b"Build")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=job:p=body", b"done")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Build".into()),
+                body: "done".into(),
+                identifier: Some("job".into()),
+                expiry: NotificationExpiry::AfterMillis(250),
+                ..NotificationRequest::default()
+            })
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=never:w=0", b"stay")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("stay".into()),
+                identifier: Some("never".into()),
+                expiry: NotificationExpiry::Never,
+                ..NotificationRequest::default()
+            })
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=system:w=-1", b"default")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("default".into()),
+                identifier: Some("system".into()),
+                ..NotificationRequest::default()
+            })
+        );
+
+        assert_eq!(
+            protocol.handle(&parts(b"i=pending:d=0", b"stale")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=pending:p=close", b"")),
+            Osc99Action::Close("pending".into())
+        );
+        assert_eq!(protocol.pending_len(), 0);
+        assert_eq!(protocol.handle(&parts(b"p=close", b"")), Osc99Action::None);
+        assert_eq!(
+            protocol.handle(&parts(b"i=invalid-close:d=0", b"stale")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=invalid-close:p=close", b"not-empty")),
+            Osc99Action::None
+        );
+        assert_eq!(protocol.pending_len(), 0);
+        assert_eq!(
+            protocol.handle(&parts(b"i=invalid-close:d=0", b"stale")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=invalid-close:p=close:d=0", b"")),
+            Osc99Action::None
+        );
+        assert_eq!(protocol.pending_len(), 0);
+        assert_eq!(
+            protocol.handle(&parts(b"i=bad:w=2147483648", b"ignored")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=bad:w=+1", b"ignored")),
+            Osc99Action::None
         );
     }
 
@@ -644,6 +761,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("fresh".into()),
                 body: String::new(),
+                identifier: Some("bad".into()),
                 ..NotificationRequest::default()
             })
         );
@@ -692,6 +810,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("fresh".into()),
                 body: String::new(),
+                identifier: Some("bad".into()),
                 ..NotificationRequest::default()
             })
         );
@@ -700,6 +819,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("kept value".into()),
                 body: String::new(),
+                identifier: Some("good".into()),
                 ..NotificationRequest::default()
             })
         );
@@ -723,6 +843,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("gone".into()),
                 body: String::new(),
+                identifier: Some("item-0".into()),
                 ..NotificationRequest::default()
             })
         );

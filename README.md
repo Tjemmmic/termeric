@@ -40,9 +40,9 @@ the [modern input and accessibility policy](docs/accessibility-and-input.md). Se
 [OSC integration policy](docs/osc-integration.md) for terminal-controlled
 titles, working directories, clipboard access, dynamic colors, and mouse
 pointer shapes, including bounded application-owned title/icon queries and the
-xterm title stack, plus capability-negotiated Kitty OSC 99 title/body desktop
-notifications with bounded application/category/icon-name metadata and Linux
-urgency routing. Kitty OSC 66 text sizing and explicit cell widths have bounded
+xterm title stack, plus capability-negotiated Kitty OSC 99 desktop notifications
+with bounded application/category/icon-name metadata, Linux urgency routing,
+and origin-scoped replacement, close, and expiry. Kitty OSC 66 text sizing and explicit cell widths have bounded
 automated coverage, with native visual acceptance still pending. See the
 [feature-support matrix](docs/feature-support.md) for exact boundaries rather
 than inferring support from a parser, setting, or UI entry.

@@ -40,12 +40,13 @@ bell/notification flood are deliberately discarded and logged once per owner;
 terminal pending vectors are still fully drained. This bounds the bridge while
 preserving request/response correctness.
 
-Forwarded bell and notification events enter their existing global rate
+Forwarded bells and ordinary notifications enter their existing global rate
 limits, then submit platform helpers to a separate 16-request worker queue with
-an eight-child ceiling. The worker reaps every started child. Immediate launch,
-worker, or capacity failures are bounded and deduplicated before becoming
-warning toasts, so an unavailable desktop helper cannot silently fail or grow
-process/toast state without limit.
+an eight-child ceiling. Identified or explicitly expiring Linux OSC 99 requests
+instead enter a 64-request worker and retain at most 64 origin-scoped native
+handles. Both paths report bounded, deduplicated launch, worker, capacity, and
+lifecycle failures as warning toasts, so an unavailable desktop service cannot
+silently fail or grow process/toast state without limit.
 
 Transcript backpressure has its own byte/entry policy documented in
 [background-io.md](background-io.md). The pane output hook does not retain an

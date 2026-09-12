@@ -25,7 +25,7 @@ use crate::terminal::geometry::TerminalGeometry;
 /// Stable origin for an app-facing terminal event. Tab IDs are monotonic and
 /// pane IDs are stable for the lifetime of a pane, so replies never depend on
 /// whichever terminal happens to be focused when App handles the event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TerminalEventOrigin {
     Tab { tab_id: usize },
     Pane { tab_id: usize, pane_id: PaneId },

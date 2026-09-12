@@ -569,7 +569,12 @@ impl App {
                 }
             }
             TerminalEvent::Notification(req) => {
-                if let Some(error) = self.notifications.notify_request(&req) {
+                if let Some(error) = self.notifications.notify_terminal(origin, req) {
+                    self.toasts.warning(error);
+                }
+            }
+            TerminalEvent::NotificationClose { identifier } => {
+                if let Some(error) = self.notifications.close_terminal(origin, identifier) {
                     self.toasts.warning(error);
                 }
             }

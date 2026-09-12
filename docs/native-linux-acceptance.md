@@ -5,6 +5,54 @@ method behavior, screen-reader usability, font quality, fractional scaling, or
 vendor-GPU behavior. Candidate evidence for those boundaries uses the
 schema-versioned native acceptance record instead of free-form release notes.
 
+## Deferred OSC 99 notification lifecycle check
+
+Run these commands inside the candidate Termeric build on a Linux desktop with
+a freedesktop notification service. They do not invoke an AI provider.
+
+1. Show and then replace one identified notification. The second command should
+   update the existing desktop notification rather than add another bubble:
+
+   ```bash
+   printf '\033]99;i=termeric-replace;Replacement version one\033\\'
+   printf '\033]99;i=termeric-replace;Replacement version two\033\\'
+   ```
+
+2. Show and explicitly close one notification. The second command should remove
+   only the notification created by the first:
+
+   ```bash
+   printf '\033]99;i=termeric-close;Close this notification\033\\'
+   printf '\033]99;i=termeric-close:p=close;\033\\'
+   ```
+
+3. Show a notification with a five-second lifetime. It should disappear without
+   further terminal output or scrolling:
+
+   ```bash
+   printf '\033]99;i=termeric-expiry:w=5000;Expires after five seconds\033\\'
+   ```
+
+4. Open two panes and run one show command in each. Two independent
+   notifications should appear despite sharing an ID. Run the close command in
+   the first pane; its notification should close without closing the second:
+
+   ```bash
+   # 1. First pane
+   printf '\033]99;i=termeric-origin;Notification from pane one\033\\'
+
+   # 2. Second pane
+   printf '\033]99;i=termeric-origin;Notification from pane two\033\\'
+
+   # 3. First pane
+   printf '\033]99;i=termeric-origin:p=close;\033\\'
+   ```
+
+Record the desktop environment and notification-daemon version, whether each
+observation passed, and a screenshot or short recording. A visible warning
+toast is the expected failure mode if the session bus or notification service
+cannot complete an operation.
+
 ## Create a candidate record
 
 Generate one complete template from the exact candidate commit:

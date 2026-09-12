@@ -41,6 +41,9 @@ pub enum TerminalEvent {
     /// Desktop notification request (OSC 9, OSC 99, or OSC 777)
     Notification(NotificationRequest),
 
+    /// Close one exact identified Kitty OSC 99 desktop notification.
+    NotificationClose { identifier: String },
+
     /// Data that should be written back to the PTY (e.g., DSR responses)
     PtyWrite(Vec<u8>),
 
@@ -59,6 +62,18 @@ pub enum NotificationUrgency {
     Critical,
 }
 
+/// Desktop expiry policy from Kitty OSC 99 `w` metadata.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NotificationExpiry {
+    /// Defer to the desktop notification service (`w=-1` or absent).
+    #[default]
+    System,
+    /// Ask the desktop to retain the notification indefinitely (`w=0`).
+    Never,
+    /// Close the notification after this positive number of milliseconds.
+    AfterMillis(u32),
+}
+
 /// Desktop notification request
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NotificationRequest {
@@ -67,6 +82,8 @@ pub struct NotificationRequest {
     pub title: Option<String>,
     /// Notification body/message
     pub body: String,
+    /// Optional Kitty OSC 99 notification identifier used for replacement.
+    pub identifier: Option<String>,
     /// Application identity supplied by Kitty OSC 99 `f` metadata.
     pub application_name: Option<String>,
     /// Ordered notification categories supplied by Kitty OSC 99 `t` metadata.
@@ -75,6 +92,8 @@ pub struct NotificationRequest {
     pub icon_names: Vec<String>,
     /// Optional Kitty OSC 99 urgency. Absence retains the desktop default.
     pub urgency: Option<NotificationUrgency>,
+    /// Kitty OSC 99 expiry policy.
+    pub expiry: NotificationExpiry,
 }
 
 /// Clipboard request type

@@ -1221,11 +1221,13 @@ mod tests {
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("build".into()),
                     body: "complete".into(),
+                    identifier: Some("first".into()),
                     ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("other result".into()),
                     body: String::new(),
+                    identifier: Some("second".into()),
                     ..crate::event::NotificationRequest::default()
                 }),
             ]
@@ -1244,10 +1246,10 @@ mod tests {
         #[cfg(target_os = "linux")]
         let expected_query_events = vec![
             crate::event::TerminalEvent::PtyWrite(
-                b"\x1b]99;i=query-7:p=?;p=title,body:o=always:u=0,1,2\x1b\\".to_vec(),
+                b"\x1b]99;i=query-7:p=?;p=title,body,close:o=always:u=0,1,2:w=1\x1b\\".to_vec(),
             ),
             crate::event::TerminalEvent::PtyWrite(
-                b"\x9d99;i=query-8:p=?;p=title,body:o=always:u=0,1,2\x9c".to_vec(),
+                b"\x9d99;i=query-8:p=?;p=title,body,close:o=always:u=0,1,2:w=1\x9c".to_vec(),
             ),
         ];
         #[cfg(not(target_os = "linux"))]
@@ -1276,11 +1278,13 @@ mod tests {
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("before-after".into()),
                     body: String::new(),
+                    identifier: Some("keep".into()),
                     ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("fresh".into()),
                     body: String::new(),
+                    identifier: Some("clear".into()),
                     ..crate::event::NotificationRequest::default()
                 }),
             ]

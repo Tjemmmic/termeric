@@ -965,8 +965,13 @@ S8C1T. Focused core tests cover both legal base64 chunking strategies,
 UTF-8/control validation, strict identifiers, malformed-continuation cleanup,
 screen/DECSTR/RIS lifecycle, owner routing, the 16-pending and 256-KiB aggregate
 ceilings, 4-KiB/16-KiB completed-field bounds, typed `f`/`t`/`n`/`u` metadata,
-deduplication, per-value/per-list ceilings, and Linux-only urgency discovery.
-No native notification service is contacted.
+deduplication, per-value/per-list ceilings, strict `w` expiry parsing,
+payload-free identified `p=close`, and Linux-only close/expiry/urgency
+discovery. Pure Linux backend-state tests prove origin-scoped native-ID
+replacement and close, post-display expiry with bounded retry, 64-handle
+eviction, failure-safe replacement authority, markup escaping, and
+failure/recovery deduplication. They use an in-memory backend; no session bus or
+native notification service is contacted.
 
 Diff-review tests are provider-free state and accessibility fixtures. They
 cover bounded row/line construction, exact shared layout and pointer targets,

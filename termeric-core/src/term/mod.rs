@@ -943,7 +943,7 @@ impl Terminal {
             Osc99Action::None => {}
             Osc99Action::Query(identifier) => {
                 #[cfg(target_os = "linux")]
-                let capabilities = "p=title,body:o=always:u=0,1,2";
+                let capabilities = "p=title,body,close:o=always:u=0,1,2:w=1";
                 #[cfg(not(target_os = "linux"))]
                 let capabilities = "p=title,body:o=always";
                 let response = format!("\x1b]99;i={identifier}:p=?;{capabilities}\x1b\\");
@@ -951,6 +951,9 @@ impl Terminal {
             }
             Osc99Action::Notify(request) => {
                 self.push_event(TerminalEvent::Notification(request));
+            }
+            Osc99Action::Close(identifier) => {
+                self.push_event(TerminalEvent::NotificationClose { identifier });
             }
         }
     }
