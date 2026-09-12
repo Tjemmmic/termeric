@@ -304,6 +304,10 @@ Already-running Unix GUI processes expose authenticated inventory through
 exact-window local tab creation, and exact-pane splitting through `termeric
 control new-window PROCESS SOURCE_WINDOW`, `termeric control new-tab PROCESS
 WINDOW`, and `termeric control split-pane PROCESS WINDOW TAB PANE DIRECTION`.
+`termeric control launch-tab PROCESS WINDOW [options] -- PROGRAM [ARG ...]`
+adds direct, bounded, exact-argv launch into an ordinary local tab with optional
+absolute cwd and initial title; it performs no implicit shell evaluation and
+returns the new stable tab ID.
 Exact window-focus requests, tab selection, and pane focus are available through
 `focus-window`, `select-tab`, and `focus-pane`; Wayland window activation remains
 compositor-controlled and fails explicitly.
@@ -323,7 +327,7 @@ and never crosses from an alternate screen into primary history or reveals
 hidden synchronized output. Opt-in `send-text` targets one stable pane with at
 most 64 KiB of typed UTF-8, explicit paste/Enter semantics, replay protection,
 and visible destructive-command confirmation for plugin tabs; arbitrary bytes
-remain unavailable. Discovery and text queries do not expose argv,
+remain unavailable. Discovery and text queries do not expose existing argv,
 environment, clipboard, or provider data. See the
 [running-GUI control contract](docs/gui-control.md).
 Press F11 or run **Toggle Fullscreen** from the command palette to change only

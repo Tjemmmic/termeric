@@ -1,8 +1,9 @@
 //! Private local control plane for already-running GUI processes.
 //!
 //! Inventory and bounded terminal-text queries are read-only; typed mutations
-//! are explicit and ID-targeted. Opt-in input accepts typed text only; argv,
-//! environment, clipboard data, and plugin/provider credentials stay hidden.
+//! are explicit and ID-targeted. Opt-in input accepts typed text only, while
+//! command launches accept bounded exact argv. Environment overrides,
+//! clipboard data, and plugin/provider credentials stay hidden.
 
 pub mod protocol;
 
@@ -47,6 +48,16 @@ pub enum ControlCommand {
     NewTab {
         process_id: u32,
         window_id: u64,
+        request_id: Option<String>,
+        json: bool,
+    },
+    LaunchTab {
+        process_id: u32,
+        window_id: u64,
+        program: String,
+        args: Vec<String>,
+        working_directory: Option<String>,
+        title: Option<String>,
         request_id: Option<String>,
         json: bool,
     },
@@ -204,6 +215,25 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<String> {
                 request_id,
                 json,
             } => client::new_tab(process_id, window_id, request_id, json),
+            ControlCommand::LaunchTab {
+                process_id,
+                window_id,
+                program,
+                args,
+                working_directory,
+                title,
+                request_id,
+                json,
+            } => client::launch_tab(
+                process_id,
+                window_id,
+                program,
+                args,
+                working_directory,
+                title,
+                request_id,
+                json,
+            ),
             ControlCommand::SplitPane {
                 process_id,
                 window_id,

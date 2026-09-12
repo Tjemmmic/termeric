@@ -584,6 +584,89 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 },
             ))
         }
+        "launch-tab" => {
+            let process_id = parse_control_process_id(arguments.get(1))?;
+            let window_id = parse_control_window_id(arguments.get(2))?;
+            let mut working_directory = None;
+            let mut title = None;
+            let mut request_id = None;
+            let mut json = false;
+            let mut index = 3;
+            let command_index = loop {
+                let option = domain_utf8(
+                    arguments.get(index),
+                    "control launch-tab requires `-- PROGRAM [ARG ...]`",
+                )?;
+                match option.as_str() {
+                    "--" => break index + 1,
+                    "--cwd" if working_directory.is_none() => {
+                        index += 1;
+                        working_directory = Some(domain_utf8(
+                            arguments.get(index),
+                            "--cwd requires an absolute directory",
+                        )?);
+                    }
+                    "--title" if title.is_none() => {
+                        index += 1;
+                        title = Some(domain_utf8(
+                            arguments.get(index),
+                            "--title requires a title",
+                        )?);
+                    }
+                    "--request-id" if request_id.is_none() => {
+                        index += 1;
+                        let value = domain_utf8(
+                            arguments.get(index),
+                            "--request-id requires 32 lowercase hex digits",
+                        )?;
+                        if !crate::control::protocol::valid_request_id(&value) {
+                            anyhow::bail!("--request-id must be exactly 32 lowercase hex digits");
+                        }
+                        request_id = Some(value);
+                    }
+                    "--json" if !json => json = true,
+                    option => anyhow::bail!(
+                        "unknown or duplicate launch-tab option {option:?}; place PROGRAM and its arguments after `--`"
+                    ),
+                }
+                index += 1;
+            };
+            let program = domain_utf8(
+                arguments.get(command_index),
+                "control launch-tab requires PROGRAM after `--`",
+            )?;
+            let args = arguments[command_index + 1..]
+                .iter()
+                .map(|argument| {
+                    argument
+                        .to_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| anyhow::anyhow!("launch arguments must be valid UTF-8"))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            crate::control::protocol::Request::LaunchTab {
+                request_id: request_id.clone().unwrap_or_else(|| "0".repeat(32)),
+                window_id,
+                program: program.clone(),
+                args: args.clone(),
+                working_directory: working_directory.clone(),
+                title: title.clone(),
+            }
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+            Ok(ParseOutcome::Control(
+                crate::control::ControlCommand::LaunchTab {
+                    process_id,
+                    window_id,
+                    program,
+                    args,
+                    working_directory,
+                    title,
+                    request_id,
+                    json,
+                },
+            ))
+        }
         "split-pane" => {
             let process_id = parse_control_process_id(arguments.get(1))?;
             let window_id = parse_control_window_id(arguments.get(2))?;
@@ -903,6 +986,7 @@ Commands for already-running local GUI processes:\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
   new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
+  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv directly in a local tab of one exact stable window\n  \
   split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
   focus-window PROCESS WINDOW [--request-id ID] [--json]\n      Request native focus for one exact stable window\n  \
   select-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Select one exact stable tab without focusing its native window\n  \
@@ -915,7 +999,8 @@ Commands for already-running local GUI processes:\n  \
   resize-window PROCESS WINDOW WIDTH HEIGHT [--request-id ID] [--json]\n      Request an exact native window inner size in physical pixels\n  \
   resize-divider PROCESS WINDOW TAB DIVIDER RATIO [--request-id ID] [--json]\n      Set one exact local divider to 100-900 thousandths\n\n\
 The endpoint is private to the current Unix user. Text access is explicit and\n\
-bounded; input is opt-in and typed, while argv, environment, clipboard data, and provider credentials remain hidden."
+bounded; input is opt-in and typed, command launches use exact bounded argv, and\n\
+environment overrides, clipboard data, and provider credentials remain hidden."
         .into()
 }
 
@@ -2076,6 +2161,46 @@ mod tests {
             parse(
                 [
                     "control",
+                    "launch-tab",
+                    "42",
+                    "7",
+                    "--cwd",
+                    "/tmp/two words",
+                    "--title",
+                    "Exact 🙂",
+                    "--request-id",
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "--json",
+                    "--",
+                    "/bin/printf",
+                    "",
+                    "two words",
+                    "$HOME;🙂",
+                    "--json",
+                ]
+                .into_iter()
+                .map(OsString::from)
+            )
+            .unwrap(),
+            ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
+                process_id: 42,
+                window_id: 7,
+                program,
+                args,
+                working_directory: Some(cwd),
+                title: Some(title),
+                request_id: Some(request_id),
+                json: true,
+            }) if program == "/bin/printf"
+                && args == ["", "two words", "$HOME;🙂", "--json"]
+                && cwd == "/tmp/two words"
+                && title == "Exact 🙂"
+                && request_id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        assert!(matches!(
+            parse(
+                [
+                    "control",
                     "split-pane",
                     "42",
                     "7",
@@ -2288,6 +2413,39 @@ mod tests {
             vec!["control", "new-tab", "42", "0"],
             vec!["control", "new-tab", "42", "7", "--request-id", "short"],
             vec!["control", "new-tab", "42", "7", "--json", "--json"],
+            vec!["control", "launch-tab", "42", "7"],
+            vec!["control", "launch-tab", "42", "7", "--", ""],
+            vec![
+                "control",
+                "launch-tab",
+                "42",
+                "7",
+                "--cwd",
+                "relative",
+                "--",
+                "ok",
+            ],
+            vec![
+                "control",
+                "launch-tab",
+                "42",
+                "7",
+                "--title",
+                "",
+                "--",
+                "ok",
+            ],
+            vec!["control", "launch-tab", "42", "7", "ok"],
+            vec![
+                "control",
+                "launch-tab",
+                "42",
+                "7",
+                "--json",
+                "--json",
+                "--",
+                "ok",
+            ],
             vec!["control", "split-pane", "42", "7", "3", "0", "diagonal"],
             vec!["control", "split-pane", "42", "7", "3", "-1", "vertical"],
             vec!["control", "focus-window", "42", "0"],

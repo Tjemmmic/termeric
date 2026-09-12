@@ -1977,6 +1977,21 @@ impl Application {
                 request_id,
                 window_id,
             } => self.create_control_tab(request_id, *window_id),
+            Request::LaunchTab {
+                request_id,
+                window_id,
+                program,
+                args,
+                working_directory,
+                title,
+            } => self.launch_control_tab(
+                request_id,
+                *window_id,
+                program,
+                args,
+                working_directory.as_deref(),
+                title.as_deref(),
+            ),
             Request::SplitPane {
                 request_id,
                 window_id,
@@ -2748,6 +2763,60 @@ impl Application {
             .get_mut(&native_id)
             .expect("validated control window disappeared")
             .create_control_tab()?;
+        Ok(crate::control::protocol::Response::TabCreated {
+            process_id: std::process::id(),
+            request_id: request_id.to_string(),
+            window_id,
+            tab_id,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn launch_control_tab(
+        &mut self,
+        request_id: &str,
+        window_id: u64,
+        program: &str,
+        args: &[String],
+        working_directory: Option<&str>,
+        title: Option<&str>,
+    ) -> std::result::Result<crate::control::protocol::Response, String> {
+        let native_id = self
+            .control_window_ids
+            .iter()
+            .find_map(|(native_id, control_id)| (*control_id == window_id).then_some(*native_id))
+            .ok_or_else(|| format!("GUI window {window_id} does not exist"))?;
+        let target = self
+            .windows
+            .get(&native_id)
+            .filter(|window| !window.should_exit)
+            .ok_or_else(|| format!("GUI window {window_id} is closing"))?;
+        let target_tabs = target
+            .tabs
+            .as_ref()
+            .map_or(0, crate::tabs::TabManager::count);
+        if target_tabs >= crate::control::protocol::MAX_TABS_PER_WINDOW {
+            return Err(format!(
+                "GUI window tab limit of {} reached",
+                crate::control::protocol::MAX_TABS_PER_WINDOW
+            ));
+        }
+        let total_tabs = self
+            .windows
+            .values()
+            .map(|window| {
+                window
+                    .tabs
+                    .as_ref()
+                    .map_or(0, crate::tabs::TabManager::count)
+            })
+            .sum::<usize>();
+        validate_process_tab_creation_capacity(total_tabs)?;
+        let tab_id = self
+            .windows
+            .get_mut(&native_id)
+            .expect("validated control window disappeared")
+            .launch_control_tab(program, args, working_directory, title)?;
         Ok(crate::control::protocol::Response::TabCreated {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -4130,6 +4199,34 @@ mod tests {
         cache.record(tab_request.clone(), tab_response.clone());
         assert_eq!(cache.replay(&tab_request), Some(tab_response));
 
+        let launch_request = Request::LaunchTab {
+            request_id: "2".repeat(32),
+            window_id: 7,
+            program: "/usr/bin/printf".into(),
+            args: vec!["%s".into(), "exact".into()],
+            working_directory: Some("/tmp".into()),
+            title: Some("build".into()),
+        };
+        let launch_response = Ok(Response::TabCreated {
+            process_id: 42,
+            request_id: "2".repeat(32),
+            window_id: 7,
+            tab_id: 4,
+        });
+        cache.record(launch_request.clone(), launch_response.clone());
+        assert_eq!(cache.replay(&launch_request), Some(launch_response));
+        assert!(matches!(
+            cache.replay(&Request::LaunchTab {
+                request_id: "2".repeat(32),
+                window_id: 7,
+                program: "/usr/bin/printf".into(),
+                args: vec!["%s".into(), "different".into()],
+                working_directory: Some("/tmp".into()),
+                title: Some("build".into()),
+            }),
+            Some(Err(error)) if error.contains("different action")
+        ));
+
         let terminal_failure = Request::CreateTab {
             request_id: "1".repeat(32),
             window_id: 7,
@@ -4279,6 +4376,71 @@ mod tests {
         assert!(cache.replay(&request).is_none());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn control_launch_tab_targets_one_stable_window_and_returns_its_tab_id() {
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        let mut window = App::new_headless(Config::default()).unwrap();
+        window.tabs = Some(crate::tabs::TabManager::new(
+            80,
+            24,
+            Config::default().shell,
+            1_000,
+            1024 * 1024,
+        ));
+        application.windows.insert(native_id, window);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let missing = application
+            .launch_control_tab(
+                "33333333333333333333333333333333",
+                8,
+                "/bin/sh",
+                &["-c".into(), "sleep 1".into()],
+                None,
+                Some("wrong target"),
+            )
+            .unwrap_err();
+        assert!(missing.contains("does not exist"), "{missing}");
+        assert_eq!(
+            application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .count(),
+            0
+        );
+
+        let response = application
+            .launch_control_tab(
+                "44444444444444444444444444444444",
+                7,
+                "/bin/sh",
+                &["-c".into(), "sleep 1".into()],
+                None,
+                Some("targeted"),
+            )
+            .unwrap();
+        assert!(matches!(
+            response,
+            crate::control::protocol::Response::TabCreated {
+                window_id: 7,
+                tab_id: 0,
+                ..
+            }
+        ));
+        let tabs = application.windows[&native_id].tabs.as_ref().unwrap();
+        assert_eq!(tabs.count(), 1);
+        assert_eq!(tabs.active_tab().unwrap().title, "targeted");
+    }
+
     #[test]
     fn control_errors_are_single_line_control_free_and_bounded() {
         let error = bounded_control_error(&format!("bad\n\u{1b}{}", "x".repeat(2_000)));
@@ -4389,6 +4551,12 @@ mod tests {
             initial.id.clone(),
             crate::domain::model::DomainTopology::from(&initial),
         );
+        let domain_tab_count = window.tabs.as_ref().unwrap().count();
+        let local_launch = window
+            .launch_control_tab("/bin/true", &[], None, Some("must not launch"))
+            .unwrap_err();
+        assert!(local_launch.contains("domain spawn"), "{local_launch}");
+        assert_eq!(window.tabs.as_ref().unwrap().count(), domain_tab_count);
 
         let mut application =
             Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();

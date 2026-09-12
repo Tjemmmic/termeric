@@ -1981,6 +1981,7 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     crate::control::protocol::Request::CreateWindow { .. }
                     | crate::control::protocol::Request::CreateTab { .. }
+                    | crate::control::protocol::Request::LaunchTab { .. }
                     | crate::control::protocol::Request::SplitPane { .. }
                     | crate::control::protocol::Request::FocusWindow { .. }
                     | crate::control::protocol::Request::SetQuickAccessVisibility { .. }

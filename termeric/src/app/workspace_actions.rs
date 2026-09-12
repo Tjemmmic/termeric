@@ -2791,6 +2791,54 @@ impl App {
         self.create_ordinary_tab(true)
     }
 
+    /// Launch exact argv in an ordinary local tab for the private running-GUI
+    /// control plane. The caller has already passed bounded wire validation.
+    pub(super) fn launch_control_tab(
+        &mut self,
+        program: &str,
+        args: &[String],
+        working_directory: Option<&str>,
+        title: Option<&str>,
+    ) -> std::result::Result<u64, String> {
+        let tab_count = self.tabs.as_ref().map_or(0, TabManager::count);
+        validate_ordinary_tab_creation_capacity(tab_count)?;
+        if self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .is_some_and(|tab| tab.live_domain_tab_route().is_some())
+        {
+            return Err(
+                "Exact local command launch is unavailable while the target window's active tab belongs to a live domain; use `termeric domain spawn`"
+                    .into(),
+            );
+        }
+        if let Some(directory) = working_directory
+            && !std::path::Path::new(directory).is_dir()
+        {
+            return Err(format!(
+                "GUI control launch working directory {directory:?} does not exist or is not a directory"
+            ));
+        }
+        let tabs = self
+            .tabs
+            .as_mut()
+            .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
+        let id = tabs
+            .new_tab_with_command(
+                program,
+                args,
+                working_directory,
+                title,
+                None,
+                std::collections::HashMap::new(),
+            )
+            .map_err(|error| format!("Could not launch command tab: {error:#}"))?;
+        self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
+        self.refresh_focused_terminal_surfaces();
+        u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
+    }
+
     /// Create one ordinary tab for a declarative plugin without redispatching
     /// the derived tab-created hook. The correlated action result is the only
     /// follow-up event, preventing lifecycle-driven creation loops.

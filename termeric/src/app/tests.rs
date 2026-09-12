@@ -7021,6 +7021,107 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
 
 #[cfg(unix)]
 #[test]
+fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().to_str().unwrap();
+    let helper = temp.path().join("capture-argv.sh");
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\nprintf '[%s]|[%s]|[%s]|[%s]\\n' \"$1\" \"$2\" \"$3\" \"$4\"\npwd\nsleep 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+    }
+    let helper = helper.to_str().unwrap();
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(TabManager::new(
+        80,
+        24,
+        ShellConfig::default(),
+        100,
+        1024 * 1024,
+    ));
+
+    let exact_id = app
+        .launch_control_tab(
+            helper,
+            &[
+                "".into(),
+                "two words".into(),
+                "$HOME;🙂".into(),
+                "--json".into(),
+            ],
+            Some(cwd),
+            Some("Exact launch 🙂"),
+        )
+        .unwrap();
+    assert_eq!(exact_id, 0);
+    assert_eq!(app.tabs.as_ref().unwrap().count(), 1);
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 0);
+    assert_eq!(tabs_at(&app, 0).unwrap().title, "Exact launch 🙂");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut exact_output = false;
+    let mut cwd_output = false;
+    while Instant::now() < deadline {
+        app.process_pty_events();
+        exact_output = tabs_at(&app, 0)
+            .and_then(|tab| tab.focused_terminal())
+            .is_some_and(|terminal| {
+                terminal
+                    .grid()
+                    .export_scrollback_text()
+                    .join("\n")
+                    .contains("[]|[two words]|[$HOME;🙂]|[--json]")
+            });
+        cwd_output = tabs_at(&app, 0)
+            .and_then(|tab| tab.focused_terminal())
+            .is_some_and(|terminal| {
+                terminal
+                    .grid()
+                    .export_scrollback_text()
+                    .join("\n")
+                    .contains(cwd)
+            });
+        if exact_output && cwd_output {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        exact_output,
+        "exact argv output did not reach the command tab"
+    );
+    assert!(cwd_output, "the command did not run in the requested cwd");
+
+    let count = app.tabs.as_ref().unwrap().count();
+    assert!(
+        app.launch_control_tab(
+            "/definitely/missing/termeric-control-program",
+            &[],
+            Some(cwd),
+            None,
+        )
+        .is_err()
+    );
+    assert_eq!(app.tabs.as_ref().unwrap().count(), count);
+    assert!(
+        app.launch_control_tab(helper, &[], Some("/definitely/missing/termeric-cwd"), None)
+            .is_err()
+    );
+    assert_eq!(app.tabs.as_ref().unwrap().count(), count);
+}
+
+#[cfg(unix)]
+#[test]
 fn terminal_profile_cli_launch_applies_env_cwd_title_and_workspace_identity() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;

@@ -8,6 +8,14 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Running-GUI control protocol v13 adds `control launch-tab` for directly
+  executing a bounded exact UTF-8 program/argv vector in a new ordinary local
+  tab of one stable process/window. Optional existing absolute cwd and initial
+  title metadata are bounded and control/bidi-safe; environment overrides and
+  implicit shell parsing are excluded. The action activates the tab, returns
+  its stable ID, preserves at-most-once replay, rejects live-domain targets in
+  favor of `domain spawn`, and leaves no tab after cwd or spawn failure.
+
 - Tall and Fat pane presets now make the focused pane a 50% full-height left
   or full-width top master and evenly tile the remaining panes without
   replacing their PTYs or identities. Both are available through the command

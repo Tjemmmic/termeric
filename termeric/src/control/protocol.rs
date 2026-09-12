@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -22,6 +22,10 @@ pub const MAX_WINDOW_DIMENSION: u32 = 16_384;
 pub const MAX_TEXT_HISTORY_LINES: u16 = 256;
 pub const MAX_TERMINAL_TEXT_BYTES: u32 = 64 * 1024;
 pub const MAX_CONTROL_INPUT_BYTES: usize = 64 * 1024;
+pub const MAX_CONTROL_LAUNCH_ARGS: usize = 128;
+pub const MAX_CONTROL_LAUNCH_ARGV_BYTES: usize = 16 * 1024;
+pub const MAX_CONTROL_LAUNCH_CWD_BYTES: usize = 4 * 1024;
+pub const MAX_CONTROL_LAUNCH_TITLE_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +63,14 @@ pub enum Request {
     CreateTab {
         request_id: String,
         window_id: u64,
+    },
+    LaunchTab {
+        request_id: String,
+        window_id: u64,
+        program: String,
+        args: Vec<String>,
+        working_directory: Option<String>,
+        title: Option<String>,
     },
     SplitPane {
         request_id: String,
@@ -533,6 +545,66 @@ impl Request {
                 }
                 Ok(())
             }
+            Self::LaunchTab {
+                request_id,
+                window_id,
+                program,
+                args,
+                working_directory,
+                title,
+            } => {
+                if !valid_request_id(request_id) {
+                    return Err(
+                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
+                    );
+                }
+                if *window_id == 0 {
+                    return Err("GUI control target window ID must be nonzero".into());
+                }
+                if program.is_empty() || program.chars().any(unsafe_control_metadata_character) {
+                    return Err(
+                        "GUI control launch program must be nonempty UTF-8 without control or bidirectional formatting text"
+                            .into(),
+                    );
+                }
+                if args.len() > MAX_CONTROL_LAUNCH_ARGS {
+                    return Err(format!(
+                        "GUI control launch is limited to {MAX_CONTROL_LAUNCH_ARGS} arguments"
+                    ));
+                }
+                if args.iter().any(|argument| argument.contains('\0')) {
+                    return Err("GUI control launch arguments cannot contain NUL bytes".into());
+                }
+                let argv_bytes = args.iter().fold(program.len(), |total, argument| {
+                    total.saturating_add(argument.len())
+                });
+                if argv_bytes > MAX_CONTROL_LAUNCH_ARGV_BYTES {
+                    return Err(format!(
+                        "GUI control launch program and arguments are limited to {MAX_CONTROL_LAUNCH_ARGV_BYTES} UTF-8 bytes"
+                    ));
+                }
+                if let Some(directory) = working_directory {
+                    if directory.is_empty()
+                        || directory.len() > MAX_CONTROL_LAUNCH_CWD_BYTES
+                        || !std::path::Path::new(directory).is_absolute()
+                        || directory.chars().any(unsafe_control_metadata_character)
+                    {
+                        return Err(format!(
+                            "GUI control launch working directory must be an absolute UTF-8 path of at most {MAX_CONTROL_LAUNCH_CWD_BYTES} bytes without control or bidirectional formatting text"
+                        ));
+                    }
+                }
+                if let Some(title) = title
+                    && (title.trim().is_empty()
+                        || title.len() > MAX_CONTROL_LAUNCH_TITLE_BYTES
+                        || title.chars().any(unsafe_control_metadata_character))
+                {
+                    return Err(format!(
+                        "GUI control launch title must be nonempty UTF-8 of at most {MAX_CONTROL_LAUNCH_TITLE_BYTES} bytes without control or bidirectional formatting text"
+                    ));
+                }
+                Ok(())
+            }
             Self::SplitPane {
                 request_id,
                 window_id,
@@ -681,6 +753,7 @@ impl Request {
             Self::Inventory | Self::ReadText { .. } => None,
             Self::CreateWindow { request_id, .. }
             | Self::CreateTab { request_id, .. }
+            | Self::LaunchTab { request_id, .. }
             | Self::SplitPane { request_id, .. }
             | Self::FocusWindow { request_id, .. }
             | Self::SetQuickAccessVisibility { request_id, .. }
@@ -702,6 +775,20 @@ pub fn valid_control_input_text(value: &str) -> bool {
     value
         .chars()
         .all(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+}
+
+fn unsafe_control_metadata_character(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 pub fn valid_request_id(value: &str) -> bool {
@@ -1074,6 +1161,112 @@ mod tests {
                 request_id: "0".repeat(32),
                 window_id: 0,
             }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn launch_tab_requests_preserve_exact_argv_and_reject_unsafe_or_oversized_input() {
+        let request = Request::LaunchTab {
+            request_id: "0123456789abcdef0123456789abcdef".into(),
+            window_id: 7,
+            program: "/bin/printf".into(),
+            args: vec![
+                "".into(),
+                "two words".into(),
+                "$HOME;🙂".into(),
+                "--json".into(),
+            ],
+            working_directory: Some("/tmp/launch space".into()),
+            title: Some("Exact launch 🙂".into()),
+        };
+        request.validate().unwrap();
+        let frame = ClientFrame {
+            version: PROTOCOL_VERSION,
+            token: "secret".into(),
+            request: request.clone(),
+        };
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &frame).unwrap();
+        assert_eq!(
+            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
+            frame
+        );
+        assert_eq!(
+            request.request_id(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+
+        let invalid = |program: String,
+                       args: Vec<String>,
+                       working_directory: Option<String>,
+                       title: Option<String>| Request::LaunchTab {
+            request_id: "0123456789abcdef0123456789abcdef".into(),
+            window_id: 7,
+            program,
+            args,
+            working_directory,
+            title,
+        };
+        assert!(invalid("".into(), vec![], None, None).validate().is_err());
+        assert!(
+            invalid("bad\u{1b}".into(), vec![], None, None)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            invalid("ok".into(), vec!["bad\0arg".into()], None, None)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            invalid(
+                "ok".into(),
+                vec!["x".into(); MAX_CONTROL_LAUNCH_ARGS + 1],
+                None,
+                None,
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            invalid(
+                "x".repeat(MAX_CONTROL_LAUNCH_ARGV_BYTES + 1),
+                vec![],
+                None,
+                None,
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            invalid("ok".into(), vec![], Some("relative".into()), None)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            invalid(
+                "ok".into(),
+                vec![],
+                Some("/tmp/\u{202e}hidden".into()),
+                None,
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            invalid("ok".into(), vec![], None, Some("line\nbreak".into()))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            invalid(
+                "ok".into(),
+                vec![],
+                None,
+                Some("x".repeat(MAX_CONTROL_LAUNCH_TITLE_BYTES + 1)),
+            )
             .validate()
             .is_err()
         );

@@ -848,6 +848,51 @@ mod tests {
         ));
         worker.join().unwrap();
 
+        let request_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        let launch = Request::LaunchTab {
+            request_id: request_id.clone(),
+            window_id: 7,
+            program: "/usr/bin/printf".into(),
+            args: vec!["%s".into(), "$HOME;🙂".into()],
+            working_directory: Some("/tmp".into()),
+            title: Some("exact".into()),
+        };
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let expected_request = launch.clone();
+        let expected_id = request_id.clone();
+        let worker = thread::spawn(move || {
+            serve_client(server, "secret", |request| {
+                assert_eq!(request, expected_request);
+                Ok(Response::TabCreated {
+                    process_id: 42,
+                    request_id: expected_id,
+                    window_id: 7,
+                    tab_id: 4,
+                })
+            })
+            .unwrap();
+        });
+        protocol::write_frame(
+            &mut client,
+            &ClientFrame {
+                version: protocol::PROTOCOL_VERSION,
+                token: "secret".into(),
+                request: launch,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
+            ServerFrame::TabCreated {
+                process_id: 42,
+                request_id: returned,
+                window_id: 7,
+                tab_id: 4,
+                ..
+            } if returned == request_id
+        ));
+        worker.join().unwrap();
+
         let request_id = "1234567890abcdef1234567890abcdef".to_string();
         let (mut client, server) = UnixStream::pair().unwrap();
         let expected_id = request_id.clone();

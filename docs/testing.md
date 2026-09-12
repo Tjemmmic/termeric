@@ -1122,7 +1122,7 @@ provider participates in any of these tests.
 Quick-access tests are display-free. They prove single-window CLI parsing,
 primary-monitor percentage geometry and clamping (including negative monitor
 coordinates), focused/visible toggle decisions, owner-private nonblocking lock
-exclusion, crash-safe descriptor lifetime, symlink refusal, protocol-v12
+exclusion, crash-safe descriptor lifetime, symlink refusal, protocol-v13
 request/response framing, and an authenticated temporary Unix-socket inventory
 plus toggle round trip. They do not claim compositor behavior. Real X11 and
 Wayland acceptance must bind `termeric --quick-access` to a desktop shortcut and

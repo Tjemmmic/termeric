@@ -1,9 +1,10 @@
 # Running-GUI control protocol
 
 Termeric exposes experimental local inventory and narrowly typed control of
-already-running GUI processes. These are the first bounded slices of issue
-[#29](https://github.com/Tjemmmic/termeric/issues/29); it is not yet a general
-remote-control API.
+already-running GUI processes. Issue
+[#29](https://github.com/Tjemmmic/termeric/issues/29) established the bounded
+foundation and [#95](https://github.com/Tjemmmic/termeric/issues/95) added exact
+local command-tab launch; it is not a general remote-control API.
 
 ## Command line
 
@@ -21,6 +22,8 @@ termeric control new-window PROCESS SOURCE_WINDOW
 termeric control new-window PROCESS SOURCE_WINDOW --json
 termeric control new-tab PROCESS WINDOW
 termeric control new-tab PROCESS WINDOW --json
+termeric control launch-tab PROCESS WINDOW -- /usr/bin/printf '%s\n' 'literal $HOME; value'
+termeric control launch-tab PROCESS WINDOW --cwd /absolute/project --title build --json -- cargo test --workspace
 termeric control split-pane PROCESS WINDOW TAB PANE horizontal
 termeric control split-pane PROCESS WINDOW TAB PANE vertical --json
 termeric control focus-window PROCESS WINDOW
@@ -68,9 +71,25 @@ initial tab creation complete, and includes the new stable window ID.
 `new-tab` targets one exact stable window ID and returns its stable window-local
 tab ID only after the PTY-backed tab exists. An ordinary target creates the same
 local shell tab as the in-app New Tab action. If the active tab belongs to a live
-domain, protocol v12 keeps the socket worker off the GUI event loop while the
+domain, protocol v13 keeps the socket worker off the GUI event loop while the
 daemon creates the authoritative tab, reconciles the returned snapshot, and
 then returns the resulting GUI-local stable ID.
+
+`launch-tab` targets one exact stable window but deliberately creates only an
+ordinary local tab. Everything after the required `--` is preserved as one
+program and an ordered argument vector and passed directly to the PTY spawn
+path; Termeric does not concatenate or evaluate a shell command. Empty
+arguments, whitespace, Unicode, leading hyphens, and shell metacharacters
+therefore remain literal. `--cwd` accepts an existing absolute UTF-8 directory
+and `--title` supplies an optional initial title. If no cwd is supplied, the
+child uses the same GUI-process working-directory behavior as other direct
+command tabs. The inherited process environment is unchanged and the protocol
+does not accept environment overrides. The new tab becomes active and success
+returns its stable window-local ID. A missing executable, invalid directory,
+closing/uninitialized window, capacity failure, or active live-domain tab fails
+without inserting a tab. Use `termeric domain spawn DOMAIN -- PROGRAM [ARG ...]`
+for a daemon-owned command instead of implicitly crossing that authority
+boundary.
 
 `split-pane` targets one exact process/window/tab/pane path plus a typed
 `horizontal` or `vertical` direction. A fresh unsplit tab starts with pane ID
@@ -114,7 +133,7 @@ claim that animation, persistence, or process teardown already finished.
 mutation, removes the exact pane synchronously, and returns both the remaining
 pane count and focused pane ID. If two panes collapse to one terminal owner, the
 survivor keeps its stable ID through inventory, workspace capture/restore, and
-the next split. For live-domain tabs and panes, protocol v12 defers the response
+the next split. For live-domain tabs and panes, protocol v13 defers the response
 until the authoritative daemon snapshot proves the exact remote object was
 removed and GUI reconciliation can report the surviving local pane state. The
 domain's last pane and last tab remain protected; terminating the domain is a
@@ -144,7 +163,7 @@ pane must move with its whole tab. Moving within the same tab is currently
 rejected because that requires an explicit layout-tree rearrangement contract,
 not an ownership transfer. Live-domain panes can move between different tabs in
 the same domain and native window. Domain protocol v10 carries the exact remote
-anchor and requested direction; protocol v12 responds only after the source
+anchor and requested direction; protocol v13 responds only after the source
 route disappears, the destination layout contains that exact split, and the
 moved relay has a destination-local stable ID. Cross-window, cross-domain, and
 mixed ordinary/live moves fail before mutation.
@@ -229,25 +248,29 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 12 accepts exactly `inventory`, ID-targeted `read_text`, `send_text`, `create_window`,
-`create_tab`, `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
+Protocol version 13 accepts exactly `inventory`, ID-targeted `read_text`, `send_text`, `create_window`,
+`create_tab`, `launch_tab`, `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,
 `resize_window`, `resize_divider`, and the exact-window `set_quick_access_visibility`
 operation used only after inventory marks that window as quick access. It does **not** accept arbitrary-byte
-input, arbitrary plugin calls, or domain controls. Text is returned only by an explicit bounded
+input, environment overrides, arbitrary plugin calls, or domain controls. Text is returned only by an explicit bounded
 `read_text` request; inventory never includes terminal contents, scrollback,
-working directories, argv,
+working directories, or argv (a caller supplies launch argv but cannot inspect
+another tab's),
 environment, clipboard data, transcripts, context, diffs, or AI/provider
-credentials. Titles and identifiers are the only user-controlled strings;
-control characters are removed before publication so human output cannot inject
-terminal escape sequences.
+credentials. Titles and identifiers are the only user-controlled strings in
+published inventory; control characters are removed before publication so
+human output cannot inject terminal escape sequences.
 
 The socket authenticates same-user local processes, not mutually distrustful
 programs running under the same Unix account. Any process that can read the
 private token as that account can inspect the metadata and issue the explicit
 bounded text query described above. When the opt-in input policy is enabled,
 that process can also write and execute text in exact panes. The protocol must not be treated as a
-sandbox boundary between applications owned by one Unix user.
+sandbox boundary between applications owned by one Unix user. Even when
+`security.allow_gui_control_input` is false, possession of the token authorizes
+the explicitly bounded `launch_tab` operation and therefore direct local
+process execution as that user.
 
 ## Resource and failure policy
 
@@ -260,6 +283,10 @@ sandbox boundary between applications owned by one Unix user.
 - One input request is limited to 64 KiB of typed UTF-8 plus an optional Enter.
   Protocol validation rejects C0/C1 controls other than tab/newline before the
   event loop or PTY sees them.
+- One direct launch accepts at most 128 arguments and 16 KiB across its program
+  and argument strings. An optional absolute cwd is capped at 4 KiB and an
+  optional initial title at 256 UTF-8 bytes. NUL-bearing argv and control or
+  bidirectional-formatting metadata fail before process or tab creation.
 - Reads and writes time out after 12 seconds. The GUI event-loop request must
   answer within 10 seconds, and socket I/O never runs on that event loop. A
   timed-out live-domain mutation can be retried with the same request ID to
@@ -298,7 +325,8 @@ I/O. No test launches a plugin, provider-backed AI command, or network service.
 
 The acknowledged topology surface now covers every live-domain mutation exposed
 by the running-GUI commands without pretending daemon topology can place tabs
-across native windows. Richer typed workspace/query actions can be added by
-demonstrated automation demand. Arbitrary byte input and implicit
+across native windows. Richer typed workspace/query actions, environment
+overrides, and process-exit observation can be added only by demonstrated
+automation demand. Arbitrary byte input and implicit
 focus-following actions remain deliberately excluded rather than becoming
 consequences of the control socket.

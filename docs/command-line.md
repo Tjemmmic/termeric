@@ -69,6 +69,7 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `control list [--json]` | Inspect bounded metadata for every already-running local GUI process without opening a display. |
 | `control new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]` | Create a native window from an exact running source window; an explicit request ID safely retries an ambiguous recent result. |
 | `control new-tab PROCESS WINDOW [--request-id ID] [--json]` | Create a local shell tab in an exact running window and return its stable ID. |
+| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector directly in a new ordinary local tab and return its stable ID. |
 | `control split-pane PROCESS WINDOW TAB PANE horizontal\|vertical [--request-id ID] [--json]` | Split an exact local pane and return the new stable pane ID. |
 | `control focus-window PROCESS WINDOW [--request-id ID] [--json]` | Request focus for an exact native window on supported backends; Wayland fails explicitly. |
 | `control select-tab PROCESS WINDOW TAB [--request-id ID] [--json]` | Select an exact stable tab without activating its native window. |
@@ -125,7 +126,13 @@ and focused cwd. `termeric control new-tab PROCESS WINDOW` creates a shell tab
 in one exact listed window and returns its stable window-local ID. When the
 active tab belongs to a live domain, it waits for the daemon's authoritative
 snapshot and returns only after the new remote tab has a reconciled GUI-local
-ID. `termeric control split-pane PROCESS WINDOW TAB PANE horizontal|vertical`
+ID. `termeric control launch-tab PROCESS WINDOW [options] -- PROGRAM [ARG ...]`
+instead creates an ordinary local tab, preserves exact UTF-8 argument
+boundaries without invoking a shell, optionally applies an existing absolute
+cwd and initial title, activates the tab, and returns its stable ID. It inherits
+the GUI process environment without accepting overrides and rejects an active
+live-domain target; use `domain spawn` for that authority. `termeric control
+split-pane PROCESS WINDOW TAB PANE horizontal|vertical`
 targets the complete stable-ID path and likewise acknowledges an ordinary or
 live-domain split only after it can return the new tab-local pane ID.
 `select-tab` and `focus-pane`
@@ -141,8 +148,10 @@ PANE [--history-lines N] [--bytes N] [--json]` reads the exact pane's presented
 UTF-8 viewport. It can add at most 256 primary-screen history rows and returns
 the newest content within a caller-selected ceiling no larger than 64 KiB.
 Alternate-screen queries are viewport-only, and synchronized output that has
-not been presented remains hidden. GUI control does not expose argv,
-environment, clipboard, or provider data. See the complete
+not been presented remains hidden. GUI control does not expose existing argv,
+environment, clipboard, or provider data. A caller can supply bounded argv to
+`launch-tab`, but inventory and text reads cannot inspect existing process argv.
+See the complete
 [running-GUI control contract](gui-control.md).
 
 `termeric control send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter]

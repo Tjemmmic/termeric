@@ -282,7 +282,7 @@ impl TabManager {
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
 
-        log::info!("Created command tab {} running '{}'", id, program);
+        log::info!("Created command tab {}", id);
         Ok(id)
     }
 
