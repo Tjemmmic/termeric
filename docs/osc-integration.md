@@ -142,15 +142,18 @@ desktop helper.
 
 Termeric also implements a bounded subset of Kitty's
 [OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
-`d`, `e`, `w`, and `c` provide strict identifiers, title/body/close/alive
-selection, completion, plain or RFC 4648 base64 payloads, expiry policy, and
-close-report requests. The `f`, `t`, and `n` keys add base64-encoded
+`d`, `e`, `w`, `c`, and `a` provide strict identifiers,
+title/body/close/alive/buttons selection, completion, plain or RFC 4648 base64
+payloads, expiry policy, and close/activation-report requests. The `f`, `t`,
+and `n` keys add base64-encoded
 application identity, ordered notification types, and ordered icon-name
 candidates; `u=0/1/2` is retained as typed low/normal/critical urgency. Plain
 chunks are limited to 2,048 bytes;
 encoded chunks are limited to 4,096 bytes and accept Kitty's encode-before-
 chunking and encode-after-chunking forms, including an unpadded final chunk.
 Assembled titles and bodies retain at most 4 KiB and 16 KiB respectively.
+Button payloads retain at most 4 KiB before decoding into at most eight
+non-empty labels of 256 UTF-8 bytes each, separated by U+2028.
 
 Up to 16 identified notifications may be incomplete at once under a 256 KiB
 aggregate payload ceiling. Interleaved identifiers remain isolated, the least
@@ -170,18 +173,22 @@ Expiry accepts exactly `-1` for desktop policy, `0` for no automatic expiry, or
 a positive millisecond value no greater than `2147483647`. A completed,
 payload-free `p=close` request requires an identifier and also retires any
 incomplete parser assembly carrying that identifier. `c` accepts only `0` or
-`1`. A payload-free `p=alive` query is completed immediately; payload-bearing
-or continued alive queries are rejected.
+`1`. The `a` value is a strict comma-separated combination of `report`,
+`-report`, `focus`, and `-focus`; duplicate, contradictory, empty, or unknown
+actions are rejected. Only report is advertised and implemented. A
+payload-free `p=alive` query is completed immediately; payload-bearing or
+continued alive queries are rejected. Button labels reject empty entries and
+C0/C1 controls.
 
 `OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
 terminal's S7C1T/S8C1T framing. Linux responds with
-`p=title,body,close,alive:c=1:o=always:u=0,1,2:w=1`; other targets respond with
+`p=title,body,close,alive,buttons:a=report:c=1:o=always:u=0,1,2:w=1`; other targets respond with
 `p=title,body:o=always`. The platform split keeps lifecycle and urgency
 discovery truthful.
 Application/type/icon-name metadata has no capability-query key. Non-`always`
-occasion requirements are rejected. Activation/focus, buttons, application-side
-filtering, sound selection, transmitted icon data, and icon caching are not
-advertised or claimed.
+occasion requirements are rejected. Native focus, application-side filtering,
+sound selection, transmitted icon data, and icon caching are not advertised or
+claimed.
 
 Unidentified requests with desktop-default expiry enter the existing
 rate-limited helper path. On Linux, requests needing lifecycle semantics use a
@@ -191,9 +198,17 @@ close authority scoped to the originating tab/pane; equal client IDs from two
 origins cannot affect each other. Positive expiry starts after `Notify` returns,
 is also passed to the service, and makes up to three terminal-side close
 attempts. The command and completion queues and tracked-handle set are each
-capped at 64, as is the pending close-report set. A single signal listener
-subscribes to freedesktop `NotificationClosed` before the first tracked
-notification is shown. When `c=1` was requested, native user, service-policy,
+capped at 64, as is the pending close-report set. A single ordered signal
+listener subscribes to freedesktop notification signals before the first
+tracked notification is shown. `p=buttons` becomes revision-scoped private
+action-key/label pairs in the D-Bus `Notify` call; `a=report` additionally
+registers the required
+`default` action. A matching `ActionInvoked` emits exactly one OSC 99 activation
+reply to the originating terminal, with an empty payload for the default action
+or the one-based button number for a button. Unknown, stale, oversized, and
+duplicate actions are ignored. Activation does not consume close-report state,
+so a following native close still produces its requested report. When `c=1`
+was requested, native user, service-policy,
 explicit, and expiry closure emits exactly one `p=close` report to the original
 tab or pane using the framing captured by that request. Replacement adopts only
 the newest successful request's close policy; replacing a revision does not
@@ -202,7 +217,9 @@ for native confirmation and then fail visibly and answer with `untracked`
 instead of leaving the client waiting forever. `p=alive` returns a sorted,
 comma-separated snapshot of named live IDs owned by that exact terminal;
 anonymous and already-closing entries are excluded. Stale terminal origins are
-dropped with no focused-terminal fallback.
+dropped with no focused-terminal fallback. Native `ActivationToken` is
+deliberately ignored because compositor-authorized focus is not yet implemented
+or advertised.
 
 D-Bus methods have a two-second timeout, and evicting the oldest handle makes a
 best-effort close. Repeated worker failures are deduplicated until a successful
@@ -217,9 +234,10 @@ Kitty's universal semantic icon names are mapped to common freedesktop names;
 other names are delegated to the desktop icon resolver. macOS retains
 title/body helper behavior but does not advertise lifecycle support. Hermetic
 tests use an in-memory backend and do not contact a notification service;
-they cover close signals, reports, alive snapshots, timeouts, shutdown, and
-exact delayed-reply routing without a session bus. Real-compositor permission,
-presentation, and daemon signal behavior remain manual acceptance.
+they cover ordered action/close state, default and button reports, replacement
+authority, close signals, alive snapshots, timeouts, shutdown, and exact
+delayed-reply routing without a session bus. Real-compositor permission,
+presentation, and daemon action/signal behavior remain manual acceptance.
 
 [kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
 

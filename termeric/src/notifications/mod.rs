@@ -404,7 +404,8 @@ impl Notifications {
     }
 
     /// Route a terminal-owned notification, using tracked native handles when
-    /// its identifier, expiry, or close-report policy requires lifecycle state.
+    /// its identity, expiry, reporting, or button policy requires lifecycle
+    /// state.
     pub fn notify_terminal(
         &mut self,
         origin: crate::tabs::TerminalEventOrigin,
@@ -417,6 +418,8 @@ impl Notifications {
         if request.identifier.is_some()
             || !matches!(request.expiry, termeric_core::NotificationExpiry::System)
             || request.report_close
+            || request.report_activation
+            || !request.buttons.is_empty()
         {
             let tracked = match self.tracked.as_mut() {
                 Some(tracked) => tracked,

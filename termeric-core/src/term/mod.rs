@@ -943,7 +943,8 @@ impl Terminal {
             Osc99Action::None => {}
             Osc99Action::Query(identifier) => {
                 #[cfg(target_os = "linux")]
-                let capabilities = "p=title,body,close,alive:c=1:o=always:u=0,1,2:w=1";
+                let capabilities =
+                    "p=title,body,close,alive,buttons:a=report:c=1:o=always:u=0,1,2:w=1";
                 #[cfg(not(target_os = "linux"))]
                 let capabilities = "p=title,body:o=always";
                 let response = format!("\x1b]99;i={identifier}:p=?;{capabilities}\x1b\\");

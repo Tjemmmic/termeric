@@ -961,13 +961,23 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
             TerminalEvent::Bell => "bell".to_string(),
             TerminalEvent::PtyWrite(bytes) => format!("pty:{}", encode_hex(&bytes)),
             TerminalEvent::Notification(request) => {
-                let close_policy = if request.report_close {
-                    ":report-close"
+                let mut policies = Vec::new();
+                if request.report_close {
+                    policies.push("report-close".to_string());
+                }
+                if request.report_activation {
+                    policies.push("report-activation".to_string());
+                }
+                if !request.buttons.is_empty() {
+                    policies.push(format!("buttons={}", request.buttons.len()));
+                }
+                let policies = if policies.is_empty() {
+                    String::new()
                 } else {
-                    ""
+                    format!(":{}", policies.join(":"))
                 };
                 format!(
-                    "notification:{}:{}{close_policy}",
+                    "notification:{}:{}{policies}",
                     request.title.unwrap_or_default(),
                     request.body
                 )

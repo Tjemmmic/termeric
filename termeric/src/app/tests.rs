@@ -6048,7 +6048,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     if !std::path::Path::new("/bin/sh").exists() {
         return;
     }
-    let data = b"\x1b]99;i=build:p=alive;\x1b\\".to_vec();
+    let data = b"\x1b]99;i=build;2\x1b\\".to_vec();
     let script = format!(
         "stty raw -echo; reply=$(dd bs=1 count={} 2>/dev/null); \
          printf '\\rnotification='; printf '%s' \"$reply\" | od -An -tx1; printf '\\r\\n'",
@@ -6099,6 +6099,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     ));
 
     let deadline = Instant::now() + Duration::from_secs(5);
+    let expected_reply_hex = "notification=1b5d39393b693d6275696c643b321b5c";
     let mut requesting_text = String::new();
     while Instant::now() < deadline {
         app.tabs.as_mut().unwrap().poll_events();
@@ -6117,7 +6118,12 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
             .grid()
             .export_scrollback_text()
             .join("\n");
-        if requesting_text.contains("notification=") {
+        if requesting_text
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+            .contains(expected_reply_hex)
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -6144,8 +6150,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
         .filter(|character| !character.is_whitespace())
         .collect();
     assert!(
-        compact_requesting_text
-            .contains("notification=1b5d39393b693d6275696c643a703d616c6976653b1b5c"),
+        compact_requesting_text.contains(expected_reply_hex),
         "requesting pane output did not contain the exact reply: {requesting_text:?}"
     );
     assert!(!focused_text.contains("notification="));

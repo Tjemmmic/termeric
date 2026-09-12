@@ -102,8 +102,13 @@ pub struct NotificationRequest {
     pub expiry: NotificationExpiry,
     /// Whether Kitty OSC 99 requested an asynchronous close report with `c=1`.
     pub report_close: bool,
-    /// Control framing captured when an OSC 99 request that can report closes
-    /// was parsed.
+    /// Whether Kitty OSC 99 requested activation/button reports with
+    /// `a=report`.
+    pub report_activation: bool,
+    /// Ordered Kitty OSC 99 button labels from a completed `p=buttons` payload.
+    pub buttons: Vec<String>,
+    /// Control framing captured when an OSC 99 request that can produce a
+    /// delayed reply was parsed.
     pub reply_uses_8bit_controls: bool,
 }
 

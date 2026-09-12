@@ -12,6 +12,9 @@ pub const MAX_NOTIFICATION_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_NOTIFICATION_METADATA_VALUE_BYTES: usize = 256;
 pub const MAX_NOTIFICATION_TYPES: usize = 8;
 pub const MAX_NOTIFICATION_ICON_NAMES: usize = 8;
+pub const MAX_NOTIFICATION_BUTTONS: usize = 8;
+pub const MAX_NOTIFICATION_BUTTON_LABEL_BYTES: usize = 256;
+pub const MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES: usize = 4 * 1024;
 pub const MAX_OSC99_DECODED_CHUNK_BYTES: usize = 2 * 1024;
 pub const MAX_OSC99_ENCODED_CHUNK_BYTES: usize = 4 * 1024;
 const MAX_OSC99_METADATA_BYTES: usize = 1024;
@@ -23,6 +26,7 @@ enum PayloadKind {
     Body,
     Query,
     Alive,
+    Buttons,
     Close,
     Unsupported,
 }
@@ -39,6 +43,7 @@ struct Metadata {
     urgency: Option<NotificationUrgency>,
     expiry: Option<NotificationExpiry>,
     report_close: Option<bool>,
+    report_activation: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -101,12 +106,14 @@ struct PendingNotification {
     identifier: Option<String>,
     title: PendingField,
     body: PendingField,
+    buttons: PendingField,
     application_name: Option<String>,
     notification_types: Vec<String>,
     icon_names: Vec<String>,
     urgency: Option<NotificationUrgency>,
     expiry: NotificationExpiry,
     report_close: bool,
+    report_activation: bool,
 }
 
 impl PendingNotification {
@@ -114,6 +121,7 @@ impl PendingNotification {
         self.identifier.as_ref().map_or(0, String::len)
             + self.title.retained_bytes()
             + self.body.retained_bytes()
+            + self.buttons.retained_bytes()
             + self.application_name.as_ref().map_or(0, String::len)
             + self
                 .notification_types
@@ -146,6 +154,9 @@ impl PendingNotification {
         if let Some(report_close) = metadata.report_close {
             self.report_close = report_close;
         }
+        if let Some(report_activation) = metadata.report_activation {
+            self.report_activation = report_activation;
+        }
         Ok(())
     }
 
@@ -154,8 +165,12 @@ impl PendingNotification {
             .finish_encoded(MAX_NOTIFICATION_TITLE_BYTES)
             .ok()?;
         self.body.finish_encoded(MAX_NOTIFICATION_BODY_BYTES).ok()?;
+        self.buttons
+            .finish_encoded(MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES)
+            .ok()?;
         let mut title = String::from_utf8(self.title.decoded).ok()?;
         let mut body = String::from_utf8(self.body.decoded).ok()?;
+        let buttons = parse_buttons(self.buttons.decoded)?;
         if title.is_empty() {
             if body.is_empty() {
                 return None;
@@ -172,6 +187,8 @@ impl PendingNotification {
             urgency: self.urgency,
             expiry: self.expiry,
             report_close: self.report_close,
+            report_activation: self.report_activation,
+            buttons,
             reply_uses_8bit_controls: false,
         })
     }
@@ -243,7 +260,10 @@ impl NotificationProtocol {
             self.remove(&identifier);
             return Osc99Action::Close(identifier);
         }
-        if !matches!(metadata.payload, PayloadKind::Title | PayloadKind::Body) {
+        if !matches!(
+            metadata.payload,
+            PayloadKind::Title | PayloadKind::Body | PayloadKind::Buttons
+        ) {
             return Osc99Action::None;
         }
         if !metadata.done && metadata.identifier.is_none() {
@@ -267,6 +287,10 @@ impl NotificationProtocol {
         let (field, limit) = match payload_kind {
             PayloadKind::Title => (&mut notification.title, MAX_NOTIFICATION_TITLE_BYTES),
             PayloadKind::Body => (&mut notification.body, MAX_NOTIFICATION_BODY_BYTES),
+            PayloadKind::Buttons => (
+                &mut notification.buttons,
+                MAX_NOTIFICATION_BUTTON_PAYLOAD_BYTES,
+            ),
             _ => unreachable!(),
         };
         let appended = if encoded {
@@ -377,6 +401,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                     b"body" => PayloadKind::Body,
                     b"?" => PayloadKind::Query,
                     b"alive" => PayloadKind::Alive,
+                    b"buttons" => PayloadKind::Buttons,
                     b"close" => PayloadKind::Close,
                     _ => PayloadKind::Unsupported,
                 };
@@ -424,6 +449,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                 });
             }
             b'c' => metadata.report_close = Some(parse_bool(value)?),
+            b'a' => metadata.report_activation = Some(parse_activation_policy(value)?),
             b'o' if value == b"always" => {}
             b'o' => return Err(()),
             // Unknown keys are deliberately ignored for protocol extension.
@@ -447,6 +473,47 @@ fn parse_bool(value: &[u8]) -> Result<bool, ()> {
         b"1" => Ok(true),
         _ => Err(()),
     }
+}
+
+fn parse_activation_policy(value: &[u8]) -> Result<bool, ()> {
+    let mut report = false;
+    let mut report_seen = false;
+    let mut focus_seen = false;
+    for action in value.split(|byte| *byte == b',') {
+        match action {
+            b"report" | b"-report" if !report_seen => {
+                report = action == b"report";
+                report_seen = true;
+            }
+            b"focus" | b"-focus" if !focus_seen => {
+                // Focus policy is parsed so otherwise valid applications are
+                // not rejected, but it remains unadvertised and is not acted
+                // on until native activation-token handling is implemented.
+                focus_seen = true;
+            }
+            _ => return Err(()),
+        }
+    }
+    Ok(report)
+}
+
+fn parse_buttons(bytes: Vec<u8>) -> Option<Vec<String>> {
+    if bytes.is_empty() {
+        return Some(Vec::new());
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    let mut buttons = Vec::new();
+    for label in text.split('\u{2028}') {
+        if label.is_empty()
+            || label.len() > MAX_NOTIFICATION_BUTTON_LABEL_BYTES
+            || label.chars().any(is_unsafe_plain_character)
+            || buttons.len() >= MAX_NOTIFICATION_BUTTONS
+        {
+            return None;
+        }
+        buttons.push(label.to_owned());
+    }
+    Some(buttons)
 }
 
 fn valid_identifier(identifier: &[u8]) -> bool {
@@ -662,6 +729,8 @@ mod tests {
                 urgency: Some(NotificationUrgency::Critical),
                 expiry: NotificationExpiry::System,
                 report_close: false,
+                report_activation: false,
+                buttons: Vec::new(),
                 reply_uses_8bit_controls: false,
             })
         );
@@ -677,6 +746,8 @@ mod tests {
                 urgency: Some(NotificationUrgency::Low),
                 expiry: NotificationExpiry::System,
                 report_close: false,
+                report_activation: false,
+                buttons: Vec::new(),
                 reply_uses_8bit_controls: false,
             })
         );
@@ -794,6 +865,104 @@ mod tests {
         );
         assert_eq!(
             protocol.handle(&parts(b"i=bad:c=2", b"ignored")),
+            Osc99Action::None
+        );
+    }
+
+    #[test]
+    fn activation_policy_and_buttons_are_bounded_typed_and_chunkable() {
+        let mut protocol = NotificationProtocol::default();
+        assert_eq!(
+            protocol.handle(&parts(
+                b"i=actions:d=0:p=buttons:a=report,-focus",
+                "Open\u{2028}Ignore".as_bytes(),
+            )),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=actions", b"Build finished")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Build finished".into()),
+                identifier: Some("actions".into()),
+                report_activation: true,
+                buttons: vec!["Open".into(), "Ignore".into()],
+                ..NotificationRequest::default()
+            })
+        );
+
+        assert_eq!(
+            protocol.handle(&parts(
+                b"i=encoded:d=0:p=buttons:e=1:a=-focus,report",
+                b"WWVz4oCoTm8=",
+            )),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=encoded", b"Question")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Question".into()),
+                identifier: Some("encoded".into()),
+                report_activation: true,
+                buttons: vec!["Yes".into(), "No".into()],
+                ..NotificationRequest::default()
+            })
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=no-report:a=-report,focus", b"Quiet")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Quiet".into()),
+                identifier: Some("no-report".into()),
+                report_activation: false,
+                ..NotificationRequest::default()
+            })
+        );
+
+        for metadata in [
+            b"i=bad:a=report,report".as_slice(),
+            b"i=bad:a=report,-report".as_slice(),
+            b"i=bad:a=unknown".as_slice(),
+            b"i=bad:a=focus,-focus".as_slice(),
+        ] {
+            assert_eq!(
+                protocol.handle(&parts(metadata, b"ignored")),
+                Osc99Action::None
+            );
+        }
+        assert_eq!(
+            protocol.handle(&parts(b"i=empty:p=buttons:d=0", "One\u{2028}".as_bytes())),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=empty", b"ignored")),
+            Osc99Action::None
+        );
+        let too_many = (0..=MAX_NOTIFICATION_BUTTONS)
+            .map(|index| format!("button-{index}"))
+            .collect::<Vec<_>>()
+            .join("\u{2028}");
+        assert_eq!(
+            protocol.handle(&parts(b"i=many:p=buttons:d=0", too_many.as_bytes())),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=many", b"ignored")),
+            Osc99Action::None
+        );
+        let oversized_label = "x".repeat(MAX_NOTIFICATION_BUTTON_LABEL_BYTES + 1);
+        assert_eq!(
+            protocol.handle(&parts(b"i=long:p=buttons:d=0", oversized_label.as_bytes(),)),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=long", b"ignored")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=control:p=buttons:d=0:e=1", b"T25l4oCoVHdvCg==",)),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=control", b"ignored")),
             Osc99Action::None
         );
     }

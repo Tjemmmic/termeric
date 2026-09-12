@@ -42,11 +42,12 @@ preserving request/response correctness.
 
 Forwarded bells and ordinary notifications enter their existing global rate
 limits, then submit platform helpers to a separate 16-request worker queue with
-an eight-child ceiling. Identified, explicitly expiring, or close-reporting
-Linux OSC 99 requests instead enter a 64-request worker and retain at most 64 origin-scoped native
-handles plus 64 pending close reports. One bounded native signal listener feeds
-`NotificationClosed` back through that coordinator. Requested close reports
-and alive-query snapshots retain their captured origin and S7C1T/S8C1T framing;
+an eight-child ceiling. Identified, explicitly expiring, reporting, or buttoned
+Linux OSC 99 requests instead enter a 64-request worker and retain at most 64
+origin-scoped native handles plus 64 pending close reports. One bounded ordered
+native signal listener feeds `ActionInvoked` and `NotificationClosed` back
+through that coordinator. Requested activation/close reports and alive-query
+snapshots retain their captured origin and S7C1T/S8C1T framing;
 the app writes them only to that exact live tab or pane. If the origin has
 closed, the reply is discarded and never falls back to the focused terminal.
 Both paths report bounded, deduplicated launch, worker, capacity, and lifecycle

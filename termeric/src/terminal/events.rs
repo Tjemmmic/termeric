@@ -161,7 +161,7 @@ mod tests {
     fn osc99_notifications_are_forwarded_but_queries_stay_with_the_owner() {
         let mut terminal = Terminal::new(80, 24);
         terminal.process(
-            b"\x1b]99;i=capability:p=?;\x1b\\\x1b G\x1b]99;i=job:c=1:f=YnVpbGQtYWdlbnQ=:u=2;finished\x1b\\\x1b]99;i=job:p=close;\x1b\\\x1b]99;i=probe:p=alive;\x1b\\",
+            b"\x1b]99;i=capability:p=?;\x1b\\\x1b G\x1b]99;i=job:d=0:p=buttons:a=report;Open\xe2\x80\xa8Ignore\x1b\\\x1b]99;i=job:c=1:f=YnVpbGQtYWdlbnQ=:u=2;finished\x1b\\\x1b]99;i=job:p=close;\x1b\\\x1b]99;i=probe:p=alive;\x1b\\",
         );
         let mut forwarded = Vec::new();
         let mut replies = Vec::new();
@@ -181,6 +181,8 @@ mod tests {
                     application_name: Some("build-agent".into()),
                     urgency: Some(termeric_core::NotificationUrgency::Critical),
                     report_close: true,
+                    report_activation: true,
+                    buttons: vec!["Open".into(), "Ignore".into()],
                     reply_uses_8bit_controls: true,
                     ..termeric_core::NotificationRequest::default()
                 }),
@@ -196,7 +198,7 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         let expected_reply =
-            b"\x1b]99;i=capability:p=?;p=title,body,close,alive:c=1:o=always:u=0,1,2:w=1\x1b\\"
+            b"\x1b]99;i=capability:p=?;p=title,body,close,alive,buttons:a=report:c=1:o=always:u=0,1,2:w=1\x1b\\"
                 .as_slice();
         #[cfg(not(target_os = "linux"))]
         let expected_reply = b"\x1b]99;i=capability:p=?;p=title,body:o=always\x1b\\".as_slice();

@@ -98,6 +98,33 @@ a freedesktop notification service. They do not invoke an AI provider.
    the query to select S8C1T: the reply must then begin with byte `9d` and end
    with `9c`. Restore S7C1T afterward with `printf '\033 F'`.
 
+7. From Bash, request activation and close reports for a notification with two
+   buttons. Click the second button. The two hex records should contain exactly
+   one activation reply with `i=termeric-action;2` and one
+   `i=termeric-action:p=close` reply. Their order should match the desktop
+   service's ordered signals, and neither may be delivered to another pane:
+
+   ```bash
+   old_stty=$(stty -g)
+   trap 'stty "$old_stty"' EXIT INT TERM
+   stty -echo -icanon min 1 time 0
+   buttons=$'Open\u2028Ignore'
+   printf '\033]99;i=termeric-action:d=0:p=buttons:a=report,-focus:c=1;%s\033\\' "$buttons"
+   printf '\033]99;i=termeric-action;Choose an action\033\\'
+   for expected_reply in 1 2; do
+     IFS= read -r -t 20 -d '\' reply
+     read_status=$?
+     if [ "$read_status" -eq 0 ]; then printf '%s\\' "$reply" | od -An -tx1; else printf 'timed out waiting for reply %s\n' "$expected_reply"; fi
+   done
+   stty "$old_stty"
+   trap - EXIT INT TERM
+   ```
+
+   Repeat by clicking the notification body rather than a button. The
+   activation reply should then have an empty payload after the semicolon.
+   Optionally query `p=?` first and confirm the response includes
+   `p=title,body,close,alive,buttons` and `a=report`.
+
 Record the desktop environment and notification-daemon version, whether each
 observation passed, and a screenshot or short recording. A visible warning
 toast is the expected failure mode if the session bus or notification service

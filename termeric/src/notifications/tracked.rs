@@ -14,6 +14,9 @@ const MAX_EXPIRY_CLOSE_ATTEMPTS: u8 = 3;
 const EXPIRY_RETRY_DELAY: Duration = Duration::from_secs(1);
 const CLOSE_SIGNAL_TIMEOUT: Duration = Duration::from_secs(5);
 const DBUS_METHOD_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_NATIVE_ACTION_KEY_BYTES: usize = 64;
+const DEFAULT_ACTION_KEY: &str = "default";
+const BUTTON_ACTION_KEY_PREFIX: &str = "termeric-button-";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum InternalIdentifier {
@@ -33,6 +36,9 @@ struct TrackedEntry {
     expires_at: Option<Instant>,
     expiry_close_attempts: u8,
     report_close: bool,
+    report_activation: bool,
+    button_action_keys: Vec<String>,
+    activation_reported: bool,
     reply_uses_8bit_controls: bool,
 }
 
@@ -66,6 +72,10 @@ enum TrackedCommand {
     NativeClosed {
         desktop_id: u32,
     },
+    ActionInvoked {
+        desktop_id: u32,
+        action_key: String,
+    },
     BackendFailure(String),
     Shutdown,
 }
@@ -81,7 +91,12 @@ trait TrackedNotificationBackend: Send + 'static {
         Ok(())
     }
 
-    fn show(&mut self, request: &NotificationRequest, replaces_id: u32) -> Result<u32, String>;
+    fn show(
+        &mut self,
+        request: &NotificationRequest,
+        replaces_id: u32,
+        button_action_keys: &[String],
+    ) -> Result<u32, String>;
 
     fn close(&mut self, desktop_id: u32) -> Result<(), String>;
 
@@ -95,6 +110,7 @@ struct TrackedState<B> {
     order: VecDeque<TrackedKey>,
     closing: HashMap<u32, ClosingEntry>,
     closing_order: VecDeque<u32>,
+    next_action_generation: u64,
 }
 
 impl<B: TrackedNotificationBackend> TrackedState<B> {
@@ -106,12 +122,17 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             order: VecDeque::new(),
             closing: HashMap::new(),
             closing_order: VecDeque::new(),
+            next_action_generation: 1,
         }
     }
 
     fn show(&mut self, key: TrackedKey, request: NotificationRequest) -> Vec<String> {
         let replaces_id = self.entries.get(&key).map_or(0, |entry| entry.desktop_id);
-        let desktop_id = match self.backend.show(&request, replaces_id) {
+        let button_action_keys = self.allocate_button_action_keys(request.buttons.len());
+        let desktop_id = match self
+            .backend
+            .show(&request, replaces_id, &button_action_keys)
+        {
             Ok(desktop_id) if desktop_id != 0 => desktop_id,
             Ok(_) => return vec!["notification service returned invalid desktop ID 0".into()],
             Err(error) => return vec![format!("could not display tracked notification: {error}")],
@@ -144,10 +165,24 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
                 expires_at,
                 expiry_close_attempts: 0,
                 report_close: request.report_close,
+                report_activation: request.report_activation,
+                button_action_keys,
+                activation_reported: false,
                 reply_uses_8bit_controls: request.reply_uses_8bit_controls,
             },
         );
         self.enforce_capacity()
+    }
+
+    fn allocate_button_action_keys(&mut self, count: usize) -> Vec<String> {
+        if count == 0 {
+            return Vec::new();
+        }
+        let generation = self.next_action_generation;
+        self.next_action_generation = self.next_action_generation.wrapping_add(1).max(1);
+        (1..=count)
+            .map(|index| button_action_key(generation, index))
+            .collect()
     }
 
     fn close(&mut self, key: &TrackedKey) -> Vec<String> {
@@ -230,6 +265,28 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
         entry
             .report_close
             .then(|| close_reply_for(&key, entry.reply_uses_8bit_controls, false))
+    }
+
+    fn action_invoked(&mut self, desktop_id: u32, action_key: &str) -> Option<ProtocolReply> {
+        let key = self.native_keys.get(&desktop_id)?.clone();
+        let entry = self.entries.get_mut(&key)?;
+        if !entry.report_activation || entry.activation_reported {
+            return None;
+        }
+        let button = entry
+            .button_action_keys
+            .iter()
+            .position(|candidate| candidate == action_key)
+            .map(|index| index + 1);
+        if action_key != DEFAULT_ACTION_KEY && button.is_none() {
+            return None;
+        }
+        entry.activation_reported = true;
+        Some(activation_reply_for(
+            &key,
+            entry.reply_uses_8bit_controls,
+            button,
+        ))
     }
 
     fn alive_reply(
@@ -376,6 +433,43 @@ fn close_reply_for(
         },
         untracked,
     )
+}
+
+fn activation_reply_for(
+    key: &TrackedKey,
+    reply_uses_8bit_controls: bool,
+    button: Option<usize>,
+) -> ProtocolReply {
+    let payload = button.map_or_else(String::new, |button| button.to_string());
+    let canonical = format!("\x1b]99;i={};{payload}\x1b\\", client_identifier(key));
+    ProtocolReply {
+        origin: key.origin,
+        data: termeric_core::Terminal::frame_pty_reply_for_mode(
+            canonical.as_bytes(),
+            reply_uses_8bit_controls,
+        ),
+    }
+}
+
+fn button_action_key(generation: u64, index: usize) -> String {
+    format!("{BUTTON_ACTION_KEY_PREFIX}{generation}-{index}")
+}
+
+fn freedesktop_actions(
+    request: &NotificationRequest,
+    button_action_keys: &[String],
+) -> Vec<String> {
+    debug_assert_eq!(request.buttons.len(), button_action_keys.len());
+    let mut actions = Vec::with_capacity(request.buttons.len().saturating_mul(2).saturating_add(2));
+    if request.report_activation {
+        actions.push(DEFAULT_ACTION_KEY.into());
+        actions.push("Activate".into());
+    }
+    for (action_key, label) in button_action_keys.iter().zip(&request.buttons) {
+        actions.push(action_key.clone());
+        actions.push(label.clone());
+    }
+    actions
 }
 
 pub(super) struct TrackedNotifications {
@@ -539,6 +633,15 @@ fn tracked_worker<B: TrackedNotificationBackend>(
                 }
                 publish_operation(&completions, &mut last_failure, Vec::new());
             }
+            Ok(TrackedCommand::ActionInvoked {
+                desktop_id,
+                action_key,
+            }) => {
+                if let Some(reply) = state.action_invoked(desktop_id, &action_key) {
+                    publish_reply(&completions, reply);
+                }
+                publish_operation(&completions, &mut last_failure, Vec::new());
+            }
             Ok(TrackedCommand::BackendFailure(error)) => {
                 publish_operation(&completions, &mut last_failure, vec![error]);
             }
@@ -684,7 +787,12 @@ impl TrackedNotificationBackend for FreedesktopBackend {
         }
     }
 
-    fn show(&mut self, request: &NotificationRequest, replaces_id: u32) -> Result<u32, String> {
+    fn show(
+        &mut self,
+        request: &NotificationRequest,
+        replaces_id: u32,
+        button_action_keys: &[String],
+    ) -> Result<u32, String> {
         let connection = self.connection()?;
         (|| {
             use std::collections::HashMap;
@@ -707,7 +815,7 @@ impl TrackedNotificationBackend for FreedesktopBackend {
                 .unwrap_or("");
             let summary = escape_markup(request.title.as_deref().unwrap_or("Terminal"));
             let body = escape_markup(&request.body);
-            let actions: Vec<&str> = Vec::new();
+            let actions = freedesktop_actions(request, button_action_keys);
             let categories = request.notification_types.join(",");
             let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
             if !categories.is_empty() {
@@ -789,11 +897,13 @@ async fn notification_signal_listener(
             return;
         }
     };
-    let mut signals = match proxy.receive_signal("NotificationClosed").await {
+    // A single stream preserves service ordering when activation and closure
+    // are emitted back-to-back for one user action.
+    let mut signals = match proxy.receive_all_signals().await {
         Ok(signals) => signals,
         Err(error) => {
             let _ = ready.send(Err(format!(
-                "notification close signals are unavailable: {error}"
+                "notification lifecycle signals are unavailable: {error}"
             )));
             return;
         }
@@ -819,30 +929,66 @@ async fn notification_signal_listener(
         match event {
             ListenerEvent::Stop => break,
             ListenerEvent::Signal(Some(message)) => {
-                let (desktop_id, _reason): (u32, u32) = match message.body().deserialize() {
-                    Ok(body) => body,
-                    Err(error) => {
+                match message.header().member().map(|member| member.as_str()) {
+                    Some("NotificationClosed") => {
+                        let (desktop_id, _reason): (u32, u32) = match message.body().deserialize() {
+                            Ok(body) => body,
+                            Err(error) => {
+                                if commands
+                                    .send(TrackedCommand::BackendFailure(format!(
+                                        "invalid notification close signal: {error}"
+                                    )))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
                         if commands
-                            .send(TrackedCommand::BackendFailure(format!(
-                                "invalid notification close signal: {error}"
-                            )))
+                            .send(TrackedCommand::NativeClosed { desktop_id })
                             .is_err()
                         {
                             break;
                         }
-                        continue;
                     }
-                };
-                if commands
-                    .send(TrackedCommand::NativeClosed { desktop_id })
-                    .is_err()
-                {
-                    break;
+                    Some("ActionInvoked") => {
+                        let (desktop_id, action_key): (u32, String) =
+                            match message.body().deserialize() {
+                                Ok(body) => body,
+                                Err(error) => {
+                                    if commands
+                                        .send(TrackedCommand::BackendFailure(format!(
+                                            "invalid notification action signal: {error}"
+                                        )))
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            };
+                        if action_key.len() > MAX_NATIVE_ACTION_KEY_BYTES {
+                            continue;
+                        }
+                        if commands
+                            .send(TrackedCommand::ActionInvoked {
+                                desktop_id,
+                                action_key,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    // ActivationToken is deliberately ignored until exact
+                    // native focus behavior is implemented and advertised.
+                    _ => {}
                 }
             }
             ListenerEvent::Signal(None) => {
                 let _ = commands.send(TrackedCommand::BackendFailure(
-                    "notification close signal stream stopped".into(),
+                    "notification lifecycle signal stream stopped".into(),
                 ));
                 break;
             }
@@ -871,6 +1017,7 @@ mod tests {
     struct FakeBackend {
         next_id: u32,
         shows: Vec<(Option<String>, u32, NotificationExpiry)>,
+        shown_action_keys: Vec<Vec<String>>,
         closes: Vec<u32>,
         show_error: Option<String>,
         show_delay: Duration,
@@ -879,13 +1026,19 @@ mod tests {
     }
 
     impl TrackedNotificationBackend for FakeBackend {
-        fn show(&mut self, request: &NotificationRequest, replaces_id: u32) -> Result<u32, String> {
+        fn show(
+            &mut self,
+            request: &NotificationRequest,
+            replaces_id: u32,
+            button_action_keys: &[String],
+        ) -> Result<u32, String> {
             if let Some(error) = &self.show_error {
                 return Err(error.clone());
             }
             std::thread::sleep(self.show_delay);
             self.shows
                 .push((request.identifier.clone(), replaces_id, request.expiry));
+            self.shown_action_keys.push(button_action_keys.to_vec());
             if replaces_id != 0 {
                 return Ok(replaces_id);
             }
@@ -930,6 +1083,17 @@ mod tests {
             title: Some("title".into()),
             identifier: identifier.map(str::to_owned),
             report_close: true,
+            reply_uses_8bit_controls: use_8bit_controls,
+            ..NotificationRequest::default()
+        }
+    }
+
+    fn action_request(identifier: Option<&str>, use_8bit_controls: bool) -> NotificationRequest {
+        NotificationRequest {
+            title: Some("title".into()),
+            identifier: identifier.map(str::to_owned),
+            report_activation: true,
+            buttons: vec!["Open".into(), "Ignore".into()],
             reply_uses_8bit_controls: use_8bit_controls,
             ..NotificationRequest::default()
         }
@@ -1105,6 +1269,176 @@ mod tests {
         assert_eq!(
             state.alive_reply(event_origin, "probe", true).data,
             b"\x9d99;i=probe:p=alive;\x9c"
+        );
+    }
+
+    #[test]
+    fn activation_and_buttons_report_once_without_consuming_close_state() {
+        let event_origin = origin(1, 1);
+        let mut state = TrackedState::new(FakeBackend::default());
+        let mut request = action_request(Some("job"), false);
+        request.report_close = true;
+        assert!(state.show(key(event_origin, "job"), request).is_empty());
+
+        assert_eq!(state.action_invoked(1, "unknown"), None);
+        assert_eq!(state.action_invoked(999, DEFAULT_ACTION_KEY), None);
+        assert_eq!(
+            state.action_invoked(1, &button_action_key(1, 2)),
+            Some(ProtocolReply {
+                origin: event_origin,
+                data: b"\x1b]99;i=job;2\x1b\\".to_vec(),
+            })
+        );
+        assert_eq!(state.action_invoked(1, DEFAULT_ACTION_KEY), None);
+        assert_eq!(
+            state.native_closed(1),
+            Some(ProtocolReply {
+                origin: event_origin,
+                data: b"\x1b]99;i=job:p=close;\x1b\\".to_vec(),
+            })
+        );
+    }
+
+    #[test]
+    fn every_bounded_button_index_has_an_exact_revision_scoped_reply() {
+        let event_origin = origin(1, 1);
+        const BUTTON_COUNT: usize = 8;
+        for selected in 1..=BUTTON_COUNT {
+            let mut state = TrackedState::new(FakeBackend::default());
+            let request = NotificationRequest {
+                title: Some("title".into()),
+                identifier: Some("job".into()),
+                report_activation: true,
+                buttons: (1..=BUTTON_COUNT)
+                    .map(|index| format!("Button {index}"))
+                    .collect(),
+                ..NotificationRequest::default()
+            };
+            assert!(state.show(key(event_origin, "job"), request).is_empty());
+            assert_eq!(
+                state.action_invoked(1, &button_action_key(1, selected)),
+                Some(ProtocolReply {
+                    origin: event_origin,
+                    data: format!("\x1b]99;i=job;{selected}\x1b\\").into_bytes(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn anonymous_default_activation_uses_zero_and_captured_eight_bit_framing() {
+        let event_origin = origin(1, 1);
+        let mut state = TrackedState::new(FakeBackend::default());
+        assert!(
+            state
+                .show(
+                    TrackedKey {
+                        origin: event_origin,
+                        identifier: InternalIdentifier::Anonymous(1),
+                    },
+                    action_request(None, true),
+                )
+                .is_empty()
+        );
+
+        assert_eq!(
+            state.action_invoked(1, DEFAULT_ACTION_KEY),
+            Some(ProtocolReply {
+                origin: event_origin,
+                data: b"\x9d99;i=0;\x9c".to_vec(),
+            })
+        );
+    }
+
+    #[test]
+    fn replacement_updates_action_authority_only_after_success() {
+        let event_origin = origin(1, 1);
+        let tracked_key = key(event_origin, "job");
+        let mut state = TrackedState::new(FakeBackend::default());
+        assert!(
+            state
+                .show(tracked_key.clone(), action_request(Some("job"), false))
+                .is_empty()
+        );
+        state.backend.show_error = Some("synthetic replacement failure".into());
+        assert_eq!(
+            state
+                .show(
+                    tracked_key.clone(),
+                    request("job", NotificationExpiry::System),
+                )
+                .len(),
+            1
+        );
+        assert!(state.action_invoked(1, DEFAULT_ACTION_KEY).is_some());
+
+        state.backend.show_error = None;
+        assert!(
+            state
+                .show(tracked_key, request("job", NotificationExpiry::System),)
+                .is_empty()
+        );
+        assert_eq!(state.action_invoked(1, DEFAULT_ACTION_KEY), None);
+    }
+
+    #[test]
+    fn successful_replacement_rejects_the_previous_revision_button_keys() {
+        let event_origin = origin(1, 1);
+        let tracked_key = key(event_origin, "job");
+        let mut state = TrackedState::new(FakeBackend::default());
+        assert!(
+            state
+                .show(tracked_key.clone(), action_request(Some("job"), false))
+                .is_empty()
+        );
+        let old_key = state.backend.shown_action_keys[0][0].clone();
+
+        assert!(
+            state
+                .show(tracked_key, action_request(Some("job"), false))
+                .is_empty()
+        );
+        let current_key = state.backend.shown_action_keys[1][0].clone();
+        assert_ne!(old_key, current_key);
+        assert_eq!(state.action_invoked(1, &old_key), None);
+        assert_eq!(
+            state.action_invoked(1, &current_key),
+            Some(ProtocolReply {
+                origin: event_origin,
+                data: b"\x1b]99;i=job;1\x1b\\".to_vec(),
+            })
+        );
+    }
+
+    #[test]
+    fn freedesktop_actions_use_private_keys_and_separate_labels() {
+        let request = action_request(Some("job"), false);
+        let action_keys = vec![button_action_key(7, 1), button_action_key(7, 2)];
+        assert!(
+            action_keys
+                .iter()
+                .all(|key| key.len() <= MAX_NATIVE_ACTION_KEY_BYTES)
+        );
+        assert_eq!(
+            freedesktop_actions(&request, &action_keys),
+            vec![
+                "default",
+                "Activate",
+                "termeric-button-7-1",
+                "Open",
+                "termeric-button-7-2",
+                "Ignore",
+            ]
+        );
+
+        let no_report = NotificationRequest {
+            title: Some("title".into()),
+            buttons: vec!["Still visible".into()],
+            ..NotificationRequest::default()
+        };
+        assert_eq!(
+            freedesktop_actions(&no_report, &[button_action_key(8, 1)]),
+            vec!["termeric-button-8-1", "Still visible"]
         );
     }
 
