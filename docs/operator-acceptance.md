@@ -330,6 +330,8 @@ WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak
+python3 scripts/validate_native_gui_soak.py \
+  target/native-gui-soak/results.json --source .
 ```
 
 For a candidate, repeat both soaks for 600 seconds. Keep the reports and logs:
@@ -346,13 +348,16 @@ WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak-release
+python3 scripts/validate_native_gui_soak.py \
+  target/native-gui-soak-release/results.json --source .
 ```
 
 The pass criteria include peak and growth RSS, thread/file-descriptor/child
 growth, complete child cleanup, bounded and fully drained transcript queues,
 continuous PTY and graphics progress, pane routing, resize churn, normal exit,
-and absence of GPU validation/device-loss errors. Schema-2 core and schema-3
-displayed reports also reconcile every aggregate thread/descriptor/child count
+and absence of GPU validation/device-loss errors. Schema-3 core and schema-4
+displayed reports seal their artifacts, independently reconstruct their checks,
+and reconcile every aggregate thread/descriptor/child count
 with privacy-safe categories and summarize category quartile growth and peaks,
 so a failed ceiling remains diagnosable without publishing raw paths or process
 arguments. These artifacts address the

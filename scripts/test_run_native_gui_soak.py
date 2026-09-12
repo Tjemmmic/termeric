@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import os
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -6,12 +8,17 @@ from tempfile import TemporaryDirectory
 
 from scripts.run_native_gui_soak import (
     AcceptanceError,
+    MAX_DRIVER_ERROR_CHARACTERS,
     NATIVE_SOAK_SCHEMA_VERSION,
+    bounded_driver_error,
+    build_native_soak_checks,
     evaluate_native_checks,
     fixture_arguments,
     git_provenance,
     kitty_image_ack_count,
+    native_artifact_manifest,
     perform_until,
+    prepare_artifact_directory,
     progress_count,
     require_clean_candidate,
     runtime_error_count,
@@ -37,7 +44,7 @@ def sample(index: int, *, rss_kib: float = 200_000, fds: int = 30) -> dict:
 
 class NativeGuiSoakTests(unittest.TestCase):
     def test_report_schema_is_versioned_for_resource_inventories(self) -> None:
-        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 3)
+        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 4)
 
     def evaluate(self, samples: list[dict], **overrides: object) -> list[dict]:
         arguments = {
@@ -168,7 +175,8 @@ class NativeGuiSoakTests(unittest.TestCase):
             )
         self.assertEqual(run.call_count, 2)
         self.assertEqual(
-            run.call_args_list[1].args[0], ["git", "status", "--porcelain"]
+            run.call_args_list[1].args[0],
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
         )
 
     def test_clean_candidate_mode_rejects_only_dirty_evidence(self) -> None:
@@ -197,6 +205,90 @@ class NativeGuiSoakTests(unittest.TestCase):
             perform_until("pane startup", action, lambda: False)
         self.assertEqual(action.call_count, 2)
         self.assertEqual(wait.call_count, 2)
+
+    def test_driver_error_is_single_line_bounded_and_reconstructable(self) -> None:
+        error = bounded_driver_error(" first\nsecond\x00 " + "x" * 2_000)
+        self.assertEqual(len(error), MAX_DRIVER_ERROR_CHARACTERS)
+        self.assertNotIn("\n", error)
+        self.assertNotIn("\x00", error)
+        checks = build_native_soak_checks(
+            [sample(index) for index in range(6)],
+            {
+                "max_rss_kib": 500_000,
+                "max_rss_growth_kib": 50_000,
+                "max_thread_growth": 2,
+                "max_fd_growth": 4,
+                "max_children": 2,
+                "minimum_resource_samples": 3,
+                "minimum_progress_records": 1,
+                "minimum_resize_actions": 1,
+                "minimum_pane_actions": 1,
+                "minimum_graphics_acknowledgements": 1,
+            },
+            {
+                "exit_status": 1,
+                "progress_records": 1,
+                "resize_actions": 1,
+                "pane_actions": 1,
+                "graphics_acknowledgements": 1,
+                "remaining_children": 0,
+                "runtime_errors": 0,
+                "driver_error": error,
+            },
+        )
+        self.assertFalse(checks[-1]["passed"])
+        self.assertEqual(checks[-1]["actual"], error)
+
+    def test_artifact_destination_must_be_empty_and_manifest_is_exact(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "bundle"
+            prepare_artifact_directory(root)
+            (root / "nested").mkdir()
+            artifact = root / "nested" / "log.txt"
+            artifact.write_text("evidence", encoding="utf-8")
+            self.assertEqual(
+                native_artifact_manifest(root),
+                [
+                    {
+                        "path": "nested/log.txt",
+                        "bytes": 8,
+                        "sha256": hashlib.sha256(b"evidence").hexdigest(),
+                    }
+                ],
+            )
+            with self.assertRaisesRegex(AcceptanceError, "non-empty"):
+                prepare_artifact_directory(root)
+            symlink = root / "linked.log"
+            symlink.symlink_to(artifact)
+            with self.assertRaisesRegex(AcceptanceError, "symlink"):
+                native_artifact_manifest(root)
+            symlink.unlink()
+            if hasattr(os, "mkfifo"):
+                os.mkfifo(root / "special-pipe")
+                with self.assertRaisesRegex(AcceptanceError, "regular file"):
+                    native_artifact_manifest(root)
+
+    def test_artifact_manifest_enforces_file_count_and_byte_limits(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "one").write_bytes(b"1234")
+            (root / "two").write_bytes(b"5678")
+            with mock.patch(
+                "scripts.run_native_gui_soak.MAX_NATIVE_SOAK_ARTIFACT_BYTES", 3
+            ):
+                with self.assertRaisesRegex(AcceptanceError, "byte limit"):
+                    native_artifact_manifest(root)
+            with mock.patch(
+                "scripts.run_native_gui_soak.MAX_NATIVE_SOAK_TOTAL_ARTIFACT_BYTES",
+                7,
+            ):
+                with self.assertRaisesRegex(AcceptanceError, "bundle exceeds"):
+                    native_artifact_manifest(root)
+            with mock.patch(
+                "scripts.run_native_gui_soak.MAX_NATIVE_SOAK_ARTIFACTS", 1
+            ):
+                with self.assertRaisesRegex(AcceptanceError, "too many"):
+                    native_artifact_manifest(root)
 
 
 if __name__ == "__main__":

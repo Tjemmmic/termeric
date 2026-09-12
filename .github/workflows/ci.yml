@@ -324,6 +324,12 @@ jobs:
           --require-clean
           --binary target/debug/termeric
           --artifacts target/gui-acceptance/native-soak
+      - name: Validate 30-second displayed resource soak evidence
+        if: always()
+        run: >-
+          python3 scripts/validate_native_gui_soak.py
+          target/gui-acceptance/native-soak/results.json
+          --source .
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -400,6 +406,12 @@ jobs:
           --require-clean
           --binary target/debug/termeric
           --artifacts target/soak/native-gui
+      - name: Validate 10-minute displayed resource soak evidence
+        if: always()
+        run: >-
+          python3 scripts/validate_native_gui_soak.py
+          target/soak/native-gui/results.json
+          --source .
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -121,7 +121,12 @@ WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
   --require-clean \
   --binary target/debug/termeric \
   --artifacts target/native-gui-soak
+python3 scripts/validate_native_gui_soak.py \
+  target/native-gui-soak/results.json --source .
 ```
+
+The artifact destination must be new or empty; the runner refuses to delete or
+mix existing evidence. Use a distinct directory for every run.
 
 Weekly/manual CI runs both the core scenario above and this displayed scenario
 for ten minutes. Native defaults allow 768 MiB peak RSS, 192 MiB
@@ -133,16 +138,21 @@ child cleanup. Resize and pane-churn counts have independent minimums; one
 workload cannot compensate for the other in the aggregate action count. These
 are broad regression rails, not expected steady-state consumption targets.
 
-The schema-3 native report records UTC time, candidate commit, explicit
-worktree-dirty state, tested binary SHA-256, backend/compositor/WGPU identity,
-every raw process sample, workload
-counts including separate resize and pane-churn totals, the minimum required
-sample count, accepted graphics acknowledgements, resource-category summaries,
-explicit thresholds, and individual results. Application, Sway, and PTY
-logs remain beside it. Run the pure regression detector with:
+The schema-4 native report records UTC time, candidate commit, explicit
+worktree-dirty and eligibility state, a source-relative tested binary with byte
+length and SHA-256, backend/compositor/WGPU identity, every raw process sample,
+reconstructable exit/driver/cleanup/workload outcomes, resource-category
+summaries, explicit thresholds, and individual results. Every regular file
+beside `results.json` is listed in an exact sorted manifest with byte length and
+SHA-256. The validator rejects extra, missing, altered, symlinked, special, or
+unsafe-path artifacts; it re-derives PTY progress and exact Kitty
+acknowledgements from the transcript, runtime errors from the application log,
+threshold formulas from the run parameters, and every summary/check from raw
+inputs. Run the pure regression and validator detectors with:
 
 ```bash
-python3 -m unittest scripts.test_run_native_gui_soak
+python3 -m unittest scripts.test_run_native_gui_soak \
+  scripts.test_validate_native_gui_soak
 ```
 
 Pass `--require-clean` for candidate or CI evidence. The runner captures Git
@@ -150,6 +160,14 @@ provenance before it creates artifacts and refuses to launch the compositor
 when that mode sees a dirty worktree. A report with a missing or true
 `environment.worktree_dirty` value is implementation evidence, not a
 clean-candidate record.
+
+The native manifest permits at most 512 files, 128 MiB per file, and 256 MiB
+in aggregate. Those limits cover current ten-minute software-renderer logs and
+driver caches while bounding validation work. A dirty or failed but internally
+consistent bundle can be inspected with `--allow-ineligible`; it remains
+ineligible. The report cannot hash itself, and CI does not include the tested
+binary inside the bundle, so detached signing and portable binary provenance
+remain future work.
 
 Defaults are intentionally broad host-independent safety rails: 512 MiB peak
 RSS, 128 MiB first-to-last RSS growth, four threads of growth, eight file
@@ -207,8 +225,8 @@ the JSON plus its scenario log. The ordinary CI upload does not include the
 often-large test executable, so a downloaded JSON/log pair preserves the
 recorded candidate identity and log integrity but cannot, by itself, re-prove
 the binary bytes on another host. Portable binary bundling or signed provenance
-is future work. The schema-3 displayed/native report uses a different contract
-and is not validated by `validate_soak.py`.
+is future work. The schema-4 displayed/native report uses its own manifest
+validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
 

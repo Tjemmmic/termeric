@@ -51,6 +51,12 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("scripts/run_native_gui_soak.py", native)
         self.assertIn("--duration-seconds 30", native)
         self.assertIn("--require-clean", native)
+        self.assertIn("scripts/validate_native_gui_soak.py", native)
+        self.assertIn("target/gui-acceptance/native-soak/results.json", native)
+        self.assertRegex(
+            native,
+            r"Validate 30-second displayed resource soak evidence\n\s+if: always\(\)",
+        )
         self.assertIn("if: always()", native)
         self.assertIn("if-no-files-found: error", native)
 
@@ -74,6 +80,12 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("scripts/run_native_gui_soak.py", block)
         self.assertIn("--duration-seconds 600", block)
         self.assertIn("--require-clean", block)
+        self.assertIn("scripts/validate_native_gui_soak.py", block)
+        self.assertIn("target/soak/native-gui/results.json", block)
+        self.assertRegex(
+            block,
+            r"Validate 10-minute displayed resource soak evidence\n\s+if: always\(\)",
+        )
         self.assertIn("if: always()", block)
         self.assertIn("if-no-files-found: error", block)
 

@@ -664,6 +664,7 @@ runner. Its deliberate growth/progress/cleanup/runtime-error fixtures run with:
 
 ```bash
 python3 -m unittest scripts.test_run_native_gui_soak
+python3 -m unittest scripts.test_validate_native_gui_soak
 ```
 
 ## Serial profile lane

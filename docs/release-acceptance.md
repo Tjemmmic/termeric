@@ -163,9 +163,11 @@ samples RSS, threads, file descriptors, and children, and scans a companion GPU
 smoke log for validation/device-loss errors. The current schema-3 core record
 seals that log, binds the tested binary and exact clean source candidate, and is
 independently validated by reconstructing every check and summary. The separate
-schema-3 displayed report is not yet sealed. Both reports reconcile privacy-safe
-descriptor/thread/child inventories and summarize category quartile growth and
-peaks without retaining paths, arguments, or environment data.
+schema-4 displayed report seals an exact bounded artifact manifest and
+reconstructs transcript, log, resource, and outcome checks. Both reports
+reconcile privacy-safe descriptor/thread/child inventories and summarize
+category quartile growth and peaks without retaining paths, arguments, or
+environment data.
 
 A 30-second local change-gate run plus headless Vulkan smoke on 2026-08-25
 completed 322 iterations and all ten configured checks. It peaked at 33.9 MiB
