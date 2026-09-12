@@ -115,6 +115,11 @@ tick per sample, not literally zero instructions. See
 [event-driven-rendering.md](event-driven-rendering.md) for architecture,
 artifacts, diagnostics, and the remaining vendor-specific GPU check.
 
+Those historical artifacts predate the displayed-memory contract and remain
+RSS-only. New artifacts retain RSS with a broad 512 MiB p95 safety rail and add
+context-bound Linux `smaps_rollup` PSS/private diagnostics. The new rows improve
+attribution but do not backfill old results or estimate vendor VRAM.
+
 The release runner now also records five native X11
 `latency.displayed_key_event_to_present` samples when `xdotool` is available.
 The interval begins in Winit's key callback, crosses the PTY echo/parser and

@@ -1,14 +1,18 @@
 import unittest
 from pathlib import Path
 import tempfile
+import tomllib
 
 from scripts.run_benchmarks import (
     compare_reports,
     comparison_diagnostics,
+    display_memory_metrics,
     evaluate_budgets,
     isolate_display_backend,
     load_metric_contract,
     merge_metrics,
+    parse_process_rss_kib,
+    parse_smaps_rollup_kib,
     percentile,
     presentation_latency_samples,
     rendered_frame_count,
@@ -240,10 +244,165 @@ class BenchmarkBudgetTests(unittest.TestCase):
                 "idle.application_cpu",
                 "idle.application_rendered_frames",
                 "memory.application_idle_rss",
+                "memory.application_idle_pss",
+                "memory.application_idle_private",
                 "latency.displayed_key_event_to_present",
             ],
         )
         self.assertTrue(all(metric["samples"] == [] for metric in metrics))
+
+    def test_proc_memory_parsers_require_exact_unique_kib_fields(self):
+        self.assertEqual(
+            parse_process_rss_kib("Name:\tterm\nVmRSS:\t12345 kB\nThreads:\t8\n"),
+            12345.0,
+        )
+        for invalid_status in (
+            "Name:\tterm\n",
+            "VmRSS: 1 kB\nVmRSS: 2 kB\n",
+            "VmRSS: 1 KB\n",
+        ):
+            with self.subTest(invalid_status=invalid_status):
+                with self.assertRaises(ValueError):
+                    parse_process_rss_kib(invalid_status)
+        self.assertEqual(
+            parse_smaps_rollup_kib(
+                "00400000-7fffffff ---p 00000000 00:00 0 [rollup]\n"
+                "Rss:                 200 kB\n"
+                "Pss:                 150 kB\n"
+                "Private_Clean:        20 kB\n"
+                "Private_Dirty:        70 kB\n"
+                "Private_Hugetlb:      10 kB\n"
+                "Shared_Clean:         80 kB\n"
+            ),
+            {"rss_kib": 200.0, "pss_kib": 150.0, "private_kib": 100.0},
+        )
+        self.assertEqual(
+            parse_smaps_rollup_kib(
+                "Rss: 20 kB\nPss: 15 kB\nPrivate_Clean: 2 kB\nPrivate_Dirty: 7 kB\n"
+            )["private_kib"],
+            9.0,
+        )
+
+        for invalid in (
+            "Rss: 20 kB\nPrivate_Clean: 2 kB\nPrivate_Dirty: 7 kB\n",
+            "Rss: 20 kB\nRss: 21 kB\nPss: 15 kB\nPrivate_Clean: 2 kB\nPrivate_Dirty: 7 kB\n",
+            "Rss: -20 kB\nPss: 15 kB\nPrivate_Clean: 2 kB\nPrivate_Dirty: 7 kB\n",
+            "Rss: 20 KB\nPss: 15 kB\nPrivate_Clean: 2 kB\nPrivate_Dirty: 7 kB\n",
+            "Rss: 20.5 kB\nPss: 15 kB\nPrivate_Clean: 2 kB\nPrivate_Dirty: 7 kB\n",
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    parse_smaps_rollup_kib(invalid)
+
+    def test_display_memory_rows_bind_context_and_explicit_smaps_skip(self):
+        sampled = display_memory_metrics(
+            display_backend="wayland",
+            rss_samples=[180_000.0] * 5,
+            pss_samples=[140_000.0] * 5,
+            private_samples=[110_000.0] * 5,
+            smaps_skip_reason=None,
+        )
+        self.assertEqual(
+            [metric["name"] for metric in sampled],
+            [
+                "memory.application_idle_rss",
+                "memory.application_idle_pss",
+                "memory.application_idle_private",
+            ],
+        )
+        self.assertEqual(sampled[0]["context"]["display_backend"], "wayland")
+        self.assertEqual(sampled[1]["context"]["measurement"], "linux-proc-smaps-rollup")
+        self.assertEqual(sampled[2]["samples"], [110_000.0] * 5)
+        display_batch = [
+            metric
+            for metric in skipped_display_metrics("skipped: fixture")
+            if not metric["name"].startswith("memory.application_idle_")
+        ] + sampled
+        self.assertEqual(
+            validate_metric_batch(display_batch, load_metric_contract(), "display"),
+            [],
+        )
+
+        skipped = display_memory_metrics(
+            display_backend="x11",
+            rss_samples=[180_000.0] * 5,
+            pss_samples=[],
+            private_samples=[],
+            smaps_skip_reason="skipped: Linux smaps_rollup unavailable (PermissionError)",
+        )
+        self.assertEqual(skipped[1]["samples"], [])
+        self.assertIsNone(skipped[1]["context"])
+        self.assertTrue(skipped[1]["workload"].startswith("skipped:"))
+        smaps_unavailable_batch = [
+            metric
+            for metric in skipped_display_metrics("skipped: fixture")
+            if not metric["name"].startswith("memory.application_idle_")
+        ] + skipped
+        self.assertEqual(
+            validate_metric_batch(
+                smaps_unavailable_batch, load_metric_contract(), "display"
+            ),
+            [],
+        )
+
+        with self.assertRaisesRegex(ValueError, "availability differs"):
+            display_memory_metrics(
+                display_backend="x11",
+                rss_samples=[1.0] * 5,
+                pss_samples=[1.0] * 5,
+                private_samples=[],
+                smaps_skip_reason=None,
+            )
+        with self.assertRaisesRegex(ValueError, "sample counts differ"):
+            display_memory_metrics(
+                display_backend="x11",
+                rss_samples=[1.0] * 5,
+                pss_samples=[1.0] * 4,
+                private_samples=[1.0] * 4,
+                smaps_skip_reason=None,
+            )
+        with self.assertRaisesRegex(ValueError, "unsupported displayed-memory backend"):
+            display_memory_metrics(
+                display_backend="unknown",
+                rss_samples=[1.0] * 5,
+                pss_samples=[1.0] * 5,
+                private_samples=[1.0] * 5,
+                smaps_skip_reason=None,
+            )
+        with self.assertRaisesRegex(ValueError, "skip reason must be explicit"):
+            display_memory_metrics(
+                display_backend="x11",
+                rss_samples=[1.0] * 5,
+                pss_samples=[],
+                private_samples=[],
+                smaps_skip_reason="unavailable",
+            )
+
+    def test_checked_in_idle_rss_budget_is_broad_and_fail_closed(self):
+        with (Path(__file__).resolve().parents[1] / "benchmarks" / "budgets.toml").open(
+            "rb"
+        ) as stream:
+            budgets = tomllib.load(stream)
+        budget = next(
+            item
+            for item in budgets["metric_budget"]
+            if item["metric"] == "memory.application_idle_rss"
+        )
+        self.assertEqual(budget["statistic"], "p95")
+        self.assertEqual(budget["max"], 512 * 1024)
+        self.assertTrue(budget["allow_skipped"])
+
+        sampled = {
+            "metrics": [
+                {
+                    "name": "memory.application_idle_rss",
+                    "samples": [budget["max"] + 1] * 5,
+                    "statistics": summarize([budget["max"] + 1] * 5),
+                    "workload": "fixture",
+                }
+            ]
+        }
+        self.assertFalse(evaluate_budgets(sampled, {"metric_budget": [budget]})[0]["passed"])
 
     def test_presentation_latency_samples_are_ordered_and_ignore_blank_lines(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -78,10 +78,65 @@ def process_ticks(pid: int) -> int:
     return int(fields[13]) + int(fields[14])
 
 
+def parse_proc_kib_fields(
+    text: str,
+    *,
+    required: tuple[str, ...],
+    optional: tuple[str, ...] = (),
+) -> dict[str, float]:
+    """Parse exact, unique Linux `/proc` fields whose unit is binary KiB."""
+    expected = set(required) | set(optional)
+    values: dict[str, float] = {}
+    for raw_line in text.splitlines():
+        label, separator, remainder = raw_line.partition(":")
+        if not separator or label not in expected:
+            continue
+        if label in values:
+            raise ValueError(f"duplicate /proc memory field {label}")
+        parts = remainder.split()
+        if len(parts) != 2 or not parts[0].isascii() or not parts[0].isdigit():
+            raise ValueError(f"invalid /proc memory value for {label}")
+        if parts[1] != "kB":
+            raise ValueError(f"invalid /proc memory unit for {label}: {parts[1]!r}")
+        values[label] = float(int(parts[0]))
+
+    missing = [label for label in required if label not in values]
+    if missing:
+        raise ValueError(f"missing /proc memory field(s): {', '.join(missing)}")
+    for label in optional:
+        values.setdefault(label, 0.0)
+    return values
+
+
+def parse_process_rss_kib(status: str) -> float:
+    return parse_proc_kib_fields(status, required=("VmRSS",))["VmRSS"]
+
+
+def parse_smaps_rollup_kib(smaps_rollup: str) -> dict[str, float]:
+    values = parse_proc_kib_fields(
+        smaps_rollup,
+        required=("Rss", "Pss", "Private_Clean", "Private_Dirty"),
+        optional=("Private_Hugetlb",),
+    )
+    return {
+        "rss_kib": values["Rss"],
+        "pss_kib": values["Pss"],
+        "private_kib": (
+            values["Private_Clean"]
+            + values["Private_Dirty"]
+            + values["Private_Hugetlb"]
+        ),
+    }
+
+
 def process_rss_kib(pid: int) -> float:
     status = (Path("/proc") / str(pid) / "status").read_text(encoding="utf-8")
-    line = next(line for line in status.splitlines() if line.startswith("VmRSS:"))
-    return float(line.split()[1])
+    return parse_process_rss_kib(status)
+
+
+def process_smaps_rollup_kib(pid: int) -> dict[str, float]:
+    text = (Path("/proc") / str(pid) / "smaps_rollup").read_text(encoding="utf-8")
+    return parse_smaps_rollup_kib(text)
 
 
 def presentation_latency_samples(path: Path) -> list[float]:
@@ -130,8 +185,71 @@ def skipped_display_metrics(reason: str) -> list[dict[str, Any]]:
             ("idle.application_cpu", "percent_of_one_core"),
             ("idle.application_rendered_frames", "frames"),
             ("memory.application_idle_rss", "KiB"),
+            ("memory.application_idle_pss", "KiB"),
+            ("memory.application_idle_private", "KiB"),
             ("latency.displayed_key_event_to_present", "ms"),
         )
+    ]
+
+
+def display_memory_metrics(
+    *,
+    display_backend: str,
+    rss_samples: list[float],
+    pss_samples: list[float],
+    private_samples: list[float],
+    smaps_skip_reason: str | None,
+) -> list[dict[str, Any]]:
+    if display_backend not in ("x11", "wayland"):
+        raise ValueError(f"unsupported displayed-memory backend {display_backend!r}")
+    if not rss_samples:
+        raise ValueError("displayed-memory rows require RSS samples")
+    has_smaps_samples = bool(pss_samples) and bool(private_samples)
+    if bool(pss_samples) != bool(private_samples):
+        raise ValueError("PSS and private-memory availability differs")
+    if has_smaps_samples == (smaps_skip_reason is not None):
+        raise ValueError("smaps samples require exactly one sampled or skipped disposition")
+    if has_smaps_samples and (
+        len(pss_samples) != len(rss_samples) or len(private_samples) != len(rss_samples)
+    ):
+        raise ValueError("displayed-memory sample counts differ")
+    if smaps_skip_reason is not None and not smaps_skip_reason.startswith("skipped:"):
+        raise ValueError("smaps skip reason must be explicit")
+    rss_context = {
+        "display_backend": display_backend,
+        "measurement": "linux-proc-status-vmrss",
+    }
+    smaps_context = {
+        "display_backend": display_backend,
+        "measurement": "linux-proc-smaps-rollup",
+    }
+    smaps_workload = (
+        smaps_skip_reason
+        if smaps_skip_reason is not None
+        else "actual displayed application proportional/private memory during idle sampling"
+    )
+    return [
+        {
+            "name": "memory.application_idle_rss",
+            "unit": "KiB",
+            "samples": rss_samples,
+            "workload": "actual displayed application RSS during idle sampling",
+            "context": rss_context,
+        },
+        {
+            "name": "memory.application_idle_pss",
+            "unit": "KiB",
+            "samples": pss_samples,
+            "workload": smaps_workload,
+            "context": smaps_context if has_smaps_samples else None,
+        },
+        {
+            "name": "memory.application_idle_private",
+            "unit": "KiB",
+            "samples": private_samples,
+            "workload": smaps_workload,
+            "context": smaps_context if has_smaps_samples else None,
+        },
     ]
 
 
@@ -280,7 +398,7 @@ def actual_display_metrics() -> list[dict[str, Any]]:
         environment.setdefault("RUST_LOG", "warn")
         environment["TERMERIC_BENCHMARK_KEY_TO_PRESENT_PATH"] = str(latency_path)
         environment["TERMERIC_BENCHMARK_FRAME_STATS_PATH"] = str(frame_stats_path)
-        isolate_display_backend(environment)
+        display_backend = isolate_display_backend(environment)
         process = subprocess.Popen(
             [ROOT / "target" / "release" / "termeric"],
             cwd=ROOT,
@@ -300,6 +418,16 @@ def actual_display_metrics() -> list[dict[str, Any]]:
             samples = []
             frame_samples = []
             rss_samples = []
+            pss_samples = []
+            private_samples = []
+            smaps_skip_reason = None
+            try:
+                process_smaps_rollup_kib(process.pid)
+            except (OSError, ValueError) as error:
+                smaps_skip_reason = (
+                    "skipped: Linux smaps_rollup unavailable "
+                    f"({type(error).__name__})"
+                )
             clock_ticks = os.sysconf("SC_CLK_TCK")
             for _ in range(5):
                 before_frames = rendered_frame_count(frame_stats_path)
@@ -312,6 +440,10 @@ def actual_display_metrics() -> list[dict[str, Any]]:
                 samples.append((after_ticks - before_ticks) / clock_ticks / elapsed * 100.0)
                 frame_samples.append(float(after_frames - before_frames))
                 rss_samples.append(process_rss_kib(process.pid))
+                if smaps_skip_reason is None:
+                    memory = process_smaps_rollup_kib(process.pid)
+                    pss_samples.append(memory["pss_kib"])
+                    private_samples.append(memory["private_kib"])
 
             latency_samples = []
             latency_workload = "skipped: native X11 input injection unavailable"
@@ -387,12 +519,6 @@ def actual_display_metrics() -> list[dict[str, Any]]:
             "workload": "actual displayed application left untouched for five 400 ms windows",
         },
         {
-            "name": "memory.application_idle_rss",
-            "unit": "KiB",
-            "samples": rss_samples,
-            "workload": "actual displayed application RSS during idle sampling",
-        },
-        {
             "name": "idle.application_rendered_frames",
             "unit": "frames",
             "samples": frame_samples,
@@ -405,6 +531,13 @@ def actual_display_metrics() -> list[dict[str, Any]]:
             "workload": latency_workload,
             "context": {"input_backend": "xdotool-x11" if latency_samples else None},
         },
+        *display_memory_metrics(
+            display_backend=display_backend,
+            rss_samples=rss_samples,
+            pss_samples=pss_samples,
+            private_samples=private_samples,
+            smaps_skip_reason=smaps_skip_reason,
+        ),
     ]
 
 

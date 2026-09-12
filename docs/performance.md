@@ -34,17 +34,19 @@ python3 scripts/run_benchmarks.py --skip-displayed \
 
 Use `--skip-displayed` on a headless machine (`--skip-gui-idle` remains a
 compatibility alias). Otherwise the runner builds and opens Termeric with an
-isolated temporary configuration, samples `/proc` CPU ticks and RSS while the
-window is untouched, injects five sequential X11 keys when `xdotool` is
-available, and then terminates it. The offscreen
-renderer workload still runs without a display when a headless WGPU adapter is
-available. It exercises Termeric's real glyph cache, text and rectangle vertex
-construction, GPU upload, render pass, submission, and completion; it does not
-include surface presentation or compositor latency.
+isolated temporary configuration, samples `/proc` CPU ticks, RSS, proportional
+set size (PSS), and private memory while the window is untouched, injects five
+sequential X11 keys when `xdotool` is available, and then terminates it. The
+offscreen renderer workload still runs without a display when a headless WGPU
+adapter is available. It exercises Termeric's real glyph cache, text and
+rectangle vertex construction, GPU upload, render pass, submission, and
+completion; it does not include surface presentation or compositor latency.
 
-Displayed CPU, RSS, and key-to-present metric rows remain in every artifact.
-When the lane is disabled or unavailable their sample lists are empty and the
-workload field records the exact skip reason.
+Displayed CPU, RSS, PSS, private-memory, and key-to-present metric rows remain
+in every artifact. When the lane is disabled or unavailable their sample lists
+are empty and the workload field records the exact skip reason. A Linux host
+that can launch the display probe but cannot read `smaps_rollup` keeps RSS and
+marks only PSS/private memory explicitly unavailable.
 
 Every timing workload produces five samples. The artifact records raw samples,
 minimum, median, p95, maximum, mean, coefficient of variation, workload text,
@@ -112,8 +114,8 @@ The current suite measures:
 - warmed code-heavy row shaping time and shaping-cache hit rate;
 - 1,000 transcript input/output enqueues against an injected 2 ms persistence
   backend, including the explicitly shed-entry count;
-- displayed idle CPU, exact rendered-frame deltas, and RSS when a Linux display
-  session is available;
+- displayed idle CPU, exact rendered-frame deltas, RSS, PSS, and private memory
+  when a Linux display session is available;
 - native X11 key-event callback through PTY echo, terminal parsing, real GPU
   submission, and `SurfaceTexture::present` when X11 plus `xdotool` are
   available.
@@ -139,6 +141,16 @@ therefore requires zero application-rendered frames during unchanged idle
 sampling as the portable submission-work rail; record vendor-tool results
 separately with the exact adapter and driver.
 
+Displayed RSS comes from `/proc/<pid>/status`. PSS and private memory come from
+one strict `/proc/<pid>/smaps_rollup` parse per sample; private memory is the
+sum of `Private_Clean`, `Private_Dirty`, and optional `Private_Hugetlb`. The
+parser requires unique nonnegative integer `kB` fields and never substitutes
+zero for missing or malformed values. All sampled memory rows name their
+display backend and measurement source, so old context-free rows or X11 and
+Wayland rows do not compare automatically. PSS apportions shared mappings
+among their current users, while private memory includes more than Rust heap;
+neither value estimates vendor VRAM.
+
 The displayed runner treats `XDG_SESSION_TYPE` as the requested backend. It
 clears inherited selectors for the other backend, selects Winit's backend, and
 pins `EGL_PLATFORM` before launch. On X11, deliberately empty Wayland variables
@@ -154,13 +166,21 @@ regression rails. Deterministic CI primarily compares related workloads from the
 same run (100k/10k history, 100k/10k search, and 64/8 pane scaling), which is
 more stable than transplanting absolute nanoseconds between machines. Broad
 absolute safety rails remain for 10k/100k incremental search, 100k RSS,
-compact ownership, repeated reflow, and offscreen frame completion. Search has
+displayed idle RSS, compact ownership, repeated reflow, and offscreen frame
+completion. Search has
 separate 10 ms p95 fresh-query keyboard-dispatch rails at 10k and 100k, 10/25
 ms completed-result extension rails, and broad 50/500 ms completion rails. This
 distinguishes total linear work from user-visible input blocking and catches
 candidate-copy/cleanup regressions that a scale ratio alone would hide. See
 [scrollback-memory.md](scrollback-memory.md) for the representation and its
 measured memory/CPU tradeoff.
+
+Displayed idle RSS has a deliberately broad 512 MiB p95 rail. The row may be
+explicitly skipped with the whole display probe, but a present oversized sample
+fails. This catches catastrophic process regressions while leaving PSS/private
+memory diagnostic until repeated clean artifacts from comparable runner classes
+justify tighter limits. The longer displayed soak retains its separate 768 MiB
+peak and growth rails.
 
 Dense search additionally has a one-second p95 completion rail and an 8 MiB
 hard result-index rail. Exact total occurrences and matching rows continue
@@ -387,8 +407,9 @@ heaptrack "$benchmark_bin" release_benchmark_suite \
 heaptrack_gui heaptrack.performance_benchmarks.*.gz
 ```
 
-Record both peak RSS from the benchmark artifact and heaptrack's allocation
-sites; allocator retention and mapped GPU/runtime memory make them different.
+Record RSS, PSS, and private memory from the benchmark artifact alongside
+heaptrack's allocation sites; allocator retention and mapped GPU/runtime memory
+make all four views different.
 
 ### DHAT
 

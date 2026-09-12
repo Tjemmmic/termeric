@@ -140,6 +140,13 @@ max = 0.0
 allow_skipped = true
 
 [[metric_budget]]
+name = "displayed idle RSS stays within the broad release safety rail"
+metric = "memory.application_idle_rss"
+statistic = "p95"
+max = 524288.0
+allow_skipped = true
+
+[[metric_budget]]
 name = "steady frames allocate no new pipeline buffers"
 metric = "renderer.steady_frame_buffer_allocations"
 statistic = "max"

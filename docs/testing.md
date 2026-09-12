@@ -500,7 +500,8 @@ ignored because corpus artifacts may contain arbitrary terminal data.
 
 The versioned benchmark runner covers core, interaction, renderer, PTY,
 tab/pane, memory, and (when a display is available) real idle process CPU,
-rendered-frame deltas, RSS, plus native key-event-to-surface-present metrics:
+rendered-frame deltas, RSS/PSS/private memory, plus native
+key-event-to-surface-present metrics:
 
 ```bash
 WGPU_BACKEND=vulkan python3 scripts/run_benchmarks.py \
@@ -511,7 +512,9 @@ Before accepting budgets, the runner validates every producer against
 [`benchmarks/metrics.toml`](../benchmarks/metrics.toml). A missing or silently
 empty metric is a failure, not an optional-probe skip. Run
 `python3 -m unittest scripts.test_run_benchmarks` to exercise the contract and
-budget fail-closed cases without executing the release workloads.
+strict Linux `status`/`smaps_rollup` parsing, displayed-memory context and skip
+dispositions, the broad idle-RSS rail, and budget fail-closed cases without
+executing the release workloads.
 
 See [`performance.md`](performance.md) for workload boundaries, repeatability,
 baseline comparison, CI budgets, and heaptrack/DHAT/perf/flamegraph recipes.

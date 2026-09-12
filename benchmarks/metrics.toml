@@ -366,6 +366,23 @@ unit = "KiB"
 producer = "display"
 samples = 5
 allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "memory.application_idle_pss"
+unit = "KiB"
+producer = "display"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "memory.application_idle_private"
+unit = "KiB"
+producer = "display"
+samples = 5
+allow_skipped = true
+context_required = true
 
 [[metric]]
 name = "latency.displayed_key_event_to_present"
