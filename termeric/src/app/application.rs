@@ -42,6 +42,17 @@ const MAX_CONTROL_REPLAYS: usize = 256;
 const MAX_PENDING_DOMAIN_CONTROLS: usize = 32;
 const MAX_PENDING_DOMAIN_WAITERS: usize = 16;
 
+fn process_tab_count(windows: &HashMap<WindowId, App>) -> usize {
+    windows.values().fold(0, |total, window| {
+        total.saturating_add(
+            window
+                .tabs
+                .as_ref()
+                .map_or(0, crate::tabs::TabManager::count),
+        )
+    })
+}
+
 fn validate_process_tab_creation_capacity(total_tabs: usize) -> std::result::Result<(), String> {
     if total_tabs >= crate::control::protocol::MAX_TOTAL_TABS {
         return Err(format!(
@@ -50,6 +61,20 @@ fn validate_process_tab_creation_capacity(total_tabs: usize) -> std::result::Res
         ));
     }
     Ok(())
+}
+
+fn validate_control_window_creation_capacity(
+    live_windows: usize,
+    pending_windows: usize,
+    total_tabs: usize,
+) -> std::result::Result<(), String> {
+    if live_windows.saturating_add(pending_windows) >= crate::control::protocol::MAX_WINDOWS {
+        return Err(format!(
+            "GUI process window limit of {} reached",
+            crate::control::protocol::MAX_WINDOWS
+        ));
+    }
+    validate_process_tab_creation_capacity(total_tabs)
 }
 
 fn validate_process_pane_creation_capacity(total_panes: usize) -> std::result::Result<(), String> {
@@ -522,16 +547,7 @@ impl Application {
                 action_id,
                 window_id,
             } => {
-                let total_tabs = self
-                    .windows
-                    .values()
-                    .map(|window| {
-                        window
-                            .tabs
-                            .as_ref()
-                            .map_or(0, crate::tabs::TabManager::count)
-                    })
-                    .sum::<usize>();
+                let total_tabs = process_tab_count(&self.windows);
                 let result = if let Err(error) = validate_process_tab_creation_capacity(total_tabs)
                 {
                     Err(error)
@@ -2680,14 +2696,12 @@ impl Application {
         request_id: &str,
         source_window: u64,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
-        if self.windows.len().saturating_add(self.pending.len())
-            >= crate::control::protocol::MAX_WINDOWS
-        {
-            return Err(format!(
-                "GUI process window limit of {} reached",
-                crate::control::protocol::MAX_WINDOWS
-            ));
-        }
+        let total_tabs = process_tab_count(&self.windows);
+        validate_control_window_creation_capacity(
+            self.windows.len(),
+            self.pending.len(),
+            total_tabs,
+        )?;
         let source_native_id = self
             .control_window_ids
             .iter()
@@ -2747,16 +2761,7 @@ impl Application {
                 crate::control::protocol::MAX_TABS_PER_WINDOW
             ));
         }
-        let total_tabs = self
-            .windows
-            .values()
-            .map(|window| {
-                window
-                    .tabs
-                    .as_ref()
-                    .map_or(0, crate::tabs::TabManager::count)
-            })
-            .sum::<usize>();
+        let total_tabs = process_tab_count(&self.windows);
         validate_process_tab_creation_capacity(total_tabs)?;
         let tab_id = self
             .windows
@@ -2801,16 +2806,7 @@ impl Application {
                 crate::control::protocol::MAX_TABS_PER_WINDOW
             ));
         }
-        let total_tabs = self
-            .windows
-            .values()
-            .map(|window| {
-                window
-                    .tabs
-                    .as_ref()
-                    .map_or(0, crate::tabs::TabManager::count)
-            })
-            .sum::<usize>();
+        let total_tabs = process_tab_count(&self.windows);
         validate_process_tab_creation_capacity(total_tabs)?;
         let tab_id = self
             .windows
@@ -4446,6 +4442,41 @@ mod tests {
         let error = bounded_control_error(&format!("bad\n\u{1b}{}", "x".repeat(2_000)));
         assert!(error.len() <= 1_024);
         assert!(!error.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn control_window_capacity_includes_its_mandatory_initial_tab() {
+        assert!(
+            validate_control_window_creation_capacity(
+                1,
+                0,
+                crate::control::protocol::MAX_TOTAL_TABS - 1,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_control_window_creation_capacity(
+                1,
+                0,
+                crate::control::protocol::MAX_TOTAL_TABS,
+            )
+            .unwrap_err()
+            .contains("process tab limit")
+        );
+        assert!(
+            validate_control_window_creation_capacity(1, 0, usize::MAX)
+                .unwrap_err()
+                .contains("process tab limit")
+        );
+        assert!(
+            validate_control_window_creation_capacity(
+                crate::control::protocol::MAX_WINDOWS - 1,
+                1,
+                0,
+            )
+            .unwrap_err()
+            .contains("process window limit")
+        );
     }
 
     #[test]

@@ -1082,6 +1082,12 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- `control new-window` now counts its mandatory initial tab against the same
+  256-tab process inventory ceiling as other running-GUI tab creation. A full
+  process fails before source lookup, pending-window insertion, native creation,
+  PTY spawn, or stable-ID allocation instead of returning a window whose tab
+  cannot be represented by bounded inventory.
+
 - Native GUI and displayed-soak fixtures no longer generate an invalid font
   configuration by repeating the primary family as its own fallback. Their
   isolated shell fixture now launches reliably instead of silently giving way

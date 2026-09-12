@@ -303,9 +303,10 @@ process execution as that user.
 - Control-created windows are rejected once the process has 32 live or pending
   windows, so a successful new stable ID can never be immediately hidden beyond
   the inventory ceiling.
-- Control-created tabs are rejected at 256 tabs in either the target window or
-  the process, so a successful new stable ID remains discoverable within both
-  inventory ceilings.
+- `new-tab` and `launch-tab`, plus the mandatory initial tab of each
+  control-created `new-window`, are rejected at 256 tabs in the process.
+  Tab actions also enforce the 256-tab target-window ceiling, so a successful
+  new stable ID remains discoverable within both inventory ceilings.
 - Control-created panes are rejected at 512 panes in the target tab or 1,024 in
   the process, so their stable IDs remain discoverable within inventory limits.
 - The maximum permitted inventory shape is serialization-tested against the
