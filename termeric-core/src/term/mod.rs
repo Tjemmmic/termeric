@@ -7,6 +7,7 @@ mod cursor;
 mod keyboard;
 mod mode;
 mod multicell;
+mod multiple_cursors;
 mod notification;
 mod pointer;
 mod selection;
@@ -23,6 +24,10 @@ pub use keyboard::{
 pub use mode::TerminalMode;
 pub use multicell::MAX_OSC66_TEXT_BYTES;
 use multicell::Osc66Command;
+pub use multiple_cursors::{
+    ExtraCursor, ExtraCursorColor, ExtraCursorColors, ExtraCursorShape, ExtraCursorState,
+    MAX_EXTRA_CURSOR_CELLS, MAX_EXTRA_CURSOR_DIMENSION,
+};
 pub use notification::{
     MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_ICON_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES,
     MAX_NOTIFICATION_TITLE_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES,
@@ -109,6 +114,7 @@ struct SynchronizedOutputSnapshot {
     dynamic_colors: DynamicColors,
     cursor_style: Option<TerminalCursorStyle>,
     cursor_blink_override: Option<bool>,
+    extra_cursors: ExtraCursorState,
     images: Vec<PresentationImage>,
     started_at: Instant,
 }
@@ -469,6 +475,7 @@ pub struct TerminalMemoryUsage {
     pub grapheme_bytes: usize,
     pub style_bytes: usize,
     pub hyperlink_bytes: usize,
+    pub extra_cursor_bytes: usize,
     pub scrollback_lines: usize,
     pub scrollback_line_limit: usize,
     pub scrollback_byte_limit: usize,
@@ -648,6 +655,8 @@ pub struct Terminal {
     /// Optional cursor-blink override selected by DECSET/DECRST 12.
     /// `None` leaves the user's configured blink policy in control.
     cursor_blink_override: Option<bool>,
+    /// Kitty multiple cursors are ephemeral, viewport-local presentation state.
+    extra_cursors: ExtraCursorState,
     /// Kitty keyboard negotiation is independent for the main and alternate screens.
     keyboard: keyboard::KittyKeyboardState,
     alt_keyboard: keyboard::KittyKeyboardState,
@@ -812,6 +821,7 @@ impl Terminal {
             dec_conformance_level: 4,
             cursor_style: None,
             cursor_blink_override: None,
+            extra_cursors: ExtraCursorState::new(cols, rows),
             keyboard: keyboard::KittyKeyboardState::default(),
             alt_keyboard: keyboard::KittyKeyboardState::default(),
             pointer_shapes: pointer::PointerShapeStack::default(),
@@ -1928,6 +1938,11 @@ impl Terminal {
             hyperlink_bytes: primary.hyperlink_reference_bytes
                 + alternate.hyperlink_reference_bytes
                 + self.hyperlink_registry.memory_usage_bytes(),
+            extra_cursor_bytes: self.extra_cursors.owned_bytes()
+                + self
+                    .synchronized_output_snapshot
+                    .as_ref()
+                    .map_or(0, |snapshot| snapshot.extra_cursors.owned_bytes()),
             scrollback_lines: primary.scrollback_lines + alternate.scrollback_lines,
             scrollback_line_limit: primary.scrollback_line_limit,
             scrollback_byte_limit: primary.scrollback_byte_limit,
@@ -2195,6 +2210,7 @@ impl Terminal {
             snapshot.grid.resize(cols, rows);
             snapshot.grid.repair_multicells(&resize_blank);
         }
+        self.resize_extra_cursors(cols, rows);
 
         // Preserve customized stops that still fit. Newly exposed columns get
         // the DEC default every eight columns; a shrink followed by a grow
@@ -3132,6 +3148,9 @@ impl Terminal {
                 self.clear_scrollback();
             }
             _ => {}
+        }
+        if matches!(mode, 2 | 3 | 22) {
+            self.clear_extra_cursors();
         }
     }
 
@@ -4897,6 +4916,7 @@ impl Terminal {
         let previous_pointer_shape = self.effective_pointer_shape();
         self.mode.insert(TerminalMode::ALT_SCREEN);
         if !self.alt_screen_active {
+            self.clear_extra_cursors();
             self.graphics.clear_screen_all(true);
             self.alt_screen_active = true;
             self.alt_grid.clear();
@@ -4910,6 +4930,7 @@ impl Terminal {
         let previous_pointer_shape = self.effective_pointer_shape();
         self.mode.remove(TerminalMode::ALT_SCREEN);
         if self.alt_screen_active {
+            self.clear_extra_cursors();
             self.graphics.clear_screen_all(true);
             self.alt_screen_active = false;
         }
@@ -4998,6 +5019,7 @@ impl Terminal {
                         dynamic_colors: self.dynamic_colors.clone(),
                         cursor_style: self.cursor_style,
                         cursor_blink_override: self.cursor_blink_override,
+                        extra_cursors: self.extra_cursors.clone(),
                         images,
                         started_at: Instant::now(),
                     });
@@ -5042,6 +5064,7 @@ impl Terminal {
         self.set_cursor_visible(true);
         self.cursor_style = None;
         self.cursor_blink_override = None;
+        self.clear_extra_cursors();
         self.xterm_keyboard_resource = XtermKeyboardResource::default();
         self.xterm_cursor_keys = XtermCursorKeys::default();
         self.xterm_function_keys = XtermFunctionKeys::default();
@@ -5098,6 +5121,7 @@ impl Terminal {
         self.alt_grid.set_cursor_visible(true);
         self.cursor_style = None;
         self.cursor_blink_override = None;
+        self.clear_extra_cursors();
         self.keyboard = keyboard::KittyKeyboardState::default();
         self.alt_keyboard = keyboard::KittyKeyboardState::default();
         self.pointer_shapes.clear();

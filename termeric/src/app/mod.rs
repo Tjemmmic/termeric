@@ -2003,6 +2003,10 @@ impl App {
         // Get cursor target position and calculate animations before borrowing
         let (cursor_style, _) = self.cursor_presentation();
         let cursor_opacity = self.cursor_opacity();
+        let cursor_elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
+        let configured_cursor_style = self.config.cursor.style;
+        let configured_cursor_blink = self.config.cursor.blink;
+        let cursor_blink_period = self.cursor_blink_period;
         let copy_flash = self.copy_flash_intensity();
         let focus_dim = self.focus_dim();
         let text_blink = self.text_blink_phases(Instant::now());
@@ -2532,11 +2536,18 @@ impl App {
                         (c.col as f32, c.row as f32)
                     };
                     let terminal_key = *term as *const _ as usize;
+                    let (pane_cursor_style, pane_cursor_blink) = resolve_cursor_presentation(
+                        configured_cursor_style,
+                        configured_cursor_blink,
+                        term.presentation_cursor_style(),
+                        term.presentation_cursor_blink_override(),
+                    );
                     PaneRenderData {
                         terminal_key,
                         grid: term.presentation_grid(),
                         selection: term.selection(),
                         dynamic_colors: term.presentation_dynamic_colors(),
+                        extra_cursors: term.presentation_extra_cursors(),
                         rect: *rect,
                         is_focused: *focused,
                         broadcast_target: broadcast_render.as_ref().and_then(
@@ -2545,6 +2556,12 @@ impl App {
                         read_only: pm.get_pane(*pane_id).is_some_and(|pane| pane.read_only),
                         is_zoomed: pm.zoomed_id() == Some(*pane_id),
                         cursor_pos: cpos,
+                        cursor_style: pane_cursor_style,
+                        cursor_opacity: cursor_opacity_at(
+                            pane_cursor_blink,
+                            cursor_elapsed,
+                            cursor_blink_period,
+                        ),
                         url_cache: &self.pane_url_caches[&terminal_key],
                         copy_mode: (*focused).then_some(copy_mode_info.as_ref()).flatten(),
                         images: term.presentation_images(),
@@ -2665,6 +2682,7 @@ impl App {
             terminal.presentation_grid(),
             terminal.selection(),
             terminal.presentation_dynamic_colors(),
+            terminal.presentation_extra_cursors(),
             cursor_opacity,
             cursor_display_pos,
             &tab_info,
@@ -2814,14 +2832,44 @@ impl App {
         )
     }
 
-    fn cursor_is_visible(&self) -> bool {
-        self.active_terminal()
-            .map(|terminal| terminal.presentation_grid().cursor().visible)
-            .unwrap_or(false)
+    /// Whether any cursor currently painted in the active tab needs the
+    /// shared blink clock. Extra cursors remain visible when the main cursor
+    /// is hidden and can exist in unfocused panes, so focused-terminal state
+    /// alone is insufficient here.
+    fn cursor_blink_required(&self) -> bool {
+        let configured_style = self.config.cursor.style;
+        let configured_blink = self.config.cursor.blink;
+        let requires = |terminal: &termeric_core::Terminal, main_cursor: bool| {
+            let grid = terminal.presentation_grid();
+            let (_, blinking) = resolve_cursor_presentation(
+                configured_style,
+                configured_blink,
+                terminal.presentation_cursor_style(),
+                terminal.presentation_cursor_blink_override(),
+            );
+            cursor_state_requires_blink(
+                blinking,
+                grid.scroll_offset() != 0,
+                main_cursor && grid.cursor().visible,
+                !terminal.presentation_extra_cursors().is_empty(),
+            )
+        };
+        let Some(tab) = self.tabs.as_ref().and_then(TabManager::active_tab) else {
+            return false;
+        };
+        if let Some(panes) = &tab.pane_manager {
+            let focused = panes.focused_id();
+            panes
+                .iter_panes()
+                .any(|pane| requires(&pane.terminal, pane.id == focused))
+        } else {
+            tab.focused_terminal()
+                .is_some_and(|terminal| requires(terminal, true))
+        }
     }
 
     fn cursor_blink_phase(&self, now: Instant) -> bool {
-        if !self.cursor_presentation().1 {
+        if !self.cursor_blink_required() {
             return true;
         }
         let half_period = (self.cursor_blink_period / 2.0).max(0.001);
@@ -2832,11 +2880,7 @@ impl App {
     }
 
     fn next_cursor_blink_deadline(&self, now: Instant) -> Option<Instant> {
-        if !self.cursor_presentation().1
-            || !self.window_focused
-            || self.presentation_suspended()
-            || !self.cursor_is_visible()
-        {
+        if !self.cursor_blink_required() || !self.window_focused || self.presentation_suspended() {
             return None;
         }
         let half_period =
@@ -3035,7 +3079,7 @@ impl App {
             let blink_visible = self.cursor_blink_phase(now);
             if blink_visible != self.last_cursor_blink_visible
                 && self.window_focused
-                && self.cursor_is_visible()
+                && self.cursor_blink_required()
             {
                 self.last_cursor_blink_visible = blink_visible;
                 self.redraw_scheduler
@@ -4304,6 +4348,15 @@ fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> 
     }
 }
 
+fn cursor_state_requires_blink(
+    blinking: bool,
+    scrolled_back: bool,
+    main_cursor_painted: bool,
+    extra_cursors_painted: bool,
+) -> bool {
+    blinking && !scrolled_back && (main_cursor_painted || extra_cursors_painted)
+}
+
 fn resolve_cursor_presentation(
     configured_style: crate::config::CursorStyle,
     configured_blink: bool,
@@ -4445,7 +4498,8 @@ fn base64_encode_standard(input: &[u8]) -> String {
 mod base64_tests {
     use super::{
         base64_encode_standard, blink_phase_visible, command_keystrokes, cursor_opacity_at,
-        next_blink_boundary, resolve_cursor_presentation, select_plugin_target,
+        cursor_state_requires_blink, next_blink_boundary, resolve_cursor_presentation,
+        select_plugin_target,
     };
     use std::time::{Duration, Instant};
 
@@ -4458,6 +4512,15 @@ mod base64_tests {
     fn cursor_blink_rate_controls_the_cycle() {
         assert!((cursor_opacity_at(true, 0.0, 1.0) - 1.0).abs() < f32::EPSILON);
         assert!((cursor_opacity_at(true, 0.5, 1.0) - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn extra_cursors_blink_without_a_visible_or_focused_main_cursor() {
+        assert!(cursor_state_requires_blink(true, false, false, true));
+        assert!(cursor_state_requires_blink(true, false, true, false));
+        assert!(!cursor_state_requires_blink(false, false, false, true));
+        assert!(!cursor_state_requires_blink(true, true, true, true));
+        assert!(!cursor_state_requires_blink(true, false, false, false));
     }
 
     #[test]

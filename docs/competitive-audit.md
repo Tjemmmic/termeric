@@ -311,8 +311,10 @@ awaiting evidence:
   deferred manual acceptance. Kitty OSC 66 text sizing now has bounded multicell parsing,
   grid/edit/reflow/history/domain semantics, scaled shaping, alignment, and
   cursor geometry; native font-quality and client acceptance remain deferred.
-  Kitty's terminal file-transfer and multiple-cursor extensions remain
-  unimplemented. The
+  Kitty's multiple-cursor extension now has bounded parser, state, color,
+  query, pane-rendering, synchronized-output, and local-domain replay coverage;
+  native visual acceptance remains deferred. Kitty's terminal file-transfer
+  extension remains unimplemented. The
   [kitty protocol index](https://sw.kovidgoyal.net/kitty/protocol-extensions/)
   is the moving reference. These should be demand-driven after the beta gates;
   implementing every new private protocol is not a prerequisite for terminal

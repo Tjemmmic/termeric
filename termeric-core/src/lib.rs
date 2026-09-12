@@ -54,9 +54,11 @@ pub use grid::{
 pub use pty::Pty;
 pub use shell::{CommandRegion, PromptMark, ShellIntegration};
 pub use term::{
-    DynamicColors, MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES,
-    MAX_NOTIFICATION_TITLE_BYTES, MAX_OSC66_TEXT_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES,
-    MAX_OSC99_ENCODED_CHUNK_BYTES, MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS,
-    Point, PointerShape, ReportedWorkingDirectory, Selection, SelectionType, Terminal,
-    TerminalMemoryUsage, XTERM_TITLE_STACK_DEPTH,
+    DynamicColors, ExtraCursor, ExtraCursorColor, ExtraCursorColors, ExtraCursorShape,
+    ExtraCursorState, MAX_EXTRA_CURSOR_CELLS, MAX_EXTRA_CURSOR_DIMENSION,
+    MAX_NOTIFICATION_BODY_BYTES, MAX_NOTIFICATION_IDENTIFIER_BYTES, MAX_NOTIFICATION_TITLE_BYTES,
+    MAX_OSC66_TEXT_BYTES, MAX_OSC99_DECODED_CHUNK_BYTES, MAX_OSC99_ENCODED_CHUNK_BYTES,
+    MAX_PENDING_NOTIFICATION_BYTES, MAX_PENDING_NOTIFICATIONS, Point, PointerShape,
+    ReportedWorkingDirectory, Selection, SelectionType, Terminal, TerminalMemoryUsage,
+    XTERM_TITLE_STACK_DEPTH,
 };

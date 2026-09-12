@@ -188,6 +188,15 @@ The application lane changes those limits at runtime, drives enough output to
 evict history, and proves the exact line/byte ceilings apply to every existing
 pane as well as panes and tabs created after the change.
 
+Kitty multiple-cursor cases preserve colon-delimited coordinate/color groups
+across arbitrary PTY fragmentation; verify exact FIFO S7/S8 support, cursor,
+and color reports; and cover clipping, incomplete tails, lifecycle, pane-local
+render inputs, synchronized output, and local-domain replay. The map is lazy,
+one byte per viewport cell, explicitly included in terminal memory accounting,
+and capped at 1000 by 1000 cells. See
+[`multiple-cursors.md`](multiple-cursors.md) for the implemented profile and
+deferred native visual checks.
+
 The full corpus provenance, reference-capture rules, replay/minimization steps,
 and resource limits are documented in
 [`terminal-conformance.md`](terminal-conformance.md).

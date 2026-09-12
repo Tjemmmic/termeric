@@ -244,6 +244,8 @@ pub struct PaneRenderData<'a> {
     pub selection: Option<&'a termeric_core::Selection>,
     /// Terminal-local OSC palette/default color overrides.
     pub dynamic_colors: &'a termeric_core::DynamicColors,
+    /// Kitty multiple cursors at the same presentation boundary as the grid.
+    pub extra_cursors: &'a termeric_core::ExtraCursorState,
     /// Pixel rectangle within the content area (relative to content_top)
     pub rect: crate::panes::PaneRect,
     /// Whether this pane currently has focus
@@ -256,6 +258,10 @@ pub struct PaneRenderData<'a> {
     pub is_zoomed: bool,
     /// Cursor position in grid coordinates (animated for focused pane, raw for unfocused)
     pub cursor_pos: (f32, f32),
+    /// Effective main-cursor shape used by follow-main extra cursors.
+    pub cursor_style: crate::config::CursorStyle,
+    /// Pane-local blink policy evaluated on the shared cursor clock.
+    pub cursor_opacity: f32,
     /// Incremental auto-detected URL cache for this pane's visible rows.
     pub url_cache: &'a crate::terminal::url::UrlCache,
     /// Keyboard copy cursor and quick-select labels for the focused pane.

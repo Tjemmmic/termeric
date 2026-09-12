@@ -392,6 +392,16 @@ evidence = ["test:src/ansi/processor.rs#fish_startup_queries_receive_truthful_bo
 notes = "Returns a bounded static terminal protocol revision. Other xterm private CSI > q operations are not part of this claim."
 
 [[sequence]]
+id = "csi-kitty-multiple-cursors"
+family = "CSI"
+syntax = "Kitty multiple cursors (CSI > Ps ; ... SP q)"
+layer = "app"
+status = "supported"
+evidence = ["test:src/term/multiple_cursors.rs#parser_support_query_is_byte_exact_fifo_and_c1_aware", "test:src/term/multiple_cursors.rs#parser_preserves_colon_groups_across_arbitrary_input_fragments", "test:src/term/multiple_cursors.rs#points_rectangles_main_cursor_clipping_and_incomplete_tails_are_exact", "test:src/term/multiple_cursors.rs#colors_parse_query_and_reject_malformed_updates_atomically", "test:src/term/multiple_cursors.rs#destructive_lifecycle_clears_while_scroll_keeps_screen_coordinates", "test:src/term/multiple_cursors.rs#synchronized_output_freezes_extra_cursors_and_colors", "test:src/term/multiple_cursors.rs#resize_and_memory_accounting_are_bounded", "test:src/term/multiple_cursors.rs#replay_is_compact_round_trippable_and_never_partial", "test:../termeric/src/renderer/cursor.rs#follow_main_tracks_each_effective_shape", "test:../termeric/src/renderer/cursor.rs#special_cursor_color_has_precedence_over_special_text_color", "test:../termeric/src/app/mod.rs#extra_cursors_blink_without_a_visible_or_focused_main_cursor", "test:../termeric/src/domain/server.rs#terminal_attach_snapshot_replays_multiple_cursors_without_replies"]
+tracking_issue = "https://github.com/Tjemmmic/termeric/issues/91"
+notes = "Implements shapes 1/2/3/29, clearing, main-cursor/point/rectangle coordinates, unset/special/sRGB/indexed shared colors, deterministic cursor/color queries, S7C1T/S8C1T, synchronized-output isolation, pane-local rendering and blinking, resize/reset/erase/alternate-screen lifecycle, lazy one-byte-per-cell storage capped at 1000 by 1000, and compact all-or-nothing local-domain replay. Native visual quality remains deferred acceptance."
+
+[[sequence]]
 id = "csi-kitty-keyboard-state-query"
 family = "CSI"
 syntax = "Kitty keyboard protocol state query (CSI ? u)"

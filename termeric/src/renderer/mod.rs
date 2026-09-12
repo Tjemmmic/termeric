@@ -17,6 +17,7 @@ mod text;
 
 mod buffer;
 mod chrome;
+mod cursor;
 pub(crate) mod draw;
 mod git;
 mod harvest;
@@ -1156,6 +1157,7 @@ impl Renderer {
         grid: &Grid,
         selection: Option<&Selection>,
         dynamic_colors: &termeric_core::DynamicColors,
+        extra_cursors: &termeric_core::ExtraCursorState,
         cursor_opacity: f32,
         cursor_pos: (f32, f32),
         tabs: &[TabInfo],
@@ -1231,6 +1233,7 @@ impl Renderer {
             grid,
             selection,
             dynamic_colors,
+            extra_cursors,
             cursor_opacity,
             cursor_pos,
             tabs,
@@ -1438,6 +1441,7 @@ impl Renderer {
         grid: &Grid,
         selection: Option<&Selection>,
         dynamic_colors: &termeric_core::DynamicColors,
+        extra_cursors: &termeric_core::ExtraCursorState,
         cursor_opacity: f32,
         cursor_pos: (f32, f32),
         tabs: &[TabInfo],
@@ -1522,13 +1526,14 @@ impl Renderer {
                     pane.grid,
                     pane.selection,
                     pane.dynamic_colors,
+                    pane.extra_cursors,
                     pane_x,
                     pane_y,
                     pane_cols.max(1),
                     pane_rows.max(1),
                     pane.is_focused,
-                    cursor_style,
-                    cursor_opacity,
+                    pane.cursor_style,
+                    pane.cursor_opacity,
                     pane_cursor_pos,
                     text_blink,
                     copy_flash,
@@ -1615,6 +1620,7 @@ impl Renderer {
                 grid,
                 selection,
                 dynamic_colors,
+                extra_cursors,
                 grid_x,
                 grid_y,
                 grid_cols,
@@ -1831,6 +1837,7 @@ impl Renderer {
         grid: &Grid,
         selection: Option<&Selection>,
         dynamic_colors: &termeric_core::DynamicColors,
+        extra_cursors: &termeric_core::ExtraCursorState,
         offset_x: f32,
         offset_y: f32,
         pane_cols: usize,
@@ -2133,6 +2140,24 @@ impl Renderer {
             let text = TextPipeline::build_batch(queued, &self.queue, &mut self.glyph_cache);
             self.terminal_row_cache
                 .replace(key, signature, rects, text, &self.device, &self.queue);
+        }
+
+        // Extra cursors are application-owned and remain visible even when
+        // DECTCEM hides the main cursor or this pane is not focused.
+        if !filter_mode {
+            self.build_extra_cursors(
+                grid,
+                extra_cursors,
+                dynamic_colors,
+                offset_x,
+                offset_y,
+                max_grid_y,
+                pane_clip,
+                cursor_style,
+                cursor_opacity,
+                brightness,
+                text_blink,
+            );
         }
 
         // Draw cursor (only for focused pane, not scrolled back, not in filter mode)

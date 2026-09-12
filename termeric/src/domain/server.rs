@@ -2565,6 +2565,9 @@ fn remove_attachment(state: &SharedState, domain_id: &str, pane_id: u32, attachm
 }
 
 fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
+    let multiple_cursors = terminal
+        .extra_cursors()
+        .replay(max_bytes.saturating_sub(512));
     let user_defined_keys = user_defined_keys_snapshot(terminal);
     let user_defined_keys = if user_defined_keys.len() <= max_bytes.saturating_sub(512) {
         user_defined_keys
@@ -2576,7 +2579,8 @@ fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
     let mut bytes = 0usize;
     let content_budget = max_bytes
         .saturating_sub(512)
-        .saturating_sub(user_defined_keys.len());
+        .saturating_sub(user_defined_keys.len())
+        .saturating_sub(multiple_cursors.len());
     for line in lines.into_iter().rev() {
         let needed = line.len().saturating_add(2);
         if bytes.saturating_add(needed) > content_budget {
@@ -2708,6 +2712,7 @@ fn terminal_snapshot(terminal: &Terminal, max_bytes: usize) -> Vec<u8> {
     snapshot.extend_from_slice(
         format!("\x1b[{}\"q", terminal.character_protection_parameter()).as_bytes(),
     );
+    snapshot.extend_from_slice(&multiple_cursors);
     debug_assert!(snapshot.len() <= max_bytes || max_bytes < 512);
     snapshot
 }
@@ -3678,6 +3683,28 @@ mod tests {
             "domain"
         );
         assert_eq!(replica.grid().cell(0, 4).unwrap().content.to_text(), "!");
+    }
+
+    #[test]
+    fn terminal_attach_snapshot_replays_multiple_cursors_without_replies() {
+        let mut terminal = Terminal::new(10, 3);
+        terminal.process(
+            b"domain\x1b[>1;2:1:2:1:3 q\x1b[>29;2:3:10 q\x1b[>30;2:1:2:3 q\x1b[>40;5:196 q",
+        );
+
+        let snapshot = terminal_snapshot(&terminal, 4096);
+        assert!(snapshot.len() <= 4096);
+        let mut replica = Terminal::new(10, 3);
+        replica.process(&snapshot);
+        assert_eq!(
+            replica.extra_cursors().cursors().collect::<Vec<_>>(),
+            terminal.extra_cursors().cursors().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            replica.extra_cursors().colors(),
+            terminal.extra_cursors().colors()
+        );
+        assert!(replica.drain_events().is_empty());
     }
 
     #[test]

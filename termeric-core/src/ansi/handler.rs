@@ -1049,6 +1049,15 @@ impl Perform for Handler<'_> {
 
             // XTVERSION. The static value is a terminal protocol revision, not
             // the package semantic version or an xterm identity claim.
+            'q' if !ignore && intermediates == [b'>', b' '] => {
+                // Kitty multiple cursors. Preserve colon-delimited parameter
+                // groups; flattening would lose coordinate/color structure.
+                let parameters = raw_params
+                    .iter()
+                    .map(|parameter| parameter.to_vec())
+                    .collect::<Vec<_>>();
+                self.terminal.handle_multiple_cursor_csi(&parameters);
+            }
             'q' if intermediates == [b'>']
                 && params.len() <= 1
                 && params.first().copied().unwrap_or(0) == 0 =>
