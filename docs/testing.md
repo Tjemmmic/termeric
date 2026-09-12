@@ -1,5 +1,15 @@
 # Testing Termeric
 
+## Cargo build-footprint contract
+
+`python3 scripts/build_footprint.py target` reports exact logical bytes and
+regular-file counts for an explicitly selected Cargo target directory without
+following symlinks or deleting artifacts. `scripts.test_build_footprint`
+provides hermetic coverage for profile configuration, classification,
+accounting, deterministic JSON, limits, symlinks, and error handling. See
+[`build-footprint.md`](build-footprint.md) for the ordinary and full-debug
+workflows and the same-host profile comparison.
+
 The default verification lane is deterministic and does not require a window:
 
 ```bash

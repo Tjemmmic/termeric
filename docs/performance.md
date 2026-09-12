@@ -7,6 +7,11 @@ improvements. Git/transcript blocking work is isolated behind bounded workers;
 a separate resource-soak lane now measures process growth without conflating a
 short passing run with proof of multi-day stability.
 
+Cargo artifact disk use is measured separately from runtime memory. See
+[`build-footprint.md`](build-footprint.md) for the line-table development
+profile, opt-in full-debug profile, deterministic target-directory reporter,
+and explicit cleanup boundary.
+
 ## Run the suite
 
 From a release-capable Linux checkout, one command runs the core, interaction,
