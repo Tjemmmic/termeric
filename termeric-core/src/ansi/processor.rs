@@ -1216,18 +1216,21 @@ mod tests {
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("simple 🌱".into()),
                     body: String::new(),
+                    focus_on_activation: true,
                     ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("build".into()),
                     body: "complete".into(),
                     identifier: Some("first".into()),
+                    focus_on_activation: true,
                     ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("other result".into()),
                     body: String::new(),
                     identifier: Some("second".into()),
+                    focus_on_activation: true,
                     ..crate::event::NotificationRequest::default()
                 }),
             ]
@@ -1246,11 +1249,11 @@ mod tests {
         #[cfg(target_os = "linux")]
         let expected_query_events = vec![
             crate::event::TerminalEvent::PtyWrite(
-                b"\x1b]99;i=query-7:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
+                b"\x1b]99;i=query-7:p=?;p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
                     .to_vec(),
             ),
             crate::event::TerminalEvent::PtyWrite(
-                b"\x9d99;i=query-8:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x9c"
+                b"\x9d99;i=query-8:p=?;p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x9c"
                     .to_vec(),
             ),
         ];
@@ -1282,12 +1285,14 @@ mod tests {
                     body: String::new(),
                     identifier: Some("keep".into()),
                     reply_uses_8bit_controls: true,
+                    focus_on_activation: true,
                     ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {
                     title: Some("fresh".into()),
                     body: String::new(),
                     identifier: Some("clear".into()),
+                    focus_on_activation: true,
                     ..crate::event::NotificationRequest::default()
                 }),
             ]

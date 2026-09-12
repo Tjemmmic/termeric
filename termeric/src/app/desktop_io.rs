@@ -85,6 +85,70 @@ impl App {
         }
     }
 
+    /// Restore the exact terminal that emitted an activated notification, then
+    /// ask the native window system to activate this owning window. The origin
+    /// is validated before any tab or pane mutation; stale origins never fall
+    /// back to whichever terminal happens to be focused now.
+    pub(super) fn activate_notification_origin(
+        &mut self,
+        origin: crate::tabs::TerminalEventOrigin,
+    ) -> bool {
+        if self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.terminal_for_origin(origin))
+            .is_none()
+        {
+            log::debug!("Ignored notification activation for stale origin {origin:?}");
+            return false;
+        }
+
+        let selected = match origin {
+            crate::tabs::TerminalEventOrigin::Tab { tab_id } => self
+                .select_control_tab(tab_id as u64)
+                .map(|changed| (changed, false)),
+            crate::tabs::TerminalEventOrigin::Pane { tab_id, pane_id } => {
+                self.focus_control_pane(tab_id as u64, pane_id.0)
+            }
+        };
+        if let Err(error) = selected {
+            log::debug!("Ignored notification activation for stale origin {origin:?}: {error}");
+            return false;
+        }
+
+        let Some(window) = self.window.as_ref() else {
+            // Headless tests still exercise exact-origin selection.
+            return true;
+        };
+        if self.launch.quick_access && !self.quick_access_visible {
+            self.quick_access_visible = true;
+            self.window_occluded = false;
+            window.set_visible(true);
+        }
+        window.set_minimized(false);
+
+        #[cfg(target_os = "linux")]
+        {
+            use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+            let is_wayland = window
+                .window_handle()
+                .ok()
+                .is_some_and(|handle| matches!(handle.as_raw(), RawWindowHandle::Wayland(_)));
+            if is_wayland {
+                // Winit owns the Wayland connection and safely performs an
+                // xdg-activation request for this existing surface.
+                window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
+            } else {
+                window.focus_window();
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        window.focus_window();
+
+        window.request_redraw();
+        true
+    }
+
     /// Validate and quote one compositor-provided local path without reading
     /// file contents or crossing a terminal/domain/plugin trust boundary.
     #[cfg(test)]

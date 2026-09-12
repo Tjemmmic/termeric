@@ -301,9 +301,11 @@ awaiting evidence:
   bounded transmitted PNG/JPEG/GIF icons with process-wide cache reuse are now
   implemented. Ordered local theme names take priority over transmitted data.
   Exact-origin `always`, `unfocused`, and `invisible` occasion filtering now
-  follows tab, pane, zoom, and native window state. Application-requested
-  native focus remains a gap; notification-daemon icon and presentation
-  behavior is deferred manual acceptance. Kitty OSC 66 text sizing now has bounded multicell parsing,
+  follows tab, pane, zoom, and native window state. Default-on, independently
+  disableable `a=focus` now selects the exact live originating tab/pane and
+  requests native X11 or Wayland activation; the compositor retains final
+  authority. Notification-daemon icon, presentation, and focus behavior are
+  deferred manual acceptance. Kitty OSC 66 text sizing now has bounded multicell parsing,
   grid/edit/reflow/history/domain semantics, scaled shaping, alignment, and
   cursor geometry; native font-quality and client acceptance remain deferred.
   Kitty's terminal file-transfer and multiple-cursor extensions remain

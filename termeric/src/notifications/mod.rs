@@ -28,6 +28,16 @@ pub(crate) enum NotificationCompletion {
         origin: crate::tabs::TerminalEventOrigin,
         data: Vec<u8>,
     },
+    Activation {
+        origin: crate::tabs::TerminalEventOrigin,
+        focus: bool,
+        protocol_reply: Option<Vec<u8>>,
+        /// Opaque daemon authority retained only for this notification
+        /// generation. Winit cannot currently apply a supplied token to an
+        /// existing window, so the app deliberately consumes it without
+        /// logging or forwarding it.
+        activation_token: Option<String>,
+    },
 }
 
 struct DesktopCommandRequest {
@@ -534,6 +544,14 @@ impl Notifications {
                             data: reply.data,
                         })
                     }
+                    tracked::TrackedCompletion::Activation(activation) => {
+                        Some(NotificationCompletion::Activation {
+                            origin: activation.origin,
+                            focus: activation.focus,
+                            protocol_reply: activation.protocol_reply,
+                            activation_token: activation.activation_token,
+                        })
+                    }
                 })
                 .collect()
         }
@@ -566,6 +584,7 @@ fn requires_tracked_notification(request: &NotificationRequest) -> bool {
         || !matches!(request.expiry, termeric_core::NotificationExpiry::System)
         || request.report_close
         || request.report_activation
+        || request.focus_on_activation
         || !request.buttons.is_empty()
         || !matches!(request.sound, termeric_core::NotificationSound::System)
         || request.icon_cache_id.is_some()
@@ -804,6 +823,17 @@ mod tests {
                 ..NotificationRequest::default()
             }));
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn focus_actions_use_the_bounded_tracked_route() {
+        let focus = NotificationRequest {
+            title: Some("Title".into()),
+            focus_on_activation: true,
+            ..NotificationRequest::default()
+        };
+        assert!(requires_tracked_notification(&focus));
     }
 
     #[cfg(target_os = "linux")]

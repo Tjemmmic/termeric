@@ -947,7 +947,7 @@ impl Terminal {
             Osc99Action::None => {}
             Osc99Action::Query(identifier) => {
                 #[cfg(target_os = "linux")]
-                let capabilities = "p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1";
+                let capabilities = "p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1";
                 #[cfg(not(target_os = "linux"))]
                 let capabilities = "p=title,body:o=always,unfocused,invisible";
                 let response = format!("\x1b]99;i={identifier}:p=?;{capabilities}\x1b\\");

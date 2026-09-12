@@ -143,6 +143,11 @@ pub struct NotificationRequest {
     /// Whether Kitty OSC 99 requested activation/button reports with
     /// `a=report`.
     pub report_activation: bool,
+    /// Whether Kitty OSC 99 requested that a user activation focus the exact
+    /// originating terminal with `a=focus`. Completed OSC 99 requests default
+    /// this to true; legacy OSC 9/777 requests retain the struct default of
+    /// false.
+    pub focus_on_activation: bool,
     /// Ordered Kitty OSC 99 button labels from a completed `p=buttons` payload.
     pub buttons: Vec<String>,
     /// Control framing captured when an OSC 99 request that can produce a

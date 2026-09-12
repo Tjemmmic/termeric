@@ -123,7 +123,24 @@ a freedesktop notification service. They do not invoke an AI provider.
    Repeat by clicking the notification body rather than a button. The
    activation reply should then have an empty payload after the semicolon.
    Optionally query `p=?` first and confirm the response includes
-   `p=title,body,close,alive,buttons,icon` and `a=report`.
+   `p=title,body,close,alive,buttons,icon` and `a=report,focus`.
+
+   Then verify focus independently. Create a notification in a non-active tab
+   or an unfocused split pane and click its body. The exact originating tab and
+   pane should become active, and the Termeric window should request native
+   focus. No activation reply should be written because this request does not
+   include `report`:
+
+   ```bash
+   printf '\033]99;i=termeric-focus;Focus the originating terminal\033\\'
+   ```
+
+   Repeat with `a=-focus`; neither the active tab/pane nor native focus should
+   change. Repeat with `a=report,focus` to confirm one click both selects the
+   exact origin and returns one report. Test under X11 and Wayland separately;
+   record whether the compositor grants the request, since compositor policy
+   has final authority and a denied request is not an application crash or
+   protocol-routing failure.
 
 8. With desktop notification sounds enabled, compare the default, silent, and
    error policies. The first follows daemon policy, the second must request

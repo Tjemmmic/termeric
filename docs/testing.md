@@ -982,9 +982,10 @@ ceilings, 4-KiB/16-KiB completed-field bounds, typed `f`/`t`/`n`/`u` metadata,
 deduplication, per-value/per-list ceilings, strict `w` expiry parsing,
 payload-free identified `p=close`, and Linux-only close/expiry/urgency
 discovery. The same fixtures strictly parse `c=0/1`, reject malformed close
-policy and alive payloads, strictly parse `a=report`/`focus` combinations,
+policy and alive payloads, strictly parse independent `a=report`/`focus`
+combinations and OSC 99's default-focus behavior,
 bound plain/base64 `p=buttons` labels, assemble encoded-only `p=icon` data and
-strict cache IDs, and advertise Linux `c=1`, `a=report`, `p=alive`, `p=buttons`,
+strict cache IDs, and advertise Linux `c=1`, `a=report,focus`, `p=alive`, `p=buttons`,
 `p=icon`, the exact standard `s` vocabulary, and
 `o=always,unfocused,invisible`. Typed occasion fixtures reject malformed or
 duplicate values. App tests prove exact-origin filtering for active and
@@ -999,11 +1000,13 @@ Pure Linux backend-state tests prove origin-scoped
 native-ID replacement and close, post-display expiry with bounded retry,
 requested close and default/button activation reports, owner-local sorted alive
 snapshots, replacement-policy changes, captured S7C1T/S8C1T framing, ordered
-activation/close state, five-second unconfirmed-close behavior, 64-entry
+activation/close state, focus-only and combined activation, bounded opaque
+activation tokens, five-second unconfirmed-close behavior, 64-entry
 live/closing eviction, failure-safe replacement authority, stale-revision
 rejection, separate private D-Bus action keys, markup escaping, worker shutdown,
-and failure/recovery deduplication. An app-level real-PTY fixture routes a
-delayed lifecycle reply to an inactive requesting pane and discards a stale
+and failure/recovery deduplication. App-level fixtures select the exact inactive
+notification-origin tab/pane, reject stale origins without fallback, and route a
+delayed lifecycle reply to an inactive requesting pane and discard a stale
 origin without falling back to focus. These tests use an in-memory backend; no
 session bus or native notification service is contacted.
 

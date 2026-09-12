@@ -182,6 +182,7 @@ mod tests {
                     urgency: Some(termeric_core::NotificationUrgency::Critical),
                     report_close: true,
                     report_activation: true,
+                    focus_on_activation: true,
                     buttons: vec!["Open".into(), "Ignore".into()],
                     reply_uses_8bit_controls: true,
                     ..termeric_core::NotificationRequest::default()
@@ -198,7 +199,7 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         let expected_reply =
-            b"\x1b]99;i=capability:p=?;p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
+            b"\x1b]99;i=capability:p=?;p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1\x1b\\"
                 .as_slice();
         #[cfg(not(target_os = "linux"))]
         let expected_reply =

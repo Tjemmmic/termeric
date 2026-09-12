@@ -6205,12 +6205,14 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     app.tabs = Some(tabs);
 
     assert!(!app.handle_notification_completion(
-        crate::notifications::NotificationCompletion::ProtocolReply {
+        crate::notifications::NotificationCompletion::Activation {
             origin: TerminalEventOrigin::Pane {
                 tab_id,
                 pane_id: requesting_pane,
             },
-            data,
+            focus: false,
+            protocol_reply: Some(data),
+            activation_token: None,
         }
     ));
 
@@ -6284,6 +6286,112 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
         }
     ));
     assert_eq!(latest_toast(&app), latest_toast_before.as_deref());
+}
+
+#[cfg(unix)]
+#[test]
+fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_closed() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 2".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell.clone(), 1_000, 8 * 1024 * 1024);
+    let origin_tab = tabs
+        .new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), "sleep 2".into()],
+            None,
+            Some("notification-origin"),
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+    let active_tab = tabs
+        .new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), "sleep 2".into()],
+            None,
+            Some("active"),
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+    let origin = {
+        let tab = tabs.tab_mut_by_id(origin_tab).unwrap();
+        let owner = tab.take_terminal_owner().unwrap();
+        let mut panes = PaneManager::from_existing(
+            owner,
+            shell,
+            1_000,
+            8 * 1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        );
+        let pane_id = panes.split(SplitDirection::Vertical).unwrap();
+        panes.focus(PaneId(0));
+        tab.pane_manager = Some(panes);
+        TerminalEventOrigin::Pane {
+            tab_id: origin_tab,
+            pane_id,
+        }
+    };
+    assert_eq!(tabs.active_tab_id(), Some(active_tab));
+
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    assert!(app.handle_notification_completion(
+        crate::notifications::NotificationCompletion::Activation {
+            origin,
+            focus: true,
+            protocol_reply: None,
+            activation_token: Some("must-not-be-logged-or-forwarded".into()),
+        }
+    ));
+    let tabs = app.tabs.as_ref().unwrap();
+    assert_eq!(tabs.active_tab_id(), Some(origin_tab));
+    assert_eq!(
+        tabs.active_tab()
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .focused_id(),
+        match origin {
+            TerminalEventOrigin::Pane { pane_id, .. } => pane_id,
+            TerminalEventOrigin::Tab { .. } => unreachable!(),
+        }
+    );
+
+    assert_eq!(app.select_control_tab(active_tab as u64), Ok(true));
+    let stale = TerminalEventOrigin::Pane {
+        tab_id: origin_tab,
+        pane_id: PaneId(u32::MAX),
+    };
+    assert!(!app.handle_notification_completion(
+        crate::notifications::NotificationCompletion::Activation {
+            origin: stale,
+            focus: true,
+            protocol_reply: None,
+            activation_token: None,
+        }
+    ));
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(active_tab));
+
+    assert!(!app.handle_notification_completion(
+        crate::notifications::NotificationCompletion::Activation {
+            origin,
+            focus: false,
+            protocol_reply: None,
+            activation_token: None,
+        }
+    ));
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(active_tab));
 }
 
 #[cfg(unix)]

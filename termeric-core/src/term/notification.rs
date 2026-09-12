@@ -51,7 +51,13 @@ struct Metadata {
     occasion: Option<NotificationOccasion>,
     sound: Option<NotificationSound>,
     report_close: Option<bool>,
-    report_activation: Option<bool>,
+    activation: Option<ActivationPolicy>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActivationPolicy {
+    report: bool,
+    focus: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -127,7 +133,7 @@ impl PendingField {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingNotification {
     identifier: Option<String>,
     title: PendingField,
@@ -144,6 +150,31 @@ struct PendingNotification {
     sound: NotificationSound,
     report_close: bool,
     report_activation: bool,
+    focus_on_activation: bool,
+}
+
+impl Default for PendingNotification {
+    fn default() -> Self {
+        Self {
+            identifier: None,
+            title: PendingField::default(),
+            body: PendingField::default(),
+            buttons: PendingField::default(),
+            icon: PendingField::default(),
+            application_name: None,
+            notification_types: Vec::new(),
+            icon_names: Vec::new(),
+            icon_cache_id: None,
+            urgency: None,
+            expiry: NotificationExpiry::default(),
+            occasion: NotificationOccasion::default(),
+            sound: NotificationSound::default(),
+            report_close: false,
+            report_activation: false,
+            // Kitty OSC 99 defines focus as the default activation action.
+            focus_on_activation: true,
+        }
+    }
 }
 
 impl PendingNotification {
@@ -195,8 +226,9 @@ impl PendingNotification {
         if let Some(report_close) = metadata.report_close {
             self.report_close = report_close;
         }
-        if let Some(report_activation) = metadata.report_activation {
-            self.report_activation = report_activation;
+        if let Some(activation) = metadata.activation {
+            self.report_activation = activation.report;
+            self.focus_on_activation = activation.focus;
         }
         Ok(())
     }
@@ -236,6 +268,7 @@ impl PendingNotification {
             sound: self.sound,
             report_close: self.report_close,
             report_activation: self.report_activation,
+            focus_on_activation: self.focus_on_activation,
             buttons,
             reply_uses_8bit_controls: false,
         })
@@ -526,7 +559,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                 });
             }
             b'c' => metadata.report_close = Some(parse_bool(value)?),
-            b'a' => metadata.report_activation = Some(parse_activation_policy(value)?),
+            b'a' => metadata.activation = Some(parse_activation_policy(value)?),
             b'o' => {
                 metadata.occasion = Some(match value {
                     b"always" => NotificationOccasion::Always,
@@ -558,8 +591,9 @@ fn parse_bool(value: &[u8]) -> Result<bool, ()> {
     }
 }
 
-fn parse_activation_policy(value: &[u8]) -> Result<bool, ()> {
+fn parse_activation_policy(value: &[u8]) -> Result<ActivationPolicy, ()> {
     let mut report = false;
+    let mut focus = true;
     let mut report_seen = false;
     let mut focus_seen = false;
     for action in value.split(|byte| *byte == b',') {
@@ -569,15 +603,13 @@ fn parse_activation_policy(value: &[u8]) -> Result<bool, ()> {
                 report_seen = true;
             }
             b"focus" | b"-focus" if !focus_seen => {
-                // Focus policy is parsed so otherwise valid applications are
-                // not rejected, but it remains unadvertised and is not acted
-                // on until native activation-token handling is implemented.
+                focus = action == b"focus";
                 focus_seen = true;
             }
             _ => return Err(()),
         }
     }
-    Ok(report)
+    Ok(ActivationPolicy { report, focus })
 }
 
 fn parse_buttons(bytes: Vec<u8>) -> Option<Vec<String>> {
@@ -720,6 +752,13 @@ fn is_unsafe_plain_character(character: char) -> bool {
 mod tests {
     use super::*;
 
+    fn expected_osc99() -> NotificationRequest {
+        NotificationRequest {
+            focus_on_activation: true,
+            ..NotificationRequest::default()
+        }
+    }
+
     fn parts<'a>(metadata: &'a [u8], payload: &'a [u8]) -> [&'a [u8]; 2] {
         [metadata, payload]
     }
@@ -732,7 +771,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("hello".into()),
                 body: String::new(),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -740,7 +779,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("héllo 🌱".into()),
                 body: String::new(),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
     }
@@ -766,7 +805,7 @@ mod tests {
                 title: Some("hello".into()),
                 body: "world".into(),
                 identifier: Some("first".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -775,7 +814,7 @@ mod tests {
                 title: Some("other title".into()),
                 body: String::new(),
                 identifier: Some("second".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
     }
@@ -817,6 +856,7 @@ mod tests {
                 sound: NotificationSound::System,
                 report_close: false,
                 report_activation: false,
+                focus_on_activation: true,
                 buttons: Vec::new(),
                 reply_uses_8bit_controls: false,
             })
@@ -838,6 +878,7 @@ mod tests {
                 sound: NotificationSound::System,
                 report_close: false,
                 report_activation: false,
+                focus_on_activation: true,
                 buttons: Vec::new(),
                 reply_uses_8bit_controls: false,
             })
@@ -858,7 +899,7 @@ mod tests {
                 body: "done".into(),
                 identifier: Some("job".into()),
                 expiry: NotificationExpiry::AfterMillis(250),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -867,7 +908,7 @@ mod tests {
                 title: Some("stay".into()),
                 identifier: Some("never".into()),
                 expiry: NotificationExpiry::Never,
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -875,7 +916,7 @@ mod tests {
             Osc99Action::Notify(NotificationRequest {
                 title: Some("default".into()),
                 identifier: Some("system".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -931,7 +972,7 @@ mod tests {
                 body: "done".into(),
                 identifier: Some("job".into()),
                 report_close: true,
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -976,8 +1017,9 @@ mod tests {
                 title: Some("Build finished".into()),
                 identifier: Some("actions".into()),
                 report_activation: true,
+                focus_on_activation: false,
                 buttons: vec!["Open".into(), "Ignore".into()],
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -994,8 +1036,9 @@ mod tests {
                 title: Some("Question".into()),
                 identifier: Some("encoded".into()),
                 report_activation: true,
+                focus_on_activation: false,
                 buttons: vec!["Yes".into(), "No".into()],
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -1004,7 +1047,7 @@ mod tests {
                 title: Some("Quiet".into()),
                 identifier: Some("no-report".into()),
                 report_activation: false,
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -1078,7 +1121,7 @@ mod tests {
                     title: Some("Alert".into()),
                     identifier: Some(format!("sound-{index}")),
                     sound,
-                    ..NotificationRequest::default()
+                    ..expected_osc99()
                 })
             );
         }
@@ -1117,7 +1160,7 @@ mod tests {
                 body: "done".into(),
                 identifier: Some("hidden".into()),
                 occasion: NotificationOccasion::Invisible,
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -1126,14 +1169,14 @@ mod tests {
                 title: Some("Other ready".into()),
                 identifier: Some("other".into()),
                 occasion: NotificationOccasion::Unfocused,
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
             protocol.handle(&parts(b"o=always", b"Always")),
             Osc99Action::Notify(NotificationRequest {
                 title: Some("Always".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -1156,7 +1199,7 @@ mod tests {
                 Osc99Action::Notify(NotificationRequest {
                     title: Some("fresh".into()),
                     identifier: Some("bad".into()),
-                    ..NotificationRequest::default()
+                    ..expected_osc99()
                 })
             );
         }
@@ -1180,7 +1223,7 @@ mod tests {
                 identifier: Some("icon".into()),
                 icon_cache_id: Some("shared-icon".into()),
                 icon_data: Some(vec![0, 1, 2].into_boxed_slice()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -1200,7 +1243,7 @@ mod tests {
                 identifier: Some("padded".into()),
                 icon_cache_id: Some("cached".into()),
                 icon_data: Some(vec![0, 1].into_boxed_slice()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -1211,7 +1254,7 @@ mod tests {
                 title: Some("Reuse".into()),
                 identifier: Some("reuse".into()),
                 icon_cache_id: Some("shared-icon".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -1321,7 +1364,7 @@ mod tests {
                 title: Some("fresh".into()),
                 body: String::new(),
                 identifier: Some("bad".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 
@@ -1370,7 +1413,7 @@ mod tests {
                 title: Some("fresh".into()),
                 body: String::new(),
                 identifier: Some("bad".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
         assert_eq!(
@@ -1379,7 +1422,7 @@ mod tests {
                 title: Some("kept value".into()),
                 body: String::new(),
                 identifier: Some("good".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
     }
@@ -1403,7 +1446,7 @@ mod tests {
                 title: Some("gone".into()),
                 body: String::new(),
                 identifier: Some("item-0".into()),
-                ..NotificationRequest::default()
+                ..expected_osc99()
             })
         );
 

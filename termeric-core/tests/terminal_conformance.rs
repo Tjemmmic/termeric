@@ -968,6 +968,9 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
                 if request.report_activation {
                     policies.push("report-activation".to_string());
                 }
+                if request.focus_on_activation {
+                    policies.push("focus-on-activation".to_string());
+                }
                 match request.occasion {
                     termeric_core::NotificationOccasion::Always => {}
                     termeric_core::NotificationOccasion::Unfocused => {

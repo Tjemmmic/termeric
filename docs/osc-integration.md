@@ -183,7 +183,9 @@ payload-free `p=close` request requires an identifier and also retires any
 incomplete parser assembly carrying that identifier. `c` accepts only `0` or
 `1`. The `a` value is a strict comma-separated combination of `report`,
 `-report`, `focus`, and `-focus`; duplicate, contradictory, empty, or unknown
-actions are rejected. Only report is advertised and implemented. A
+actions are rejected. Report and focus are independent, and focus defaults on
+for completed OSC 99 requests as the protocol specifies. Legacy OSC 9/777
+requests do not acquire this focus behavior. A
 payload-free `p=alive` query is completed immediately; payload-bearing or
 continued alive queries are rejected. Button labels reject empty entries and
 C0/C1 controls.
@@ -200,12 +202,10 @@ back to whichever terminal is focused.
 
 `OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
 terminal's S7C1T/S8C1T framing. Linux responds with
-`p=title,body,close,alive,buttons,icon:a=report:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1`; other targets respond with
+`p=title,body,close,alive,buttons,icon:a=report,focus:c=1:o=always,unfocused,invisible:s=system,silent,error,warn,warning,info,question:u=0,1,2:w=1`; other targets respond with
 `p=title,body:o=always,unfocused,invisible`. The platform split keeps lifecycle and urgency
 discovery truthful.
 Application/type/icon-name metadata has no capability-query key.
-Application-requested focus through `a=focus` remains unadvertised and
-unsupported.
 
 Unidentified requests with desktop-default expiry enter the existing
 rate-limited helper path. On Linux, requests needing lifecycle semantics use a
@@ -218,13 +218,17 @@ attempts. The command and completion queues and tracked-handle set are each
 capped at 64, as is the pending close-report set. A single ordered signal
 listener subscribes to freedesktop notification signals before the first
 tracked notification is shown. `p=buttons` becomes revision-scoped private
-action-key/label pairs in the D-Bus `Notify` call; `a=report` additionally
-registers the required
-`default` action. A matching `ActionInvoked` emits exactly one OSC 99 activation
-reply to the originating terminal, with an empty payload for the default action
-or the one-based button number for a button. Unknown, stale, oversized, and
-duplicate actions are ignored. Activation does not consume close-report state,
-so a following native close still produces its requested report. When `c=1`
+action-key/label pairs in the D-Bus `Notify` call. Either `a=report` or
+`a=focus` registers the required `default` action. A matching `ActionInvoked`
+is accepted once for that displayed generation. Report policy emits the exact
+OSC 99 activation reply to the originating terminal, with an empty payload for
+the default action or the one-based button number for a button. Focus policy
+atomically validates and selects that same tab/pane before requesting native
+window activation; stale origins never fall back to active content.
+`a=-focus` leaves tab, pane, and native focus unchanged while preserving an
+independent requested report. Unknown, stale, oversized, and duplicate actions
+are ignored. Activation does not consume close-report state, so a following
+native close still produces its requested report. When `c=1`
 was requested, native user, service-policy,
 explicit, and expiry closure emits exactly one `p=close` report to the original
 tab or pane using the framing captured by that request. Replacement adopts only
@@ -234,9 +238,14 @@ for native confirmation and then fail visibly and answer with `untracked`
 instead of leaving the client waiting forever. `p=alive` returns a sorted,
 comma-separated snapshot of named live IDs owned by that exact terminal;
 anonymous and already-closing entries are excluded. Stale terminal origins are
-dropped with no focused-terminal fallback. Native `ActivationToken` is
-deliberately ignored because compositor-authorized focus is not yet implemented
-or advertised.
+dropped with no focused-terminal fallback. Freedesktop `ActivationToken`
+strings are treated as opaque, bounded to 4 KiB, retained only by the matching
+live notification generation, and never logged, exposed to the PTY, or reused.
+Winit does not
+currently expose applying a daemon-supplied token to an existing window, so
+Termeric uses Winit's supported activation path: direct focus on X11 and a
+user-attention request backed by `xdg_activation_v1` on Wayland. The compositor
+has final authority, so this is a focus request rather than a focus guarantee.
 
 Non-default sound policy also selects the tracked Linux path. `silent` becomes
 the boolean freedesktop `suppress-sound` hint; error, warning, information, and
@@ -278,9 +287,11 @@ other names are delegated to the desktop icon resolver. macOS retains
 title/body helper behavior but does not advertise lifecycle support. Hermetic
 tests use an in-memory backend and do not contact a notification service;
 they cover ordered action/close state, default and button reports, replacement
-authority, close signals, alive snapshots, timeouts, shutdown, and exact
-delayed-reply routing without a session bus. Real-compositor permission,
-presentation, and daemon action/signal behavior remain manual acceptance.
+authority, focus-only and combined activation, bounded generation-scoped
+tokens, close signals, alive snapshots, timeouts, shutdown, exact inactive
+tab/pane selection, stale-origin rejection, and exact delayed-reply routing
+without a session bus. Real-compositor permission, presentation, focus grants,
+and daemon action/signal behavior remain manual acceptance.
 
 [kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
 
