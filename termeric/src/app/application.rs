@@ -38,6 +38,12 @@ pub struct Application {
     fatal_startup_error: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CreatedWindow {
+    window_id: u64,
+    initial_tab_id: u64,
+}
+
 const MAX_CONTROL_REPLAYS: usize = 256;
 const MAX_PENDING_DOMAIN_CONTROLS: usize = 32;
 const MAX_PENDING_DOMAIN_WAITERS: usize = 16;
@@ -323,7 +329,7 @@ impl Application {
     fn create_pending_windows(
         &mut self,
         event_loop: &ActiveEventLoop,
-    ) -> Vec<std::result::Result<u64, String>> {
+    ) -> Vec<std::result::Result<CreatedWindow, String>> {
         let mut startup_errors = Vec::new();
         let mut results = Vec::with_capacity(self.pending.len());
         for mut window in self.pending.drain(..) {
@@ -331,13 +337,21 @@ impl Application {
             if window.startup_error.is_none()
                 && !window.should_exit
                 && let Some(id) = window.window.as_ref().map(|native| native.id())
+                && let Some(initial_tab_id) = window
+                    .tabs
+                    .as_ref()
+                    .and_then(crate::tabs::TabManager::active_tab_id)
+                    .and_then(|tab_id| u64::try_from(tab_id).ok())
             {
                 let control_id = self.next_control_window_id;
                 self.window_order.push(id);
                 self.control_window_ids.insert(id, control_id);
                 self.next_control_window_id = self.next_control_window_id.saturating_add(1);
                 self.windows.insert(id, window);
-                results.push(Ok(control_id));
+                results.push(Ok(CreatedWindow {
+                    window_id: control_id,
+                    initial_tab_id,
+                }));
             } else {
                 let error = window
                     .startup_error
@@ -1989,6 +2003,22 @@ impl Application {
                 request_id,
                 source_window,
             } => self.create_control_window(event_loop, request_id, *source_window),
+            Request::LaunchWindow {
+                request_id,
+                source_window,
+                program,
+                args,
+                working_directory,
+                title,
+            } => self.launch_control_window(
+                event_loop,
+                request_id,
+                *source_window,
+                program,
+                args,
+                working_directory.as_deref(),
+                title.as_deref(),
+            ),
             Request::CreateTab {
                 request_id,
                 window_id,
@@ -2728,12 +2758,119 @@ impl Application {
             .into_iter()
             .nth(result_index)
             .ok_or_else(|| "New window creation produced no result".to_string())?;
-        let window_id = creation?;
+        let window_id = creation?.window_id;
         Ok(crate::control::protocol::Response::WindowCreated {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
             window_id,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn launch_control_window(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        request_id: &str,
+        source_window: u64,
+        program: &str,
+        args: &[String],
+        working_directory: Option<&str>,
+        title: Option<&str>,
+    ) -> std::result::Result<crate::control::protocol::Response, String> {
+        let result_index = self.prepare_control_launch_window(
+            source_window,
+            program,
+            args,
+            working_directory,
+            title,
+        )?;
+        let creation = self
+            .create_pending_windows(event_loop)
+            .into_iter()
+            .nth(result_index)
+            .ok_or_else(|| "New command window creation produced no result".to_string())??;
+        Ok(crate::control::protocol::Response::WindowLaunched {
+            process_id: std::process::id(),
+            request_id: request_id.to_string(),
+            window_id: creation.window_id,
+            tab_id: creation.initial_tab_id,
+        })
+    }
+
+    fn prepare_control_launch_window(
+        &mut self,
+        source_window: u64,
+        program: &str,
+        args: &[String],
+        working_directory: Option<&str>,
+        title: Option<&str>,
+    ) -> std::result::Result<usize, String> {
+        let total_tabs = process_tab_count(&self.windows);
+        validate_control_window_creation_capacity(
+            self.windows.len(),
+            self.pending.len(),
+            total_tabs,
+        )?;
+        let source_native_id = self
+            .control_window_ids
+            .iter()
+            .find_map(|(native_id, control_id)| {
+                (*control_id == source_window).then_some(*native_id)
+            })
+            .ok_or_else(|| format!("GUI window {source_window} does not exist"))?;
+        let (config, inherited_cwd) = {
+            let source = self
+                .windows
+                .get(&source_native_id)
+                .filter(|window| !window.should_exit)
+                .ok_or_else(|| format!("GUI window {source_window} is closing"))?;
+            let inherited_cwd = source
+                .tabs
+                .as_ref()
+                .and_then(|tabs| tabs.active_tab())
+                .and_then(|tab| tab.working_directory());
+            (source.config.clone(), inherited_cwd)
+        };
+        let selected_cwd = match working_directory {
+            Some(directory) => std::path::PathBuf::from(directory),
+            None => inherited_cwd
+                .map_or_else(std::env::current_dir, |directory| {
+                    Ok(std::path::PathBuf::from(directory))
+                })
+                .map_err(|error| {
+                    format!("Could not determine the GUI process working directory: {error}")
+                })?,
+        };
+        if !selected_cwd.is_absolute() || !selected_cwd.is_dir() {
+            return Err(
+                "Selected command-window working directory is not an available local directory; pass an existing absolute directory with --cwd"
+                    .into(),
+            );
+        }
+        if selected_cwd.to_str().is_none() {
+            return Err(
+                "Selected command-window working directory is not valid UTF-8; pass an existing UTF-8 absolute directory with --cwd"
+                    .into(),
+            );
+        }
+        let launch = WindowLaunch {
+            force_new: true,
+            tabs: vec![crate::cli::TabLaunch {
+                working_directory: Some(selected_cwd),
+                title: title.map(str::to_string),
+                target: crate::cli::LaunchTarget::Command {
+                    program: program.to_string(),
+                    args: args.to_vec(),
+                },
+                splits: Vec::new(),
+            }],
+            ..WindowLaunch::default()
+        };
+        let result_index = self.pending.len();
+        self.queue_window(config, launch)
+            .map_err(|error| format!("Could not prepare a new command window: {error:#}"))?;
+        self.pending[result_index].redact_startup_error_log = true;
+        Ok(result_index)
     }
 
     fn create_control_tab(
@@ -4223,6 +4360,40 @@ mod tests {
             Some(Err(error)) if error.contains("different action")
         ));
 
+        let window_launch_request = Request::LaunchWindow {
+            request_id: "3".repeat(32),
+            source_window: 7,
+            program: "/usr/bin/printf".into(),
+            args: vec!["%s".into(), "exact".into()],
+            working_directory: Some("/tmp".into()),
+            title: Some("window build".into()),
+        };
+        let window_launch_response = Ok(Response::WindowLaunched {
+            process_id: 42,
+            request_id: "3".repeat(32),
+            window_id: 9,
+            tab_id: 0,
+        });
+        cache.record(
+            window_launch_request.clone(),
+            window_launch_response.clone(),
+        );
+        assert_eq!(
+            cache.replay(&window_launch_request),
+            Some(window_launch_response)
+        );
+        assert!(matches!(
+            cache.replay(&Request::LaunchWindow {
+                request_id: "3".repeat(32),
+                source_window: 7,
+                program: "/usr/bin/printf".into(),
+                args: vec!["%s".into(), "different".into()],
+                working_directory: Some("/tmp".into()),
+                title: Some("window build".into()),
+            }),
+            Some(Err(error)) if error.contains("different action")
+        ));
+
         let terminal_failure = Request::CreateTab {
             request_id: "1".repeat(32),
             window_id: 7,
@@ -4435,6 +4606,170 @@ mod tests {
         let tabs = application.windows[&native_id].tabs.as_ref().unwrap();
         assert_eq!(tabs.count(), 1);
         assert_eq!(tabs.active_tab().unwrap().title, "targeted");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_launch_window_prepares_one_exact_local_command_and_real_pty() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("capture-window-argv.sh");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\nprintf '[%s]|[%s]|[%s]|[%s]\\n' \"$1\" \"$2\" \"$3\" \"$4\"\npwd\nsleep 1\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&helper).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&helper, permissions).unwrap();
+
+        let mut source_config = Config::default();
+        source_config.font.size = 19.0;
+        let mut source = App::new_headless(source_config.clone()).unwrap();
+        let mut source_tabs =
+            crate::tabs::TabManager::new(80, 24, source_config.shell.clone(), 1_000, 1024 * 1024);
+        source_tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "sleep 2".into()],
+                temp.path().to_str(),
+                Some("source"),
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        source.tabs = Some(source_tabs);
+
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        application.windows.insert(native_id, source);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let missing_cwd = application
+            .prepare_control_launch_window(
+                7,
+                "/bin/true",
+                &[],
+                Some("/definitely/missing/termeric-launch-window-cwd"),
+                None,
+            )
+            .unwrap_err();
+        assert!(missing_cwd.contains("pass an existing absolute directory"));
+        assert!(application.pending.is_empty());
+
+        let helper = helper.to_str().unwrap();
+        let result_index = application
+            .prepare_control_launch_window(
+                7,
+                helper,
+                &[
+                    "".into(),
+                    "two words".into(),
+                    "$HOME;🙂".into(),
+                    "--json".into(),
+                ],
+                None,
+                Some("Exact window 🙂"),
+            )
+            .unwrap();
+        assert_eq!(result_index, 0);
+        assert_eq!(application.pending.len(), 1);
+        let prepared = &application.pending[0];
+        assert_eq!(prepared.config.font.size, 19.0);
+        assert!(prepared.managed_window);
+        assert!(!prepared.allow_auto_restore);
+        assert!(prepared.redact_startup_error_log);
+        assert!(prepared.launch.force_new);
+        assert_eq!(prepared.launch.tabs.len(), 1);
+        let tab = &prepared.launch.tabs[0];
+        assert_eq!(tab.working_directory.as_deref(), Some(temp.path()));
+        assert_eq!(tab.title.as_deref(), Some("Exact window 🙂"));
+        assert!(tab.splits.is_empty());
+        assert!(matches!(
+            &tab.target,
+            crate::cli::LaunchTarget::Command { program, args }
+                if program == helper
+                    && args == &["", "two words", "$HOME;🙂", "--json"]
+        ));
+        assert!(prepared.launch.workspace.is_none());
+        assert!(prepared.launch.domain.is_none());
+        assert!(prepared.launch.domain_snapshot.is_none());
+
+        let mut prepared = application.pending.pop().unwrap();
+        prepared.init_tabs().unwrap();
+        let tabs = prepared.tabs.as_ref().unwrap();
+        assert_eq!(tabs.count(), 1);
+        assert_eq!(tabs.active_tab_id(), Some(0));
+        assert_eq!(tabs.active_tab().unwrap().title, "Exact window 🙂");
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        while Instant::now() < deadline {
+            prepared.process_pty_events();
+            let output = prepared
+                .tabs
+                .as_ref()
+                .and_then(crate::tabs::TabManager::active_tab)
+                .and_then(crate::tabs::Tab::focused_terminal)
+                .map(|terminal| terminal.grid().export_scrollback_text().join("\n"))
+                .unwrap_or_default();
+            if output.contains("[]|[two words]|[$HOME;🙂]|[--json]")
+                && output.contains(temp.path().to_str().unwrap())
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("exact argv or inherited cwd output did not reach the command window");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_launch_window_preparation_is_atomic_for_stale_and_spawn_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        let source = App::new_headless(Config::default()).unwrap();
+        application.windows.insert(native_id, source);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+
+        let result_index = application
+            .prepare_control_launch_window(
+                7,
+                "/definitely/missing/termeric-launch-window-program",
+                &[],
+                temp.path().to_str(),
+                None,
+            )
+            .unwrap();
+        let mut prepared = application.pending.remove(result_index);
+        let error = prepared.init_tabs().unwrap_err();
+        let error = format!("{error:#}");
+        assert!(error.contains("spawn"));
+        assert_eq!(prepared.tabs.as_ref().unwrap().count(), 0);
+        assert!(application.pending.is_empty());
+
+        application.windows.get_mut(&native_id).unwrap().should_exit = true;
+        let error = application
+            .prepare_control_launch_window(7, "/bin/true", &[], temp.path().to_str(), None)
+            .unwrap_err();
+        assert!(error.contains("closing"));
+        assert!(application.pending.is_empty());
+
+        let error = application
+            .prepare_control_launch_window(8, "/bin/true", &[], temp.path().to_str(), None)
+            .unwrap_err();
+        assert!(error.contains("does not exist"));
+        assert!(application.pending.is_empty());
     }
 
     #[test]

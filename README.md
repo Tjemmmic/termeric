@@ -308,6 +308,10 @@ WINDOW`, and `termeric control split-pane PROCESS WINDOW TAB PANE DIRECTION`.
 adds direct, bounded, exact-argv launch into an ordinary local tab with optional
 absolute cwd and initial title; it performs no implicit shell evaluation and
 returns the new stable tab ID.
+`termeric control launch-window PROCESS SOURCE_WINDOW [options] -- PROGRAM
+[ARG ...]` creates a fresh native window from the exact source configuration,
+starts one exact local command as its initial tab, and returns both new stable
+IDs only after native, renderer, and PTY initialization succeed.
 Exact window-focus requests, tab selection, and pane focus are available through
 `focus-window`, `select-tab`, and `focus-pane`; Wayland window activation remains
 compositor-controlled and fails explicitly.

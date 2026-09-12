@@ -34,6 +34,12 @@ Reusable terminal-profile coverage is hermetic: `/bin/sh` fixtures verify exact
 environment/cwd/title delivery, CLI resolution before window creation, palette
 hot replacement, frozen pane launch configuration, and workspace identity.
 No provider-backed or authenticated AI command is executed by this lane.
+Running-GUI exact-command coverage is also hermetic. Protocol, framing, CLI,
+replay, preparation, and headless real-PTY fixtures verify literal argv,
+cwd/title behavior, source-configuration inheritance, stable result IDs, and
+failure atomicity for both existing-tab and fresh-window launch. These tests do
+not open a native window; compositor visibility/placement acceptance is deferred
+to the operator and is not a release claim.
 The separate `scripts/run_fake_provider_acceptance.py` runner resolves and
 executes only that exact fake-CLI test, strips the real-Codex opt-in variable,
 and emits a sealed partial integration record. CI uploads it with the tested

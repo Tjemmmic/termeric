@@ -8,6 +8,15 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Running-GUI control protocol v14 adds `control launch-window` for launching
+  bounded exact argv as the sole initial tab of a fresh native window cloned
+  from one exact source configuration. Optional cwd and title follow the
+  `launch-tab` bounds, with focused-source/process cwd inheritance and explicit
+  failure for unavailable local paths. Native, renderer, and PTY initialization
+  complete before the managed window becomes a replayable success; the response
+  returns both stable window and tab IDs. Environment overrides, implicit shell
+  parsing, and live-domain routing remain excluded.
+
 - Running-GUI control protocol v13 adds `control launch-tab` for directly
   executing a bounded exact UTF-8 program/argv vector in a new ordinary local
   tab of one stable process/window. Optional existing absolute cwd and initial

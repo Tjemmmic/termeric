@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -59,6 +59,14 @@ pub enum Request {
     CreateWindow {
         request_id: String,
         source_window: u64,
+    },
+    LaunchWindow {
+        request_id: String,
+        source_window: u64,
+        program: String,
+        args: Vec<String>,
+        working_directory: Option<String>,
+        title: Option<String>,
     },
     CreateTab {
         request_id: String,
@@ -197,6 +205,12 @@ pub enum Response {
         process_id: u32,
         request_id: String,
         window_id: u64,
+    },
+    WindowLaunched {
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        tab_id: u64,
     },
     TabCreated {
         process_id: u32,
@@ -340,6 +354,13 @@ pub enum ServerFrame {
         process_id: u32,
         request_id: String,
         window_id: u64,
+    },
+    WindowLaunched {
+        version: u32,
+        process_id: u32,
+        request_id: String,
+        window_id: u64,
+        tab_id: u64,
     },
     TabCreated {
         version: u32,
@@ -561,49 +582,35 @@ impl Request {
                 if *window_id == 0 {
                     return Err("GUI control target window ID must be nonzero".into());
                 }
-                if program.is_empty() || program.chars().any(unsafe_control_metadata_character) {
+                validate_control_launch(
+                    program,
+                    args,
+                    working_directory.as_deref(),
+                    title.as_deref(),
+                )
+            }
+            Self::LaunchWindow {
+                request_id,
+                source_window,
+                program,
+                args,
+                working_directory,
+                title,
+            } => {
+                if !valid_request_id(request_id) {
                     return Err(
-                        "GUI control launch program must be nonempty UTF-8 without control or bidirectional formatting text"
-                            .into(),
+                        "GUI control request ID must be exactly 32 lowercase hex digits".into(),
                     );
                 }
-                if args.len() > MAX_CONTROL_LAUNCH_ARGS {
-                    return Err(format!(
-                        "GUI control launch is limited to {MAX_CONTROL_LAUNCH_ARGS} arguments"
-                    ));
+                if *source_window == 0 {
+                    return Err("GUI control source window ID must be nonzero".into());
                 }
-                if args.iter().any(|argument| argument.contains('\0')) {
-                    return Err("GUI control launch arguments cannot contain NUL bytes".into());
-                }
-                let argv_bytes = args.iter().fold(program.len(), |total, argument| {
-                    total.saturating_add(argument.len())
-                });
-                if argv_bytes > MAX_CONTROL_LAUNCH_ARGV_BYTES {
-                    return Err(format!(
-                        "GUI control launch program and arguments are limited to {MAX_CONTROL_LAUNCH_ARGV_BYTES} UTF-8 bytes"
-                    ));
-                }
-                if let Some(directory) = working_directory {
-                    if directory.is_empty()
-                        || directory.len() > MAX_CONTROL_LAUNCH_CWD_BYTES
-                        || !std::path::Path::new(directory).is_absolute()
-                        || directory.chars().any(unsafe_control_metadata_character)
-                    {
-                        return Err(format!(
-                            "GUI control launch working directory must be an absolute UTF-8 path of at most {MAX_CONTROL_LAUNCH_CWD_BYTES} bytes without control or bidirectional formatting text"
-                        ));
-                    }
-                }
-                if let Some(title) = title
-                    && (title.trim().is_empty()
-                        || title.len() > MAX_CONTROL_LAUNCH_TITLE_BYTES
-                        || title.chars().any(unsafe_control_metadata_character))
-                {
-                    return Err(format!(
-                        "GUI control launch title must be nonempty UTF-8 of at most {MAX_CONTROL_LAUNCH_TITLE_BYTES} bytes without control or bidirectional formatting text"
-                    ));
-                }
-                Ok(())
+                validate_control_launch(
+                    program,
+                    args,
+                    working_directory.as_deref(),
+                    title.as_deref(),
+                )
             }
             Self::SplitPane {
                 request_id,
@@ -752,6 +759,7 @@ impl Request {
         match self {
             Self::Inventory | Self::ReadText { .. } => None,
             Self::CreateWindow { request_id, .. }
+            | Self::LaunchWindow { request_id, .. }
             | Self::CreateTab { request_id, .. }
             | Self::LaunchTab { request_id, .. }
             | Self::SplitPane { request_id, .. }
@@ -769,6 +777,56 @@ impl Request {
             | Self::SendText { request_id, .. } => Some(request_id),
         }
     }
+}
+
+fn validate_control_launch(
+    program: &str,
+    args: &[String],
+    working_directory: Option<&str>,
+    title: Option<&str>,
+) -> Result<(), String> {
+    if program.is_empty() || program.chars().any(unsafe_control_metadata_character) {
+        return Err(
+            "GUI control launch program must be nonempty UTF-8 without control or bidirectional formatting text"
+                .into(),
+        );
+    }
+    if args.len() > MAX_CONTROL_LAUNCH_ARGS {
+        return Err(format!(
+            "GUI control launch is limited to {MAX_CONTROL_LAUNCH_ARGS} arguments"
+        ));
+    }
+    if args.iter().any(|argument| argument.contains('\0')) {
+        return Err("GUI control launch arguments cannot contain NUL bytes".into());
+    }
+    let argv_bytes = args.iter().fold(program.len(), |total, argument| {
+        total.saturating_add(argument.len())
+    });
+    if argv_bytes > MAX_CONTROL_LAUNCH_ARGV_BYTES {
+        return Err(format!(
+            "GUI control launch program and arguments are limited to {MAX_CONTROL_LAUNCH_ARGV_BYTES} UTF-8 bytes"
+        ));
+    }
+    if let Some(directory) = working_directory
+        && (directory.is_empty()
+            || directory.len() > MAX_CONTROL_LAUNCH_CWD_BYTES
+            || !std::path::Path::new(directory).is_absolute()
+            || directory.chars().any(unsafe_control_metadata_character))
+    {
+        return Err(format!(
+            "GUI control launch working directory must be an absolute UTF-8 path of at most {MAX_CONTROL_LAUNCH_CWD_BYTES} bytes without control or bidirectional formatting text"
+        ));
+    }
+    if let Some(title) = title
+        && (title.trim().is_empty()
+            || title.len() > MAX_CONTROL_LAUNCH_TITLE_BYTES
+            || title.chars().any(unsafe_control_metadata_character))
+    {
+        return Err(format!(
+            "GUI control launch title must be nonempty UTF-8 of at most {MAX_CONTROL_LAUNCH_TITLE_BYTES} bytes without control or bidirectional formatting text"
+        ));
+    }
+    Ok(())
 }
 
 pub fn valid_control_input_text(value: &str) -> bool {
@@ -1267,6 +1325,71 @@ mod tests {
                 None,
                 Some("x".repeat(MAX_CONTROL_LAUNCH_TITLE_BYTES + 1)),
             )
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn launch_window_requests_and_responses_preserve_exact_stable_ids() {
+        let request_id = "abcdef0123456789abcdef0123456789".to_string();
+        let request = Request::LaunchWindow {
+            request_id: request_id.clone(),
+            source_window: 7,
+            program: "/bin/printf".into(),
+            args: vec!["".into(), "two words".into(), "$HOME;🙂".into()],
+            working_directory: Some("/tmp/launch space".into()),
+            title: Some("Exact window 🙂".into()),
+        };
+        request.validate().unwrap();
+        let frame = ClientFrame {
+            version: PROTOCOL_VERSION,
+            token: "secret".into(),
+            request: request.clone(),
+        };
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &frame).unwrap();
+        assert_eq!(
+            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
+            frame
+        );
+        assert_eq!(request.request_id(), Some(request_id.as_str()));
+
+        let response = ServerFrame::WindowLaunched {
+            version: PROTOCOL_VERSION,
+            process_id: 42,
+            request_id,
+            window_id: 9,
+            tab_id: 0,
+        };
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &response).unwrap();
+        assert_eq!(
+            read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
+            response
+        );
+
+        assert!(
+            Request::LaunchWindow {
+                request_id: "0".repeat(32),
+                source_window: 0,
+                program: "/bin/true".into(),
+                args: Vec::new(),
+                working_directory: None,
+                title: None,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Request::LaunchWindow {
+                request_id: "0".repeat(32),
+                source_window: 7,
+                program: "/bin/true".into(),
+                args: vec!["x".into(); MAX_CONTROL_LAUNCH_ARGS + 1],
+                working_directory: None,
+                title: None,
+            }
             .validate()
             .is_err()
         );

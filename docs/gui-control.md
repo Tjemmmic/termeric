@@ -4,7 +4,9 @@ Termeric exposes experimental local inventory and narrowly typed control of
 already-running GUI processes. Issue
 [#29](https://github.com/Tjemmmic/termeric/issues/29) established the bounded
 foundation and [#95](https://github.com/Tjemmmic/termeric/issues/95) added exact
-local command-tab launch; it is not a general remote-control API.
+local command-tab launch. [#97](https://github.com/Tjemmmic/termeric/issues/97)
+adds the bounded fresh-window companion; this remains narrower than a general
+remote-control API.
 
 ## Command line
 
@@ -20,6 +22,8 @@ termeric control send-text PROCESS WINDOW TAB PANE 'cargo test' --enter
 termeric control send-text PROCESS WINDOW TAB PANE 'multi-line text' --paste --json
 termeric control new-window PROCESS SOURCE_WINDOW
 termeric control new-window PROCESS SOURCE_WINDOW --json
+termeric control launch-window PROCESS SOURCE_WINDOW -- /usr/bin/printf '%s\n' 'literal $HOME; value'
+termeric control launch-window PROCESS SOURCE_WINDOW --cwd /absolute/project --title build --json -- cargo test --workspace
 termeric control new-tab PROCESS WINDOW
 termeric control new-tab PROCESS WINDOW --json
 termeric control launch-tab PROCESS WINDOW -- /usr/bin/printf '%s\n' 'literal $HOME; value'
@@ -68,10 +72,24 @@ configuration and the focused tab's working directory, matching the in-app New
 Window action. Success is returned only after native window, renderer, and
 initial tab creation complete, and includes the new stable window ID.
 
+`launch-window` uses the same exact stable source-window selection and validated
+configuration cloning, but its sole initial tab directly executes the program
+and ordered argv after the required `--`. It accepts the same optional absolute
+UTF-8 `--cwd` and bounded initial `--title` as `launch-tab`. Without `--cwd`, it
+uses the source's focused-tab cwd, then the GUI process cwd when unavailable. A
+selected inherited path that is not an available local directory fails with an
+explicit `--cwd` remedy rather than silently changing directories. A source
+live-domain tab remains only a configuration/cwd template: the new window and
+PTY are ordinary local owners and no daemon mutation occurs. Success is returned
+only after hidden native-window, renderer, PTY, and tab initialization complete,
+then includes both the new process-stable window ID and initial window-local tab
+ID. Missing executables and other initialization failures leave no managed
+window or stable success result.
+
 `new-tab` targets one exact stable window ID and returns its stable window-local
 tab ID only after the PTY-backed tab exists. An ordinary target creates the same
 local shell tab as the in-app New Tab action. If the active tab belongs to a live
-domain, protocol v13 keeps the socket worker off the GUI event loop while the
+domain, protocol v14 keeps the socket worker off the GUI event loop while the
 daemon creates the authoritative tab, reconciles the returned snapshot, and
 then returns the resulting GUI-local stable ID.
 
@@ -97,7 +115,7 @@ boundary.
 the current inventory rather than assuming zero. Success creates exactly one
 local shell pane, focuses it within its tab, preserves the window's active-tab
 choice, and returns the new tab-local pane ID. A live-domain target uses the
-same deferred protocol-v11 acknowledgement as `new-tab`: the response is sent
+same deferred protocol-v14 acknowledgement as `new-tab`: the response is sent
 only after the daemon snapshot has been reconciled and the new remote pane has
 an authoritative GUI-local stable ID.
 
@@ -133,7 +151,7 @@ claim that animation, persistence, or process teardown already finished.
 mutation, removes the exact pane synchronously, and returns both the remaining
 pane count and focused pane ID. If two panes collapse to one terminal owner, the
 survivor keeps its stable ID through inventory, workspace capture/restore, and
-the next split. For live-domain tabs and panes, protocol v13 defers the response
+the next split. For live-domain tabs and panes, protocol v14 defers the response
 until the authoritative daemon snapshot proves the exact remote object was
 removed and GUI reconciliation can report the surviving local pane state. The
 domain's last pane and last tab remain protected; terminating the domain is a
@@ -163,7 +181,7 @@ pane must move with its whole tab. Moving within the same tab is currently
 rejected because that requires an explicit layout-tree rearrangement contract,
 not an ownership transfer. Live-domain panes can move between different tabs in
 the same domain and native window. Domain protocol v10 carries the exact remote
-anchor and requested direction; protocol v13 responds only after the source
+anchor and requested direction; protocol v14 responds only after the source
 route disappears, the destination layout contains that exact split, and the
 moved relay has a destination-local stable ID. Cross-window, cross-domain, and
 mixed ordinary/live moves fail before mutation.
@@ -248,8 +266,9 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 13 accepts exactly `inventory`, ID-targeted `read_text`, `send_text`, `create_window`,
-`create_tab`, `launch_tab`, `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
+Protocol version 14 accepts exactly `inventory`, ID-targeted `read_text`,
+`send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
+`split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,
 `resize_window`, `resize_divider`, and the exact-window `set_quick_access_visibility`
 operation used only after inventory marks that window as quick access. It does **not** accept arbitrary-byte
@@ -261,6 +280,10 @@ environment, clipboard data, transcripts, context, diffs, or AI/provider
 credentials. Titles and identifiers are the only user-controlled strings in
 published inventory; control characters are removed before publication so
 human output cannot inject terminal escape sequences.
+Submitted program, argv, cwd, environment values, and provider credentials are
+not written to process logs. A failed private window launch may return its
+detailed startup diagnostic to the authenticated requester while logging only a
+generic initialization failure.
 
 The socket authenticates same-user local processes, not mutually distrustful
 programs running under the same Unix account. Any process that can read the
@@ -269,8 +292,8 @@ bounded text query described above. When the opt-in input policy is enabled,
 that process can also write and execute text in exact panes. The protocol must not be treated as a
 sandbox boundary between applications owned by one Unix user. Even when
 `security.allow_gui_control_input` is false, possession of the token authorizes
-the explicitly bounded `launch_tab` operation and therefore direct local
-process execution as that user.
+the explicitly bounded `launch_tab` and `launch_window` operations and therefore
+direct local process execution as that user.
 
 ## Resource and failure policy
 
@@ -283,8 +306,9 @@ process execution as that user.
 - One input request is limited to 64 KiB of typed UTF-8 plus an optional Enter.
   Protocol validation rejects C0/C1 controls other than tab/newline before the
   event loop or PTY sees them.
-- One direct launch accepts at most 128 arguments and 16 KiB across its program
-  and argument strings. An optional absolute cwd is capped at 4 KiB and an
+- One direct tab or window launch accepts at most 128 arguments and 16 KiB
+  across its program and argument strings. An optional absolute cwd is capped
+  at 4 KiB and an
   optional initial title at 256 UTF-8 bytes. NUL-bearing argv and control or
   bidirectional-formatting metadata fail before process or tab creation.
 - Reads and writes time out after 12 seconds. The GUI event-loop request must
@@ -304,7 +328,8 @@ process execution as that user.
   windows, so a successful new stable ID can never be immediately hidden beyond
   the inventory ceiling.
 - `new-tab` and `launch-tab`, plus the mandatory initial tab of each
-  control-created `new-window`, are rejected at 256 tabs in the process.
+  control-created `new-window` or `launch-window`, are rejected at 256 tabs in
+  the process.
   Tab actions also enforce the 256-tab target-window ceiling, so a successful
   new stable ID remains discoverable within both inventory ceilings.
 - Control-created panes are rejected at 512 panes in the target tab or 1,024 in

@@ -1020,6 +1020,10 @@ pub struct App {
     /// this separate from `should_exit` prevents renderer/window errors from
     /// being reduced to a successful process exit after an invisible window.
     startup_error: Option<String>,
+    /// Private control launches return detailed startup diagnostics only to
+    /// their authenticated caller; submitted program/cwd data must not enter
+    /// process logs through the shared native startup path.
+    redact_startup_error_log: bool,
     /// Surface rendering is paused until a real resize safely reconfigures it.
     surface_lost: bool,
     /// First observation of the current surface loss. A single deadline-driven
@@ -1325,6 +1329,7 @@ impl App {
             tabs: None,
             should_exit: false,
             startup_error: None,
+            redact_startup_error_log: false,
             surface_lost: false,
             surface_lost_at: None,
             cols: 80,

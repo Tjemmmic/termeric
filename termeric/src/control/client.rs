@@ -397,6 +397,76 @@ pub fn new_window(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn launch_window(
+    process_id: u32,
+    source_window: u64,
+    program: String,
+    args: Vec<String>,
+    working_directory: Option<String>,
+    title: Option<String>,
+    request_id: Option<String>,
+    json: bool,
+) -> anyhow::Result<String> {
+    if process_id == 0 || process_id > i32::MAX as u32 || source_window == 0 {
+        anyhow::bail!("process and source-window IDs must be nonzero runtime IDs");
+    }
+    let request_id = match request_id {
+        Some(request_id) if protocol::valid_request_id(&request_id) => request_id,
+        Some(_) => anyhow::bail!("--request-id must be exactly 32 lowercase hex digits"),
+        None => generate_request_id()?,
+    };
+    let request_frame = Request::LaunchWindow {
+        request_id: request_id.clone(),
+        source_window,
+        program,
+        args,
+        working_directory,
+        title,
+    };
+    request_frame.validate().map_err(anyhow::Error::msg)?;
+    let endpoint = ControlPaths::discover_all()?
+        .into_iter()
+        .find(|endpoint| endpoint.process_id == process_id)
+        .ok_or_else(|| anyhow::anyhow!("running GUI process {process_id} was not found"))?;
+    let frame = request(&endpoint, request_frame).with_context(|| {
+        format!(
+            "launch-window request {request_id} did not complete; retry with `--request-id {request_id}` to avoid duplicate creation"
+        )
+    })?;
+    match frame {
+        ServerFrame::WindowLaunched {
+            version,
+            process_id: returned_process,
+            request_id: returned_request,
+            window_id,
+            tab_id,
+        } if version == protocol::PROTOCOL_VERSION
+            && returned_process == process_id
+            && returned_request == request_id
+            && window_id != 0 =>
+        {
+            if json {
+                Ok(serde_json::to_string_pretty(&WindowLaunchedOutput {
+                    schema_version: protocol::JSON_SCHEMA_VERSION,
+                    process_id,
+                    request_id,
+                    window_id,
+                    tab_id,
+                })?)
+            } else {
+                Ok(format!(
+                    "Launched tab {tab_id} in new window {window_id} of process {process_id} (request {request_id})."
+                ))
+            }
+        }
+        ServerFrame::Error { message, .. } => anyhow::bail!(
+            "{message} (request {request_id}; retry the same logical action with this ID)"
+        ),
+        frame => anyhow::bail!("invalid GUI control window-launch response {frame:?}"),
+    }
+}
+
 pub fn new_tab(
     process_id: u32,
     window_id: u64,
@@ -1277,6 +1347,15 @@ struct WindowCreatedOutput {
 }
 
 #[derive(Serialize)]
+struct WindowLaunchedOutput {
+    schema_version: u32,
+    process_id: u32,
+    request_id: String,
+    window_id: u64,
+    tab_id: u64,
+}
+
+#[derive(Serialize)]
 struct TabCreatedOutput {
     schema_version: u32,
     process_id: u32,
@@ -1867,6 +1946,18 @@ mod tests {
         assert_eq!(output["schema_version"], 3);
         assert_eq!(output["request_id"], request_id);
         assert_eq!(output["window_id"], 9);
+
+        let output = serde_json::to_value(WindowLaunchedOutput {
+            schema_version: protocol::JSON_SCHEMA_VERSION,
+            process_id: 42,
+            request_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            window_id: 10,
+            tab_id: 0,
+        })
+        .unwrap();
+        assert_eq!(output["schema_version"], 3);
+        assert_eq!(output["window_id"], 10);
+        assert_eq!(output["tab_id"], 0);
 
         let output = serde_json::to_value(TabCreatedOutput {
             schema_version: protocol::JSON_SCHEMA_VERSION,

@@ -571,6 +571,33 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 },
             ))
         }
+        "launch-window" => {
+            let process_id = parse_control_process_id(arguments.get(1))?;
+            let source_window = parse_control_window_id(arguments.get(2))?;
+            let launch = parse_control_launch(arguments, 3, "launch-window")?;
+            crate::control::protocol::Request::LaunchWindow {
+                request_id: launch.request_id.clone().unwrap_or_else(|| "0".repeat(32)),
+                source_window,
+                program: launch.program.clone(),
+                args: launch.args.clone(),
+                working_directory: launch.working_directory.clone(),
+                title: launch.title.clone(),
+            }
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+            Ok(ParseOutcome::Control(
+                crate::control::ControlCommand::LaunchWindow {
+                    process_id,
+                    source_window,
+                    program: launch.program,
+                    args: launch.args,
+                    working_directory: launch.working_directory,
+                    title: launch.title,
+                    request_id: launch.request_id,
+                    json: launch.json,
+                },
+            ))
+        }
         "new-tab" => {
             let process_id = parse_control_process_id(arguments.get(1))?;
             let window_id = parse_control_window_id(arguments.get(2))?;
@@ -587,70 +614,14 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
         "launch-tab" => {
             let process_id = parse_control_process_id(arguments.get(1))?;
             let window_id = parse_control_window_id(arguments.get(2))?;
-            let mut working_directory = None;
-            let mut title = None;
-            let mut request_id = None;
-            let mut json = false;
-            let mut index = 3;
-            let command_index = loop {
-                let option = domain_utf8(
-                    arguments.get(index),
-                    "control launch-tab requires `-- PROGRAM [ARG ...]`",
-                )?;
-                match option.as_str() {
-                    "--" => break index + 1,
-                    "--cwd" if working_directory.is_none() => {
-                        index += 1;
-                        working_directory = Some(domain_utf8(
-                            arguments.get(index),
-                            "--cwd requires an absolute directory",
-                        )?);
-                    }
-                    "--title" if title.is_none() => {
-                        index += 1;
-                        title = Some(domain_utf8(
-                            arguments.get(index),
-                            "--title requires a title",
-                        )?);
-                    }
-                    "--request-id" if request_id.is_none() => {
-                        index += 1;
-                        let value = domain_utf8(
-                            arguments.get(index),
-                            "--request-id requires 32 lowercase hex digits",
-                        )?;
-                        if !crate::control::protocol::valid_request_id(&value) {
-                            anyhow::bail!("--request-id must be exactly 32 lowercase hex digits");
-                        }
-                        request_id = Some(value);
-                    }
-                    "--json" if !json => json = true,
-                    option => anyhow::bail!(
-                        "unknown or duplicate launch-tab option {option:?}; place PROGRAM and its arguments after `--`"
-                    ),
-                }
-                index += 1;
-            };
-            let program = domain_utf8(
-                arguments.get(command_index),
-                "control launch-tab requires PROGRAM after `--`",
-            )?;
-            let args = arguments[command_index + 1..]
-                .iter()
-                .map(|argument| {
-                    argument
-                        .to_str()
-                        .map(str::to_string)
-                        .ok_or_else(|| anyhow::anyhow!("launch arguments must be valid UTF-8"))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
+            let launch = parse_control_launch(arguments, 3, "launch-tab")?;
             crate::control::protocol::Request::LaunchTab {
-                request_id: request_id.clone().unwrap_or_else(|| "0".repeat(32)),
+                request_id: launch.request_id.clone().unwrap_or_else(|| "0".repeat(32)),
                 window_id,
-                program: program.clone(),
-                args: args.clone(),
-                working_directory: working_directory.clone(),
-                title: title.clone(),
+                program: launch.program.clone(),
+                args: launch.args.clone(),
+                working_directory: launch.working_directory.clone(),
+                title: launch.title.clone(),
             }
             .validate()
             .map_err(anyhow::Error::msg)?;
@@ -658,12 +629,12 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 crate::control::ControlCommand::LaunchTab {
                     process_id,
                     window_id,
-                    program,
-                    args,
-                    working_directory,
-                    title,
-                    request_id,
-                    json,
+                    program: launch.program,
+                    args: launch.args,
+                    working_directory: launch.working_directory,
+                    title: launch.title,
+                    request_id: launch.request_id,
+                    json: launch.json,
                 },
             ))
         }
@@ -957,6 +928,86 @@ fn parse_control_process_id(value: Option<&OsString>) -> anyhow::Result<u32> {
     Ok(parsed)
 }
 
+struct ParsedControlLaunch {
+    program: String,
+    args: Vec<String>,
+    working_directory: Option<String>,
+    title: Option<String>,
+    request_id: Option<String>,
+    json: bool,
+}
+
+fn parse_control_launch(
+    arguments: &[OsString],
+    mut index: usize,
+    command: &str,
+) -> anyhow::Result<ParsedControlLaunch> {
+    let mut working_directory = None;
+    let mut title = None;
+    let mut request_id = None;
+    let mut json = false;
+    let command_index = loop {
+        let option = domain_utf8(
+            arguments.get(index),
+            &format!("control {command} requires `-- PROGRAM [ARG ...]`"),
+        )?;
+        match option.as_str() {
+            "--" => break index + 1,
+            "--cwd" if working_directory.is_none() => {
+                index += 1;
+                working_directory = Some(domain_utf8(
+                    arguments.get(index),
+                    "--cwd requires an absolute directory",
+                )?);
+            }
+            "--title" if title.is_none() => {
+                index += 1;
+                title = Some(domain_utf8(
+                    arguments.get(index),
+                    "--title requires a title",
+                )?);
+            }
+            "--request-id" if request_id.is_none() => {
+                index += 1;
+                let value = domain_utf8(
+                    arguments.get(index),
+                    "--request-id requires 32 lowercase hex digits",
+                )?;
+                if !crate::control::protocol::valid_request_id(&value) {
+                    anyhow::bail!("--request-id must be exactly 32 lowercase hex digits");
+                }
+                request_id = Some(value);
+            }
+            "--json" if !json => json = true,
+            option => anyhow::bail!(
+                "unknown or duplicate {command} option {option:?}; place PROGRAM and its arguments after `--`"
+            ),
+        }
+        index += 1;
+    };
+    let program = domain_utf8(
+        arguments.get(command_index),
+        &format!("control {command} requires PROGRAM after `--`"),
+    )?;
+    let args = arguments[command_index + 1..]
+        .iter()
+        .map(|argument| {
+            argument
+                .to_str()
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("launch arguments must be valid UTF-8"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(ParsedControlLaunch {
+        program,
+        args,
+        working_directory,
+        title,
+        request_id,
+        json,
+    })
+}
+
 fn parse_control_window_id(value: Option<&OsString>) -> anyhow::Result<u64> {
     let value = domain_utf8(value, "control action requires WINDOW")?;
     let parsed = value.parse::<u64>().context("invalid GUI window ID")?;
@@ -985,6 +1036,7 @@ Commands for already-running local GUI processes:\n  \
   get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
+  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv in a new window using the source window's configuration\n  \
   new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
   launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv directly in a local tab of one exact stable window\n  \
   split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
@@ -2201,6 +2253,46 @@ mod tests {
             parse(
                 [
                     "control",
+                    "launch-window",
+                    "42",
+                    "7",
+                    "--cwd",
+                    "/tmp/two words",
+                    "--title",
+                    "Exact window 🙂",
+                    "--request-id",
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "--json",
+                    "--",
+                    "/bin/printf",
+                    "",
+                    "two words",
+                    "$HOME;🙂",
+                    "--json",
+                ]
+                .into_iter()
+                .map(OsString::from)
+            )
+            .unwrap(),
+            ParseOutcome::Control(crate::control::ControlCommand::LaunchWindow {
+                process_id: 42,
+                source_window: 7,
+                program,
+                args,
+                working_directory: Some(cwd),
+                title: Some(title),
+                request_id: Some(request_id),
+                json: true,
+            }) if program == "/bin/printf"
+                && args == ["", "two words", "$HOME;🙂", "--json"]
+                && cwd == "/tmp/two words"
+                && title == "Exact window 🙂"
+                && request_id == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ));
+        assert!(matches!(
+            parse(
+                [
+                    "control",
                     "split-pane",
                     "42",
                     "7",
@@ -2410,6 +2502,29 @@ mod tests {
             vec!["control", "new-window", "42", "0"],
             vec!["control", "new-window", "42", "7", "--request-id", "short"],
             vec!["control", "new-window", "42", "7", "--json", "--json"],
+            vec!["control", "launch-window", "42", "7"],
+            vec!["control", "launch-window", "42", "0", "--", "ok"],
+            vec!["control", "launch-window", "42", "7", "--", ""],
+            vec![
+                "control",
+                "launch-window",
+                "42",
+                "7",
+                "--cwd",
+                "relative",
+                "--",
+                "ok",
+            ],
+            vec![
+                "control",
+                "launch-window",
+                "42",
+                "7",
+                "--json",
+                "--json",
+                "--",
+                "ok",
+            ],
             vec!["control", "new-tab", "42", "0"],
             vec!["control", "new-tab", "42", "7", "--request-id", "short"],
             vec!["control", "new-tab", "42", "7", "--json", "--json"],

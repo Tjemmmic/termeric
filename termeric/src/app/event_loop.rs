@@ -118,7 +118,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // Initialize renderer
                 if let Err(e) = self.init_renderer(window.clone()) {
                     let error = format!("Failed to initialize renderer: {e:#}");
-                    log::error!("{error}");
+                    if self.redact_startup_error_log {
+                        log::error!("Private GUI-control window renderer initialization failed");
+                    } else {
+                        log::error!("{error}");
+                    }
                     self.startup_error = Some(error);
                     self.should_exit = true;
                     if !self.managed_window {
@@ -130,7 +134,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // Initialize tabs with first tab
                 if let Err(e) = self.init_tabs() {
                     let error = format!("Failed to initialize tabs: {e:#}");
-                    log::error!("{error}");
+                    if self.redact_startup_error_log {
+                        log::error!("Private GUI-control window tab initialization failed");
+                    } else {
+                        log::error!("{error}");
+                    }
                     self.startup_error = Some(error);
                     self.should_exit = true;
                     if !self.managed_window {
@@ -155,7 +163,11 @@ impl ApplicationHandler<AppEvent> for App {
             }
             Err(e) => {
                 let error = format!("Failed to create window: {e:#}");
-                log::error!("{error}");
+                if self.redact_startup_error_log {
+                    log::error!("Private GUI-control native window creation failed");
+                } else {
+                    log::error!("{error}");
+                }
                 self.startup_error = Some(error);
                 self.should_exit = true;
                 if !self.managed_window {
@@ -1980,6 +1992,7 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                     crate::control::protocol::Request::CreateWindow { .. }
+                    | crate::control::protocol::Request::LaunchWindow { .. }
                     | crate::control::protocol::Request::CreateTab { .. }
                     | crate::control::protocol::Request::LaunchTab { .. }
                     | crate::control::protocol::Request::SplitPane { .. }

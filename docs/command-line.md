@@ -68,6 +68,7 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `domain protocol-version [--json]` | Print the local executable's expected live-domain wire version without starting or contacting a daemon. |
 | `control list [--json]` | Inspect bounded metadata for every already-running local GUI process without opening a display. |
 | `control new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]` | Create a native window from an exact running source window; an explicit request ID safely retries an ambiguous recent result. |
+| `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector as the initial tab of a new source-configured native window and return both stable IDs. |
 | `control new-tab PROCESS WINDOW [--request-id ID] [--json]` | Create a local shell tab in an exact running window and return its stable ID. |
 | `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector directly in a new ordinary local tab and return its stable ID. |
 | `control split-pane PROCESS WINDOW TAB PANE horizontal\|vertical [--request-id ID] [--json]` | Split an exact local pane and return the new stable pane ID. |
@@ -132,7 +133,14 @@ boundaries without invoking a shell, optionally applies an existing absolute
 cwd and initial title, activates the tab, and returns its stable ID. It inherits
 the GUI process environment without accepting overrides and rejects an active
 live-domain target; use `domain spawn` for that authority. `termeric control
-split-pane PROCESS WINDOW TAB PANE horizontal|vertical`
+launch-window PROCESS SOURCE_WINDOW [options] -- PROGRAM [ARG ...]` applies the
+same exact-argv, cwd, title, environment, and replay contract to the sole initial
+tab of a new ordinary local window. The source supplies validated configuration
+and, unless `--cwd` is given, focused cwd; an inherited path unavailable locally
+fails explicitly. Success returns both the process-stable window ID and its
+initial window-local tab ID only after native, renderer, and PTY initialization.
+It does not route through a source live domain. `termeric control split-pane
+PROCESS WINDOW TAB PANE horizontal|vertical`
 targets the complete stable-ID path and likewise acknowledges an ordinary or
 live-domain split only after it can return the new tab-local pane ID.
 `select-tab` and `focus-pane`

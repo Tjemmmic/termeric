@@ -298,6 +298,27 @@ fn serve_client(
                 window_id,
             }
         }
+        Response::WindowLaunched {
+            process_id,
+            request_id,
+            window_id,
+            tab_id,
+        } => {
+            if process_id == 0
+                || process_id > i32::MAX as u32
+                || !protocol::valid_request_id(&request_id)
+                || window_id == 0
+            {
+                anyhow::bail!("GUI event loop returned an invalid window-launch response");
+            }
+            ServerFrame::WindowLaunched {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+                request_id,
+                window_id,
+                tab_id,
+            }
+        }
         Response::TabCreated {
             process_id,
             request_id,
@@ -798,6 +819,51 @@ mod tests {
                 process_id: 42,
                 request_id: returned,
                 window_id: 9,
+                ..
+            } if returned == request_id
+        ));
+        worker.join().unwrap();
+
+        let request_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+        let launch = Request::LaunchWindow {
+            request_id: request_id.clone(),
+            source_window: 7,
+            program: "/usr/bin/printf".into(),
+            args: vec!["%s".into(), "$HOME;🙂".into()],
+            working_directory: Some("/tmp".into()),
+            title: Some("exact window".into()),
+        };
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let expected_request = launch.clone();
+        let expected_id = request_id.clone();
+        let worker = thread::spawn(move || {
+            serve_client(server, "secret", |request| {
+                assert_eq!(request, expected_request);
+                Ok(Response::WindowLaunched {
+                    process_id: 42,
+                    request_id: expected_id,
+                    window_id: 9,
+                    tab_id: 0,
+                })
+            })
+            .unwrap();
+        });
+        protocol::write_frame(
+            &mut client,
+            &ClientFrame {
+                version: protocol::PROTOCOL_VERSION,
+                token: "secret".into(),
+                request: launch,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
+            ServerFrame::WindowLaunched {
+                process_id: 42,
+                request_id: returned,
+                window_id: 9,
+                tab_id: 0,
                 ..
             } if returned == request_id
         ));
