@@ -639,6 +639,9 @@ fn handle_client(
             resume_only,
         );
     }
+    if matches!(&request, Request::Shutdown) {
+        return serve_shutdown(stream, state);
+    }
     let response = process_request(&state, request);
     match response {
         Ok(response) => protocol::write_frame(&mut stream, &ServerFrame::Response { response }),
@@ -649,6 +652,43 @@ fn handle_client(
             },
         ),
     }
+}
+
+fn serve_shutdown(mut stream: UnixStream, state: SharedState) -> anyhow::Result<()> {
+    let wake_socket = {
+        let state = state.lock().unwrap();
+        if !state.domains.is_empty() {
+            drop(state);
+            protocol::write_frame(
+                &mut stream,
+                &ServerFrame::Error {
+                    message: "refusing to stop the server while live domains exist".into(),
+                },
+            )?;
+            return Ok(());
+        }
+
+        // Keep the empty-domain state boundary until the complete response is
+        // in the socket. Publishing shutdown first can let the daemon process
+        // exit and terminate this handler midway through the frame.
+        protocol::write_frame(
+            &mut stream,
+            &ServerFrame::Response {
+                response: Response::Ok {
+                    message: "domain server stopping".into(),
+                },
+            },
+        )?;
+        state.shutdown.store(true, Ordering::Release);
+        state.wake_socket.clone()
+    };
+
+    // The accept loop sleeps in the kernel while idle. One private connection
+    // wakes it so it can observe the already-published shutdown immediately.
+    if let Some(socket) = wake_socket {
+        let _ = UnixStream::connect(socket);
+    }
+    Ok(())
 }
 
 fn serve_file_upload(
@@ -1365,23 +1405,7 @@ fn process_request(state: &SharedState, request: Request) -> anyhow::Result<Resp
                 message: format!("terminated domain {domain}", domain = domain.id),
             })
         }
-        Request::Shutdown => {
-            let state = state.lock().unwrap();
-            if !state.domains.is_empty() {
-                anyhow::bail!("refusing to stop the server while live domains exist");
-            }
-            state.shutdown.store(true, Ordering::Release);
-            let wake_socket = state.wake_socket.clone();
-            drop(state);
-            // The accept loop sleeps in the kernel while idle. One private
-            // connection wakes it so it can observe shutdown immediately.
-            if let Some(socket) = wake_socket {
-                let _ = UnixStream::connect(socket);
-            }
-            Ok(Response::Ok {
-                message: "domain server stopping".into(),
-            })
-        }
+        Request::Shutdown => unreachable!("shutdown is acknowledged before generic dispatch"),
         Request::Attach { .. } | Request::SubscribeTopology { .. } => {
             unreachable!("streaming requests are handled before request dispatch")
         }
@@ -4916,6 +4940,51 @@ mod tests {
         ));
         client.request(Request::Shutdown).unwrap();
         server.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_acknowledgement_is_transactional() {
+        let (mut probe, _peer) = UnixStream::pair().unwrap();
+        if let Err(error) = probe.write_all(&[0]) {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!("skip domain shutdown exchange: sandbox denies AF_UNIX I/O");
+                return;
+            }
+            panic!("could not probe Unix-domain socket I/O: {error}");
+        }
+        let empty_state = || {
+            Arc::new(Mutex::new(ServerState {
+                domains: HashMap::new(),
+                allow_screen_checksum_reports: false,
+                xterm_keyboard_type: XtermKeyboardType::Normal,
+                shutdown: Arc::new(AtomicBool::new(false)),
+                wake_socket: None,
+                next_attachment: AtomicU64::new(1),
+                next_topology_subscription: AtomicU64::new(1),
+                active_uploads: 0,
+                upload_ids_in_flight: HashMap::new(),
+                upload_records: HashMap::new(),
+                upload_janitor_running: false,
+            }))
+        };
+
+        let state = empty_state();
+        let (server, mut client) = UnixStream::pair().unwrap();
+        serve_shutdown(server, Arc::clone(&state)).unwrap();
+        assert!(matches!(
+            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
+            ServerFrame::Response {
+                response: Response::Ok { message }
+            } if message == "domain server stopping"
+        ));
+        assert!(state.lock().unwrap().shutdown.load(Ordering::Acquire));
+
+        let state = empty_state();
+        let (server, client) = UnixStream::pair().unwrap();
+        client.shutdown(std::net::Shutdown::Both).unwrap();
+        drop(client);
+        assert!(serve_shutdown(server, Arc::clone(&state)).is_err());
+        assert!(!state.lock().unwrap().shutdown.load(Ordering::Acquire));
     }
 
     #[test]

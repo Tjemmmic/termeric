@@ -240,6 +240,12 @@ fn fake_ssh_controls_a_remote_daemon_without_network_or_token_export() {
     let relay = harness.successful(&["domain", "--host", "test-host", "relay", &domain, "0"]);
     assert!(String::from_utf8_lossy(&relay.stdout).contains("REMOTE_STDIO_RELAY"));
 
+    let live_shutdown = harness.command(&["domain", "--host", "test-host", "stop-server"]);
+    assert!(!live_shutdown.status.success());
+    assert!(
+        String::from_utf8_lossy(&live_shutdown.stderr)
+            .contains("refusing to stop the server while live domains exist")
+    );
     harness.successful(&["domain", "--host", "test-host", "kill", &domain]);
     harness.successful(&["domain", "--host", "test-host", "stop-server"]);
 
