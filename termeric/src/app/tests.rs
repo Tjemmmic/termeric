@@ -1703,15 +1703,15 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
         .structured_workspace_action_event(
             "pane-arranger",
             crate::plugin::structured::StructuredResponseAction::ApplyPaneLayout {
-                action_id: "grid".into(),
+                action_id: "tall".into(),
                 tab_id: target_tab_id as u64,
-                preset: crate::plugin::structured::PluginPaneLayoutPreset::Grid,
+                preset: crate::plugin::structured::PluginPaneLayoutPreset::Tall,
             },
         )
         .unwrap();
     let arranged: serde_json::Value = serde_json::from_str(&arranged).unwrap();
     assert_eq!(arranged["event"]["ok"], true);
-    assert_eq!(arranged["event"]["preset"], "grid");
+    assert_eq!(arranged["event"]["preset"], "tall");
     assert!(arranged["event"]["zoomed_pane_id"].is_null());
     assert_eq!(
         app.tabs.as_ref().unwrap().active_tab_id(),
@@ -1727,7 +1727,21 @@ fn plugin_pane_layout_controls_background_tab_without_changing_terminal_owners()
         .as_ref()
         .unwrap();
     assert_eq!(target.focused_id(), original[1]);
-    assert_eq!(target.pane_ids(), expected);
+    let tall_order = [
+        vec![original[1]],
+        expected
+            .into_iter()
+            .filter(|id| *id != original[1])
+            .collect(),
+    ]
+    .concat();
+    assert_eq!(target.pane_ids(), tall_order);
+    let layout = target.calculate_layout();
+    assert!(
+        tall_order[1..]
+            .iter()
+            .all(|id| layout[id].x > layout[&original[1]].x)
+    );
     for (id, child_id) in owners {
         assert_eq!(target.get_pane(id).unwrap().pty.child_id(), child_id);
     }

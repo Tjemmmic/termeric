@@ -949,7 +949,7 @@ and optimistic-preview rollback after a rejected stale target. Protocol-v5
 coverage also proves explicit-title precedence and clearing, pinned-prefix
 validation, stable-ID tab reorder without relay replacement, ignored
 relay-local title authority, and rejected tab-state rollback. Protocol-v6 cases
-add stable-pane swap, recursive balance, columns/rows/grid tree reconstruction,
+add stable-pane swap, recursive balance, columns/rows/grid/tall/fat tree reconstruction,
 fresh split IDs, retained focus/relay mappings, and single-pane rejection.
 Protocol-v7 cases add atomic cross-tab runtime transfer, source and destination
 focus/tree repair, fresh destination split identity, retained daemon
@@ -1276,7 +1276,7 @@ fixtures are used; no AI provider process or tokens are involved.
 API v18 adds exact pane-layout version/mode/grant denial, strict swap/balance/
 preset parsing, atomic stale/duplicate/unsplit/closed/closing/live/serial
 refusal, background-tab routing, live PTY and stable-ID preservation, focus and
-zoom contracts, balance idempotence, columns/rows/grid geometry, correlated
+zoom contracts, balance idempotence, columns/rows/grid/tall/fat geometry, correlated
 state, same-process query-to-layout reuse, one-operation enforcement,
 authority removal, and a checked-in pane arranger. Only inert local shell/
 Python fixtures are used; no AI provider process or tokens are involved.

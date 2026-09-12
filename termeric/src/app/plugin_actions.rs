@@ -1080,6 +1080,12 @@ impl App {
                     crate::plugin::structured::PluginPaneLayoutPreset::Grid => {
                         crate::panes::PaneLayoutPreset::Grid
                     }
+                    crate::plugin::structured::PluginPaneLayoutPreset::Tall => {
+                        crate::panes::PaneLayoutPreset::Tall
+                    }
+                    crate::plugin::structured::PluginPaneLayoutPreset::Fat => {
+                        crate::panes::PaneLayoutPreset::Fat
+                    }
                 };
                 match self.apply_plugin_pane_layout(tab_id, pane_preset) {
                     Ok((pane_order, focused_pane_id, zoomed_pane_id)) => serde_json::json!({

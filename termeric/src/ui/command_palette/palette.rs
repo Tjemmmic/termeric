@@ -1148,6 +1148,18 @@ pub fn core_commands(
             false,
         ),
         (
+            "core.layout-tall",
+            "Layout: Tall",
+            BindableAction::LayoutTall,
+            false,
+        ),
+        (
+            "core.layout-fat",
+            "Layout: Fat",
+            BindableAction::LayoutFat,
+            false,
+        ),
+        (
             "core.cycle-pane-cwd",
             "Cycle New Pane Directory",
             BindableAction::CyclePaneCwdMode,
@@ -1330,7 +1342,7 @@ mod tests {
             .filter(|command| command.category == "Panes")
             .collect();
 
-        assert_eq!(pane_commands.len(), 18);
+        assert_eq!(pane_commands.len(), 20);
         assert_eq!(
             pane_commands
                 .iter()
@@ -1352,6 +1364,8 @@ mod tests {
             "core.layout-columns",
             "core.layout-rows",
             "core.layout-grid",
+            "core.layout-tall",
+            "core.layout-fat",
             "core.cycle-pane-cwd",
             "core.toggle-broadcast",
         ] {

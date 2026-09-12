@@ -158,6 +158,8 @@ pub enum LivePaneLayoutPreset {
     Columns,
     Rows,
     Grid,
+    Tall,
+    Fat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

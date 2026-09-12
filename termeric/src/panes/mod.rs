@@ -40,6 +40,8 @@ pub enum PaneLayoutPreset {
     Columns,
     Rows,
     Grid,
+    Tall,
+    Fat,
 }
 
 /// App-facing terminal event tagged with the pane that produced it. Protocol
@@ -1477,12 +1479,18 @@ impl PaneManager {
         preset: PaneLayoutPreset,
     ) -> anyhow::Result<()> {
         self.validate_complete_live_layout()?;
-        let (direction, alternate) = match preset {
-            PaneLayoutPreset::Columns => (SplitDirection::Vertical, false),
-            PaneLayoutPreset::Rows => (SplitDirection::Horizontal, false),
-            PaneLayoutPreset::Grid => (SplitDirection::Vertical, true),
+        let applied = match preset {
+            PaneLayoutPreset::Columns => self.tree.apply_preset(SplitDirection::Vertical, false),
+            PaneLayoutPreset::Rows => self.tree.apply_preset(SplitDirection::Horizontal, false),
+            PaneLayoutPreset::Grid => self.tree.apply_preset(SplitDirection::Vertical, true),
+            PaneLayoutPreset::Tall => self
+                .tree
+                .apply_master_detail_preset(self.focused, SplitDirection::Vertical),
+            PaneLayoutPreset::Fat => self
+                .tree
+                .apply_master_detail_preset(self.focused, SplitDirection::Horizontal),
         };
-        if !self.tree.apply_preset(direction, alternate) {
+        if !applied {
             anyhow::bail!("Pane layout split ID space is exhausted");
         }
         self.zoomed = None;
@@ -1527,6 +1535,22 @@ impl PaneManager {
             }
             PaneLayoutPreset::Grid => {
                 if !self.tree.apply_preset(SplitDirection::Vertical, true) {
+                    return false;
+                }
+            }
+            PaneLayoutPreset::Tall => {
+                if !self
+                    .tree
+                    .apply_master_detail_preset(self.focused, SplitDirection::Vertical)
+                {
+                    return false;
+                }
+            }
+            PaneLayoutPreset::Fat => {
+                if !self
+                    .tree
+                    .apply_master_detail_preset(self.focused, SplitDirection::Horizontal)
+                {
                     return false;
                 }
             }
@@ -2051,6 +2075,58 @@ mod tests {
         let dividers = manager.get_dividers();
         assert!(dividers.iter().any(|divider| divider.vertical));
         assert!(dividers.iter().any(|divider| !divider.vertical));
+
+        manager
+            .apply_layout_preset_exact(PaneLayoutPreset::Tall)
+            .unwrap();
+        let details = expected
+            .iter()
+            .copied()
+            .filter(|id| *id != focused)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            manager.pane_ids(),
+            [vec![focused], details.clone()].concat()
+        );
+        let layout = manager.calculate_layout();
+        let master = layout[&focused];
+        assert!(details.iter().all(|id| layout[id].x > master.x));
+        assert!(
+            details
+                .windows(2)
+                .all(|pair| layout[&pair[0]].y < layout[&pair[1]].y)
+        );
+        assert!(details.iter().all(|id| {
+            (layout[id].height - layout[&details[0]].height).abs() <= PANE_DIVIDER_THICKNESS
+        }));
+        let dividers = manager.get_dividers();
+        assert!(dividers[0].vertical);
+        assert_eq!(dividers[0].ratio_millis, 500);
+        assert!(dividers[1..].iter().all(|divider| !divider.vertical));
+
+        manager
+            .apply_layout_preset_exact(PaneLayoutPreset::Fat)
+            .unwrap();
+        assert_eq!(
+            manager.pane_ids(),
+            [vec![focused], details.clone()].concat()
+        );
+        let layout = manager.calculate_layout();
+        let master = layout[&focused];
+        assert!(details.iter().all(|id| layout[id].y > master.y));
+        assert!(
+            details
+                .windows(2)
+                .all(|pair| layout[&pair[0]].x < layout[&pair[1]].x)
+        );
+        assert!(details.iter().all(|id| {
+            (layout[id].width - layout[&details[0]].width).abs() <= PANE_DIVIDER_THICKNESS
+        }));
+        let dividers = manager.get_dividers();
+        assert!(!dividers[0].vertical);
+        assert_eq!(dividers[0].ratio_millis, 500);
+        assert!(dividers[1..].iter().all(|divider| divider.vertical));
+        assert_eq!(manager.focused_id(), focused);
         for (id, child_id) in &child_ids {
             assert_eq!(manager.get_pane(*id).unwrap().pty.child_id(), *child_id);
         }
@@ -2088,6 +2164,26 @@ mod tests {
                 .to_string()
                 .contains("at least two")
         );
+        assert!(
+            unsplit
+                .apply_layout_preset_exact(PaneLayoutPreset::Tall)
+                .unwrap_err()
+                .to_string()
+                .contains("at least two")
+        );
+
+        let mut pair = property_manager(2);
+        let pair_focus = pair.focused_id();
+        pair.apply_layout_preset_exact(PaneLayoutPreset::Tall)
+            .unwrap();
+        assert_eq!(pair.pane_ids()[0], pair_focus);
+        assert!(pair.get_dividers()[0].vertical);
+        assert_eq!(pair.get_dividers()[0].ratio_millis, 500);
+        pair.apply_layout_preset_exact(PaneLayoutPreset::Fat)
+            .unwrap();
+        assert_eq!(pair.pane_ids()[0], pair_focus);
+        assert!(!pair.get_dividers()[0].vertical);
+        assert_eq!(pair.get_dividers()[0].ratio_millis, 500);
     }
 
     #[cfg(unix)]
@@ -2228,10 +2324,12 @@ mod tests {
                 }
                 3 => assert!(manager.balance()),
                 4 => {
-                    let preset = match (value >> 8) % 3 {
+                    let preset = match (value >> 8) % 5 {
                         0 => PaneLayoutPreset::Columns,
                         1 => PaneLayoutPreset::Rows,
-                        _ => PaneLayoutPreset::Grid,
+                        2 => PaneLayoutPreset::Grid,
+                        3 => PaneLayoutPreset::Tall,
+                        _ => PaneLayoutPreset::Fat,
                     };
                     assert!(manager.apply_layout_preset(preset));
                 }

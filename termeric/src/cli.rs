@@ -1255,16 +1255,23 @@ fn parse_domain(
             }
         }
         "layout-tab" => {
-            require_len(values, 3, "domain layout-tab DOMAIN TAB columns|rows|grid")?;
-            let preset =
-                match domain_utf8(values.get(2), "domain layout-tab requires PRESET")?.as_str() {
-                    "columns" => crate::domain::model::LivePaneLayoutPreset::Columns,
-                    "rows" => crate::domain::model::LivePaneLayoutPreset::Rows,
-                    "grid" => crate::domain::model::LivePaneLayoutPreset::Grid,
-                    value => anyhow::bail!(
-                        "domain layout preset must be columns, rows, or grid, got {value:?}"
-                    ),
-                };
+            require_len(
+                values,
+                3,
+                "domain layout-tab DOMAIN TAB columns|rows|grid|tall|fat",
+            )?;
+            let preset = match domain_utf8(values.get(2), "domain layout-tab requires PRESET")?
+                .as_str()
+            {
+                "columns" => crate::domain::model::LivePaneLayoutPreset::Columns,
+                "rows" => crate::domain::model::LivePaneLayoutPreset::Rows,
+                "grid" => crate::domain::model::LivePaneLayoutPreset::Grid,
+                "tall" => crate::domain::model::LivePaneLayoutPreset::Tall,
+                "fat" => crate::domain::model::LivePaneLayoutPreset::Fat,
+                value => anyhow::bail!(
+                    "domain layout preset must be columns, rows, grid, tall, or fat, got {value:?}"
+                ),
+            };
             DomainCommand::ApplyPaneLayout {
                 domain: validated_domain_id(values.first())?,
                 tab: parse_tab_id(values.get(1))?,
@@ -1684,7 +1691,7 @@ Create and control:\n  \
   move-tab DOMAIN TAB INDEX             Move in its pin group (zero-based)\n  \
   swap-pane DOMAIN PANE                 Swap with next pane in visual order\n  \
   balance-tab DOMAIN TAB                Reset every divider to 50%\n  \
-  layout-tab DOMAIN TAB PRESET          Apply columns, rows, or grid\n  \
+  layout-tab DOMAIN TAB PRESET          Apply columns, rows, grid, tall, or fat\n  \
   move-pane DOMAIN PANE TAB             Move a pane to a stable destination tab\n  \
   focus DOMAIN PANE                     Set persisted focus\n  \
   close-pane DOMAIN PANE                Terminate and remove one split pane\n  \
@@ -2705,6 +2712,32 @@ mod tests {
             ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
                 tab: 7,
                 preset: crate::domain::model::LivePaneLayoutPreset::Grid,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(
+                ["domain", "layout-tab", "domain-123", "7", "tall"]
+                    .into_iter()
+                    .map(OsString::from)
+            )
+            .unwrap(),
+            ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
+                tab: 7,
+                preset: crate::domain::model::LivePaneLayoutPreset::Tall,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(
+                ["domain", "layout-tab", "domain-123", "7", "fat"]
+                    .into_iter()
+                    .map(OsString::from)
+            )
+            .unwrap(),
+            ParseOutcome::Domain(crate::domain::DomainCommand::ApplyPaneLayout {
+                tab: 7,
+                preset: crate::domain::model::LivePaneLayoutPreset::Fat,
                 ..
             })
         ));

@@ -22,7 +22,8 @@ application binding cannot be captured unexpectedly.
 | Toggle Pane Read-only | Locks or unlocks user-originated input for the focused pane while output and required terminal replies remain live. |
 | Swap Pane with Next | Exchanges terminal positions in leaf order while retaining focus and PTY ownership. |
 | Balance Panes | Resets every divider ratio in the tab to an even split. |
-| Layout: Columns / Rows / Grid | Rebuilds geometry from the same pane IDs and PTYs. |
+| Layout: Columns / Rows / Grid | Rebuilds balanced geometry from the same pane IDs and PTYs. |
+| Layout: Tall / Fat | Makes the focused pane a full-height left or full-width top master at 50% and evenly tiles the remaining panes in visual order. |
 | Move Pane to Next Tab | Detaches the focused pane and attaches it to the next tab, focusing the moved pane. |
 | Move Pane to Next Window | Transfers the focused pane into the active tab of the next native window without restarting its process. |
 | Cycle New Pane Directory | Selects focused pane, tab primary pane, or Termeric process cwd and saves the choice. |
@@ -54,8 +55,10 @@ changes. Every attached window converges by stable remote tab ID while keeping
 its existing relay PTYs. Explicit remote titles retain the same precedence over
 OSC titles, and clearing one reveals the daemon's newest focused-pane title.
 
-Swap, balance, and columns/rows/grid are daemon-owned as well: stable pane IDs,
-focus, and relay PTYs survive, while a preset receives fresh stable split IDs.
+Swap, balance, and columns/rows/grid/tall/fat are daemon-owned as well: stable
+pane IDs, focus, and relay PTYs survive, while a preset receives fresh stable
+split IDs. Tall and Fat always use the focused pane as the master; the other
+panes retain their relative visual order.
 Cross-tab movement is an atomic daemon transaction that preserves the global
 pane ID, process, and relay streams; repairs the source; creates a fresh split
 at the destination; and converges every attached window. Zoom remains

@@ -8,6 +8,13 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Tall and Fat pane presets now make the focused pane a 50% full-height left
+  or full-width top master and evenly tile the remaining panes without
+  replacing their PTYs or identities. Both are available through the command
+  palette, configurable shortcuts, ordinary plugin layout grants, and
+  daemon-owned domain controls. Live-domain protocol v16 carries the new
+  values with exact-version negotiation and fresh stable split identities.
+
 - Kitty OSC 5113 now has a consent-gated Linux `send` profile for bounded
   remote-to-host regular files, directories, symbolic links, and hard links.
   Simple/no-compression and zlib sessions use exact-origin S7/S8 replies,
@@ -60,8 +67,8 @@ Versioning once public beta tags begin.
 
 - Declarative plugin API v30 adds an independent `process-pane-layout` grant
   for swapping two exact panes, balancing dividers, or applying a columns,
-  rows, or grid preset to one exact ordinary split tab in an exact live
-  process-owned window. The existing API v18 layout path preserves terminal
+  rows, grid, tall, or fat preset to one exact ordinary split tab in an exact
+  live process-owned window. The existing API v18 layout path preserves terminal
   owners, stable pane IDs, focus, and active-tab selection while stale,
   closing, unsplit, live-domain, serial, and duplicate-pane targets fail
   without fallback. Results are bounded and correlated, with no native
@@ -210,9 +217,9 @@ Versioning once public beta tags begin.
   process, and App tests plus a checked-in example. No provider process runs.
 
 - Declarative plugin API v18 adds an independent `pane-layout` grant for
-  swapping two exact panes, balancing dividers, or applying columns, rows, and
-  grid presets within one ordinary current-window split tab. Operations
-  preserve live terminal owners, stable pane IDs, focus, and active-tab state;
+  swapping two exact panes, balancing dividers, or applying columns, rows,
+  grid, tall, and fat presets within one ordinary current-window split tab.
+  Operations preserve live terminal owners, stable pane IDs, focus, and active-tab state;
   swap and balance retain zoom, while presets clear it as they replace hidden
   geometry. Strict schemas, atomic unsupported-target refusal, bounded
   correlated results, and complete result-authority removal are covered by

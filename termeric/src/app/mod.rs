@@ -3479,6 +3479,12 @@ impl App {
             Action::LayoutGrid => {
                 self.request_active_tab_layout(crate::panes::PaneLayoutPreset::Grid)
             }
+            Action::LayoutTall => {
+                self.request_active_tab_layout(crate::panes::PaneLayoutPreset::Tall)
+            }
+            Action::LayoutFat => {
+                self.request_active_tab_layout(crate::panes::PaneLayoutPreset::Fat)
+            }
             Action::CyclePaneCwdMode => self.cycle_pane_cwd_mode(),
             Action::ToggleBroadcast => self.toggle_broadcast(),
             Action::ClearScrollback => {
@@ -3762,6 +3768,8 @@ impl App {
                     "core.layout-columns" => Action::LayoutColumns,
                     "core.layout-rows" => Action::LayoutRows,
                     "core.layout-grid" => Action::LayoutGrid,
+                    "core.layout-tall" => Action::LayoutTall,
+                    "core.layout-fat" => Action::LayoutFat,
                     "core.cycle-pane-cwd" => Action::CyclePaneCwdMode,
                     "core.toggle-broadcast" => Action::ToggleBroadcast,
                     "core.navigate-pane-up" => {

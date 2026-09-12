@@ -31,6 +31,7 @@ termeric domain resize-split DOMAIN 0 350
 termeric domain swap-pane DOMAIN 0
 termeric domain balance-tab DOMAIN 0
 termeric domain layout-tab DOMAIN 0 grid
+termeric domain layout-tab DOMAIN 0 tall
 # Move pane 1 to stable tab 2 without replacing its process or relay streams.
 termeric domain move-pane DOMAIN 1 2
 termeric domain rename-tab DOMAIN 0 "Build λ"
@@ -189,7 +190,9 @@ the focused-pane/vertical default for existing domain CLI commands. Versions
 11 through 15 add the bounded upload transaction used by local and OpenSSH
 file/directory transfers: safe typed descriptors, contiguous chunks, explicit
 cancel/commit, resumable offsets, prefix digests, retained-partial inventory,
-and idempotent completion replay.
+and idempotent completion replay. Version 16 adds focused-master Tall and Fat
+layout preset values; both retain pane identities and allocate fresh stable
+split identities.
 
 Renderer-backed relays preserve the exact pane grid geometry at the daemon
 PTY. An external parent that reports zero pixel fields retains the daemon's

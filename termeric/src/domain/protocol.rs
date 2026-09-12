@@ -8,7 +8,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_STREAM_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_FILE_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
@@ -458,6 +458,20 @@ mod tests {
                     domain: "daily".into(),
                     tab: 3,
                     preset: super::super::model::LivePaneLayoutPreset::Grid,
+                },
+            },
+            ClientFrame::Request {
+                request: Request::ApplyPaneLayout {
+                    domain: "daily".into(),
+                    tab: 3,
+                    preset: super::super::model::LivePaneLayoutPreset::Tall,
+                },
+            },
+            ClientFrame::Request {
+                request: Request::ApplyPaneLayout {
+                    domain: "daily".into(),
+                    tab: 3,
+                    preset: super::super::model::LivePaneLayoutPreset::Fat,
                 },
             },
             ClientFrame::Request {

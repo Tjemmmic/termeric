@@ -41,7 +41,7 @@ to one exact current-window terminal. It additionally requires the user's
 disabled-by-default external-input policy, and destructive matches retain a
 visible exact-destination confirmation.
 API v18 adds an independent `pane-layout` grant for swapping two exact panes,
-balancing dividers, or applying a columns, rows, or grid preset within one
+balancing dividers, or applying a columns, rows, grid, tall, or fat preset within one
 ordinary current-window split tab without recreating its terminals.
 API v19 adds an independent `window-close` grant for the exact window in which
 a declared plugin command was invoked. It delivers one final correlated result
@@ -82,7 +82,7 @@ API v29 adds an independent `process-tab-close` grant for scheduling closure of
 one exact ordinary tab in an exact live process-owned window while preserving
 its window and refusing the final non-closing tab.
 API v30 adds an independent `process-pane-layout` grant for swapping, balancing,
-or applying columns/rows/grid layouts to one exact ordinary split tab in an
+or applying columns/rows/grid/tall/fat layouts to one exact ordinary split tab in an
 exact live process-owned window while preserving terminal identity and focus.
 API v31 adds an independent `process-window-close` grant for exact process-owned
 window closure after correlated result submission while protecting the final
@@ -1455,7 +1455,10 @@ tab. API v18 accepts exactly one of these host operations per response:
 {"type":"apply-pane-layout","action_id":"grid","tab_id":4,"preset":"grid"}
 ```
 
-`preset` is strictly `columns`, `rows`, or `grid`. `swap-panes` preserves the
+`preset` is strictly `columns`, `rows`, `grid`, `tall`, or `fat`. Tall makes the
+focused pane the full-height left master; Fat makes it the full-width top
+master. Both use a 50% master area and preserve the other panes' relative
+visual order. `swap-panes` preserves the
 existing divider tree and exchanges only the two named stable pane identities.
 `balance-panes` resets every divider to one-half and reports whether anything
 changed. A preset rebuilds the tree from current visual pane order and clears
@@ -2195,7 +2198,7 @@ of these operations:
 {"type":"apply-process-pane-layout","action_id":"grid-panes","window_id":7,"tab_id":12,"preset":"grid"}
 ```
 
-`preset` is exactly `columns`, `rows`, or `grid`, and a swap requires two
+`preset` is exactly `columns`, `rows`, `grid`, `tall`, or `fat`, and a swap requires two
 distinct pane IDs. Only an API v30 persistent handler with retained
 `process-pane-layout` authority may emit these actions. Termeric revalidates
 plugin generation, continuation authority, stable process-owned window ID,
@@ -2330,7 +2333,7 @@ separate host operations and therefore cannot be combined in one response.
 | `tab-close` | API v15+, after `--allow tab-close`; permits scheduling closure of one exact ordinary local current-window tab through a persistent handler, protects the final non-closing tab, and returns correlated selection state. |
 | `pane-move` | API v16+, after `--allow pane-move`; permits moving one exact ordinary pane between distinct tabs in the originating window through a persistent handler, preserves its live PTY, and returns the fresh destination-local identity. |
 | `terminal-input` | API v17+, after `--allow terminal-input`; permits at most 8 KiB of bounded UTF-8 text to one exact current-window terminal through a persistent handler, additionally requires `security.allow_gui_control_input = true`, and preserves destructive-command confirmation. |
-| `pane-layout` | API v18+, after `--allow pane-layout`; permits exact same-tab pane swap, divider balancing, and columns/rows/grid presets for one ordinary current-window split through a persistent handler, preserving live terminal owners and focus. |
+| `pane-layout` | API v18+, after `--allow pane-layout`; permits exact same-tab pane swap, divider balancing, and columns/rows/grid/tall/fat presets for one ordinary current-window split through a persistent handler, preserving live terminal owners and focus. |
 | `window-close` | API v19+, after `--allow window-close`; permits only a declared command invocation to schedule closure of its exact originating window through a persistent handler, after delivery of one correlated final result. |
 | `process-query` | API v20+, after `--allow process-query`; exposes one bounded, creation-ordered read-only inventory of the live windows owned by this Termeric process, including the exact originating stable window ID, through a persistent handler. |
 | `process-actions` | API v21+, after `--allow process-actions`; permits one exact non-activating tab selection or pane focus in any live process-owned window through a persistent handler, with atomic full-path validation and a correlated non-chainable result. |
@@ -2342,7 +2345,7 @@ separate host operations and therefore cannot be combined in one response.
 | `process-tab-move` | API v27+, after `--allow process-tab-move`; permits exact same-window tab reordering or movement of one exact ordinary tab into an exact process-owned destination window, preserving complete live tab state without native activation or implicit source-window closure. |
 | `process-pane-close` | API v28+, after `--allow process-pane-close`; permits closure of one exact ordinary pane in an exact live process-owned window while preserving its containing tab/window and refusing the final pane, without selection or native activation. |
 | `process-tab-close` | API v29+, after `--allow process-tab-close`; permits scheduled closure of one exact ordinary tab in an exact live process-owned window while preserving the window and refusing the final non-closing tab, without native activation or lifecycle feedback. |
-| `process-pane-layout` | API v30+, after `--allow process-pane-layout`; permits exact pane swap, divider balancing, or columns/rows/grid presets in one exact ordinary split tab in an exact live process-owned window, preserving terminal identity, focus, and active-tab selection without native activation. |
+| `process-pane-layout` | API v30+, after `--allow process-pane-layout`; permits exact pane swap, divider balancing, or columns/rows/grid/tall/fat presets in one exact ordinary split tab in an exact live process-owned window, preserving terminal identity, focus, and active-tab selection without native activation. |
 | `process-window-close` | API v31+, after `--allow process-window-close`; permits result-gated closure of one exact non-final live process-owned window through a persistent handler, without identity fallback, native activation, or implicit application termination. |
 | `process-window-focus` | API v32+, after `--allow process-window-focus`; permits one truthful native focus request for an exact live process-owned window through the existing authenticated control policy, without identity fallback, restoration, or compositor-confirmation claims. |
 | `secrets` | Reserved and denied; there is no secret API or manifest interpolation. |
@@ -2925,7 +2928,7 @@ current-window pane, requires the global disabled-by-default external-input
 policy, preserves target-mode encoding and destructive-command confirmation,
 and removes every host-operation authority from the result.
 API v18 adds separately granted exact same-tab pane swapping, balancing, and
-columns/rows/grid presets for ordinary split tabs, preserves live owners and
+columns/rows/grid/tall/fat presets for ordinary split tabs, preserves live owners and
 focus, returns resulting pane/zoom state, and removes every host-operation
 authority from the result.
 API v19 adds separately granted exact current-window closure only to declared
@@ -2976,7 +2979,7 @@ host authority. It preserves the containing window, refuses the final
 non-closing tab and unsupported targets, suppresses lifecycle feedback, and
 never activates a native window.
 API v30 adds separately granted pane swapping, divider balancing, and
-columns/rows/grid presets for one exact ordinary split tab in any live process-
+columns/rows/grid/tall/fat presets for one exact ordinary split tab in any live process-
 owned window. Process-query results may retain that independently granted
 mutation authority, while layout results remove every host authority. It
 preserves terminal owners, stable pane IDs, focus, and active-tab selection,

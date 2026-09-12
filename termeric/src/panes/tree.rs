@@ -129,6 +129,40 @@ impl PaneNode {
         })
     }
 
+    fn master_detail_preset(
+        ids: &[PaneId],
+        master: PaneId,
+        direction: SplitDirection,
+        next_split_id: &mut u64,
+    ) -> Option<Self> {
+        debug_assert!(ids.len() >= 2);
+        debug_assert!(ids.contains(&master));
+        let detail_ids = ids
+            .iter()
+            .copied()
+            .filter(|id| *id != master)
+            .collect::<Vec<_>>();
+        let detail_direction = match direction {
+            SplitDirection::Horizontal => SplitDirection::Vertical,
+            SplitDirection::Vertical => SplitDirection::Horizontal,
+        };
+        let local_split_id = *next_split_id;
+        *next_split_id = next_split_id.checked_add(1)?;
+        Some(Self::Split {
+            local_split_id,
+            domain_split_id: None,
+            direction,
+            ratio: 0.5,
+            first: Box::new(Self::Leaf(master)),
+            second: Box::new(Self::preset(
+                &detail_ids,
+                detail_direction,
+                false,
+                next_split_id,
+            )?),
+        })
+    }
+
     /// Find and split a leaf node
     fn split_leaf(
         &mut self,
@@ -803,6 +837,25 @@ impl PaneTree {
         let ids = self.get_all_ids();
         let mut next = self.next_local_split_id;
         let Some(root) = PaneNode::preset(&ids, direction, alternate, &mut next) else {
+            return false;
+        };
+        self.root = root;
+        self.next_local_split_id = next;
+        true
+    }
+
+    /// Rebuild the tree with one focused master and evenly tiled details.
+    pub fn apply_master_detail_preset(
+        &mut self,
+        master: PaneId,
+        direction: SplitDirection,
+    ) -> bool {
+        let ids = self.get_all_ids();
+        if ids.len() < 2 || !ids.contains(&master) {
+            return false;
+        }
+        let mut next = self.next_local_split_id;
+        let Some(root) = PaneNode::master_detail_preset(&ids, master, direction, &mut next) else {
             return false;
         };
         self.root = root;

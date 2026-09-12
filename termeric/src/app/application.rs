@@ -1026,6 +1026,12 @@ impl Application {
                     crate::plugin::structured::PluginPaneLayoutPreset::Grid => {
                         crate::panes::PaneLayoutPreset::Grid
                     }
+                    crate::plugin::structured::PluginPaneLayoutPreset::Tall => {
+                        crate::panes::PaneLayoutPreset::Tall
+                    }
+                    crate::plugin::structured::PluginPaneLayoutPreset::Fat => {
+                        crate::panes::PaneLayoutPreset::Fat
+                    }
                 };
                 let result = self
                     .control_native_window_id(window_id)
@@ -7429,18 +7435,34 @@ mod tests {
                 "process-pane-arranger",
                 7,
                 crate::plugin::structured::StructuredResponseAction::ApplyProcessPaneLayout {
-                    action_id: "grid-sibling-panes".into(),
+                    action_id: "fat-sibling-panes".into(),
                     window_id: 8,
                     tab_id: target_tab_id as u64,
-                    preset: crate::plugin::structured::PluginPaneLayoutPreset::Grid,
+                    preset: crate::plugin::structured::PluginPaneLayoutPreset::Fat,
                 },
             )
             .unwrap();
         let applied: serde_json::Value = serde_json::from_str(&applied).unwrap();
         assert_eq!(applied["event"]["action"], "apply-process-pane-layout");
-        assert_eq!(applied["event"]["preset"], "grid");
+        assert_eq!(applied["event"]["preset"], "fat");
         assert_eq!(applied["event"]["ok"], true);
         assert_eq!(applied["event"]["focused_pane_id"], initial_focus);
+        let target_manager = application.windows[&target_native]
+            .tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(target_tab_id)
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap();
+        let target_layout = target_manager.calculate_layout();
+        let detail = target_manager
+            .pane_ids()
+            .into_iter()
+            .find(|pane| pane.0 != initial_focus)
+            .unwrap();
+        assert!(target_layout[&detail].y > target_layout[&crate::panes::PaneId(initial_focus)].y);
         assert_eq!(
             application.windows[&target_native]
                 .tabs

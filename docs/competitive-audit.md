@@ -39,7 +39,7 @@ The practical position is therefore:
 |---|---|---|---|
 | Terminal correctness | Broad tested VT/xterm subset, Kitty keyboard, xterm keyboard resources, bounded xterm title queries/stack, synchronized output, Unicode graphemes, rich SGR, mouse/focus/paste, truthful terminfo | kitty and Ghostty explicitly target modern/xterm-compatible protocol breadth; WezTerm covers modern keyboard, mouse, images, and text attributes | Competitive in implemented breadth; native-client interoperability evidence is thinner |
 | Text and graphics | Ligatures, color emoji, bounded glyph atlases, bounded static window backgrounds, partial Kitty graphics including animation/placeholders/relative placement, static Sixel and iTerm2 PNG | kitty is the protocol origin and supports images/animation/background layouts; WezTerm advertises Kitty, iTerm2, experimental Sixel, and image backgrounds; Ghostty advertises Kitty graphics and background images | Broad, but still partial until visible native-client/background acceptance and remaining protocol variants pass |
-| Tabs, panes, windows | Multiple native windows, live top/vertical-left tabs, nested splits, zoom/swap/balance/presets, drag resizing, tab/pane transfer | kitty provides tabs and seven layouts; WezTerm and Ghostty provide windows/tabs/splits; Konsole provides split views, detach, maximize, and saved layouts | Competitive; kitty has more layout variants and mature interaction polish, while Termeric's new left rail still needs native acceptance |
+| Tabs, panes, windows | Multiple native windows, live top/vertical-left tabs, nested splits, zoom/swap/balance, Columns/Rows/Grid and focused-master Tall/Fat presets, drag resizing, tab/pane transfer | kitty provides tabs and seven layouts, including configurable Tall/Fat and hidden-pane Stack; WezTerm and Ghostty provide windows/tabs/splits; Konsole provides split views, detach, maximize, and saved layouts | Competitive in visible-pane geometry; kitty retains configurable bias/mirroring/multiple masters, Stack semantics, and mature interaction polish, while Termeric's new left rail still needs native acceptance |
 | Persistence | Atomic schema-2 workspaces preserve mixed pane launch identity, topology, metadata, and bounded scrollback; legacy snapshots are separate | kitty session files describe startup layouts; WezTerm has workspaces/domains; Konsole can save tab layouts | Strong and unusually explicit, but relaunch is not process checkpointing |
 | Search, navigation, and character entry | Cancellable full-history literal/regex search, filter mode, copy mode, configurable quick-select hints, prompt navigation, and a 256-result Unicode 17.0 canonical-name/CLDR 48 English annotation picker with exact scalar and fully-qualified emoji-sequence insertion | Alacritty exposes search, Vi mode, and regex hints; WezTerm exposes search, copy mode, QuickSelect, and character selection; kitty exposes searchable history, hints, and Unicode input | Strong: complete canonical-name discovery and natural English emoji search have explicit memory/latency, accessibility, and exact-destination boundaries; additional locales remain absent |
 | Multiplexing and remote work | Experimental daemon-owned PTYs, local/SSH domains, detach/reattach, topology mutation, GUI picker, bounded relays | WezTerm supports local Unix, SSH, and TLS domains plus an embedded SSH client; kitty provides SSH tooling and a powerful remote-control protocol | Promising but behind WezTerm in transport maturity and behind kitty in application automation |
@@ -175,8 +175,8 @@ awaiting evidence:
   terminal input behind the existing disabled-by-default global policy, with
   live bracketed-paste encoding and destructive-command confirmation.
   API v18 adds separately granted exact same-tab pane swap, balance, and
-  columns/rows/grid presets while preserving terminal owners, pane identity,
-  focus, and background-tab selection.
+  columns/rows/grid/tall/fat presets while preserving terminal owners, pane
+  identity, focus, and background-tab selection.
   API v19 adds separately granted closure of the exact invoking window, only
   from a declared plugin command and only after its correlated final callback.
   API v20 adds separately granted, bounded process-wide read-only inventory
@@ -203,7 +203,7 @@ awaiting evidence:
   API v29 adds separately granted scheduled closure of one exact ordinary tab
   in any live process-owned window while preserving the window and refusing
   final-tab or unsupported targets.
-  API v30 adds separately granted swap, balance, and columns/rows/grid presets
+  API v30 adds separately granted swap, balance, and columns/rows/grid/tall/fat presets
   for one exact ordinary split tab in any live process-owned window while
   preserving terminal identity, focus, and active-tab selection.
   API v31 adds separately granted result-gated closure of one exact non-final

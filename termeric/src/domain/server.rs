@@ -1887,13 +1887,31 @@ fn apply_domain_pane_layout(
     if panes.len() <= 1 {
         anyhow::bail!("layout preset requires at least two panes");
     }
-    let (direction, alternate) = match preset {
-        LivePaneLayoutPreset::Columns => (SplitDirection::Vertical, false),
-        LivePaneLayoutPreset::Rows => (SplitDirection::Horizontal, false),
-        LivePaneLayoutPreset::Grid => (SplitDirection::Vertical, true),
-    };
+    let focused_pane = domain.tabs[tab_index].focused_pane;
     let mut next_split = domain.next_split;
-    let layout = preset_layout(&panes, direction, alternate, &mut next_split)?;
+    let layout = match preset {
+        LivePaneLayoutPreset::Columns => {
+            preset_layout(&panes, SplitDirection::Vertical, false, &mut next_split)?
+        }
+        LivePaneLayoutPreset::Rows => {
+            preset_layout(&panes, SplitDirection::Horizontal, false, &mut next_split)?
+        }
+        LivePaneLayoutPreset::Grid => {
+            preset_layout(&panes, SplitDirection::Vertical, true, &mut next_split)?
+        }
+        LivePaneLayoutPreset::Tall => master_detail_layout(
+            &panes,
+            focused_pane,
+            SplitDirection::Vertical,
+            &mut next_split,
+        )?,
+        LivePaneLayoutPreset::Fat => master_detail_layout(
+            &panes,
+            focused_pane,
+            SplitDirection::Horizontal,
+            &mut next_split,
+        )?,
+    };
     domain.tabs[tab_index].layout = layout;
     domain.next_split = next_split;
     domain.publish_topology();
@@ -2058,6 +2076,42 @@ fn preset_layout(
             &panes[midpoint..],
             next_direction,
             alternate,
+            next_split,
+        )?),
+    })
+}
+
+fn master_detail_layout(
+    panes: &[u32],
+    master: u32,
+    direction: SplitDirection,
+    next_split: &mut u32,
+) -> anyhow::Result<LivePaneLayout> {
+    if panes.len() < 2 || !panes.contains(&master) {
+        anyhow::bail!("master-detail layout requires its focused pane in the layout");
+    }
+    let details = panes
+        .iter()
+        .copied()
+        .filter(|pane| *pane != master)
+        .collect::<Vec<_>>();
+    let detail_direction = match direction {
+        SplitDirection::Horizontal => SplitDirection::Vertical,
+        SplitDirection::Vertical => SplitDirection::Horizontal,
+    };
+    let split_id = *next_split;
+    *next_split = next_split
+        .checked_add(1)
+        .context("domain split identity space exhausted")?;
+    Ok(LivePaneLayout::Split {
+        split_id,
+        direction,
+        ratio_millis: 500,
+        first: Box::new(LivePaneLayout::Pane { pane: master }),
+        second: Box::new(preset_layout(
+            &details,
+            detail_direction,
+            false,
             next_split,
         )?),
     })
@@ -3539,6 +3593,63 @@ mod tests {
                 ..
             }
         ));
+
+        let mut next_split = 30;
+        let tall =
+            master_detail_layout(&[3, 4, 5, 6], 5, SplitDirection::Vertical, &mut next_split)
+                .unwrap();
+        assert_eq!(next_split, 33);
+        assert!(matches!(
+            &tall,
+            LivePaneLayout::Split {
+                split_id: 30,
+                direction: SplitDirection::Vertical,
+                ratio_millis: 500,
+                first,
+                second,
+            } if matches!(first.as_ref(), LivePaneLayout::Pane { pane: 5 })
+                && matches!(second.as_ref(), LivePaneLayout::Split {
+                    split_id: 31,
+                    direction: SplitDirection::Horizontal,
+                    ratio_millis: 667,
+                    ..
+                })
+        ));
+        let mut panes = Vec::new();
+        collect_layout_panes(&tall, &mut panes);
+        assert_eq!(panes, vec![5, 3, 4, 6]);
+
+        let mut next_split = 40;
+        let fat = master_detail_layout(
+            &[3, 4, 5, 6],
+            4,
+            SplitDirection::Horizontal,
+            &mut next_split,
+        )
+        .unwrap();
+        assert!(matches!(
+            &fat,
+            LivePaneLayout::Split {
+                direction: SplitDirection::Horizontal,
+                ratio_millis: 500,
+                first,
+                second,
+                ..
+            } if matches!(first.as_ref(), LivePaneLayout::Pane { pane: 4 })
+                && matches!(second.as_ref(), LivePaneLayout::Split {
+                    direction: SplitDirection::Vertical,
+                    ..
+                })
+        ));
+        panes.clear();
+        collect_layout_panes(&fat, &mut panes);
+        assert_eq!(panes, vec![4, 3, 5, 6]);
+        assert!(
+            master_detail_layout(&[3, 4], 99, SplitDirection::Vertical, &mut next_split)
+                .unwrap_err()
+                .to_string()
+                .contains("focused pane")
+        );
     }
 
     #[test]

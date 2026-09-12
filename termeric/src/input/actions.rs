@@ -75,6 +75,8 @@ pub enum Action {
     LayoutColumns,
     LayoutRows,
     LayoutGrid,
+    LayoutTall,
+    LayoutFat,
     CyclePaneCwdMode,
     ToggleBroadcast,
     /// Clear scrollback buffer

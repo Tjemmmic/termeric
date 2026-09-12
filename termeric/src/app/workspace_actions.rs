@@ -292,6 +292,12 @@ impl App {
                 crate::panes::PaneLayoutPreset::Grid => {
                     crate::domain::model::LivePaneLayoutPreset::Grid
                 }
+                crate::panes::PaneLayoutPreset::Tall => {
+                    crate::domain::model::LivePaneLayoutPreset::Tall
+                }
+                crate::panes::PaneLayoutPreset::Fat => {
+                    crate::domain::model::LivePaneLayoutPreset::Fat
+                }
             };
             self.queue_live_domain_control(LiveDomainControl::ApplyPaneLayout {
                 domain_id,
@@ -303,6 +309,8 @@ impl App {
                 crate::panes::PaneLayoutPreset::Columns => "Column layout applied",
                 crate::panes::PaneLayoutPreset::Rows => "Row layout applied",
                 crate::panes::PaneLayoutPreset::Grid => "Grid layout applied",
+                crate::panes::PaneLayoutPreset::Tall => "Tall layout applied",
+                crate::panes::PaneLayoutPreset::Fat => "Fat layout applied",
             };
             self.workspace_pane_action(|manager| manager.apply_layout_preset(preset), success);
         }
@@ -4021,13 +4029,13 @@ mod workspace_control_tests {
             LiveDomainControl::ApplyPaneLayout {
                 domain_id: "domain-control".into(),
                 remote_tab_id: 10,
-                preset: crate::domain::model::LivePaneLayoutPreset::Grid,
+                preset: crate::domain::model::LivePaneLayoutPreset::Tall,
             }
             .request(),
             crate::domain::protocol::Request::ApplyPaneLayout {
                 domain: "domain-control".into(),
                 tab: 10,
-                preset: crate::domain::model::LivePaneLayoutPreset::Grid,
+                preset: crate::domain::model::LivePaneLayoutPreset::Tall,
             }
         );
         assert_eq!(

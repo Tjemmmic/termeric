@@ -190,7 +190,7 @@ API v17 separately grants bounded UTF-8 input to one exact current-window pane;
 the global external-input policy remains disabled by default, and destructive
 commands require visible confirmation regardless of the destination tab type.
 API v18 separately grants exact same-tab pane swapping, divider balancing, and
-columns/rows/grid presets for ordinary split tabs while preserving live
+columns/rows/grid/tall/fat presets for ordinary split tabs while preserving live
 terminal owners, focus, and stable pane IDs.
 API v19 separately grants closure of the exact invoking window, only from a
 declared plugin command. Termeric delivers the bounded correlated result to the
@@ -253,7 +253,7 @@ any live process-owned window. It preserves the containing window, refuses the
 final non-closing tab plus stale, closing, live-domain, and uninitialized
 targets, suppresses lifecycle feedback, and reports remaining/active tab state
 without native activation.
-API v30 adds separately granted swapping, balancing, and columns/rows/grid
+API v30 adds separately granted swapping, balancing, and columns/rows/grid/tall/fat
 layout presets for one exact ordinary split tab in any live process-owned
 window. It preserves live terminal owners, stable pane IDs, focus, and active
 tab selection; stale, closing, unsplit, live-domain, serial, and duplicate-pane

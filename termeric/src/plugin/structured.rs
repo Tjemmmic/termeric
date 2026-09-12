@@ -50,6 +50,8 @@ pub enum PluginPaneLayoutPreset {
     Columns,
     Rows,
     Grid,
+    Tall,
+    Fat,
 }
 
 #[derive(Debug, Clone)]
@@ -3180,6 +3182,16 @@ mod tests {
                 preset: PluginPaneLayoutPreset::Grid,
             }]
         );
+        let tall = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-process-pane-layout","action_id":"tall-sibling-panes","window_id":7,"tab_id":12,"preset":"tall"}]}"#;
+        assert!(matches!(
+            parse_process_pane_layout_response(tall, false, true)
+                .unwrap()
+                .as_slice(),
+            [StructuredResponseAction::ApplyProcessPaneLayout {
+                preset: PluginPaneLayoutPreset::Tall,
+                ..
+            }]
+        ));
         assert!(
             parse_process_pane_layout_response(preset, true, false)
                 .unwrap_err()
@@ -4159,6 +4171,19 @@ mod tests {
                 preset: PluginPaneLayoutPreset::Grid,
             }]
         );
+        let fat = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"apply-pane-layout","action_id":"fat-build","tab_id":42,"preset":"fat"}]}"#;
+        assert!(matches!(
+            parse_persistent_response_with_host_mutation(
+                fat, false, false, false, false, false, false, false, false, false, false, false,
+                true, 9,
+            )
+            .unwrap()
+            .as_slice(),
+            [StructuredResponseAction::ApplyPaneLayout {
+                preset: PluginPaneLayoutPreset::Fat,
+                ..
+            }]
+        ));
 
         let same = br#"{"schema_version":2,"request_id":9,"actions":[{"type":"swap-panes","action_id":"same","tab_id":42,"first_pane_id":3,"second_pane_id":3}]}"#;
         assert!(

@@ -71,6 +71,8 @@ pub enum BindableAction {
     LayoutColumns,
     LayoutRows,
     LayoutGrid,
+    LayoutTall,
+    LayoutFat,
     CyclePaneCwdMode,
     ToggleBroadcast,
 
@@ -93,7 +95,7 @@ impl BindableAction {
     /// Every variant, in display order.
     pub fn all() -> &'static [BindableAction] {
         use BindableAction::*;
-        static ALL: [BindableAction; 57] = [
+        static ALL: [BindableAction; 59] = [
             // General
             Copy,
             Paste,
@@ -145,6 +147,8 @@ impl BindableAction {
             LayoutColumns,
             LayoutRows,
             LayoutGrid,
+            LayoutTall,
+            LayoutFat,
             CyclePaneCwdMode,
             ToggleBroadcast,
             // Scrolling
@@ -393,6 +397,8 @@ impl BindableAction {
             LayoutColumns => action_meta("layout_columns", "Layout: Columns", Panes),
             LayoutRows => action_meta("layout_rows", "Layout: Rows", Panes),
             LayoutGrid => action_meta("layout_grid", "Layout: Grid", Panes),
+            LayoutTall => action_meta("layout_tall", "Layout: Tall", Panes),
+            LayoutFat => action_meta("layout_fat", "Layout: Fat", Panes),
             CyclePaneCwdMode => {
                 action_meta("cycle_pane_cwd_mode", "Cycle New Pane Directory", Panes)
             }
@@ -505,6 +511,8 @@ impl BindableAction {
             Self::LayoutColumns => Action::LayoutColumns,
             Self::LayoutRows => Action::LayoutRows,
             Self::LayoutGrid => Action::LayoutGrid,
+            Self::LayoutTall => Action::LayoutTall,
+            Self::LayoutFat => Action::LayoutFat,
             Self::CyclePaneCwdMode => Action::CyclePaneCwdMode,
             Self::ToggleBroadcast => Action::ToggleBroadcast,
             Self::ScrollPageUp => Action::ScrollUp(10),

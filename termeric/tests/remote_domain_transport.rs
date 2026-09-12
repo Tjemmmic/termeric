@@ -95,7 +95,7 @@ fn protocol_version_probe_is_offline_and_machine_readable() {
         String::from_utf8_lossy(&output.stderr)
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["protocol_version"], 15);
+    assert_eq!(value["protocol_version"], 16);
     assert!(
         fs::read_dir(&runtime).unwrap().next().is_none(),
         "an offline version probe must not create a daemon socket or token"
@@ -278,7 +278,7 @@ fn stdio_bridge_rejects_daemon_tokens_before_opening_a_socket() {
         .unwrap();
     let payload = serde_json::to_vec(&serde_json::json!({
         "type": "hello",
-        "version": 15,
+        "version": 16,
         "token": "must-not-cross-ssh"
     }))
     .unwrap();
