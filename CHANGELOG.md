@@ -12,8 +12,14 @@ Versioning once public beta tags begin.
   remote-to-host regular files, directories, symbolic links, and hard links.
   Simple/no-compression and zlib sessions use exact-origin S7/S8 replies,
   streamed staging, no-overwrite publication, progress, cancellation, timeout,
-  and shutdown cleanup; detached domains and unsupported read/bypass/quiet/
-  rsync paths fail closed. Native `kitten transfer` acceptance remains deferred.
+  and shutdown cleanup; detached domains and unsupported bypass/quiet/rsync
+  paths fail closed. Native `kitten transfer` acceptance remains deferred.
+
+- Kitty OSC 5113 `receive` now provides a separate one-shot host-read approval
+  for at most 16 exact regular-file paths and 64 MiB. Files are opened only
+  after consent with `openat2` no-symlink and identity checks, then streamed in 4 KiB
+  chunks through acknowledged eight-chunk batches to the exact origin. Directory
+  and link export, quiet/bypass, rsync, and native acceptance remain deferred.
 
 - The displayed Linux resource soak now samples bounded standardized DRM fdinfo
   memory across Termeric's process tree, deduplicates shared clients, records

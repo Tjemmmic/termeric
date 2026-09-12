@@ -439,6 +439,89 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
     assert!(app.kitty_file_transfers.active.is_empty());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let mut config = Config::default();
+    config.shell.program = Some("/bin/sh".into());
+    config.shell.args = vec!["-c".into(), "sleep 2".into()];
+    let mut app = App::new_headless(config).unwrap();
+    app.allow_auto_restore = false;
+    app.init_tabs().unwrap();
+    let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
+    let origin = TerminalEventOrigin::Tab { tab_id };
+    let command =
+        |action, file_id: &str, name: Option<&str>, size| termeric_core::KittyFileTransferCommand {
+            action,
+            compression: termeric_core::KittyFileTransferCompression::None,
+            file_type: termeric_core::KittyFileTransferType::Regular,
+            transmission_type: termeric_core::KittyFileTransmissionType::Simple,
+            id: "upload-1".into(),
+            file_id: file_id.into(),
+            quiet: 0,
+            mtime_ns: None,
+            permissions: None,
+            size,
+            name: name.map(str::to_owned),
+            status: None,
+            parent: None,
+            data: Box::default(),
+            bypass_present: false,
+            reply_uses_8bit_controls: true,
+        };
+
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin,
+        event: TerminalEvent::KittyFileTransfer(command(
+            termeric_core::KittyFileTransferAction::Receive,
+            "",
+            None,
+            Some(2),
+        )),
+    });
+    assert!(app.kitty_file_transfers.pending_upload.is_some());
+    assert!(!app.info_overlay.is_active());
+
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin,
+        event: TerminalEvent::KittyFileTransfer(command(
+            termeric_core::KittyFileTransferAction::File,
+            "f1",
+            Some("/tmp/approved-one.txt"),
+            None,
+        )),
+    });
+    assert!(!app.info_overlay.is_active());
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin,
+        event: TerminalEvent::KittyFileTransfer(command(
+            termeric_core::KittyFileTransferAction::File,
+            "f2",
+            Some("~/approved-two.txt"),
+            None,
+        )),
+    });
+
+    let request_id = app.info_overlay.request_id();
+    assert!(app.info_overlay.is_awaiting(request_id));
+    assert_eq!(
+        app.info_overlay.title(),
+        "Allow terminal to read host files?"
+    );
+    let notice = app.info_overlay.lines().join("\n");
+    assert!(notice.contains("/tmp/approved-one.txt"));
+    assert!(notice.contains("approved-two.txt"));
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "kitty-upload-deny".into(),
+    });
+    assert!(app.kitty_file_transfers.pending_upload.is_none());
+    assert!(app.kitty_file_transfers.active_uploads.is_empty());
+}
+
 #[test]
 fn file_upload_completion_is_request_scoped_and_distinguishes_partial_success() {
     let mut app = App::new_headless(Config::default()).unwrap();

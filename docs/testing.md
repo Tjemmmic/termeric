@@ -856,15 +856,21 @@ quality remains the deferred checklist in [`text-sizing.md`](text-sizing.md).
 
 Kitty OSC 5113 file-transfer tests keep the wire parser separate from host
 filesystem authority. Core fixtures cover bounded base64 fields, duplicate and
-invalid metadata, canonical status replies, and S7/S8 framing. Application and
-Unix transaction fixtures cover request-scoped consent, terminal-type gating,
+invalid metadata, canonical status/metadata/data replies, payload/path-redacted
+debug output, and S7/S8 framing. Application and Unix transaction fixtures
+cover request-scoped consent, exact pre-consent host-read path collection,
+terminal-type gating,
 stale overlays, staging before `finish`, regular files, directories, zlib,
 internal hard links, internal and external-target symbolic links, metadata,
 no-overwrite collisions, duplicate IDs/paths, traversal, declared-size
 mismatch, decompression expansion, cancellation cleanup, and a destination
-ancestor changed to a symlink before commit. The normal client may pipeline a
-bounded number of commands through a filesystem worker; it never performs file
-I/O on the renderer/input path. Detached-domain denial is owned by the domain
+ancestor changed to a symlink before commit. Host-read worker fixtures cover
+home-relative lexical resolution, traversal rejection, no-follow symlink
+refusal, opened/path identity checks, fixed-size payload framing, and
+acknowledged event-loop backpressure. The normal client may pipeline a bounded
+number of commands through a filesystem worker; neither direction performs file
+I/O on the renderer/input path or buffers a complete file in application state.
+Detached-domain denial is owned by the domain
 server, while an attached GUI processes the raw OSC at the exact relay origin.
 The native `kitten transfer` rows remain deferred in
 [`kitty-file-transfer.md`](kitty-file-transfer.md).

@@ -1349,6 +1349,9 @@ impl App {
                 if self.handle_kitty_download_choice(request_id, &choice_id) {
                     return;
                 }
+                if self.handle_kitty_upload_choice(request_id, &choice_id) {
+                    return;
+                }
                 if self.handle_font_feature_manager_choice(request_id, &choice_id) {
                     return;
                 }

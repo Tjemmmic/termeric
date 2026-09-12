@@ -4,6 +4,7 @@ use super::{App, AppEvent, EVENT_LOOP_PROXY};
 use crate::tabs::{TabType, TerminalEventOrigin};
 use crate::ui::info_overlay::InfoOverlayChoice;
 use std::collections::HashMap;
+use std::path::PathBuf;
 #[cfg(unix)]
 use std::sync::mpsc::Receiver;
 use std::sync::{
@@ -11,20 +12,25 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::{SyncSender, TrySendError, sync_channel},
 };
-#[cfg(unix)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use termeric_core::{
-    KittyFileTransferAction, KittyFileTransferCommand, KittyFileTransferStatus,
-    KittyFileTransferStatusCode, KittyFileTransferType, KittyFileTransmissionType, Terminal,
+    KittyFileTransferAction, KittyFileTransferCommand, KittyFileTransferReply,
+    KittyFileTransferStatus, KittyFileTransferStatusCode, KittyFileTransferType,
+    KittyFileTransmissionType, Terminal,
 };
 
 pub(super) const MAX_ACTIVE_KITTY_DOWNLOADS: usize = 4;
 pub(super) const MAX_KITTY_DOWNLOAD_FILES: usize = 1_024;
 pub(super) const MAX_KITTY_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
+pub(super) const MAX_KITTY_UPLOAD_PATHS: usize = 16;
+pub(super) const MAX_KITTY_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(unix)]
 const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 #[cfg(unix)]
 const WORKER_QUEUE_CAPACITY: usize = 1_024;
+#[cfg(target_os = "linux")]
+const UPLOAD_BATCH_CHUNKS: usize = 8;
+const PENDING_UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct TransferKey {
@@ -41,11 +47,54 @@ pub(super) struct PendingConsent {
 }
 
 #[derive(Debug)]
+pub(super) struct PendingUpload {
+    request_id: Option<u64>,
+    token: u64,
+    key: TransferKey,
+    expected_paths: usize,
+    paths: Vec<UploadPath>,
+    reply_uses_8bit_controls: bool,
+    created_at: Instant,
+}
+
+#[derive(Clone)]
+struct UploadPath {
+    file_id: String,
+    requested_name: String,
+    path: PathBuf,
+}
+
+impl std::fmt::Debug for UploadPath {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("UploadPath")
+            .field("file_id", &self.file_id)
+            .field("requested_name_bytes", &self.requested_name.len())
+            .field(
+                "resolved_path_bytes",
+                &self.path.as_os_str().as_encoded_bytes().len(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct ActiveDownload {
     key: TransferKey,
     sender: SyncSender<WorkerCommand>,
     cancellation: Arc<AtomicBool>,
     progress_toast_id: u64,
+}
+
+#[derive(Debug)]
+pub(super) struct ActiveUpload {
+    key: TransferKey,
+    sender: SyncSender<UploadWorkerCommand>,
+    cancellation: Arc<AtomicBool>,
+    progress_toast_id: u64,
+    files_sent: usize,
+    total_files: usize,
+    bytes_sent: u64,
 }
 
 #[derive(Debug, Default)]
@@ -54,11 +103,50 @@ pub(super) struct KittyFileTransferManager {
     pub(super) pending: Option<PendingConsent>,
     pub(super) active: HashMap<u64, ActiveDownload>,
     tokens: HashMap<TransferKey, u64>,
+    pub(super) pending_upload: Option<PendingUpload>,
+    pub(super) active_uploads: HashMap<u64, ActiveUpload>,
+    upload_tokens: HashMap<TransferKey, u64>,
 }
 
 #[derive(Debug)]
 struct WorkerCommand {
     command: KittyFileTransferCommand,
+}
+
+#[derive(Debug)]
+struct UploadWorkerCommand {
+    command: KittyFileTransferCommand,
+}
+
+pub(crate) struct UploadWorkerCompletion {
+    frames: Vec<Vec<u8>>,
+    terminal: bool,
+    files: usize,
+    total_files: usize,
+    bytes: u64,
+    error: Option<String>,
+    reply_uses_8bit_controls: bool,
+    acknowledge: Option<SyncSender<bool>>,
+}
+
+impl std::fmt::Debug for UploadWorkerCompletion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("UploadWorkerCompletion")
+            .field("frame_count", &self.frames.len())
+            .field(
+                "encoded_frame_bytes",
+                &self.frames.iter().map(Vec::len).sum::<usize>(),
+            )
+            .field("terminal", &self.terminal)
+            .field("files", &self.files)
+            .field("total_files", &self.total_files)
+            .field("bytes", &self.bytes)
+            .field("error", &self.error)
+            .field("reply_uses_8bit_controls", &self.reply_uses_8bit_controls)
+            .field("acknowledge_present", &self.acknowledge.is_some())
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -88,16 +176,7 @@ impl App {
         command: KittyFileTransferCommand,
     ) {
         if command.action == KittyFileTransferAction::Receive {
-            self.write_kitty_status(
-                origin,
-                command.reply_uses_8bit_controls,
-                transfer_status(
-                    &command.id,
-                    &command.file_id,
-                    KittyFileTransferStatusCode::PermissionDenied,
-                    "host-to-child file transfer is not supported",
-                ),
-            );
+            self.request_kitty_upload(origin, command);
             return;
         }
         if command.action == KittyFileTransferAction::Send {
@@ -110,7 +189,25 @@ impl App {
             id: command.id.clone(),
         };
         if command.action == KittyFileTransferAction::Cancel {
+            if self.cancel_kitty_upload(&key, command.reply_uses_8bit_controls, true) {
+                return;
+            }
             self.cancel_kitty_download(&key, command.reply_uses_8bit_controls, true);
+            return;
+        }
+
+        if self
+            .kitty_file_transfers
+            .pending_upload
+            .as_ref()
+            .is_some_and(|pending| pending.key == key)
+        {
+            self.collect_kitty_upload_path(command);
+            return;
+        }
+
+        if let Some(token) = self.kitty_file_transfers.upload_tokens.get(&key).copied() {
+            self.route_kitty_upload_command(token, command);
             return;
         }
 
@@ -187,6 +284,258 @@ impl App {
         }
     }
 
+    fn request_kitty_upload(
+        &mut self,
+        origin: TerminalEventOrigin,
+        command: KittyFileTransferCommand,
+    ) {
+        let key = TransferKey {
+            origin,
+            id: command.id.clone(),
+        };
+        let expected_paths = command
+            .size
+            .and_then(|size| usize::try_from(size).ok())
+            .filter(|size| (1..=MAX_KITTY_UPLOAD_PATHS).contains(size));
+        let unsupported = if command.quiet != 0 {
+            Some("quiet transfer modes are not supported")
+        } else if command.bypass_present {
+            Some("confirmation bypass credentials are not supported")
+        } else if command.transmission_type != KittyFileTransmissionType::Simple {
+            Some("rsync transfer mode is not supported")
+        } else if expected_paths.is_none() {
+            Some("receive must declare between 1 and 16 paths")
+        } else if command.compression != termeric_core::KittyFileTransferCompression::None
+            || command.file_type != KittyFileTransferType::Regular
+            || command.mtime_ns.is_some()
+            || command.permissions.is_some()
+            || command.status.is_some()
+            || command.parent.is_some()
+            || command.name.is_some()
+            || !command.file_id.is_empty()
+            || !command.data.is_empty()
+        {
+            Some("the initial receive command contains unexpected file fields")
+        } else {
+            None
+        };
+        if let Some(reason) = unsupported {
+            self.write_kitty_status(
+                origin,
+                command.reply_uses_8bit_controls,
+                transfer_status(
+                    &command.id,
+                    "",
+                    KittyFileTransferStatusCode::Invalid,
+                    reason,
+                ),
+            );
+            return;
+        }
+        if self.kitty_file_transfers.tokens.contains_key(&key)
+            || self.kitty_file_transfers.upload_tokens.contains_key(&key)
+            || self
+                .kitty_file_transfers
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.key == key)
+            || self
+                .kitty_file_transfers
+                .pending_upload
+                .as_ref()
+                .is_some_and(|pending| pending.key == key)
+        {
+            self.write_kitty_status(
+                origin,
+                command.reply_uses_8bit_controls,
+                transfer_status(
+                    &command.id,
+                    "",
+                    KittyFileTransferStatusCode::Busy,
+                    "transfer id is already active",
+                ),
+            );
+            return;
+        }
+        if self.kitty_file_transfers.pending.is_some()
+            || self.kitty_file_transfers.pending_upload.is_some()
+            || self.kitty_file_transfers.active.len()
+                + self.kitty_file_transfers.active_uploads.len()
+                >= MAX_ACTIVE_KITTY_DOWNLOADS
+            || self.info_overlay.is_active()
+        {
+            self.write_kitty_status(
+                origin,
+                command.reply_uses_8bit_controls,
+                transfer_status(
+                    &command.id,
+                    "",
+                    KittyFileTransferStatusCode::Busy,
+                    "another confirmation or too many transfers are active",
+                ),
+            );
+            return;
+        }
+        if !self.kitty_download_origin_allowed(origin) {
+            self.write_kitty_status(
+                origin,
+                command.reply_uses_8bit_controls,
+                transfer_status(
+                    &command.id,
+                    "",
+                    KittyFileTransferStatusCode::PermissionDenied,
+                    "this terminal type cannot read host files",
+                ),
+            );
+            return;
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.write_kitty_status(
+                origin,
+                command.reply_uses_8bit_controls,
+                transfer_status(
+                    &command.id,
+                    "",
+                    KittyFileTransferStatusCode::PermissionDenied,
+                    "host file reads are currently supported only on Linux",
+                ),
+            );
+            return;
+        }
+
+        self.kitty_file_transfers.next_token = self
+            .kitty_file_transfers
+            .next_token
+            .checked_add(1)
+            .unwrap_or(1);
+        self.kitty_file_transfers.pending_upload = Some(PendingUpload {
+            request_id: None,
+            token: self.kitty_file_transfers.next_token,
+            key,
+            expected_paths: expected_paths.expect("validated path count"),
+            paths: Vec::with_capacity(expected_paths.expect("validated path count")),
+            reply_uses_8bit_controls: command.reply_uses_8bit_controls,
+            created_at: Instant::now(),
+        });
+    }
+
+    fn collect_kitty_upload_path(&mut self, command: KittyFileTransferCommand) {
+        let Some(pending) = self.kitty_file_transfers.pending_upload.as_mut() else {
+            return;
+        };
+        let valid = pending.request_id.is_none()
+            && command.action == KittyFileTransferAction::File
+            && command.quiet == 0
+            && !command.bypass_present
+            && command.transmission_type == KittyFileTransmissionType::Simple
+            && command.compression == termeric_core::KittyFileTransferCompression::None
+            && command.file_type == KittyFileTransferType::Regular
+            && !command.file_id.is_empty()
+            && command.name.is_some()
+            && command.mtime_ns.is_none()
+            && command.permissions.is_none()
+            && command.size.is_none()
+            && command.status.is_none()
+            && command.parent.is_none()
+            && command.data.is_empty();
+        if !valid {
+            self.deny_pending_kitty_upload(
+                Some(KittyFileTransferStatusCode::Invalid),
+                "invalid path specification or data arrived before approval",
+            );
+            return;
+        }
+        if pending
+            .paths
+            .iter()
+            .any(|path| path.file_id == command.file_id)
+        {
+            self.deny_pending_kitty_upload(
+                Some(KittyFileTransferStatusCode::Invalid),
+                "duplicate file id",
+            );
+            return;
+        }
+        let requested_name = command.name.expect("validated name");
+        let path = match resolve_kitty_upload_path(&requested_name) {
+            Ok(path) => path,
+            Err(error) => {
+                self.deny_pending_kitty_upload(Some(KittyFileTransferStatusCode::Invalid), &error);
+                return;
+            }
+        };
+        if pending.paths.iter().any(|existing| existing.path == path) {
+            self.deny_pending_kitty_upload(
+                Some(KittyFileTransferStatusCode::Invalid),
+                "duplicate requested path",
+            );
+            return;
+        }
+        pending.paths.push(UploadPath {
+            file_id: command.file_id,
+            requested_name,
+            path,
+        });
+        if pending.paths.len() == pending.expected_paths {
+            self.show_kitty_upload_consent();
+        }
+    }
+
+    fn show_kitty_upload_consent(&mut self) {
+        if self.info_overlay.is_active() {
+            self.deny_pending_kitty_upload(
+                Some(KittyFileTransferStatusCode::Busy),
+                "another information dialog appeared before path collection completed",
+            );
+            return;
+        }
+        let Some(pending) = self.kitty_file_transfers.pending_upload.as_ref() else {
+            return;
+        };
+        let mut lines = vec![
+            "The exact originating terminal wants to read files from this computer.".into(),
+            String::new(),
+            format!("Session: {}", pending.key.id),
+            format!("Origin: {}", describe_origin(pending.key.origin)),
+            format!("Limits: at most {MAX_KITTY_UPLOAD_PATHS} regular files and 64 MiB"),
+            String::new(),
+            "Requested paths:".into(),
+        ];
+        lines.extend(
+            pending
+                .paths
+                .iter()
+                .map(|path| format!("  {}", path.path.display())),
+        );
+        lines.extend([
+            String::new(),
+            "Directories, links, and non-regular files will be refused.".into(),
+            "Only continue if you trust the command that requested these exact files.".into(),
+            String::new(),
+            "  A  Allow these reads once".into(),
+            "  D  Deny".into(),
+        ]);
+        let allow_line = lines.len() - 2;
+        let deny_line = lines.len() - 1;
+        let request_id = self.info_overlay.show_choices(
+            "Allow terminal to read host files?",
+            lines,
+            vec![
+                InfoOverlayChoice::new(
+                    "kitty-upload-allow",
+                    "Allow these reads once",
+                    allow_line,
+                    Some('a'),
+                ),
+                InfoOverlayChoice::new("kitty-upload-deny", "Deny", deny_line, Some('d')),
+            ],
+        );
+        if let Some(pending) = self.kitty_file_transfers.pending_upload.as_mut() {
+            pending.request_id = Some(request_id);
+        }
+    }
+
     fn request_kitty_download(
         &mut self,
         origin: TerminalEventOrigin,
@@ -231,9 +580,15 @@ impl App {
             return;
         }
         if self.kitty_file_transfers.tokens.contains_key(&key)
+            || self.kitty_file_transfers.upload_tokens.contains_key(&key)
             || self
                 .kitty_file_transfers
                 .pending
+                .as_ref()
+                .is_some_and(|pending| pending.key == key)
+            || self
+                .kitty_file_transfers
+                .pending_upload
                 .as_ref()
                 .is_some_and(|pending| pending.key == key)
         {
@@ -250,7 +605,10 @@ impl App {
             return;
         }
         if self.kitty_file_transfers.pending.is_some()
-            || self.kitty_file_transfers.active.len() >= MAX_ACTIVE_KITTY_DOWNLOADS
+            || self.kitty_file_transfers.pending_upload.is_some()
+            || self.kitty_file_transfers.active.len()
+                + self.kitty_file_transfers.active_uploads.len()
+                >= MAX_ACTIVE_KITTY_DOWNLOADS
             || self.info_overlay.is_active()
         {
             self.write_kitty_status(
@@ -467,20 +825,297 @@ impl App {
         true
     }
 
+    pub(super) fn handle_kitty_upload_choice(&mut self, request_id: u64, choice_id: &str) -> bool {
+        let Some(pending) = self.kitty_file_transfers.pending_upload.as_ref() else {
+            return false;
+        };
+        if pending.request_id != Some(request_id)
+            || !matches!(choice_id, "kitty-upload-allow" | "kitty-upload-deny")
+        {
+            return false;
+        }
+        self.info_overlay.dismiss(request_id);
+        if choice_id == "kitty-upload-deny" {
+            self.deny_pending_kitty_upload(
+                Some(KittyFileTransferStatusCode::PermissionDenied),
+                "user refused the host file read",
+            );
+            return true;
+        }
+        let pending = self
+            .kitty_file_transfers
+            .pending_upload
+            .take()
+            .expect("checked pending upload");
+        if !self.kitty_download_origin_allowed(pending.key.origin) {
+            self.write_kitty_status(
+                pending.key.origin,
+                pending.reply_uses_8bit_controls,
+                transfer_status(
+                    &pending.key.id,
+                    "",
+                    KittyFileTransferStatusCode::PermissionDenied,
+                    "this terminal type can no longer read host files",
+                ),
+            );
+            return true;
+        }
+        if self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.terminal_for_origin(pending.key.origin))
+            .is_none()
+        {
+            return true;
+        }
+        let Some(window_id) = self.window.as_ref().map(|window| window.id()) else {
+            self.write_kitty_status(
+                pending.key.origin,
+                pending.reply_uses_8bit_controls,
+                transfer_status(
+                    &pending.key.id,
+                    "",
+                    KittyFileTransferStatusCode::PermissionDenied,
+                    "a native window is required for consented transfers",
+                ),
+            );
+            return true;
+        };
+        let Some(proxy) = EVENT_LOOP_PROXY.get().cloned() else {
+            self.write_kitty_status(
+                pending.key.origin,
+                pending.reply_uses_8bit_controls,
+                transfer_status(
+                    &pending.key.id,
+                    "",
+                    KittyFileTransferStatusCode::Io,
+                    "transfer event channel is unavailable",
+                ),
+            );
+            return true;
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let sender = match start_upload_worker(
+            window_id,
+            pending.token,
+            pending.key.id.clone(),
+            pending.paths,
+            pending.reply_uses_8bit_controls,
+            Arc::clone(&cancellation),
+            proxy,
+        ) {
+            Ok(sender) => sender,
+            Err(error) => {
+                self.write_kitty_status(
+                    pending.key.origin,
+                    pending.reply_uses_8bit_controls,
+                    transfer_status(&pending.key.id, "", KittyFileTransferStatusCode::Io, &error),
+                );
+                return true;
+            }
+        };
+        let toast = self.toasts.persistent_info(format!(
+            "Sending approved host files for session {}",
+            pending.key.id
+        ));
+        self.kitty_file_transfers
+            .upload_tokens
+            .insert(pending.key.clone(), pending.token);
+        self.kitty_file_transfers.active_uploads.insert(
+            pending.token,
+            ActiveUpload {
+                key: pending.key.clone(),
+                sender,
+                cancellation,
+                progress_toast_id: toast,
+                files_sent: 0,
+                total_files: pending.expected_paths,
+                bytes_sent: 0,
+            },
+        );
+        if !self.write_kitty_status(
+            pending.key.origin,
+            pending.reply_uses_8bit_controls,
+            transfer_status(&pending.key.id, "", KittyFileTransferStatusCode::Ok, ""),
+        ) {
+            self.remove_active_kitty_upload(pending.token);
+        }
+        true
+    }
+
+    fn route_kitty_upload_command(&mut self, token: u64, command: KittyFileTransferCommand) {
+        if command.action == KittyFileTransferAction::Finish {
+            if let Some(active) = self.remove_active_kitty_upload(token) {
+                let message = format!(
+                    "Sent {}/{} approved host files ({} bytes)",
+                    active.files_sent, active.total_files, active.bytes_sent
+                );
+                if active.files_sent == active.total_files {
+                    self.toasts.success(message);
+                } else {
+                    self.toasts.warning(message);
+                }
+            }
+            return;
+        }
+        if command.action == KittyFileTransferAction::Status {
+            self.remove_active_kitty_upload(token);
+            return;
+        }
+        let valid = command.action == KittyFileTransferAction::File
+            && command.quiet == 0
+            && !command.bypass_present
+            && command.transmission_type == KittyFileTransmissionType::Simple
+            && command.compression == termeric_core::KittyFileTransferCompression::None
+            && command.file_type == KittyFileTransferType::Regular
+            && !command.file_id.is_empty()
+            && command.name.is_some()
+            && command.mtime_ns.is_none()
+            && command.permissions.is_none()
+            && command.size.is_none()
+            && command.status.is_none()
+            && command.parent.is_none()
+            && command.data.is_empty();
+        if !valid {
+            self.fail_active_kitty_upload(
+                token,
+                command.reply_uses_8bit_controls,
+                &command.file_id,
+                KittyFileTransferStatusCode::Invalid,
+                "unsupported or invalid host file request",
+            );
+            return;
+        }
+        let reply_mode = command.reply_uses_8bit_controls;
+        let file_id = command.file_id.clone();
+        let send_result = self
+            .kitty_file_transfers
+            .active_uploads
+            .get(&token)
+            .expect("upload token and active transfer stay synchronized")
+            .sender
+            .try_send(UploadWorkerCommand { command });
+        if let Err(error) = send_result {
+            let message = match error {
+                TrySendError::Full(_) => "host-read worker queue is full",
+                TrySendError::Disconnected(_) => "host-read worker stopped",
+            };
+            self.fail_active_kitty_upload(
+                token,
+                reply_mode,
+                &file_id,
+                KittyFileTransferStatusCode::Busy,
+                message,
+            );
+        }
+    }
+
+    fn cancel_kitty_upload(
+        &mut self,
+        key: &TransferKey,
+        reply_uses_8bit_controls: bool,
+        acknowledge: bool,
+    ) -> bool {
+        if self
+            .kitty_file_transfers
+            .pending_upload
+            .as_ref()
+            .is_some_and(|pending| &pending.key == key)
+        {
+            self.deny_pending_kitty_upload(
+                acknowledge.then_some(KittyFileTransferStatusCode::Canceled),
+                "",
+            );
+            return true;
+        }
+        let Some(token) = self.kitty_file_transfers.upload_tokens.get(key).copied() else {
+            return false;
+        };
+        self.remove_active_kitty_upload(token);
+        if acknowledge {
+            self.write_kitty_status(
+                key.origin,
+                reply_uses_8bit_controls,
+                transfer_status(&key.id, "", KittyFileTransferStatusCode::Canceled, ""),
+            );
+        }
+        true
+    }
+
+    fn deny_pending_kitty_upload(
+        &mut self,
+        code: Option<KittyFileTransferStatusCode>,
+        message: &str,
+    ) {
+        let Some(pending) = self.kitty_file_transfers.pending_upload.take() else {
+            return;
+        };
+        if let Some(request_id) = pending.request_id {
+            self.info_overlay.dismiss(request_id);
+        }
+        if let Some(code) = code {
+            self.write_kitty_status(
+                pending.key.origin,
+                pending.reply_uses_8bit_controls,
+                transfer_status(&pending.key.id, "", code, message),
+            );
+        }
+    }
+
+    fn fail_active_kitty_upload(
+        &mut self,
+        token: u64,
+        reply_uses_8bit_controls: bool,
+        file_id: &str,
+        code: KittyFileTransferStatusCode,
+        message: &str,
+    ) {
+        let Some(active) = self.remove_active_kitty_upload(token) else {
+            return;
+        };
+        self.write_kitty_status(
+            active.key.origin,
+            reply_uses_8bit_controls,
+            transfer_status(&active.key.id, file_id, code, message),
+        );
+        self.toasts
+            .error(format!("Host file transfer failed: {message}"));
+    }
+
+    fn remove_active_kitty_upload(&mut self, token: u64) -> Option<ActiveUpload> {
+        let active = self.kitty_file_transfers.active_uploads.remove(&token)?;
+        active.cancellation.store(true, Ordering::Release);
+        self.kitty_file_transfers.upload_tokens.remove(&active.key);
+        self.toasts.dismiss(active.progress_toast_id);
+        Some(active)
+    }
+
     pub(super) fn dismiss_pending_kitty_download(&mut self, request_id: u64) -> bool {
         if self
             .kitty_file_transfers
             .pending
             .as_ref()
-            .is_none_or(|pending| pending.request_id != request_id)
+            .is_some_and(|pending| pending.request_id == request_id)
         {
-            return false;
+            self.deny_pending_kitty_download(
+                Some(KittyFileTransferStatusCode::PermissionDenied),
+                "user dismissed the transfer confirmation",
+            );
+            return true;
         }
-        self.deny_pending_kitty_download(
-            Some(KittyFileTransferStatusCode::PermissionDenied),
-            "user dismissed the transfer confirmation",
-        );
-        true
+        if self
+            .kitty_file_transfers
+            .pending_upload
+            .as_ref()
+            .is_some_and(|pending| pending.request_id == Some(request_id))
+        {
+            self.deny_pending_kitty_upload(
+                Some(KittyFileTransferStatusCode::PermissionDenied),
+                "user dismissed the host file read confirmation",
+            );
+            return true;
+        }
+        false
     }
 
     fn deny_pending_kitty_download(
@@ -622,6 +1257,63 @@ impl App {
         }
     }
 
+    pub(super) fn handle_kitty_file_upload_completed(
+        &mut self,
+        token: u64,
+        mut completion: UploadWorkerCompletion,
+    ) {
+        let Some(active) = self.kitty_file_transfers.active_uploads.get(&token) else {
+            if let Some(acknowledge) = completion.acknowledge.take() {
+                let _ = acknowledge.try_send(false);
+            }
+            return;
+        };
+        let origin = active.key.origin;
+        let progress_toast_id = active.progress_toast_id;
+        let origin_exists = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.terminal_for_origin(origin))
+            .is_some();
+        let mut written = origin_exists;
+        for canonical in &completion.frames {
+            if !written {
+                break;
+            }
+            let reply =
+                Terminal::frame_pty_reply_for_mode(canonical, completion.reply_uses_8bit_controls);
+            written = self
+                .tabs
+                .as_mut()
+                .is_some_and(|tabs| tabs.write_to_origin(origin, &reply).is_ok());
+        }
+        if let Some(acknowledge) = completion.acknowledge.take() {
+            let _ = acknowledge.try_send(written);
+        }
+        if !written || completion.terminal {
+            self.remove_active_kitty_upload(token);
+            if let Some(error) = completion.error {
+                self.toasts
+                    .error(format!("Host file transfer failed: {error}"));
+            }
+            return;
+        }
+        if let Some(active) = self.kitty_file_transfers.active_uploads.get_mut(&token) {
+            active.files_sent = completion.files;
+            active.total_files = completion.total_files;
+            active.bytes_sent = completion.bytes;
+        }
+        self.toasts.update_persistent(
+            progress_toast_id,
+            format!(
+                "Sending approved host files: {}/{} files, {}",
+                completion.files,
+                completion.total_files,
+                format_transfer_bytes_sent(completion.bytes)
+            ),
+        );
+    }
+
     fn write_kitty_status(
         &mut self,
         origin: TerminalEventOrigin,
@@ -660,6 +1352,28 @@ impl App {
             );
         }
 
+        let stale_pending_upload = self
+            .kitty_file_transfers
+            .pending_upload
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.created_at.elapsed() >= PENDING_UPLOAD_TIMEOUT
+                    || pending
+                        .request_id
+                        .is_some_and(|request_id| !self.info_overlay.is_awaiting(request_id))
+                    || self
+                        .tabs
+                        .as_ref()
+                        .and_then(|tabs| tabs.terminal_for_origin(pending.key.origin))
+                        .is_none()
+            });
+        if stale_pending_upload {
+            self.deny_pending_kitty_upload(
+                Some(KittyFileTransferStatusCode::PermissionDenied),
+                "host file read request expired or its confirmation is no longer available",
+            );
+        }
+
         let stale_tokens: Vec<_> = self
             .kitty_file_transfers
             .active
@@ -675,14 +1389,42 @@ impl App {
         for token in &stale_tokens {
             self.remove_active_kitty_download(*token);
         }
-        stale_pending || !stale_tokens.is_empty()
+        let stale_upload_tokens: Vec<_> = self
+            .kitty_file_transfers
+            .active_uploads
+            .iter()
+            .filter_map(|(token, active)| {
+                self.tabs
+                    .as_ref()
+                    .and_then(|tabs| tabs.terminal_for_origin(active.key.origin))
+                    .is_none()
+                    .then_some(*token)
+            })
+            .collect();
+        for token in &stale_upload_tokens {
+            self.remove_active_kitty_upload(*token);
+        }
+        stale_pending
+            || stale_pending_upload
+            || !stale_tokens.is_empty()
+            || !stale_upload_tokens.is_empty()
     }
 
     pub(super) fn shutdown_kitty_file_transfers(&mut self) {
         self.kitty_file_transfers.pending = None;
+        self.kitty_file_transfers.pending_upload = None;
         let tokens: Vec<_> = self.kitty_file_transfers.active.keys().copied().collect();
         for token in tokens {
             self.remove_active_kitty_download(token);
+        }
+        let upload_tokens: Vec<_> = self
+            .kitty_file_transfers
+            .active_uploads
+            .keys()
+            .copied()
+            .collect();
+        for token in upload_tokens {
+            self.remove_active_kitty_upload(token);
         }
     }
 }
@@ -695,6 +1437,10 @@ fn format_transfer_bytes(bytes: u64) -> String {
     } else {
         format!("{bytes} bytes received")
     }
+}
+
+fn format_transfer_bytes_sent(bytes: u64) -> String {
+    format_transfer_bytes(bytes).replace("received", "sent")
 }
 
 fn describe_origin(origin: TerminalEventOrigin) -> String {
@@ -720,6 +1466,591 @@ fn transfer_status(
         name: None,
         size: None,
         transmission_type: KittyFileTransmissionType::Simple,
+    }
+}
+
+fn resolve_kitty_upload_path(name: &str) -> Result<PathBuf, String> {
+    if name.is_empty() || name.len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES {
+        return Err("empty or oversized requested path".into());
+    }
+    if name.chars().any(|character| {
+        character.is_control()
+            || matches!(
+                character,
+                '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+    }) {
+        return Err("requested path contains unsafe display controls".into());
+    }
+    let components = name
+        .strip_prefix("~/")
+        .or_else(|| name.strip_prefix('/'))
+        .unwrap_or(name);
+    if components.is_empty()
+        || components.split('/').any(|component| {
+            component.is_empty()
+                || matches!(component, "." | "..")
+                || component.as_bytes().contains(&0)
+                || component.len() > 255
+        })
+    {
+        return Err("requested path contains empty, traversal, or oversized components".into());
+    }
+    let home = directories::BaseDirs::new()
+        .map(|dirs| dirs.home_dir().to_path_buf())
+        .ok_or_else(|| "home directory is unavailable".to_string())?;
+    let path = if name == "~" {
+        home
+    } else if let Some(relative) = name.strip_prefix("~/") {
+        home.join(relative)
+    } else if std::path::Path::new(name).is_absolute() {
+        PathBuf::from(name)
+    } else {
+        home.join(name)
+    };
+    if path.as_os_str().as_encoded_bytes().len() > termeric_core::MAX_KITTY_TRANSFER_PATH_BYTES {
+        return Err("resolved requested path is too large".into());
+    }
+    Ok(path)
+}
+
+#[cfg(target_os = "linux")]
+fn start_upload_worker(
+    window_id: winit::window::WindowId,
+    token: u64,
+    session_id: String,
+    paths: Vec<UploadPath>,
+    reply_uses_8bit_controls: bool,
+    cancellation: Arc<AtomicBool>,
+    proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+) -> Result<SyncSender<UploadWorkerCommand>, String> {
+    let (sender, receiver) = sync_channel::<UploadWorkerCommand>(MAX_KITTY_UPLOAD_PATHS + 2);
+    std::thread::Builder::new()
+        .name("termeric-kitty-upload".into())
+        .spawn(move || {
+            run_upload_worker(
+                receiver,
+                session_id,
+                paths,
+                reply_uses_8bit_controls,
+                cancellation,
+                |result| {
+                    proxy
+                        .send_event(AppEvent::KittyFileUploadCompleted {
+                            window_id,
+                            token,
+                            result,
+                        })
+                        .is_ok()
+                },
+            );
+        })
+        .map_err(|error| format!("could not start host-read worker: {error}"))?;
+    Ok(sender)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_upload_worker(
+    _window_id: winit::window::WindowId,
+    _token: u64,
+    _session_id: String,
+    _paths: Vec<UploadPath>,
+    _reply_uses_8bit_controls: bool,
+    _cancellation: Arc<AtomicBool>,
+    _proxy: winit::event_loop::EventLoopProxy<AppEvent>,
+) -> Result<SyncSender<UploadWorkerCommand>, String> {
+    Err("host file reads are currently supported only on Linux".into())
+}
+
+#[cfg(target_os = "linux")]
+fn run_upload_worker(
+    receiver: Receiver<UploadWorkerCommand>,
+    session_id: String,
+    paths: Vec<UploadPath>,
+    reply_uses_8bit_controls: bool,
+    cancellation: Arc<AtomicBool>,
+    mut emit: impl FnMut(UploadWorkerCompletion) -> bool,
+) {
+    use std::ffi::CString;
+    use std::fs::File;
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+
+    struct Source {
+        requested_name: String,
+        path_name: String,
+        file: File,
+        size: u64,
+        sent: bool,
+    }
+
+    fn open_without_symlinks(path: &std::path::Path) -> std::io::Result<File> {
+        #[repr(C)]
+        struct OpenHow {
+            flags: u64,
+            mode: u64,
+            resolve: u64,
+        }
+
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "approved path contains NUL",
+            )
+        })?;
+        let how = OpenHow {
+            flags: (libc::O_RDONLY | libc::O_CLOEXEC) as u64,
+            mode: 0,
+            resolve: libc::RESOLVE_NO_SYMLINKS,
+        };
+        // SAFETY: `path` is a live NUL-terminated CString, `how` points to a
+        // fully initialized `open_how` for the supplied size, and a successful
+        // syscall transfers ownership of one new descriptor to this function.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                libc::AT_FDCWD,
+                path.as_ptr(),
+                &how,
+                std::mem::size_of::<OpenHow>(),
+            )
+        };
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `openat2` returned a new owned descriptor and it has not been
+        // wrapped or closed elsewhere.
+        Ok(unsafe { File::from_raw_fd(descriptor as libc::c_int) })
+    }
+
+    fn error_frame(
+        session_id: &str,
+        file_id: &str,
+        code: KittyFileTransferStatusCode,
+        message: &str,
+    ) -> Vec<u8> {
+        transfer_status(session_id, file_id, code, message).canonical_reply()
+    }
+
+    fn emit_with_ack(
+        emit: &mut impl FnMut(UploadWorkerCompletion) -> bool,
+        cancellation: &AtomicBool,
+        frames: Vec<Vec<u8>>,
+        terminal: bool,
+        files: usize,
+        total_files: usize,
+        bytes: u64,
+        error: Option<String>,
+        reply_uses_8bit_controls: bool,
+    ) -> bool {
+        let (sender, receiver) = sync_channel(1);
+        if !emit(UploadWorkerCompletion {
+            frames,
+            terminal,
+            files,
+            total_files,
+            bytes,
+            error,
+            reply_uses_8bit_controls,
+            acknowledge: Some(sender),
+        }) {
+            return false;
+        }
+        loop {
+            if cancellation.load(Ordering::Acquire) {
+                return false;
+            }
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(written) => return written,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+    }
+
+    let total_files = paths.len();
+    let mut sources = HashMap::with_capacity(total_files);
+    let mut metadata_frames = Vec::with_capacity(total_files + 1);
+    let mut total_bytes = 0u64;
+    for path in paths {
+        if cancellation.load(Ordering::Acquire) {
+            return;
+        }
+        let file = match open_without_symlinks(&path.path) {
+            Ok(file) => file,
+            Err(error) => {
+                let message = format!("could not open approved regular file: {error}");
+                let code = if error.kind() == std::io::ErrorKind::PermissionDenied {
+                    KittyFileTransferStatusCode::PermissionDenied
+                } else {
+                    KittyFileTransferStatusCode::Io
+                };
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(&session_id, &path.file_id, code, &message)],
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
+        };
+        let metadata = match file.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(_) => {
+                let message = "approved path is not a regular file".to_string();
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(
+                        &session_id,
+                        &path.file_id,
+                        KittyFileTransferStatusCode::Invalid,
+                        &message,
+                    )],
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
+            Err(error) => {
+                let message = format!("could not inspect approved regular file: {error}");
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(
+                        &session_id,
+                        &path.file_id,
+                        KittyFileTransferStatusCode::Io,
+                        &message,
+                    )],
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
+        };
+        match std::fs::symlink_metadata(&path.path) {
+            Ok(path_metadata)
+                if path_metadata.is_file()
+                    && path_metadata.dev() == metadata.dev()
+                    && path_metadata.ino() == metadata.ino() => {}
+            Ok(_) => {
+                let message =
+                    "approved path changed identity while its file was being opened".to_string();
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(
+                        &session_id,
+                        &path.file_id,
+                        KittyFileTransferStatusCode::PermissionDenied,
+                        &message,
+                    )],
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
+            Err(error) => {
+                let message = format!("could not revalidate approved file identity: {error}");
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(
+                        &session_id,
+                        &path.file_id,
+                        KittyFileTransferStatusCode::Io,
+                        &message,
+                    )],
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
+        }
+        total_bytes = match total_bytes.checked_add(metadata.len()) {
+            Some(total) if total <= MAX_KITTY_UPLOAD_BYTES => total,
+            _ => {
+                let message = "approved files exceed the 64 MiB transfer limit".to_string();
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(
+                        &session_id,
+                        &path.file_id,
+                        KittyFileTransferStatusCode::TooLarge,
+                        &message,
+                    )],
+                    true,
+                    0,
+                    total_files,
+                    0,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
+        };
+        let Some(path_name) = path.path.to_str().map(str::to_owned) else {
+            let message = "approved path is not valid UTF-8".to_string();
+            let _ = emit_with_ack(
+                &mut emit,
+                &cancellation,
+                vec![error_frame(
+                    &session_id,
+                    &path.file_id,
+                    KittyFileTransferStatusCode::Invalid,
+                    &message,
+                )],
+                true,
+                0,
+                total_files,
+                0,
+                Some(message),
+                reply_uses_8bit_controls,
+            );
+            return;
+        };
+        let mtime_ns = metadata
+            .mtime()
+            .saturating_mul(1_000_000_000)
+            .saturating_add(metadata.mtime_nsec());
+        metadata_frames.push(
+            KittyFileTransferReply::File {
+                id: session_id.clone(),
+                file_id: path.file_id.clone(),
+                actual_file_id: path.file_id.clone(),
+                name: path_name.clone(),
+                mtime_ns,
+                permissions: metadata.mode() & 0o777,
+                size: metadata.len(),
+            }
+            .canonical_reply(),
+        );
+        sources.insert(
+            path.file_id,
+            Source {
+                requested_name: path.requested_name,
+                path_name,
+                file,
+                size: metadata.len(),
+                sent: false,
+            },
+        );
+    }
+    let home = directories::BaseDirs::new()
+        .and_then(|dirs| dirs.home_dir().to_str().map(str::to_owned))
+        .unwrap_or_else(|| "/".into());
+    let mut ready = transfer_status(&session_id, "", KittyFileTransferStatusCode::Ok, "");
+    ready.name = Some(home);
+    metadata_frames.push(ready.canonical_reply());
+    if !emit_with_ack(
+        &mut emit,
+        &cancellation,
+        metadata_frames,
+        false,
+        0,
+        total_files,
+        0,
+        None,
+        reply_uses_8bit_controls,
+    ) {
+        return;
+    }
+
+    let mut files_sent = 0usize;
+    let mut bytes_sent = 0u64;
+    loop {
+        let command = match receiver.recv_timeout(WORKER_IDLE_TIMEOUT) {
+            Ok(command) => command.command,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let message = "host file read expired after ten minutes of inactivity".to_string();
+                let _ = emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    vec![error_frame(
+                        &session_id,
+                        "",
+                        KittyFileTransferStatusCode::TimedOut,
+                        &message,
+                    )],
+                    true,
+                    files_sent,
+                    total_files,
+                    bytes_sent,
+                    Some(message),
+                    reply_uses_8bit_controls,
+                );
+                return;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        if cancellation.load(Ordering::Acquire) {
+            return;
+        }
+        let Some(source) = sources.get_mut(&command.file_id) else {
+            let message = "requested an unknown approved file id".to_string();
+            let _ = emit_with_ack(
+                &mut emit,
+                &cancellation,
+                vec![error_frame(
+                    &session_id,
+                    &command.file_id,
+                    KittyFileTransferStatusCode::Invalid,
+                    &message,
+                )],
+                true,
+                files_sent,
+                total_files,
+                bytes_sent,
+                Some(message),
+                reply_uses_8bit_controls,
+            );
+            return;
+        };
+        if source.sent
+            || command
+                .name
+                .as_deref()
+                .is_none_or(|name| name != source.path_name && name != source.requested_name)
+        {
+            let message = "file was already sent or its path did not match approval".to_string();
+            let _ = emit_with_ack(
+                &mut emit,
+                &cancellation,
+                vec![error_frame(
+                    &session_id,
+                    &command.file_id,
+                    KittyFileTransferStatusCode::Invalid,
+                    &message,
+                )],
+                true,
+                files_sent,
+                total_files,
+                bytes_sent,
+                Some(message),
+                reply_uses_8bit_controls,
+            );
+            return;
+        }
+        let mut remaining = source.size;
+        let mut batch = Vec::with_capacity(UPLOAD_BATCH_CHUNKS);
+        if remaining == 0 {
+            batch.push(
+                KittyFileTransferReply::Data {
+                    id: session_id.clone(),
+                    file_id: command.file_id.clone(),
+                    data: Box::default(),
+                    last: true,
+                }
+                .canonical_reply(),
+            );
+        }
+        while remaining > 0 {
+            if cancellation.load(Ordering::Acquire) {
+                return;
+            }
+            let mut chunk = vec![0u8; termeric_core::MAX_KITTY_TRANSFER_DATA_BYTES];
+            let wanted = usize::try_from(remaining.min(chunk.len() as u64)).unwrap_or(chunk.len());
+            let count = match source.file.read(&mut chunk[..wanted]) {
+                Ok(0) => {
+                    let message = "approved file changed or ended while being read".to_string();
+                    let _ = emit_with_ack(
+                        &mut emit,
+                        &cancellation,
+                        vec![error_frame(
+                            &session_id,
+                            &command.file_id,
+                            KittyFileTransferStatusCode::Io,
+                            &message,
+                        )],
+                        true,
+                        files_sent,
+                        total_files,
+                        bytes_sent,
+                        Some(message),
+                        reply_uses_8bit_controls,
+                    );
+                    return;
+                }
+                Ok(count) => count,
+                Err(error) => {
+                    let message = format!("could not read approved regular file: {error}");
+                    let _ = emit_with_ack(
+                        &mut emit,
+                        &cancellation,
+                        vec![error_frame(
+                            &session_id,
+                            &command.file_id,
+                            KittyFileTransferStatusCode::Io,
+                            &message,
+                        )],
+                        true,
+                        files_sent,
+                        total_files,
+                        bytes_sent,
+                        Some(message),
+                        reply_uses_8bit_controls,
+                    );
+                    return;
+                }
+            };
+            chunk.truncate(count);
+            remaining -= count as u64;
+            batch.push(
+                KittyFileTransferReply::Data {
+                    id: session_id.clone(),
+                    file_id: command.file_id.clone(),
+                    data: chunk.into_boxed_slice(),
+                    last: remaining == 0,
+                }
+                .canonical_reply(),
+            );
+            if batch.len() == UPLOAD_BATCH_CHUNKS || remaining == 0 {
+                if !emit_with_ack(
+                    &mut emit,
+                    &cancellation,
+                    std::mem::take(&mut batch),
+                    false,
+                    files_sent + usize::from(remaining == 0),
+                    total_files,
+                    bytes_sent + (source.size - remaining),
+                    None,
+                    reply_uses_8bit_controls,
+                ) {
+                    return;
+                }
+            }
+        }
+        bytes_sent = bytes_sent.saturating_add(source.size);
+        source.sent = true;
+        files_sent += 1;
     }
 }
 
@@ -878,6 +2209,264 @@ mod worker_tests {
         assert_eq!(bytes, 0);
         assert_eq!(status.id, "idle-session");
         assert_eq!(status.code, KittyFileTransferStatusCode::TimedOut);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod upload_worker_tests {
+    use super::*;
+
+    fn request(session: &str, file_id: &str, name: &str) -> KittyFileTransferCommand {
+        KittyFileTransferCommand {
+            action: KittyFileTransferAction::File,
+            compression: termeric_core::KittyFileTransferCompression::None,
+            file_type: KittyFileTransferType::Regular,
+            transmission_type: KittyFileTransmissionType::Simple,
+            id: session.into(),
+            file_id: file_id.into(),
+            quiet: 0,
+            mtime_ns: None,
+            permissions: None,
+            size: None,
+            name: Some(name.into()),
+            status: None,
+            parent: None,
+            data: Box::default(),
+            bypass_present: false,
+            reply_uses_8bit_controls: true,
+        }
+    }
+
+    #[test]
+    fn upload_worker_opens_after_consent_and_streams_bounded_canonical_frames() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("approved.txt");
+        std::fs::write(&path, b"approved contents").unwrap();
+        let path_name = path.to_str().unwrap().to_string();
+        let (sender, receiver) = sync_channel(2);
+        sender
+            .send(UploadWorkerCommand {
+                command: request("upload-test", "f1", &path_name),
+            })
+            .unwrap();
+        drop(sender);
+        let mut completions = Vec::new();
+        run_upload_worker(
+            receiver,
+            "upload-test".into(),
+            vec![UploadPath {
+                file_id: "f1".into(),
+                requested_name: path_name.clone(),
+                path,
+            }],
+            true,
+            Arc::new(AtomicBool::new(false)),
+            |mut completion| {
+                if let Some(acknowledge) = completion.acknowledge.take() {
+                    acknowledge.send(true).unwrap();
+                }
+                completions.push(completion);
+                true
+            },
+        );
+
+        assert_eq!(completions.len(), 2);
+        assert_eq!(completions[0].frames.len(), 2);
+        let metadata = String::from_utf8(completions[0].frames[0].clone()).unwrap();
+        assert!(metadata.starts_with("\u{1b}]5113;ac=file;id=upload-test;fid=f1;"));
+        assert!(metadata.contains(";sz=17;"));
+        assert!(!metadata.contains("approved contents"));
+        let ready = String::from_utf8(completions[0].frames[1].clone()).unwrap();
+        assert!(ready.contains(";ac=status;id=upload-test;"));
+        assert_eq!(completions[1].frames.len(), 1);
+        let payload = String::from_utf8(completions[1].frames[0].clone()).unwrap();
+        assert!(payload.contains(";ac=end_data;id=upload-test;fid=f1;"));
+        assert!(payload.contains("d=YXBwcm92ZWQgY29udGVudHM="));
+        assert_eq!(completions[1].files, 1);
+        assert_eq!(completions[1].bytes, 17);
+        assert!(completions[1].reply_uses_8bit_controls);
+    }
+
+    #[test]
+    fn upload_worker_refuses_symlinks_without_reading_their_targets() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target.txt");
+        let link = temp.path().join("link.txt");
+        std::fs::write(&target, b"must not leak").unwrap();
+        symlink(&target, &link).unwrap();
+        let link_name = link.to_str().unwrap().to_string();
+        let (_sender, receiver) = sync_channel(1);
+        let mut completions = Vec::new();
+        run_upload_worker(
+            receiver,
+            "symlink-test".into(),
+            vec![UploadPath {
+                file_id: "f1".into(),
+                requested_name: link_name.clone(),
+                path: link,
+            }],
+            false,
+            Arc::new(AtomicBool::new(false)),
+            |mut completion| {
+                if let Some(acknowledge) = completion.acknowledge.take() {
+                    acknowledge.send(true).unwrap();
+                }
+                completions.push(completion);
+                true
+            },
+        );
+
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].terminal);
+        assert_eq!(completions[0].bytes, 0);
+        let error = String::from_utf8(completions[0].frames[0].clone()).unwrap();
+        assert!(error.contains(";ac=status;id=symlink-test;fid=f1;"));
+        assert!(!error.contains("must not leak"));
+
+        let real_directory = temp.path().join("real-directory");
+        let linked_directory = temp.path().join("linked-directory");
+        std::fs::create_dir(&real_directory).unwrap();
+        std::fs::write(real_directory.join("nested.txt"), b"also must not leak").unwrap();
+        symlink(&real_directory, &linked_directory).unwrap();
+        let nested = linked_directory.join("nested.txt");
+        let nested_name = nested.to_str().unwrap().to_string();
+        let (_sender, receiver) = sync_channel(1);
+        let mut ancestor_completions = Vec::new();
+        run_upload_worker(
+            receiver,
+            "ancestor-test".into(),
+            vec![UploadPath {
+                file_id: "f2".into(),
+                requested_name: nested_name,
+                path: nested,
+            }],
+            false,
+            Arc::new(AtomicBool::new(false)),
+            |mut completion| {
+                if let Some(acknowledge) = completion.acknowledge.take() {
+                    acknowledge.send(true).unwrap();
+                }
+                ancestor_completions.push(completion);
+                true
+            },
+        );
+        assert_eq!(ancestor_completions.len(), 1);
+        assert!(ancestor_completions[0].terminal);
+        let error = String::from_utf8(ancestor_completions[0].frames[0].clone()).unwrap();
+        assert!(error.contains(";ac=status;id=ancestor-test;fid=f2;"));
+        assert!(!error.contains("also must not leak"));
+    }
+
+    #[test]
+    fn upload_worker_rejects_aggregate_size_before_emitting_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("oversized.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_KITTY_UPLOAD_BYTES + 1).unwrap();
+        drop(file);
+        let path_name = path.to_str().unwrap().to_string();
+        let (_sender, receiver) = sync_channel(1);
+        let mut completions = Vec::new();
+        run_upload_worker(
+            receiver,
+            "oversized-test".into(),
+            vec![UploadPath {
+                file_id: "f1".into(),
+                requested_name: path_name,
+                path,
+            }],
+            false,
+            Arc::new(AtomicBool::new(false)),
+            |mut completion| {
+                if let Some(acknowledge) = completion.acknowledge.take() {
+                    acknowledge.send(true).unwrap();
+                }
+                completions.push(completion);
+                true
+            },
+        );
+
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].terminal);
+        assert_eq!(completions[0].bytes, 0);
+        let error = String::from_utf8(completions[0].frames[0].clone()).unwrap();
+        assert!(error.contains("st=RUZCSUc6"));
+        assert!(!error.contains("ac=file"));
+    }
+
+    #[test]
+    fn upload_worker_batches_large_files_behind_acknowledgements() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("multi-chunk.bin");
+        let size = termeric_core::MAX_KITTY_TRANSFER_DATA_BYTES * 9 + 1;
+        std::fs::write(&path, vec![0x5a; size]).unwrap();
+        let path_name = path.to_str().unwrap().to_string();
+        let (sender, receiver) = sync_channel(1);
+        sender
+            .send(UploadWorkerCommand {
+                command: request("batch-test", "f1", &path_name),
+            })
+            .unwrap();
+        drop(sender);
+        let mut completions = Vec::new();
+        run_upload_worker(
+            receiver,
+            "batch-test".into(),
+            vec![UploadPath {
+                file_id: "f1".into(),
+                requested_name: path_name,
+                path,
+            }],
+            false,
+            Arc::new(AtomicBool::new(false)),
+            |mut completion| {
+                assert!(completion.acknowledge.is_some());
+                completion.acknowledge.take().unwrap().send(true).unwrap();
+                completions.push(completion);
+                true
+            },
+        );
+
+        assert_eq!(completions.len(), 3);
+        assert_eq!(completions[1].frames.len(), UPLOAD_BATCH_CHUNKS);
+        assert_eq!(completions[1].bytes, (UPLOAD_BATCH_CHUNKS * 4096) as u64);
+        assert_eq!(completions[1].files, 0);
+        assert_eq!(completions[2].frames.len(), 2);
+        assert_eq!(completions[2].bytes, size as u64);
+        assert_eq!(completions[2].files, 1);
+        assert!(
+            String::from_utf8(completions[2].frames[1].clone())
+                .unwrap()
+                .contains("ac=end_data")
+        );
+    }
+
+    #[test]
+    fn upload_paths_are_lexical_bounded_and_home_relative() {
+        assert!(resolve_kitty_upload_path("../secret").is_err());
+        assert!(resolve_kitty_upload_path("/tmp//secret").is_err());
+        assert!(resolve_kitty_upload_path("/tmp/./secret").is_err());
+        assert!(resolve_kitty_upload_path("/tmp/line\nbreak").is_err());
+        assert!(resolve_kitty_upload_path("/tmp/a\u{202e}b").is_err());
+        assert!(
+            resolve_kitty_upload_path("/tmp/secret")
+                .unwrap()
+                .is_absolute()
+        );
+        let relative = resolve_kitty_upload_path("project/file").unwrap();
+        assert!(relative.is_absolute());
+        assert!(relative.ends_with("project/file"));
+        let debug = format!(
+            "{:?}",
+            UploadPath {
+                file_id: "f1".into(),
+                requested_name: "/tmp/private-name".into(),
+                path: PathBuf::from("/tmp/private-name"),
+            }
+        );
+        assert!(!debug.contains("private-name"));
     }
 }
 

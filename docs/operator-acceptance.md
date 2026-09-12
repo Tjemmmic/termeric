@@ -323,11 +323,14 @@ printf 'termeric kitty transfer\n' > "$probe_root/source.txt"
 mkdir "$probe_root/source-tree"
 mkdir "$probe_root/received-root"
 printf 'nested\n' > "$probe_root/source-tree/nested.txt"
+printf 'host upload\n' > "$probe_root/host-source.txt"
 
 kitten transfer --compress=never \
   "$probe_root/source.txt" "$probe_root/received.txt"
 kitten transfer --compress=always \
   "$probe_root/source-tree" "$probe_root/received-root/"
+kitten transfer --direction=upload --compress=never \
+  "$probe_root/host-source.txt" "$probe_root/child-received.txt"
 ```
 
 Approve each request. Verify the prompt identifies the originating tab/pane,
@@ -339,11 +342,20 @@ destination appears. Pre-create a destination with sentinel content, retry,
 and confirm Termeric reports a collision without changing it. Start a larger
 transfer, cancel it, and confirm no destination is published.
 
+For the upload command, the approval must list the exact resolved
+`host-source.txt` path before any read occurs. Verify `child-received.txt`
+matches byte-for-byte. Repeat with two regular files, then separately request a
+directory, a symbolic link, a FIFO, a duplicate path, and a path containing
+`..`; each must fail without returning contents. Request more than 64 MiB and
+more than 16 paths and confirm bounded refusal. Cancel during a multi-chunk
+regular file and confirm the originating client receives no later payload.
+
 Record candidate SHA, `kitten --version`, compositor, commands, source and
 destination hashes, dialog result, and any protocol error. Quiet levels 1/2,
-`--permissions-bypass`, `--transmit-deltas`, `--direction=upload`, overwrite,
-and resume are outside the supported profile and should fail explicitly. The
-feature matrix stays Partial until this real-client row has accepted evidence.
+`--permissions-bypass`, `--transmit-deltas`, receive-side directory/link
+export, overwrite, and resume are outside the supported profile and should fail
+explicitly. The feature matrix stays Partial until both direction rows have
+accepted real-client evidence.
 
 ### 6. Resource and optimization evidence
 

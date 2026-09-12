@@ -315,9 +315,10 @@ awaiting evidence:
   query, pane-rendering, synchronized-output, and local-domain replay coverage;
   native visual acceptance remains deferred. Kitty's terminal file-transfer
   extension now has a bounded, consent-gated Linux `send` direction for
-  remote-to-host files, directories, and links, but real-client acceptance is
-  deferred and host-to-child reads, quiet modes, bypass credentials, and
-  rsync/deltas remain unsupported. The
+  remote-to-host files, directories, and links plus a separately approved
+  `receive` slice for up to 16 exact regular host files. Real-client acceptance
+  is deferred, while receive-side directory/link export, quiet modes, bypass
+  credentials, and rsync/deltas remain unsupported. The
   [kitty protocol index](https://sw.kovidgoyal.net/kitty/protocol-extensions/)
   is the moving reference. These should be demand-driven after the beta gates;
   implementing every new private protocol is not a prerequisite for terminal

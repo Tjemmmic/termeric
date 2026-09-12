@@ -187,6 +187,103 @@ impl KittyFileTransferStatus {
     }
 }
 
+/// A terminal-to-child OSC 5113 command used by consented host reads.
+///
+/// Debug output intentionally reports only sizes and field presence so file
+/// names and payload bytes cannot leak through ordinary diagnostics.
+#[derive(Clone, PartialEq, Eq)]
+pub enum KittyFileTransferReply {
+    File {
+        id: String,
+        file_id: String,
+        actual_file_id: String,
+        name: String,
+        mtime_ns: i64,
+        permissions: u32,
+        size: u64,
+    },
+    Data {
+        id: String,
+        file_id: String,
+        data: Box<[u8]>,
+        last: bool,
+    },
+}
+
+impl std::fmt::Debug for KittyFileTransferReply {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File {
+                id,
+                file_id,
+                actual_file_id,
+                name,
+                mtime_ns,
+                permissions,
+                size,
+            } => formatter
+                .debug_struct("KittyFileTransferReply::File")
+                .field("id", id)
+                .field("file_id", file_id)
+                .field("actual_file_id", actual_file_id)
+                .field("name_bytes", &name.len())
+                .field("mtime_ns", mtime_ns)
+                .field("permissions", permissions)
+                .field("size", size)
+                .finish(),
+            Self::Data {
+                id,
+                file_id,
+                data,
+                last,
+            } => formatter
+                .debug_struct("KittyFileTransferReply::Data")
+                .field("id", id)
+                .field("file_id", file_id)
+                .field("data_bytes", &data.len())
+                .field("last", last)
+                .finish(),
+        }
+    }
+}
+
+impl KittyFileTransferReply {
+    pub fn canonical_reply(&self) -> Vec<u8> {
+        let fields = match self {
+            Self::File {
+                id,
+                file_id,
+                actual_file_id,
+                name,
+                mtime_ns,
+                permissions,
+                size,
+            } => vec![
+                "ac=file".to_string(),
+                format!("id={id}"),
+                format!("fid={file_id}"),
+                format!("mod={mtime_ns}"),
+                format!("prm={permissions}"),
+                format!("sz={size}"),
+                format!("n={}", STANDARD.encode(name.as_bytes())),
+                format!("st={}", STANDARD.encode(actual_file_id.as_bytes())),
+            ],
+            Self::Data {
+                id,
+                file_id,
+                data,
+                last,
+            } => vec![
+                format!("ac={}", if *last { "end_data" } else { "data" }),
+                format!("id={id}"),
+                format!("fid={file_id}"),
+                format!("d={}", STANDARD.encode(data)),
+            ],
+        };
+        format!("\x1b]5113;{}\x1b\\", fields.join(";")).into_bytes()
+    }
+}
+
 pub(crate) fn parse_kitty_file_transfer(
     params: &[&[u8]],
     reply_uses_8bit_controls: bool,
@@ -550,5 +647,36 @@ mod tests {
         assert!(text.contains("n=L3RtcC9hIGI="));
         assert!(text.contains("st=U1RBUlRFRDpyZWFkeW5vdw=="));
         assert!(text.ends_with("\u{1b}\\"));
+    }
+
+    #[test]
+    fn canonical_host_read_replies_encode_paths_and_payload_without_debug_leaks() {
+        let metadata = KittyFileTransferReply::File {
+            id: "session".into(),
+            file_id: "requested".into(),
+            actual_file_id: "actual".into(),
+            name: "/home/user/private.txt".into(),
+            mtime_ns: 12,
+            permissions: 0o640,
+            size: 3,
+        };
+        let encoded = String::from_utf8(metadata.canonical_reply()).unwrap();
+        assert!(encoded.starts_with("\u{1b}]5113;ac=file;id=session;fid=requested;"));
+        assert!(encoded.contains(";mod=12;prm=416;sz=3;"));
+        assert!(encoded.contains("n=L2hvbWUvdXNlci9wcml2YXRlLnR4dA=="));
+        assert!(encoded.contains("st=YWN0dWFs"));
+        assert!(!format!("{metadata:?}").contains("private.txt"));
+
+        let data = KittyFileTransferReply::Data {
+            id: "session".into(),
+            file_id: "actual".into(),
+            data: Box::from(b"secret".as_slice()),
+            last: true,
+        };
+        assert_eq!(
+            String::from_utf8(data.canonical_reply()).unwrap(),
+            "\u{1b}]5113;ac=end_data;id=session;fid=actual;d=c2VjcmV0\u{1b}\\"
+        );
+        assert!(!format!("{data:?}").contains("secret"));
     }
 }

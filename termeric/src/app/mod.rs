@@ -128,6 +128,11 @@ pub(crate) enum AppEvent {
         token: u64,
         result: kitty_file_transfer::WorkerCompletion,
     },
+    KittyFileUploadCompleted {
+        window_id: winit::window::WindowId,
+        token: u64,
+        result: kitty_file_transfer::UploadWorkerCompletion,
+    },
     StructuredPluginCompleted(crate::plugin::structured::StructuredHandlerCompletion),
     AccessKit(accesskit_winit::Event),
     RendererDeviceLost {

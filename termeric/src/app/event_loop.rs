@@ -2161,6 +2161,20 @@ impl ApplicationHandler<AppEvent> for App {
                     self.handle_kitty_file_transfer_completed(token, result);
                 }
             }
+            AppEvent::KittyFileUploadCompleted {
+                window_id,
+                token,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_kitty_file_upload_completed(token, result);
+                }
+            }
             AppEvent::StructuredPluginCompleted(completion) => {
                 if self
                     .window

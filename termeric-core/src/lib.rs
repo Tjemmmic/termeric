@@ -46,10 +46,10 @@ pub use event::{
 };
 pub use file_transfer::{
     KittyFileTransferAction, KittyFileTransferCommand, KittyFileTransferCompression,
-    KittyFileTransferStatus, KittyFileTransferStatusCode, KittyFileTransferType,
-    KittyFileTransmissionType, MAX_KITTY_TRANSFER_DATA_BYTES, MAX_KITTY_TRANSFER_FILE_ID_BYTES,
-    MAX_KITTY_TRANSFER_ID_BYTES, MAX_KITTY_TRANSFER_OSC_BYTES, MAX_KITTY_TRANSFER_PATH_BYTES,
-    MAX_KITTY_TRANSFER_STATUS_BYTES,
+    KittyFileTransferReply, KittyFileTransferStatus, KittyFileTransferStatusCode,
+    KittyFileTransferType, KittyFileTransmissionType, MAX_KITTY_TRANSFER_DATA_BYTES,
+    MAX_KITTY_TRANSFER_FILE_ID_BYTES, MAX_KITTY_TRANSFER_ID_BYTES, MAX_KITTY_TRANSFER_OSC_BYTES,
+    MAX_KITTY_TRANSFER_PATH_BYTES, MAX_KITTY_TRANSFER_STATUS_BYTES,
 };
 pub use graphics::{
     GraphicsManager, IMAGE_PLACEHOLDER, ImageId, ImagePlacement, PresentationImage, StoredImage,
