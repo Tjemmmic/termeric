@@ -18,8 +18,35 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CORE_SOAK_SCHEMA_VERSION = 2
 SOAK_PREFIX = "TERMERIC_SOAK "
 TRANSCRIPT_ENTRIES_PER_ITERATION = 68
+MAX_PROCESS_LABEL_CHARACTERS = 32
+MAX_INVENTORY_LABELS = 64
+COLLAPSED_INVENTORY_LABEL = "<other-labels>"
+FILE_DESCRIPTOR_KINDS = frozenset(
+    {
+        "socket",
+        "pipe",
+        "anon-eventpoll",
+        "anon-eventfd",
+        "anon-timerfd",
+        "anon-signalfd",
+        "anon-inotify",
+        "anon-pidfd",
+        "anon-other",
+        "filesystem",
+        "device-path",
+        "memory-file",
+        "other",
+        "unreadable",
+    }
+)
+INVENTORY_DIMENSIONS = (
+    ("fd_kinds", "fds"),
+    ("thread_names", "threads"),
+    ("child_names", "children"),
+)
 
 
 def file_sha256(path: Path) -> str:
@@ -69,13 +96,17 @@ def build_test_binary() -> Path:
     return candidates[-1]
 
 
-def process_children(proc: Path) -> list[int]:
-    """Return direct children spawned by any thread in a Linux process."""
-    children: set[int] = set()
+def process_tasks(proc: Path) -> list[Path]:
+    """Enumerate one bounded process task snapshot in deterministic order."""
     try:
-        tasks = list((proc / "task").iterdir())
+        return sorted((proc / "task").iterdir(), key=lambda path: int(path.name))
     except FileNotFoundError:
         return []
+
+
+def process_children_from_tasks(tasks: list[Path]) -> list[int]:
+    """Return direct children reported by one already-enumerated task snapshot."""
+    children: set[int] = set()
     for task in tasks:
         try:
             values = (task / "children").read_text().split()
@@ -86,8 +117,87 @@ def process_children(proc: Path) -> list[int]:
     return sorted(children)
 
 
+def process_children(proc: Path) -> list[int]:
+    """Return direct children spawned by any thread in a Linux process."""
+    return process_children_from_tasks(process_tasks(proc))
+
+
+def bounded_process_label(value: str) -> str:
+    """Return a privacy-safe bounded `/proc/*/comm` diagnostic label."""
+    sanitized = "".join(
+        character if character.isprintable() and character not in "\r\n" else "?"
+        for character in value.strip()
+    )
+    return sanitized[:MAX_PROCESS_LABEL_CHARACTERS] or "<empty>"
+
+
+def counted_labels(labels: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    existing_collapsed = counts.pop(COLLAPSED_INVENTORY_LABEL, 0)
+    if len(counts) + bool(existing_collapsed) > MAX_INVENTORY_LABELS:
+        ordered = sorted(counts)
+        retained = ordered[: MAX_INVENTORY_LABELS - 1]
+        collapsed = existing_collapsed + sum(
+            counts[label] for label in ordered[MAX_INVENTORY_LABELS - 1 :]
+        )
+        counts = {label: counts[label] for label in retained}
+        counts[COLLAPSED_INVENTORY_LABEL] = collapsed
+    elif existing_collapsed:
+        counts[COLLAPSED_INVENTORY_LABEL] = existing_collapsed
+    return dict(sorted(counts.items()))
+
+
+def process_name(proc: Path) -> str:
+    try:
+        return bounded_process_label((proc / "comm").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return "<unreadable>"
+
+
+def classify_file_descriptor(fd: Path) -> str:
+    """Classify an fd without retaining its potentially sensitive target."""
+    try:
+        target = os.readlink(fd)
+    except OSError:
+        return "unreadable"
+    if target.startswith("socket:["):
+        return "socket"
+    if target.startswith("pipe:["):
+        return "pipe"
+    if target.startswith("anon_inode:"):
+        for name in ("eventpoll", "eventfd", "timerfd", "signalfd", "inotify", "pidfd"):
+            if name in target:
+                return f"anon-{name}"
+        return "anon-other"
+    if target.startswith(("memfd:", "/memfd:")):
+        return "memory-file"
+    if target.startswith("/dev/"):
+        return "device-path"
+    if target.startswith("/"):
+        return "filesystem"
+    return "other"
+
+
+def process_inventory(
+    proc_root: Path,
+    tasks: list[Path],
+    fds: list[Path],
+    children: list[int],
+) -> dict[str, dict[str, int]]:
+    return {
+        "fd_kinds": counted_labels([classify_file_descriptor(fd) for fd in fds]),
+        "thread_names": counted_labels([process_name(task) for task in tasks]),
+        "child_names": counted_labels(
+            [process_name(proc_root / str(child)) for child in children]
+        ),
+    }
+
+
 def process_snapshot(pid: int, started: float) -> dict[str, Any]:
-    proc = Path("/proc") / str(pid)
+    proc_root = Path("/proc")
+    proc = proc_root / str(pid)
     status = (proc / "status").read_text(encoding="utf-8")
     values = {
         line.split(":", 1)[0]: line.split(":", 1)[1].strip()
@@ -95,17 +205,18 @@ def process_snapshot(pid: int, started: float) -> dict[str, Any]:
         if ":" in line
     }
     rss_kib = float(values["VmRSS"].split()[0])
-    threads = int(values["Threads"])
-    fds = len(list((proc / "fd").iterdir()))
-    children = process_children(proc)
-    stat = (proc / "stat").read_text().split()
+    tasks = process_tasks(proc)
+    fd_entries = sorted((proc / "fd").iterdir(), key=lambda path: int(path.name))
+    children = process_children_from_tasks(tasks)
+    stat_fields = (proc / "stat").read_text().split()
     return {
         "elapsed_seconds": time.monotonic() - started,
         "rss_kib": rss_kib,
-        "threads": threads,
-        "fds": fds,
+        "threads": len(tasks),
+        "fds": len(fd_entries),
         "children": children,
-        "cpu_ticks": int(stat[13]) + int(stat[14]),
+        "cpu_ticks": int(stat_fields[13]) + int(stat_fields[14]),
+        "inventory": process_inventory(proc_root, tasks, fd_entries, children),
     }
 
 
@@ -121,6 +232,120 @@ def minimum_sample_count(duration_seconds: float, sample_interval: float) -> int
     if duration_seconds <= 0 or sample_interval <= 0:
         raise ValueError("duration and sample interval must be positive")
     return max(2, int((duration_seconds / sample_interval) * 0.5))
+
+
+def inventory_coverage_check(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    complete = 0
+    for sample in samples:
+        inventory = sample.get("inventory")
+        if not isinstance(inventory, dict):
+            continue
+        valid = True
+        for dimension, aggregate in INVENTORY_DIMENSIONS:
+            values = inventory.get(dimension)
+            expected = (
+                len(sample.get(aggregate, []))
+                if aggregate == "children" and isinstance(sample.get(aggregate), list)
+                else sample.get(aggregate)
+            )
+            if (
+                not isinstance(values, dict)
+                or len(values) > MAX_INVENTORY_LABELS
+                or not isinstance(expected, int)
+                or isinstance(expected, bool)
+                or any(
+                    not isinstance(label, str)
+                    or not label
+                    or len(label) > MAX_PROCESS_LABEL_CHARACTERS
+                    or label != bounded_process_label(label)
+                    or (dimension == "fd_kinds" and label not in FILE_DESCRIPTOR_KINDS)
+                    or not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or count < 0
+                    for label, count in values.items()
+                )
+                or sum(values.values()) != expected
+            ):
+                valid = False
+                break
+        if valid:
+            complete += 1
+    return {
+        "name": "resource inventory coverage",
+        "actual": complete,
+        "min": len(samples),
+        "passed": bool(samples) and complete == len(samples),
+    }
+
+
+def summarize_resource_inventories(
+    samples: list[dict[str, Any]],
+) -> dict[str, dict[str, dict[str, float]]]:
+    if not samples:
+        return {dimension: {} for dimension, _ in INVENTORY_DIMENSIONS}
+    width = max(1, len(samples) // 4)
+    summary: dict[str, dict[str, dict[str, float]]] = {}
+    for dimension, _ in INVENTORY_DIMENSIONS:
+        valid_values = []
+        for sample in samples:
+            inventory = sample.get("inventory")
+            values = inventory.get(dimension) if isinstance(inventory, dict) else None
+            valid_values.append(
+                {
+                    label: count
+                    for label, count in values.items()
+                    if isinstance(values, dict)
+                    and isinstance(label, str)
+                    and label == bounded_process_label(label)
+                    and isinstance(count, int)
+                    and not isinstance(count, bool)
+                    and count >= 0
+                }
+                if isinstance(values, dict)
+                else {}
+            )
+        observed_labels = set(
+            {
+                label
+                for values in valid_values
+                for label in values
+            }
+        )
+        non_collapsed = sorted(observed_labels - {COLLAPSED_INVENTORY_LABEL})
+        if len(observed_labels) <= MAX_INVENTORY_LABELS:
+            labels = non_collapsed
+            collapsed_labels: set[str] = set()
+            if COLLAPSED_INVENTORY_LABEL in observed_labels:
+                labels.append(COLLAPSED_INVENTORY_LABEL)
+        else:
+            labels = non_collapsed[: MAX_INVENTORY_LABELS - 1]
+            collapsed_labels = set(non_collapsed[MAX_INVENTORY_LABELS - 1 :])
+            labels.append(COLLAPSED_INVENTORY_LABEL)
+        dimension_summary = {}
+        for label in labels:
+            if label == COLLAPSED_INVENTORY_LABEL:
+                values = [
+                    float(
+                        sample_values.get(COLLAPSED_INVENTORY_LABEL, 0)
+                        + sum(sample_values.get(item, 0) for item in collapsed_labels)
+                    )
+                    for sample_values in valid_values
+                ]
+            else:
+                values = [
+                    float(sample_values.get(label, 0))
+                    for sample_values in valid_values
+                ]
+            first = statistics.median(values[:width])
+            last = statistics.median(values[-width:])
+            dimension_summary[label] = {
+                "first_quartile_median": first,
+                "last_quartile_median": last,
+                "growth": last - first,
+                "peak": max(values),
+            }
+        summary[dimension] = dimension_summary
+    return summary
 
 
 def evaluate_resource_ceilings(
@@ -139,10 +364,12 @@ def evaluate_resource_ceilings(
         "min": minimum_samples,
         "passed": len(samples) >= minimum_samples,
     }
+    inventory_check = inventory_coverage_check(samples)
     if not samples:
-        return [sample_check]
+        return [sample_check, inventory_check]
     checks = [
         sample_check,
+        inventory_check,
         {
             "name": "maximum process RSS",
             "actual": max(sample["rss_kib"] for sample in samples),
@@ -414,7 +641,7 @@ def main() -> None:
         }
     )
     report = {
-        "schema_version": 1,
+        "schema_version": CORE_SOAK_SCHEMA_VERSION,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "platform": platform.platform(),
@@ -460,8 +687,11 @@ def main() -> None:
             "max_transcript_queue_bytes": max_transcript_queue_bytes,
             "minimum_resource_samples": minimum_samples,
             "transcript_entries_per_iteration": TRANSCRIPT_ENTRIES_PER_ITERATION,
+            "max_inventory_labels_per_dimension": MAX_INVENTORY_LABELS,
+            "max_process_label_characters": MAX_PROCESS_LABEL_CHARACTERS,
         },
         "samples": samples,
+        "resource_inventory_summary": summarize_resource_inventories(samples),
         "progress": progress,
         "checks": checks,
     }

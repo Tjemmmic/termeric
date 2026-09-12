@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 from scripts.run_native_gui_soak import (
     AcceptanceError,
+    NATIVE_SOAK_SCHEMA_VERSION,
     evaluate_native_checks,
     fixture_arguments,
     git_provenance,
@@ -15,6 +16,7 @@ from scripts.run_native_gui_soak import (
     require_clean_candidate,
     runtime_error_count,
 )
+from scripts.run_soak import summarize_resource_inventories
 
 
 def sample(index: int, *, rss_kib: float = 200_000, fds: int = 30) -> dict:
@@ -25,10 +27,18 @@ def sample(index: int, *, rss_kib: float = 200_000, fds: int = 30) -> dict:
         "fds": fds,
         "children": [100],
         "cpu_ticks": index,
+        "inventory": {
+            "fd_kinds": {"socket": fds},
+            "thread_names": {"termeric": 8},
+            "child_names": {"fixture": 1},
+        },
     }
 
 
 class NativeGuiSoakTests(unittest.TestCase):
+    def test_report_schema_is_versioned_for_resource_inventories(self) -> None:
+        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 3)
+
     def evaluate(self, samples: list[dict], **overrides: object) -> list[dict]:
         arguments = {
             "max_rss_kib": 500_000,
@@ -78,6 +88,20 @@ class NativeGuiSoakTests(unittest.TestCase):
             for check in self.evaluate([sample(0)], minimum_samples=6)
         }
         self.assertFalse(checks["resource sample count"]["passed"])
+
+    def test_native_samples_require_reconciled_diagnostic_inventories(self) -> None:
+        samples = [sample(i) for i in range(12)]
+        samples[4]["inventory"]["child_names"] = {}
+        checks = {check["name"]: check for check in self.evaluate(samples)}
+        self.assertFalse(checks["resource inventory coverage"]["passed"])
+
+    def test_native_inventory_summary_uses_the_shared_quartile_contract(self) -> None:
+        samples = [sample(i, fds=30 + i) for i in range(8)]
+        for index, item in enumerate(samples):
+            item["inventory"]["fd_kinds"] = {"socket": 30 + index}
+        summary = summarize_resource_inventories(samples)
+        self.assertEqual(summary["fd_kinds"]["socket"]["growth"], 6.0)
+        self.assertEqual(summary["fd_kinds"]["socket"]["peak"], 37.0)
 
     def test_resize_and_pane_churn_are_required_independently(self) -> None:
         missing_resize = {

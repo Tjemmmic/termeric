@@ -33,14 +33,18 @@ from scripts.gui_acceptance import (
     wait_until,
 )
 from scripts.run_soak import (
+    MAX_INVENTORY_LABELS,
+    MAX_PROCESS_LABEL_CHARACTERS,
     child_still_exists,
     evaluate_resource_ceilings,
     minimum_sample_count,
     process_snapshot,
+    summarize_resource_inventories,
 )
 
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
+NATIVE_SOAK_SCHEMA_VERSION = 3
 
 
 def fixture_arguments(transcript: Path, instance: int) -> list[str]:
@@ -447,7 +451,7 @@ def main() -> int:
             }
         )
     report = {
-        "schema": 2,
+        "schema": NATIVE_SOAK_SCHEMA_VERSION,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {
             "platform": platform.platform(),
@@ -473,8 +477,11 @@ def main() -> int:
             "minimum_resize_actions": minimum_action_kind,
             "minimum_pane_actions": minimum_action_kind,
             "minimum_graphics_acknowledgements": minimum_graphics_acks,
+            "max_inventory_labels_per_dimension": MAX_INVENTORY_LABELS,
+            "max_process_label_characters": MAX_PROCESS_LABEL_CHARACTERS,
         },
         "samples": samples,
+        "resource_inventory_summary": summarize_resource_inventories(samples),
         "progress_records": progress_count(records),
         "actions": resize_actions + pane_actions,
         "resize_actions": resize_actions,

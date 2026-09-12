@@ -497,7 +497,7 @@ termeric-core/      Library crate — terminal emulation
 - [`docs/unicode-support.md`](docs/unicode-support.md) — grapheme segmentation, width policy, invariants, and exclusions
 - [`docs/keyboard-input.md`](docs/keyboard-input.md) — focused legacy/xterm and Kitty progressive key encoding and boundaries
 - [`docs/terminal-input-protocols.md`](docs/terminal-input-protocols.md) — mouse, focus, alternate-scroll, and bracketed-paste routing
-- [`docs/resource-soak.md`](docs/resource-soak.md) — Linux process-growth soak scenario, ceilings, and artifacts
+- [`docs/resource-soak.md`](docs/resource-soak.md) — Linux process-growth soak scenario, ceilings, and privacy-safe leak diagnostics
 - [`docs/platform-support.md`](docs/platform-support.md) — platform evidence tiers and promotion rules
 
 ## License

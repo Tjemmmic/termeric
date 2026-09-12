@@ -577,7 +577,12 @@ bounded scrollback, mixed Unicode/styled output, resize/search, images, real
 PTY-backed panes and tabs, session replacement, transcript persistence, and
 clean exit. The runner samples RSS, threads, file descriptors, and direct
 children and scans the combined test/GPU log for validation or device-loss
-errors. Every scenario iteration also records the real background transcript
+errors. Every sample groups descriptors into a fixed non-path vocabulary and
+aggregates bounded sanitized thread/direct-child names. A fail-closed coverage
+gate reconciles those categories with the aggregate counts, and the report
+summarizes first/last-quartile medians, growth, and peaks without retaining
+descriptor targets, command lines, arguments, or environment values. Every
+scenario iteration also records the real background transcript
 queue backlog, accepted/dropped entry counts, and post-flush backlog. The gate
 requires complete metric coverage, all 68 writes, no drops, a bounded peak, and
 zero bytes after each durable shutdown:
@@ -643,15 +648,17 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
 ```
 
 Run `python3 -m unittest scripts.test_run_soak` to prove deliberate RSS,
-thread, fd, transcript-backlog, incomplete-drain, dropped-entry, and missing-
-metric fixtures fail the evaluator. Exact scenario boundaries, ceilings,
-artifact fields, and known blind spots are documented in
+thread, fd, transcript-backlog, incomplete-drain, dropped-entry, missing-
+metric, malformed/mismatched inventory, bounded-label, and category-summary
+fixtures fail or summarize exactly as required. Exact scenario boundaries,
+ceilings, artifact fields, and known blind spots are documented in
 [`resource-soak.md`](resource-soak.md).
 
 The separate `scripts/run_native_gui_soak.py` runner samples the displayed
 Wayland application while continuous PTY output, compositor resize, and exact
-split-pane churn exercise Winit/WGPU/native lifecycle state. Its deliberate
-growth/progress/cleanup/runtime-error fixtures run with:
+split-pane churn exercise Winit/WGPU/native lifecycle state. It uses the same
+privacy-safe, reconciled per-sample inventories and summaries as the core
+runner. Its deliberate growth/progress/cleanup/runtime-error fixtures run with:
 
 ```bash
 python3 -m unittest scripts.test_run_native_gui_soak

@@ -349,7 +349,11 @@ WGPU_BACKEND=gl python3 scripts/run_native_gui_soak.py \
 The pass criteria include peak and growth RSS, thread/file-descriptor/child
 growth, complete child cleanup, bounded and fully drained transcript queues,
 continuous PTY and graphics progress, pane routing, resize churn, normal exit,
-and absence of GPU validation/device-loss errors. These artifacts address the
+and absence of GPU validation/device-loss errors. Schema-2 core and schema-3
+displayed reports also reconcile every aggregate thread/descriptor/child count
+with privacy-safe categories and summarize category quartile growth and peaks,
+so a failed ceiling remains diagnosable without publishing raw paths or process
+arguments. These artifacts address the
 local portion of issue #23; green pushed CI history and long real-desktop
 vendor-GPU observation remain separate evidence.
 

@@ -5,6 +5,13 @@ thread, file-descriptor, child-process, transcript-queue, and GPU-error growth.
 It complements the short deterministic benchmarks; it does not turn a short CI
 run into proof of multi-day stability.
 
+Every `/proc` sample also retains privacy-safe diagnostic inventories. File
+descriptors use a fixed type vocabulary rather than targets, while bounded
+sanitized thread and direct-child `comm` labels are aggregated by count. No
+descriptor path, command line, argument, or environment value enters the
+artifact. Each inventory must reconcile exactly with its sample's aggregate
+counts or the run fails its coverage check.
+
 A second runner measures the actual displayed Termeric process under a private
 headless Sway compositor. The lanes are complementary: the core scenario drives
 broader deterministic storage/session operations, while the native scenario
@@ -32,6 +39,15 @@ status, final child cleanup, completion output, and WGPU validation/device-loss
 messages. Child sampling aggregates and deduplicates every
 `/proc/<pid>/task/<tid>/children` file so PTYs or helpers spawned by Rust worker
 threads cannot evade the process ceiling or cleanup check.
+
+The same enumerated task, descriptor, and child snapshots produce both totals
+and their diagnostic categories. Disappearing `/proc` entries are counted as
+`unreadable` rather than omitted. Each report summarizes the first- and
+last-quartile median, growth, and peak for every observed descriptor kind,
+thread name, and child name. Category summaries diagnose an aggregate failure;
+they intentionally have no host-specific pass/fail ceilings of their own. Each
+label is at most 32 characters and each dimension retains at most 64 labels;
+additional names are combined into a deterministic `<other-labels>` bucket.
 
 Every iteration also reports the real byte backlog held by the bounded
 background transcript channel before shutdown, the accepted and dropped entry
@@ -101,12 +117,12 @@ child cleanup. Resize and pane-churn counts have independent minimums; one
 workload cannot compensate for the other in the aggregate action count. These
 are broad regression rails, not expected steady-state consumption targets.
 
-The schema-2 native report records UTC time, candidate commit, explicit
+The schema-3 native report records UTC time, candidate commit, explicit
 worktree-dirty state, tested binary SHA-256, backend/compositor/WGPU identity,
 every raw process sample, workload
 counts including separate resize and pane-churn totals, the minimum required
-sample count, accepted graphics acknowledgements, explicit thresholds, and
-individual results. Application, Sway, and PTY
+sample count, accepted graphics acknowledgements, resource-category summaries,
+explicit thresholds, and individual results. Application, Sway, and PTY
 logs remain beside it. Run the pure regression detector with:
 
 ```bash
@@ -130,10 +146,11 @@ sample do not define the growth result. Tighten these budgets only with repeated
 artifacts from the same class of runner; do not hide a regression by raising
 them without an investigation.
 
-The runner's JSON records UTC time, commit plus dirty-worktree disclosure, WGPU
-backend, test-binary path and SHA-256, every raw sample, scenario progress,
-explicit thresholds, and each pass/fail result. The companion log contains the
-Rust test output and optional headless GPU smoke. CI uploads both even when a
+The schema-2 core runner JSON records UTC time, commit plus dirty-worktree
+disclosure, WGPU backend, test-binary path and SHA-256, every raw sample,
+scenario progress, resource-category summaries, explicit thresholds, and each
+pass/fail result. The companion log contains the Rust test output and optional
+headless GPU smoke. CI uploads both even when a
 ceiling fails. A dirty local report is implementation evidence, not an exact
 candidate record even when its commit field matches the candidate branch.
 
@@ -141,7 +158,9 @@ candidate record even when its commit field matches the candidate branch.
 
 The ceiling evaluator has deliberate flat, file-descriptor leak, RSS leak,
 thread leak, excessive transcript backlog, incomplete drain, dropped-entry,
-and missing-queue-metric fixtures. A synthetic multi-thread `/proc` tree
+missing-queue-metric, malformed inventory, mismatched inventory, category
+classification, label-sanitization/cardinality, and category-summary fixtures.
+A synthetic multi-thread `/proc` tree
 separately proves that children of non-leader threads are included exactly
 once:
 
@@ -170,7 +189,7 @@ historical local evidence, not a checked-in baseline or a scheduled/release-
 duration result. It predates the fail-closed queue-drain fields and therefore
 does not satisfy the current acceptance contract.
 
-On 2026-09-02, the current fail-closed contract completed a fresh 30-second
+On 2026-09-02, the then-current fail-closed contract completed a fresh 30-second
 core run plus headless GL submission in
 `target/soak/issue-23-current-core.json`. It recorded 61 resource samples and
 524 complete workload iterations, peaked at 42,900 KiB RSS, and measured 4,680
@@ -187,17 +206,19 @@ complete iterations, 42,996 KiB peak RSS, only 244 KiB quartile-to-quartile RSS
 growth, zero thread/fd growth, four peak children, a 10,590-byte transcript
 queue peak, zero post-finish queue bytes, zero drops, complete child cleanup,
 and zero GPU errors. All 18 checks passed. Because the tree is intentionally
-dirty roadmap work and this artifact predates the new embedded dirty-state and
-binary-digest fields, it is strong local duration evidence but not an accepted
-clean-candidate or scheduled-CI record.
+dirty roadmap work and this artifact predates the embedded dirty-state,
+binary-digest, and schema-2 resource-inventory fields, it is strong local
+duration evidence but not an accepted current-schema clean-candidate or
+scheduled-CI record.
 
 On 2026-09-10, clean commit `9a70020` passed the current 30-second core contract
 in `target/soak/issue-23-current-clean.json`: 61 samples, 505 complete workload
 iterations, 40,972 KiB peak RSS, 6,696 KiB first-to-last-quartile RSS growth,
 zero thread/fd growth, four peak children, complete child cleanup, complete
 queue drainage with no drops, and no GPU validation/device error. All 18 gates
-passed. This is clean short-lane evidence, but the earlier 600-second result is
-still not a clean-candidate or scheduled-CI record.
+passed. It predates the schema-2 diagnostic inventories and remains clean
+historical short-lane evidence; the earlier 600-second result is still not a
+clean-candidate or scheduled-CI record.
 
 Clean commit `d623154` then passed the first local 30-second displayed-process
 contract in `target/soak/issue-23-d623154-native`: 49 samples, 142,732 KiB peak
@@ -220,8 +241,9 @@ KiB first-to-last-quartile RSS growth, with zero thread or file-descriptor
 growth and two peak children. It completed 239 compositor resizes, 239 exact
 pane create/route/close actions, 614 accepted Kitty replacements, normal native
 close, and cleanup of all 121 observed fixture children. All 14 gates passed
-with no recognized runtime/GPU error. This is clean local release-duration
-evidence, not a scheduled-CI or real-desktop result.
+with no recognized runtime/GPU error. It predates the schema-3 diagnostic
+inventories but remains clean local release-duration aggregate evidence, not a
+scheduled-CI or real-desktop result.
 
 The core soak still does not create a window; the new native lane does
 so under a private software-rendered compositor. Neither measures vendor GPU

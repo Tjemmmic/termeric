@@ -160,7 +160,10 @@ feeds mixed ASCII/Unicode/styled output, resizes and searches bounded
 scrollback, replaces images, creates and closes real PTY-backed panes/tabs,
 saves sessions, and durably closes bounded transcript writers. Its runner
 samples RSS, threads, file descriptors, and children, and scans a companion GPU
-smoke log for validation/device-loss errors.
+smoke log for validation/device-loss errors. Current schema-2 core and schema-3
+displayed reports additionally reconcile privacy-safe descriptor/thread/child
+inventories and summarize category quartile growth and peaks without retaining
+paths, arguments, or environment data.
 
 A 30-second local change-gate run plus headless Vulkan smoke on 2026-08-25
 completed 322 iterations and all ten configured checks. It peaked at 33.9 MiB
@@ -191,8 +194,9 @@ The repository also configures a 30-second and scheduled ten-minute private-
 Sway displayed-process soak. It continuously renders real PTY output, resizes
 the compositor output, churns split panes with exact routing, samples the
 application PID, and checks normal native close plus complete child cleanup.
-Clean commit `a53d097` supplies the local schema-2 ten-minute evidence described
-in [resource-soak.md](resource-soak.md); accepted scheduled-CI history, a long
+Clean commit `a53d097` supplies the local ten-minute aggregate evidence described
+in [resource-soak.md](resource-soak.md), though it predates the schema-3
+diagnostic inventories; accepted scheduled-CI history, a long
 real-desktop observation, and vendor-GPU measurements remain open.
 
 ## Current Debian package-lifecycle gate

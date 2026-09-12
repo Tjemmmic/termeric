@@ -409,7 +409,10 @@ sampling interval, duration, foreground/background state, cursor blinking,
 animations, and whether shell output was active. For repeatable
 fd/thread/child/RSS growth checks, use `scripts/run_soak.py`; for the actual
 displayed process, WGPU surface, resize, and pane-churn path, use
-`scripts/run_native_gui_soak.py`. Their scenarios and ceilings are documented
+`scripts/run_native_gui_soak.py`. Both retain reconciled privacy-safe
+descriptor/thread/child category trends so aggregate failures identify the
+resource class without exposing fd targets or process arguments. Their
+scenarios and ceilings are documented
 in [resource-soak.md](resource-soak.md). Vendor GPU memory utilization and
 long real-desktop surface/compositor soaks remain manual platform
 evidence.
