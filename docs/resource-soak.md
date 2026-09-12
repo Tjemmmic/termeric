@@ -16,7 +16,9 @@ A second runner measures the actual displayed Termeric process under a private
 headless Sway compositor. The lanes are complementary: the core scenario drives
 broader deterministic storage/session operations, while the native scenario
 includes Winit, a compositor connection, a WGPU surface and renderer caches,
-real PTYs, and repeated output-size and pane-lifecycle changes.
+real PTYs, and repeated output-size and pane-lifecycle changes. On Linux it also
+samples process-attributed memory exported through standardized DRM fdinfo
+fields when the selected driver provides them.
 
 ## Scenario
 
@@ -112,6 +114,17 @@ and requires exact single-pane routing. It samples the real application PID
 through `/proc`, including direct children spawned by any thread, then closes
 the native window and requires every observed fixture child to disappear.
 
+For every sample, the runner scans the bounded application process tree's
+`/proc/<pid>/fdinfo/<fd>` files. It follows the Linux kernel's
+[DRM client usage-statistics contract](https://docs.kernel.org/gpu/drm-usage-stats.html):
+`drm-client-id` plus `drm-pdev` prevent shared descriptors from being counted
+twice, `drm-total-<region>` records requested buffers, and
+`drm-resident-<region>` records instantiated backing storage. The deprecated
+AMDGPU `drm-memory-<region>` alias is accepted only as resident memory and never
+added to a simultaneous `drm-resident-*` value. Engine cycle counters are not
+memory. Drivers may omit these optional kernel fields, so each sample records a
+bounded explicit unavailable reason instead of inventing a zero.
+
 Run the 30-second change lane after building the application:
 
 ```bash
@@ -128,6 +141,28 @@ python3 scripts/validate_native_gui_soak.py \
 The artifact destination must be new or empty; the runner refuses to delete or
 mix existing evidence. Use a distinct directory for every run.
 
+Ordinary software-rendered CI permits all GPU-memory samples to be explicitly
+unavailable. For a vendor-GPU run where the driver is expected to export DRM
+memory, require complete coverage and retain a separate bundle:
+
+```bash
+WGPU_BACKEND=vulkan python3 scripts/run_native_gui_soak.py \
+  --duration-seconds 600 \
+  --require-clean \
+  --require-gpu-memory \
+  --binary target/debug/termeric \
+  --artifacts target/native-gui-soak-vendor
+python3 scripts/validate_native_gui_soak.py \
+  target/native-gui-soak-vendor/results.json --source .
+```
+
+`--max-gpu-resident-mib` and `--max-gpu-resident-growth-mib` tighten the
+default 1024 MiB peak and 256 MiB first-to-last-quartile resident-memory rails.
+The required mode fails if any sample is unavailable or if availability changes
+during a run. A driver that exposes total but not resident memory still records
+the total exactly; resident peak/growth remain explicitly absent rather than
+being inferred.
+
 Weekly/manual CI runs both the core scenario above and this displayed scenario
 for ten minutes. Native defaults allow 768 MiB peak RSS, 192 MiB
 first-to-last-quartile RSS growth, eight threads and sixteen file descriptors of
@@ -138,11 +173,12 @@ child cleanup. Resize and pane-churn counts have independent minimums; one
 workload cannot compensate for the other in the aggregate action count. These
 are broad regression rails, not expected steady-state consumption targets.
 
-The schema-4 native report records UTC time, candidate commit, explicit
+The schema-5 native report records UTC time, candidate commit, explicit
 worktree-dirty and eligibility state, a source-relative tested binary with byte
 length and SHA-256, backend/compositor/WGPU identity, every raw process sample,
 reconstructable exit/driver/cleanup/workload outcomes, resource-category
-summaries, explicit thresholds, and individual results. Every regular file
+summaries, per-client/per-region DRM memory snapshots and their derived summary,
+explicit thresholds, and individual results. Every regular file
 beside `results.json` is listed in an exact sorted manifest with byte length and
 SHA-256. The validator rejects extra, missing, altered, symlinked, special, or
 unsafe-path artifacts; it re-derives PTY progress and exact Kitty
@@ -151,7 +187,8 @@ threshold formulas from the run parameters, and every summary/check from raw
 inputs. Run the pure regression and validator detectors with:
 
 ```bash
-python3 -m unittest scripts.test_run_native_gui_soak \
+python3 -m unittest scripts.test_drm_memory \
+  scripts.test_run_native_gui_soak \
   scripts.test_validate_native_gui_soak
 ```
 
@@ -225,7 +262,7 @@ the JSON plus its scenario log. The ordinary CI upload does not include the
 often-large test executable, so a downloaded JSON/log pair preserves the
 recorded candidate identity and log integrity but cannot, by itself, re-prove
 the binary bytes on another host. Portable binary bundling or signed provenance
-is future work. The schema-4 displayed/native report uses its own manifest
+is future work. The schema-5 displayed/native report uses its own manifest
 validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
@@ -296,11 +333,12 @@ with no recognized runtime/GPU error. It predates the schema-3 diagnostic
 inventories but remains clean local release-duration aggregate evidence, not a
 scheduled-CI or real-desktop result.
 
-The core soak still does not create a window; the new native lane does
-so under a private software-rendered compositor. Neither measures vendor GPU
-memory, substitutes for a long real-desktop observation, validates macOS/
-Windows beyond the separate bounded native-PTY smoke, or proves every terminal
-protocol. The native lane is now locally exercised, but those remaining
+The core soak still does not create a window; the native lane does so under a
+private compositor. Its current historical artifacts predate schema 5 and do
+not contain vendor-GPU memory; the new sampler makes that evidence collectable
+without claiming that it has already been collected. Neither lane substitutes
+for a long real-desktop observation, validates macOS/Windows beyond the separate
+bounded native-PTY smoke, or proves every terminal protocol. Those remaining
 boundaries stay separate platform/manual rows in
 [platform-support.md](platform-support.md) and
 [release-acceptance.md](release-acceptance.md).

@@ -252,7 +252,9 @@ def validate_inventory(value: object, sample: dict[str, Any], index: int) -> Non
             )
 
 
-def validate_samples(value: object) -> list[dict[str, Any]]:
+def validate_samples(
+    value: object, *, extra_fields: set[str] | None = None
+) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise SoakValidationError("samples must be an array")
     previous_elapsed = -1.0
@@ -268,7 +270,8 @@ def validate_samples(value: object) -> list[dict[str, Any]]:
                 "children",
                 "cpu_ticks",
                 "inventory",
-            },
+            }
+            | (extra_fields or set()),
             f"samples[{index}]",
         )
         elapsed = require_number(

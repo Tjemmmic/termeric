@@ -8,6 +8,14 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- The displayed Linux resource soak now samples bounded standardized DRM fdinfo
+  memory across Termeric's process tree, deduplicates shared clients, records
+  per-region requested and resident bytes (including AMDGPU's deprecated alias),
+  and preserves explicit unavailable reasons on drivers without the optional
+  fields. Schema 5 independently reconstructs all snapshots, summaries, peak/
+  growth checks, and an opt-in complete-coverage requirement without changing
+  software-rendered CI into false vendor-memory evidence.
+
 - Unicode character search now includes a pinned, zero-copy CLDR 48.0.0
   English short-name and keyword index for 4,342 characters and emoji
   sequences. Unicode Emoji 17.0 restores exact fully-qualified variation,

@@ -11,6 +11,7 @@ from scripts.run_native_gui_soak import (
     MAX_DRIVER_ERROR_CHARACTERS,
     NATIVE_SOAK_SCHEMA_VERSION,
     bounded_driver_error,
+    bounded_process_tree_pids,
     build_native_soak_checks,
     evaluate_native_checks,
     fixture_arguments,
@@ -23,6 +24,7 @@ from scripts.run_native_gui_soak import (
     require_clean_candidate,
     runtime_error_count,
 )
+from scripts.drm_memory import aggregate_drm_fdinfos
 from scripts.run_soak import summarize_resource_inventories
 
 
@@ -39,12 +41,13 @@ def sample(index: int, *, rss_kib: float = 200_000, fds: int = 30) -> dict:
             "thread_names": {"termeric": 8},
             "child_names": {"fixture": 1},
         },
+        "gpu_memory": aggregate_drm_fdinfos([]),
     }
 
 
 class NativeGuiSoakTests(unittest.TestCase):
-    def test_report_schema_is_versioned_for_resource_inventories(self) -> None:
-        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 4)
+    def test_report_schema_is_versioned_for_drm_memory(self) -> None:
+        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 5)
 
     def evaluate(self, samples: list[dict], **overrides: object) -> list[dict]:
         arguments = {
@@ -54,6 +57,9 @@ class NativeGuiSoakTests(unittest.TestCase):
             "max_fd_growth": 4,
             "max_children": 2,
             "minimum_samples": 6,
+            "require_gpu_memory": False,
+            "max_drm_resident_bytes": 1024 * 1024 * 1024,
+            "max_drm_resident_growth_bytes": 256 * 1024 * 1024,
             "exit_status": 0,
             "progress_records": 30,
             "minimum_progress": 10,
@@ -139,6 +145,28 @@ class NativeGuiSoakTests(unittest.TestCase):
         self.assertFalse(checks["accepted Kitty image replacements"]["passed"])
         self.assertTrue(checks["continuous PTY progress records"]["passed"])
 
+    def test_required_gpu_memory_rejects_explicit_unavailability(self) -> None:
+        checks = {
+            check["name"]: check
+            for check in self.evaluate(
+                [sample(i) for i in range(12)], require_gpu_memory=True
+            )
+        }
+        self.assertFalse(checks["required DRM memory sample coverage"]["passed"])
+        self.assertTrue(checks["DRM memory disposition consistency"]["passed"])
+
+    def test_process_tree_sampling_is_recursive_unique_and_bounded(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for pid, children in {10: "11 12", 11: "12 13", 12: "", 13: ""}.items():
+                task = root / str(pid) / "task" / str(pid)
+                task.mkdir(parents=True)
+                (task / "children").write_text(children)
+            self.assertEqual(bounded_process_tree_pids(root, 10), [10, 11, 12, 13])
+            with mock.patch("scripts.run_native_gui_soak.MAX_DRM_PROCESSES", 3):
+                with self.assertRaisesRegex(AcceptanceError, "sampling ceiling"):
+                    bounded_process_tree_pids(root, 10)
+
     def test_exact_kitty_acknowledgements_are_counted_from_fragmented_input(self) -> None:
         acknowledgement = b"\x1b_Gi=91;OK\x1b\\"
         with TemporaryDirectory() as directory:
@@ -219,6 +247,9 @@ class NativeGuiSoakTests(unittest.TestCase):
                 "max_thread_growth": 2,
                 "max_fd_growth": 4,
                 "max_children": 2,
+                "require_gpu_memory": False,
+                "max_drm_resident_bytes": 1024 * 1024 * 1024,
+                "max_drm_resident_growth_bytes": 256 * 1024 * 1024,
                 "minimum_resource_samples": 3,
                 "minimum_progress_records": 1,
                 "minimum_resize_actions": 1,

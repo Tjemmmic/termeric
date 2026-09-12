@@ -59,6 +59,7 @@ class CiResourceContractTests(unittest.TestCase):
         )
         self.assertIn("if: always()", native)
         self.assertIn("if-no-files-found: error", native)
+        self.assertNotIn("--require-gpu-memory", native)
 
     def test_native_lane_installs_every_real_graphics_client(self) -> None:
         block = job_block(self.workflow, "linux-native-gui-acceptance")
@@ -88,6 +89,7 @@ class CiResourceContractTests(unittest.TestCase):
         )
         self.assertIn("if: always()", block)
         self.assertIn("if-no-files-found: error", block)
+        self.assertNotIn("--require-gpu-memory", block)
 
     def test_quality_lane_records_and_uploads_hermetic_provider_evidence(self) -> None:
         block = job_block(self.workflow, "quality-and-package")

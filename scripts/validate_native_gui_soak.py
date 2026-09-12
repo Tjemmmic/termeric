@@ -16,6 +16,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.gui_acceptance import AcceptanceError, read_records
+from scripts.drm_memory import (
+    DRM_MEMORY_INTERFACE,
+    MAX_DRM_AGGREGATE_BYTES,
+    DrmMemoryError,
+    summarize_drm_memory,
+    validate_drm_memory_snapshot,
+)
 from scripts.run_native_gui_soak import (
     MAX_DRIVER_ERROR_CHARACTERS,
     MAX_NATIVE_SOAK_ARTIFACTS,
@@ -59,6 +66,7 @@ def validate_environment(value: object, source: Path) -> bool:
             "backend",
             "compositor",
             "wgpu_backend",
+            "gpu_memory_interface",
         },
         "environment",
     )
@@ -73,6 +81,8 @@ def validate_environment(value: object, source: Path) -> bool:
     backend = environment["wgpu_backend"]
     if not isinstance(backend, str) or not backend or len(backend) > 128:
         raise SoakValidationError("environment.wgpu_backend is invalid")
+    if environment["gpu_memory_interface"] != DRM_MEMORY_INTERFACE:
+        raise SoakValidationError("environment.gpu_memory_interface is invalid")
     commit = environment["commit"]
     if not isinstance(commit, str) or COMMIT_PATTERN.fullmatch(commit) is None:
         raise SoakValidationError("environment.commit is invalid")
@@ -145,6 +155,9 @@ def validate_thresholds(
             "max_thread_growth",
             "max_fd_growth",
             "max_children",
+            "require_gpu_memory",
+            "max_drm_resident_bytes",
+            "max_drm_resident_growth_bytes",
             "minimum_resource_samples",
             "minimum_progress_records",
             "minimum_resize_actions",
@@ -159,6 +172,19 @@ def validate_thresholds(
     for field in ("max_rss_growth_kib", "max_thread_growth", "max_fd_growth"):
         require_number(thresholds[field], f"thresholds.{field}")
     require_integer(thresholds["max_children"], "thresholds.max_children")
+    if type(thresholds["require_gpu_memory"]) is not bool:
+        raise SoakValidationError("thresholds.require_gpu_memory must be a boolean")
+    require_integer(
+        thresholds["max_drm_resident_bytes"],
+        "thresholds.max_drm_resident_bytes",
+        minimum=1,
+        maximum=MAX_DRM_AGGREGATE_BYTES,
+    )
+    require_integer(
+        thresholds["max_drm_resident_growth_bytes"],
+        "thresholds.max_drm_resident_growth_bytes",
+        maximum=MAX_DRM_AGGREGATE_BYTES,
+    )
     fixed = {
         "minimum_resource_samples": minimum_sample_count(duration, sample_interval),
         "minimum_progress_records": max(1, duration // 3),
@@ -289,6 +315,7 @@ def validate_record(
             "outcomes",
             "samples",
             "resource_inventory_summary",
+            "drm_memory_summary",
             "observed_children",
             "checks",
         },
@@ -327,7 +354,12 @@ def validate_record(
     thresholds = validate_thresholds(
         root["thresholds"], duration, sample_interval, action_interval
     )
-    samples = validate_samples(root["samples"])
+    samples = validate_samples(root["samples"], extra_fields={"gpu_memory"})
+    try:
+        for sample in samples:
+            validate_drm_memory_snapshot(sample["gpu_memory"])
+    except DrmMemoryError as error:
+        raise SoakValidationError(f"invalid DRM memory sample: {error}") from error
     observed_children = root["observed_children"]
     if (
         not isinstance(observed_children, list)
@@ -344,6 +376,12 @@ def validate_record(
     expected_summary = summarize_resource_inventories(samples)
     if root["resource_inventory_summary"] != expected_summary:
         raise SoakValidationError("resource inventory summary does not match samples")
+    try:
+        expected_drm_summary = summarize_drm_memory(samples)
+    except DrmMemoryError as error:
+        raise SoakValidationError(f"invalid DRM memory summary: {error}") from error
+    if root["drm_memory_summary"] != expected_drm_summary:
+        raise SoakValidationError("DRM memory summary does not match samples")
     expected_checks = build_native_soak_checks(samples, thresholds, outcomes)
     if root["checks"] != expected_checks:
         raise SoakValidationError("reported checks do not match reconstructed checks")

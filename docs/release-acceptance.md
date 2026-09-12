@@ -168,8 +168,10 @@ samples RSS, threads, file descriptors, and children, and scans a companion GPU
 smoke log for validation/device-loss errors. The current schema-3 core record
 seals that log, binds the tested binary and exact clean source candidate, and is
 independently validated by reconstructing every check and summary. The separate
-schema-4 displayed report seals an exact bounded artifact manifest and
-reconstructs transcript, log, resource, and outcome checks. Both reports
+schema-5 displayed report seals an exact bounded artifact manifest and
+reconstructs transcript, log, resource, outcome, and process-attributed DRM
+memory checks. Missing optional driver fields remain explicit rather than zero.
+Both reports
 reconcile privacy-safe descriptor/thread/child inventories and summarize
 category quartile growth and peaks without retaining paths, arguments, or
 environment data.

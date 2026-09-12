@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import math
 import os
 from pathlib import Path
 import platform
@@ -31,12 +32,21 @@ from scripts.gui_acceptance import (
     transcript_bytes,
     wait_until,
 )
+from scripts.drm_memory import (
+    DRM_MEMORY_INTERFACE,
+    MAX_DRM_AGGREGATE_BYTES,
+    MAX_DRM_PROCESSES,
+    evaluate_drm_memory,
+    read_process_drm_memory,
+    summarize_drm_memory,
+)
 from scripts.run_soak import (
     MAX_INVENTORY_LABELS,
     MAX_PROCESS_LABEL_CHARACTERS,
     child_still_exists,
     evaluate_resource_ceilings,
     minimum_sample_count,
+    process_children,
     process_snapshot,
     relative_file_path,
     summarize_resource_inventories,
@@ -45,7 +55,7 @@ from scripts.run_soak import (
 
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
-NATIVE_SOAK_SCHEMA_VERSION = 4
+NATIVE_SOAK_SCHEMA_VERSION = 5
 NATIVE_SOAK_RECORD_KIND = "termeric-native-resource-soak"
 MAX_NATIVE_SOAK_ARTIFACTS = 512
 MAX_NATIVE_SOAK_ARTIFACT_BYTES = 128 * 1024 * 1024
@@ -185,6 +195,26 @@ def perform_until(
                 )
 
 
+def bounded_process_tree_pids(proc_root: Path, root_pid: int) -> list[int]:
+    pending = [root_pid]
+    observed: set[int] = set()
+    while pending:
+        pid = pending.pop(0)
+        if pid in observed:
+            continue
+        observed.add(pid)
+        if len(observed) > MAX_DRM_PROCESSES:
+            raise AcceptanceError(
+                "native soak process tree exceeds its DRM sampling ceiling"
+            )
+        pending.extend(
+            child
+            for child in process_children(proc_root / str(pid))
+            if child not in observed
+        )
+    return sorted(observed)
+
+
 def evaluate_native_checks(
     samples: list[dict[str, Any]],
     *,
@@ -194,6 +224,9 @@ def evaluate_native_checks(
     max_fd_growth: float,
     max_children: int,
     minimum_samples: int,
+    require_gpu_memory: bool,
+    max_drm_resident_bytes: int,
+    max_drm_resident_growth_bytes: int,
     exit_status: int | None,
     progress_records: int,
     minimum_progress: int,
@@ -214,6 +247,14 @@ def evaluate_native_checks(
         max_fd_growth=max_fd_growth,
         max_children=max_children,
         minimum_samples=minimum_samples,
+    )
+    checks.extend(
+        evaluate_drm_memory(
+            samples,
+            required=require_gpu_memory,
+            max_resident_bytes=max_drm_resident_bytes,
+            max_resident_growth_bytes=max_drm_resident_growth_bytes,
+        )
     )
     checks.extend(
         [
@@ -277,6 +318,11 @@ def build_native_soak_checks(
         max_fd_growth=thresholds["max_fd_growth"],
         max_children=thresholds["max_children"],
         minimum_samples=thresholds["minimum_resource_samples"],
+        require_gpu_memory=thresholds["require_gpu_memory"],
+        max_drm_resident_bytes=thresholds["max_drm_resident_bytes"],
+        max_drm_resident_growth_bytes=thresholds[
+            "max_drm_resident_growth_bytes"
+        ],
         exit_status=outcomes["exit_status"],
         progress_records=outcomes["progress_records"],
         minimum_progress=thresholds["minimum_progress_records"],
@@ -330,6 +376,13 @@ def main() -> int:
     parser.add_argument("--max-thread-growth", type=float, default=8.0)
     parser.add_argument("--max-fd-growth", type=float, default=16.0)
     parser.add_argument("--max-children", type=int, default=8)
+    parser.add_argument("--max-gpu-resident-mib", type=float, default=1024.0)
+    parser.add_argument("--max-gpu-resident-growth-mib", type=float, default=256.0)
+    parser.add_argument(
+        "--require-gpu-memory",
+        action="store_true",
+        help="require standardized DRM memory fields for every resource sample",
+    )
     parser.add_argument(
         "--require-clean",
         action="store_true",
@@ -338,8 +391,19 @@ def main() -> int:
     args = parser.parse_args()
     if os.name != "posix" or not Path("/proc/self/status").is_file():
         parser.error("native GUI soak requires Linux /proc")
+    numeric_arguments = (
+        args.sample_interval,
+        args.action_interval,
+        args.max_rss_mib,
+        args.max_rss_growth_mib,
+        args.max_thread_growth,
+        args.max_fd_growth,
+        args.max_gpu_resident_mib,
+        args.max_gpu_resident_growth_mib,
+    )
     if (
-        args.duration_seconds < 5
+        any(not math.isfinite(value) for value in numeric_arguments)
+        or args.duration_seconds < 5
         or args.sample_interval <= 0
         or args.action_interval <= 0
         or args.max_rss_mib <= 0
@@ -347,10 +411,17 @@ def main() -> int:
         or args.max_thread_growth < 0
         or args.max_fd_growth < 0
         or args.max_children < 0
+        or args.max_gpu_resident_mib <= 0
+        or args.max_gpu_resident_growth_mib < 0
+        or args.max_gpu_resident_mib
+        > MAX_DRM_AGGREGATE_BYTES / (1024 * 1024)
+        or args.max_gpu_resident_growth_mib
+        > MAX_DRM_AGGREGATE_BYTES / (1024 * 1024)
     ):
         parser.error(
-            "duration must be at least five seconds, intervals and absolute ceilings "
-            "must be positive, and growth ceilings must be non-negative"
+            "duration must be at least five seconds; numeric options must be finite; "
+            "intervals and absolute ceilings must be positive; growth ceilings must "
+            "be non-negative; and DRM ceilings must fit the evidence contract"
         )
     binary = args.binary.resolve()
     if args.binary.is_symlink() or not binary.is_file():
@@ -431,6 +502,10 @@ def main() -> int:
                 )
             if now >= next_sample:
                 snapshot = process_snapshot(app.process.pid, started)
+                snapshot["gpu_memory"] = read_process_drm_memory(
+                    Path("/proc"),
+                    bounded_process_tree_pids(Path("/proc"), app.process.pid),
+                )
                 samples.append(snapshot)
                 observed_children.update(snapshot["children"])
                 next_sample = now + args.sample_interval
@@ -533,6 +608,11 @@ def main() -> int:
         "max_thread_growth": args.max_thread_growth,
         "max_fd_growth": args.max_fd_growth,
         "max_children": args.max_children,
+        "require_gpu_memory": args.require_gpu_memory,
+        "max_drm_resident_bytes": int(args.max_gpu_resident_mib * 1024 * 1024),
+        "max_drm_resident_growth_bytes": int(
+            args.max_gpu_resident_growth_mib * 1024 * 1024
+        ),
         "minimum_resource_samples": minimum_samples,
         "minimum_progress_records": minimum_progress,
         "minimum_resize_actions": minimum_action_kind,
@@ -576,6 +656,7 @@ def main() -> int:
             "backend": "wayland",
             "compositor": "sway-headless",
             "wgpu_backend": environment.get("WGPU_BACKEND"),
+            "gpu_memory_interface": DRM_MEMORY_INTERFACE,
         },
         "binary": {
             "path": binary_relative,
@@ -595,6 +676,7 @@ def main() -> int:
         "outcomes": outcomes,
         "samples": samples,
         "resource_inventory_summary": summarize_resource_inventories(samples),
+        "drm_memory_summary": summarize_drm_memory(samples),
         "observed_children": sorted(observed_children),
         "checks": checks,
     }
@@ -602,7 +684,7 @@ def main() -> int:
     write_json_atomic(output, report)
     for check in checks:
         label = "PASS" if check["passed"] else "FAIL"
-        boundary = check.get("max", check.get("min"))
+        boundary = check.get("max", check.get("min", check.get("allowed")))
         print(f"{label}: {check['name']} (actual={check['actual']}, boundary={boundary})")
     print(f"Artifacts: {artifacts}")
     return 0 if passed else 1

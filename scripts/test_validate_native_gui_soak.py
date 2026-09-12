@@ -8,6 +8,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from scripts.drm_memory import aggregate_drm_fdinfos, summarize_drm_memory
+
 from scripts.run_native_gui_soak import (
     MAX_NATIVE_SOAK_ARTIFACTS,
     MAX_NATIVE_SOAK_ARTIFACT_BYTES,
@@ -43,6 +45,7 @@ def resource_sample(index: int) -> dict[str, object]:
             "thread_names": {"termeric": 8},
             "child_names": {"fixture": 1},
         },
+        "gpu_memory": aggregate_drm_fdinfos([]),
     }
 
 
@@ -88,6 +91,9 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             "max_thread_growth": 8.0,
             "max_fd_growth": 16.0,
             "max_children": 8,
+            "require_gpu_memory": False,
+            "max_drm_resident_bytes": 1024 * 1024 * 1024,
+            "max_drm_resident_growth_bytes": 256 * 1024 * 1024,
             "minimum_resource_samples": 3,
             "minimum_progress_records": 2,
             "minimum_resize_actions": 2,
@@ -122,6 +128,7 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
                 "backend": "wayland",
                 "compositor": "sway-headless",
                 "wgpu_backend": "gl",
+                "gpu_memory_interface": "linux-drm-fdinfo-v1",
             },
             "binary": {
                 "path": "target/debug/termeric",
@@ -141,6 +148,7 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             "outcomes": outcomes,
             "samples": samples,
             "resource_inventory_summary": summarize_resource_inventories(samples),
+            "drm_memory_summary": summarize_drm_memory(samples),
             "observed_children": [100],
             "checks": checks,
         }
@@ -175,6 +183,29 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
     def test_authentic_clean_bundle_validates(self) -> None:
         self.assertEqual(self.validate()["status"], "pass")
 
+    def test_required_measured_drm_memory_bundle_validates(self) -> None:
+        for index, sample in enumerate(self.record["samples"]):
+            sample["gpu_memory"] = aggregate_drm_fdinfos(
+                [
+                    "drm-driver: amdgpu\n"
+                    "drm-pdev: 0000:03:00.0\n"
+                    "drm-client-id: 7\n"
+                    f"drm-total-vram: {256 + index} MiB\n"
+                    f"drm-resident-vram: {128 + index} MiB\n"
+                ]
+            )
+        self.record["thresholds"]["require_gpu_memory"] = True
+        self.record["drm_memory_summary"] = summarize_drm_memory(
+            self.record["samples"]
+        )
+        self.record["checks"] = build_native_soak_checks(
+            self.record["samples"],
+            self.record["thresholds"],
+            self.record["outcomes"],
+        )
+        self.write_record()
+        self.assertEqual(self.validate()["status"], "pass")
+
     def test_unknown_field_and_policy_drift_are_rejected(self) -> None:
         original = copy.deepcopy(self.record)
         self.assert_mutation_rejected(lambda record: record.update({"surprise": True}))
@@ -189,6 +220,9 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             lambda record: record["samples"][0].update({"rss_kib": 900_000.0}),
             lambda record: record["thresholds"].update({"max_rss_kib": 1.0}),
             lambda record: record["thresholds"].update(
+                {"require_gpu_memory": "yes"}
+            ),
+            lambda record: record["thresholds"].update(
                 {"minimum_progress_records": 3}
             ),
             lambda record: record["outcomes"].update({"resize_actions": 0}),
@@ -197,6 +231,12 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             lambda record: record["checks"][0].update({"passed": False}),
             lambda record: record["resource_inventory_summary"].update(
                 {"fd_kinds": {}}
+            ),
+            lambda record: record["drm_memory_summary"].update(
+                {"measured_samples": 1}
+            ),
+            lambda record: record["samples"][0]["gpu_memory"].update(
+                {"client_count": 1}
             ),
         ]
         for mutation in mutations:
