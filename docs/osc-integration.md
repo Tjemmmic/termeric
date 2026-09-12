@@ -142,8 +142,9 @@ desktop helper.
 
 Termeric also implements a bounded subset of Kitty's
 [OSC 99 notification protocol][kitty-notifications]. Metadata keys `i`, `p`,
-`d`, `e`, and `w` provide strict identifiers, title/body/close selection,
-completion, plain or RFC 4648 base64 payloads, and expiry policy. The `f`, `t`, and `n` keys add base64-encoded
+`d`, `e`, `w`, and `c` provide strict identifiers, title/body/close/alive
+selection, completion, plain or RFC 4648 base64 payloads, expiry policy, and
+close-report requests. The `f`, `t`, and `n` keys add base64-encoded
 application identity, ordered notification types, and ordered icon-name
 candidates; `u=0/1/2` is retained as typed low/normal/critical urgency. Plain
 chunks are limited to 2,048 bytes;
@@ -168,16 +169,19 @@ per-list overflow fail closed and retire only the affected identified assembly.
 Expiry accepts exactly `-1` for desktop policy, `0` for no automatic expiry, or
 a positive millisecond value no greater than `2147483647`. A completed,
 payload-free `p=close` request requires an identifier and also retires any
-incomplete parser assembly carrying that identifier.
+incomplete parser assembly carrying that identifier. `c` accepts only `0` or
+`1`. A payload-free `p=alive` query is completed immediately; payload-bearing
+or continued alive queries are rejected.
 
 `OSC 99 ; i=id:p=? ; ST` receives an owner-routed response under the requesting
 terminal's S7C1T/S8C1T framing. Linux responds with
-`p=title,body,close:o=always:u=0,1,2:w=1`; other targets respond with
-`p=title,body:o=always`. The platform split keeps urgency discovery truthful.
+`p=title,body,close,alive:c=1:o=always:u=0,1,2:w=1`; other targets respond with
+`p=title,body:o=always`. The platform split keeps lifecycle and urgency
+discovery truthful.
 Application/type/icon-name metadata has no capability-query key. Non-`always`
-occasion requirements are rejected. Activation/focus, buttons, close/alive
-reports, application-side filtering, sound selection, transmitted icon data,
-and icon caching are not advertised or claimed.
+occasion requirements are rejected. Activation/focus, buttons, application-side
+filtering, sound selection, transmitted icon data, and icon caching are not
+advertised or claimed.
 
 Unidentified requests with desktop-default expiry enter the existing
 rate-limited helper path. On Linux, requests needing lifecycle semantics use a
@@ -187,9 +191,24 @@ close authority scoped to the originating tab/pane; equal client IDs from two
 origins cannot affect each other. Positive expiry starts after `Notify` returns,
 is also passed to the service, and makes up to three terminal-side close
 attempts. The command and completion queues and tracked-handle set are each
-capped at 64, D-Bus methods have a two-second timeout, and evicting the oldest
-handle makes a best-effort close. Repeated worker failures are deduplicated until
-a successful operation recovers the path. Notification text is markup-escaped
+capped at 64, as is the pending close-report set. A single signal listener
+subscribes to freedesktop `NotificationClosed` before the first tracked
+notification is shown. When `c=1` was requested, native user, service-policy,
+explicit, and expiry closure emits exactly one `p=close` report to the original
+tab or pane using the framing captured by that request. Replacement adopts only
+the newest successful request's close policy; replacing a revision does not
+report the old revision closed. Explicit/expiry closes wait up to five seconds
+for native confirmation and then fail visibly and answer with `untracked`
+instead of leaving the client waiting forever. `p=alive` returns a sorted,
+comma-separated snapshot of named live IDs owned by that exact terminal;
+anonymous and already-closing entries are excluded. Stale terminal origins are
+dropped with no focused-terminal fallback.
+
+D-Bus methods have a two-second timeout, and evicting the oldest handle makes a
+best-effort close. Repeated worker failures are deduplicated until a successful
+operation recovers the path. A stopped signal stream is surfaced once and the
+next tracked request may replace it, but no timer-driven reconnect loop or
+additional concurrent listener is created. Notification text is markup-escaped
 before it reaches the service.
 
 Legacy Linux helper delivery still maps `f`, `t`, the first `n` candidate, and
@@ -198,7 +217,9 @@ Kitty's universal semantic icon names are mapped to common freedesktop names;
 other names are delegated to the desktop icon resolver. macOS retains
 title/body helper behavior but does not advertise lifecycle support. Hermetic
 tests use an in-memory backend and do not contact a notification service;
-real-compositor permission and presentation remain manual acceptance.
+they cover close signals, reports, alive snapshots, timeouts, shutdown, and
+exact delayed-reply routing without a session bus. Real-compositor permission,
+presentation, and daemon signal behavior remain manual acceptance.
 
 [kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
 

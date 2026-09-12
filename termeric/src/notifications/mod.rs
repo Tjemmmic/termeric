@@ -18,6 +18,14 @@ const DESKTOP_COMMAND_QUEUE_CAPACITY: usize = 16;
 const MAX_DESKTOP_HELPER_CHILDREN: usize = 8;
 const MAX_DELIVERY_ERROR_CHARS: usize = 512;
 
+pub(crate) enum NotificationCompletion {
+    Warning(String),
+    ProtocolReply {
+        origin: crate::tabs::TerminalEventOrigin,
+        data: Vec<u8>,
+    },
+}
+
 struct DesktopCommandRequest {
     program: String,
     args: Vec<String>,
@@ -396,7 +404,7 @@ impl Notifications {
     }
 
     /// Route a terminal-owned notification, using tracked native handles when
-    /// its identifier or expiry policy requires lifecycle semantics.
+    /// its identifier, expiry, or close-report policy requires lifecycle state.
     pub fn notify_terminal(
         &mut self,
         origin: crate::tabs::TerminalEventOrigin,
@@ -408,6 +416,7 @@ impl Notifications {
         #[cfg(target_os = "linux")]
         if request.identifier.is_some()
             || !matches!(request.expiry, termeric_core::NotificationExpiry::System)
+            || request.report_close
         {
             let tracked = match self.tracked.as_mut() {
                 Some(tracked) => tracked,
@@ -433,6 +442,47 @@ impl Notifications {
         self.notify_request(&request)
     }
 
+    /// Query the exact origin's currently live named OSC 99 notifications.
+    pub fn query_alive(
+        &mut self,
+        origin: crate::tabs::TerminalEventOrigin,
+        identifier: String,
+        reply_uses_8bit_controls: bool,
+    ) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        {
+            let tracked = match self.tracked.as_mut() {
+                Some(tracked) => tracked,
+                None => {
+                    self.tracked = match tracked::TrackedNotifications::new() {
+                        Ok(tracked) => Some(tracked),
+                        Err(error) => {
+                            let message =
+                                bounded_delivery_error("Desktop notification unavailable", &error);
+                            return report_new_failure(&mut self.last_delivery_failure, message);
+                        }
+                    };
+                    self.tracked
+                        .as_mut()
+                        .expect("tracked worker was initialized")
+                }
+            };
+            tracked
+                .alive(origin, identifier, reply_uses_8bit_controls)
+                .err()
+                .and_then(|error| {
+                    let message =
+                        bounded_delivery_error("Desktop notification unavailable", &error);
+                    report_new_failure(&mut self.last_delivery_failure, message)
+                })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (origin, identifier, reply_uses_8bit_controls);
+            None
+        }
+    }
+
     /// Close one exact origin-owned tracked notification.
     pub fn close_terminal(
         &mut self,
@@ -455,28 +505,36 @@ impl Notifications {
     }
 
     /// Drain asynchronous lifecycle failures for visible app reporting.
-    pub fn drain_failures(&mut self) -> Vec<String> {
-        #[cfg(target_os = "linux")]
-        let completions = self
-            .tracked
-            .as_ref()
-            .map_or_else(Vec::new, tracked::TrackedNotifications::drain_completions);
+    pub fn drain_completions(&mut self) -> Vec<NotificationCompletion> {
         #[cfg(not(target_os = "linux"))]
-        let completions: Vec<Result<(), String>> = Vec::new();
-        completions
-            .into_iter()
-            .filter_map(|completion| match completion {
-                Ok(()) => {
-                    self.last_delivery_failure = None;
-                    None
-                }
-                Err(error) => {
-                    let message =
-                        bounded_delivery_error("Desktop notification unavailable", &error);
-                    report_new_failure(&mut self.last_delivery_failure, message)
-                }
-            })
-            .collect()
+        return Vec::new();
+
+        #[cfg(target_os = "linux")]
+        {
+            self.tracked
+                .as_ref()
+                .map_or_else(Vec::new, tracked::TrackedNotifications::drain_completions)
+                .into_iter()
+                .filter_map(|completion| match completion {
+                    tracked::TrackedCompletion::Recovered => {
+                        self.last_delivery_failure = None;
+                        None
+                    }
+                    tracked::TrackedCompletion::Failure(error) => {
+                        let message =
+                            bounded_delivery_error("Desktop notification unavailable", &error);
+                        report_new_failure(&mut self.last_delivery_failure, message)
+                            .map(NotificationCompletion::Warning)
+                    }
+                    tracked::TrackedCompletion::ProtocolReply(reply) => {
+                        Some(NotificationCompletion::ProtocolReply {
+                            origin: reply.origin,
+                            data: reply.data,
+                        })
+                    }
+                })
+                .collect()
+        }
     }
 
     #[cfg(test)]

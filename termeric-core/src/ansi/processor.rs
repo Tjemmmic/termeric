@@ -1238,7 +1238,7 @@ mod tests {
             b"\x1b]99;i=query-7:p=?;\x1b\\\
               \x1b G\x1b]99;i=query-8:p=?;\x1b\\\
               \x1b]99;i=bad=:p=?;\x1b\\\
-              \x1b]99;c=1;ignored\x1b\\\
+              \x1b]99;c=2;ignored\x1b\\\
               \x1b]99;o=unfocused;ignored\x1b\\\
               \x1b]99;e=1;%%%\x1b\\\
               \x1b]99;p=future;ignored\x1b\\",
@@ -1246,10 +1246,12 @@ mod tests {
         #[cfg(target_os = "linux")]
         let expected_query_events = vec![
             crate::event::TerminalEvent::PtyWrite(
-                b"\x1b]99;i=query-7:p=?;p=title,body,close:o=always:u=0,1,2:w=1\x1b\\".to_vec(),
+                b"\x1b]99;i=query-7:p=?;p=title,body,close,alive:c=1:o=always:u=0,1,2:w=1\x1b\\"
+                    .to_vec(),
             ),
             crate::event::TerminalEvent::PtyWrite(
-                b"\x9d99;i=query-8:p=?;p=title,body,close:o=always:u=0,1,2:w=1\x9c".to_vec(),
+                b"\x9d99;i=query-8:p=?;p=title,body,close,alive:c=1:o=always:u=0,1,2:w=1\x9c"
+                    .to_vec(),
             ),
         ];
         #[cfg(not(target_os = "linux"))]
@@ -1279,6 +1281,7 @@ mod tests {
                     title: Some("before-after".into()),
                     body: String::new(),
                     identifier: Some("keep".into()),
+                    reply_uses_8bit_controls: true,
                     ..crate::event::NotificationRequest::default()
                 }),
                 crate::event::TerminalEvent::Notification(crate::event::NotificationRequest {

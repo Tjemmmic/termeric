@@ -161,7 +161,7 @@ mod tests {
     fn osc99_notifications_are_forwarded_but_queries_stay_with_the_owner() {
         let mut terminal = Terminal::new(80, 24);
         terminal.process(
-            b"\x1b]99;i=capability:p=?;\x1b\\\x1b]99;f=YnVpbGQtYWdlbnQ=:u=2;finished\x1b\\\x1b]99;i=job:p=close;\x1b\\",
+            b"\x1b]99;i=capability:p=?;\x1b\\\x1b G\x1b]99;i=job:c=1:f=YnVpbGQtYWdlbnQ=:u=2;finished\x1b\\\x1b]99;i=job:p=close;\x1b\\\x1b]99;i=probe:p=alive;\x1b\\",
         );
         let mut forwarded = Vec::new();
         let mut replies = Vec::new();
@@ -177,18 +177,27 @@ mod tests {
                 TerminalEvent::Notification(termeric_core::NotificationRequest {
                     title: Some("finished".into()),
                     body: String::new(),
+                    identifier: Some("job".into()),
                     application_name: Some("build-agent".into()),
                     urgency: Some(termeric_core::NotificationUrgency::Critical),
+                    report_close: true,
+                    reply_uses_8bit_controls: true,
                     ..termeric_core::NotificationRequest::default()
                 }),
                 TerminalEvent::NotificationClose {
                     identifier: "job".into(),
                 },
+                #[cfg(target_os = "linux")]
+                TerminalEvent::NotificationAliveQuery {
+                    identifier: "probe".into(),
+                    reply_uses_8bit_controls: true,
+                },
             ]
         );
         #[cfg(target_os = "linux")]
         let expected_reply =
-            b"\x1b]99;i=capability:p=?;p=title,body,close:o=always:u=0,1,2:w=1\x1b\\".as_slice();
+            b"\x1b]99;i=capability:p=?;p=title,body,close,alive:c=1:o=always:u=0,1,2:w=1\x1b\\"
+                .as_slice();
         #[cfg(not(target_os = "linux"))]
         let expected_reply = b"\x1b]99;i=capability:p=?;p=title,body:o=always\x1b\\".as_slice();
         assert_eq!(replies, expected_reply);

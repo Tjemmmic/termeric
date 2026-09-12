@@ -295,9 +295,10 @@ awaiting evidence:
   pending, so this is partial rather than a parity claim.
 - kitty's OSC 99 notification discovery, bounded title/body assembly, typed
   application/type/icon-name metadata, Linux urgency routing, origin-scoped
-  native-ID replacement and close, and bounded terminal-enforced expiry are now
-  implemented. Activation/focus, buttons, close/alive reports, transmitted
-  icons/cache, occasion filtering, and sound selection remain gaps. Kitty OSC 66 text sizing now has bounded multicell parsing,
+  native-ID replacement and close, bounded terminal-enforced expiry, requested
+  native close reports, and exact-owner alive queries are now implemented.
+  Activation/focus, buttons, transmitted icons/cache, occasion filtering, and
+  sound selection remain gaps. Kitty OSC 66 text sizing now has bounded multicell parsing,
   grid/edit/reflow/history/domain semantics, scaled shaping, alignment, and
   cursor geometry; native font-quality and client acceptance remain deferred.
   Kitty's terminal file-transfer and multiple-cursor extensions remain

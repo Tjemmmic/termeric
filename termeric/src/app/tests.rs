@@ -6044,6 +6044,129 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
 
 #[cfg(unix)]
 #[test]
+fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallback() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let data = b"\x1b]99;i=build:p=alive;\x1b\\".to_vec();
+    let script = format!(
+        "stty raw -echo; reply=$(dd bs=1 count={} 2>/dev/null); \
+         printf '\\rnotification='; printf '%s' \"$reply\" | od -An -tx1; printf '\\r\\n'",
+        data.len()
+    );
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), script],
+        env: Default::default(),
+    };
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+    let tab_id = tabs
+        .new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), "sleep 2".into()],
+            None,
+            Some("notification-owner"),
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+    let mut panes = PaneManager::new(
+        80,
+        24,
+        shell,
+        1_000,
+        8 * 1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    )
+    .unwrap();
+    let requesting_pane = panes.split(SplitDirection::Vertical).unwrap();
+    panes.focus(PaneId(0));
+    tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    app.tabs = Some(tabs);
+
+    assert!(!app.handle_notification_completion(
+        crate::notifications::NotificationCompletion::ProtocolReply {
+            origin: TerminalEventOrigin::Pane {
+                tab_id,
+                pane_id: requesting_pane,
+            },
+            data,
+        }
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut requesting_text = String::new();
+    while Instant::now() < deadline {
+        app.tabs.as_mut().unwrap().poll_events();
+        requesting_text = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .get_pane(requesting_pane)
+            .unwrap()
+            .terminal
+            .grid()
+            .export_scrollback_text()
+            .join("\n");
+        if requesting_text.contains("notification=") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let panes = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .pane_manager
+        .as_ref()
+        .unwrap();
+    let focused_text = panes
+        .get_pane(PaneId(0))
+        .unwrap()
+        .terminal
+        .grid()
+        .export_scrollback_text()
+        .join("\n");
+    let compact_requesting_text: String = requesting_text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    assert!(
+        compact_requesting_text
+            .contains("notification=1b5d39393b693d6275696c643a703d616c6976653b1b5c"),
+        "requesting pane output did not contain the exact reply: {requesting_text:?}"
+    );
+    assert!(!focused_text.contains("notification="));
+    assert_eq!(panes.focused_id(), PaneId(0));
+
+    // Stale origins are discarded rather than falling back to active content.
+    let latest_toast_before = latest_toast(&app).map(str::to_owned);
+    assert!(!app.handle_notification_completion(
+        crate::notifications::NotificationCompletion::ProtocolReply {
+            origin: TerminalEventOrigin::Pane {
+                tab_id,
+                pane_id: PaneId(u32::MAX),
+            },
+            data: b"must-not-leak".to_vec(),
+        }
+    ));
+    assert_eq!(latest_toast(&app), latest_toast_before.as_deref());
+}
+
+#[cfg(unix)]
+#[test]
 fn osc_titles_and_dynamic_colors_apply_to_exact_inactive_tab_and_pane_origins() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;

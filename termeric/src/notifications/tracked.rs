@@ -2,6 +2,8 @@
 
 use crate::tabs::TerminalEventOrigin;
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 use termeric_core::{NotificationExpiry, NotificationRequest, NotificationUrgency};
@@ -10,6 +12,7 @@ const TRACKED_COMMAND_CAPACITY: usize = 64;
 const MAX_TRACKED_NOTIFICATIONS: usize = 64;
 const MAX_EXPIRY_CLOSE_ATTEMPTS: u8 = 3;
 const EXPIRY_RETRY_DELAY: Duration = Duration::from_secs(1);
+const CLOSE_SIGNAL_TIMEOUT: Duration = Duration::from_secs(5);
 const DBUS_METHOD_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -29,6 +32,22 @@ struct TrackedEntry {
     desktop_id: u32,
     expires_at: Option<Instant>,
     expiry_close_attempts: u8,
+    report_close: bool,
+    reply_uses_8bit_controls: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ClosingEntry {
+    origin: TerminalEventOrigin,
+    identifier: String,
+    reply_uses_8bit_controls: bool,
+    deadline: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ProtocolReply {
+    pub(super) origin: TerminalEventOrigin,
+    pub(super) data: Vec<u8>,
 }
 
 enum TrackedCommand {
@@ -39,23 +58,43 @@ enum TrackedCommand {
     Close {
         key: TrackedKey,
     },
+    Alive {
+        origin: TerminalEventOrigin,
+        identifier: String,
+        reply_uses_8bit_controls: bool,
+    },
+    NativeClosed {
+        desktop_id: u32,
+    },
+    BackendFailure(String),
+    Shutdown,
 }
 
-enum TrackedCompletion {
+pub(super) enum TrackedCompletion {
     Failure(String),
     Recovered,
+    ProtocolReply(ProtocolReply),
 }
 
 trait TrackedNotificationBackend: Send + 'static {
+    fn prepare(&mut self, _commands: SyncSender<TrackedCommand>) -> Result<(), String> {
+        Ok(())
+    }
+
     fn show(&mut self, request: &NotificationRequest, replaces_id: u32) -> Result<u32, String>;
 
     fn close(&mut self, desktop_id: u32) -> Result<(), String>;
+
+    fn shutdown(&mut self) {}
 }
 
 struct TrackedState<B> {
     backend: B,
     entries: HashMap<TrackedKey, TrackedEntry>,
+    native_keys: HashMap<u32, TrackedKey>,
     order: VecDeque<TrackedKey>,
+    closing: HashMap<u32, ClosingEntry>,
+    closing_order: VecDeque<u32>,
 }
 
 impl<B: TrackedNotificationBackend> TrackedState<B> {
@@ -63,7 +102,10 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
         Self {
             backend,
             entries: HashMap::new(),
+            native_keys: HashMap::new(),
             order: VecDeque::new(),
+            closing: HashMap::new(),
+            closing_order: VecDeque::new(),
         }
     }
 
@@ -81,14 +123,28 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             }
             NotificationExpiry::System | NotificationExpiry::Never => None,
         };
+        if replaces_id != 0 && replaces_id != desktop_id {
+            self.native_keys.remove(&replaces_id);
+        }
         self.order.retain(|candidate| candidate != &key);
         self.order.push_back(key.clone());
+        if let Some(previous) = self.native_keys.get(&desktop_id).cloned()
+            && previous != key
+        {
+            self.remove(&previous);
+        }
+        self.native_keys.insert(desktop_id, key.clone());
+        self.closing.remove(&desktop_id);
+        self.closing_order
+            .retain(|candidate| *candidate != desktop_id);
         self.entries.insert(
             key,
             TrackedEntry {
                 desktop_id,
                 expires_at,
                 expiry_close_attempts: 0,
+                report_close: request.report_close,
+                reply_uses_8bit_controls: request.reply_uses_8bit_controls,
             },
         );
         self.enforce_capacity()
@@ -99,10 +155,7 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             return Vec::new();
         };
         match self.backend.close(desktop_id) {
-            Ok(()) => {
-                self.remove(key);
-                Vec::new()
-            }
+            Ok(()) => self.retire_after_terminal_close(key, Instant::now()),
             Err(error) => vec![format!("could not close tracked notification: {error}")],
         }
     }
@@ -125,7 +178,7 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
                 continue;
             };
             match self.backend.close(desktop_id) {
-                Ok(()) => self.remove(&key),
+                Ok(()) => failures.extend(self.retire_after_terminal_close(&key, now)),
                 Err(error) => {
                     let Some(entry) = self.entries.get_mut(&key) else {
                         continue;
@@ -143,10 +196,77 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
         failures
     }
 
-    fn next_expiry(&self) -> Option<Instant> {
+    fn reap_unconfirmed_closes(&mut self, now: Instant) -> (Vec<String>, Vec<ProtocolReply>) {
+        let due = self
+            .closing_order
+            .iter()
+            .filter(|desktop_id| {
+                self.closing
+                    .get(desktop_id)
+                    .is_some_and(|entry| entry.deadline <= now)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        let mut failures = Vec::new();
+        let mut replies = Vec::new();
+        for desktop_id in due {
+            let Some(entry) = self.remove_closing(desktop_id) else {
+                continue;
+            };
+            failures.push(format!(
+                "notification service did not confirm close for desktop ID {desktop_id}"
+            ));
+            replies.push(close_reply(&entry, true));
+        }
+        (failures, replies)
+    }
+
+    fn native_closed(&mut self, desktop_id: u32) -> Option<ProtocolReply> {
+        if let Some(entry) = self.remove_closing(desktop_id) {
+            return Some(close_reply(&entry, false));
+        }
+        let key = self.native_keys.get(&desktop_id)?.clone();
+        let entry = self.remove(&key)?;
+        entry
+            .report_close
+            .then(|| close_reply_for(&key, entry.reply_uses_8bit_controls, false))
+    }
+
+    fn alive_reply(
+        &self,
+        origin: TerminalEventOrigin,
+        identifier: &str,
+        reply_uses_8bit_controls: bool,
+    ) -> ProtocolReply {
+        let mut identifiers = self
+            .entries
+            .keys()
+            .filter_map(|key| match (&key.origin, &key.identifier) {
+                (candidate, InternalIdentifier::Named(identifier)) if *candidate == origin => {
+                    Some(identifier.as_str())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        identifiers.sort_unstable();
+        let canonical = format!(
+            "\x1b]99;i={identifier}:p=alive;{}\x1b\\",
+            identifiers.join(",")
+        );
+        ProtocolReply {
+            origin,
+            data: termeric_core::Terminal::frame_pty_reply_for_mode(
+                canonical.as_bytes(),
+                reply_uses_8bit_controls,
+            ),
+        }
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
         self.entries
             .values()
             .filter_map(|entry| entry.expires_at)
+            .chain(self.closing.values().map(|entry| entry.deadline))
             .min()
     }
 
@@ -156,28 +276,113 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
             let Some(key) = self.order.pop_front() else {
                 break;
             };
-            let Some(entry) = self.entries.remove(&key) else {
+            let Some(desktop_id) = self.entries.get(&key).map(|entry| entry.desktop_id) else {
                 continue;
             };
-            if let Err(error) = self.backend.close(entry.desktop_id) {
-                failures.push(format!(
-                    "could not close evicted tracked notification: {error}"
-                ));
+            match self.backend.close(desktop_id) {
+                Ok(()) => failures.extend(self.retire_after_terminal_close(&key, Instant::now())),
+                Err(error) => {
+                    self.remove(&key);
+                    failures.push(format!(
+                        "could not close evicted tracked notification: {error}"
+                    ));
+                }
             }
         }
         failures
     }
 
-    fn remove(&mut self, key: &TrackedKey) {
-        self.entries.remove(key);
-        self.order.retain(|candidate| candidate != key);
+    fn retire_after_terminal_close(&mut self, key: &TrackedKey, now: Instant) -> Vec<String> {
+        let Some(entry) = self.remove(key) else {
+            return Vec::new();
+        };
+        if !entry.report_close {
+            return Vec::new();
+        }
+        let closing = ClosingEntry {
+            origin: key.origin,
+            identifier: client_identifier(key),
+            reply_uses_8bit_controls: entry.reply_uses_8bit_controls,
+            deadline: now.checked_add(CLOSE_SIGNAL_TIMEOUT).unwrap_or(now),
+        };
+        self.closing_order
+            .retain(|candidate| *candidate != entry.desktop_id);
+        self.closing_order.push_back(entry.desktop_id);
+        self.closing.insert(entry.desktop_id, closing);
+        self.enforce_closing_capacity()
     }
+
+    fn enforce_closing_capacity(&mut self) -> Vec<String> {
+        let mut failures = Vec::new();
+        while self.closing.len() > MAX_TRACKED_NOTIFICATIONS {
+            let Some(desktop_id) = self.closing_order.pop_front() else {
+                break;
+            };
+            if self.closing.remove(&desktop_id).is_some() {
+                failures.push("notification close-report tracking capacity exceeded".into());
+            }
+        }
+        failures
+    }
+
+    fn remove(&mut self, key: &TrackedKey) -> Option<TrackedEntry> {
+        let entry = self.entries.remove(key)?;
+        self.native_keys.remove(&entry.desktop_id);
+        self.order.retain(|candidate| candidate != key);
+        Some(entry)
+    }
+
+    fn remove_closing(&mut self, desktop_id: u32) -> Option<ClosingEntry> {
+        let entry = self.closing.remove(&desktop_id)?;
+        self.closing_order
+            .retain(|candidate| *candidate != desktop_id);
+        Some(entry)
+    }
+}
+
+fn client_identifier(key: &TrackedKey) -> String {
+    match &key.identifier {
+        InternalIdentifier::Named(identifier) => identifier.clone(),
+        InternalIdentifier::Anonymous(_) => "0".into(),
+    }
+}
+
+fn close_reply(entry: &ClosingEntry, untracked: bool) -> ProtocolReply {
+    let canonical = if untracked {
+        format!("\x1b]99;i={}:p=close;untracked\x1b\\", entry.identifier)
+    } else {
+        format!("\x1b]99;i={}:p=close;\x1b\\", entry.identifier)
+    };
+    ProtocolReply {
+        origin: entry.origin,
+        data: termeric_core::Terminal::frame_pty_reply_for_mode(
+            canonical.as_bytes(),
+            entry.reply_uses_8bit_controls,
+        ),
+    }
+}
+
+fn close_reply_for(
+    key: &TrackedKey,
+    reply_uses_8bit_controls: bool,
+    untracked: bool,
+) -> ProtocolReply {
+    close_reply(
+        &ClosingEntry {
+            origin: key.origin,
+            identifier: client_identifier(key),
+            reply_uses_8bit_controls,
+            deadline: Instant::now(),
+        },
+        untracked,
+    )
 }
 
 pub(super) struct TrackedNotifications {
     commands: SyncSender<TrackedCommand>,
     completions: Receiver<TrackedCompletion>,
     next_anonymous: u64,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl TrackedNotifications {
@@ -188,16 +393,26 @@ impl TrackedNotifications {
     fn new_with_backend<B: TrackedNotificationBackend>(backend: B) -> Result<Self, String> {
         let (commands, receiver) = mpsc::sync_channel(TRACKED_COMMAND_CAPACITY);
         let (completion_sender, completions) = mpsc::sync_channel(TRACKED_COMMAND_CAPACITY);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let worker_commands = commands.clone();
         std::thread::Builder::new()
             .name("termeric-notification-lifecycle".into())
             .spawn(move || {
-                tracked_worker(receiver, completion_sender, TrackedState::new(backend));
+                tracked_worker(
+                    receiver,
+                    worker_commands,
+                    completion_sender,
+                    worker_shutdown,
+                    TrackedState::new(backend),
+                );
             })
             .map_err(|error| format!("could not start notification lifecycle worker: {error}"))?;
         Ok(Self {
             commands,
             completions,
             next_anonymous: 1,
+            shutdown,
         })
     }
 
@@ -233,14 +448,21 @@ impl TrackedNotifications {
         })
     }
 
-    pub(super) fn drain_completions(&self) -> Vec<Result<(), String>> {
-        self.completions
-            .try_iter()
-            .map(|completion| match completion {
-                TrackedCompletion::Failure(error) => Err(error),
-                TrackedCompletion::Recovered => Ok(()),
-            })
-            .collect()
+    pub(super) fn alive(
+        &self,
+        origin: TerminalEventOrigin,
+        identifier: String,
+        reply_uses_8bit_controls: bool,
+    ) -> Result<(), String> {
+        self.send(TrackedCommand::Alive {
+            origin,
+            identifier,
+            reply_uses_8bit_controls,
+        })
+    }
+
+    pub(super) fn drain_completions(&self) -> Vec<TrackedCompletion> {
+        self.completions.try_iter().collect()
     }
 
     fn send(&self, command: TrackedCommand) -> Result<(), String> {
@@ -254,33 +476,87 @@ impl TrackedNotifications {
     }
 }
 
+impl Drop for TrackedNotifications {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        let _ = self.commands.try_send(TrackedCommand::Shutdown);
+    }
+}
+
 fn tracked_worker<B: TrackedNotificationBackend>(
     commands: Receiver<TrackedCommand>,
+    command_sender: SyncSender<TrackedCommand>,
     completions: SyncSender<TrackedCompletion>,
+    shutdown: Arc<AtomicBool>,
     mut state: TrackedState<B>,
 ) {
     let mut last_failure = None;
     loop {
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
         let now = Instant::now();
-        if state.next_expiry().is_some_and(|deadline| deadline <= now) {
+        if state
+            .next_deadline()
+            .is_some_and(|deadline| deadline <= now)
+        {
             publish_operation(&completions, &mut last_failure, state.expire_due(now));
+            let (failures, replies) = state.reap_unconfirmed_closes(now);
+            publish_operation(&completions, &mut last_failure, failures);
+            for reply in replies {
+                publish_reply(&completions, reply);
+            }
         }
         let wait = state
-            .next_expiry()
+            .next_deadline()
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
             .unwrap_or(Duration::from_secs(60));
         match commands.recv_timeout(wait) {
             Ok(TrackedCommand::Show { key, request }) => {
-                let failures = state.show(key, request);
+                let failures = match state.backend.prepare(command_sender.clone()) {
+                    Ok(()) => state.show(key, request),
+                    Err(error) => vec![format!(
+                        "could not prepare notification close tracking: {error}"
+                    )],
+                };
                 publish_operation(&completions, &mut last_failure, failures);
             }
             Ok(TrackedCommand::Close { key }) => {
                 let failures = state.close(&key);
                 publish_operation(&completions, &mut last_failure, failures);
             }
+            Ok(TrackedCommand::Alive {
+                origin,
+                identifier,
+                reply_uses_8bit_controls,
+            }) => publish_reply(
+                &completions,
+                state.alive_reply(origin, &identifier, reply_uses_8bit_controls),
+            ),
+            Ok(TrackedCommand::NativeClosed { desktop_id }) => {
+                if let Some(reply) = state.native_closed(desktop_id) {
+                    publish_reply(&completions, reply);
+                }
+                publish_operation(&completions, &mut last_failure, Vec::new());
+            }
+            Ok(TrackedCommand::BackendFailure(error)) => {
+                publish_operation(&completions, &mut last_failure, vec![error]);
+            }
+            Ok(TrackedCommand::Shutdown) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+    }
+    drop(commands);
+    state.backend.shutdown();
+}
+
+fn publish_reply(completions: &SyncSender<TrackedCompletion>, reply: ProtocolReply) {
+    if completions
+        .send(TrackedCompletion::ProtocolReply(reply))
+        .is_ok()
+    {
+        wake_app();
     }
 }
 
@@ -319,6 +595,9 @@ fn wake_app() {
 #[derive(Default)]
 struct FreedesktopBackend {
     connection: Option<zbus::blocking::Connection>,
+    signal_stop: Option<async_channel::Sender<()>>,
+    signal_thread: Option<std::thread::JoinHandle<()>>,
+    signal_alive: Option<Arc<AtomicBool>>,
 }
 
 impl FreedesktopBackend {
@@ -337,18 +616,77 @@ impl FreedesktopBackend {
             .expect("connection was initialized"))
     }
 
-    fn invalidate_after<T>(&mut self, result: Result<T, String>) -> Result<T, String> {
-        if result.is_err() {
-            self.connection = None;
+    fn stop(&mut self) {
+        if let Some(alive) = self.signal_alive.take() {
+            alive.store(false, Ordering::Release);
         }
-        result
+        if let Some(stop) = self.signal_stop.take() {
+            let _ = stop.try_send(());
+        }
+        if let Some(connection) = self.connection.take() {
+            let _ = connection.close();
+        }
+        if let Some(thread) = self.signal_thread.take()
+            && thread.join().is_err()
+        {
+            log::warn!("Notification close-signal listener panicked during shutdown");
+        }
     }
 }
 
 impl TrackedNotificationBackend for FreedesktopBackend {
+    fn prepare(&mut self, commands: SyncSender<TrackedCommand>) -> Result<(), String> {
+        if self.signal_thread.is_some() {
+            if self
+                .signal_alive
+                .as_ref()
+                .is_some_and(|alive| alive.load(Ordering::Acquire))
+            {
+                return Ok(());
+            }
+            self.stop();
+        }
+        let connection = self.connection()?.clone();
+        let async_connection = connection.inner().clone();
+        let (stop_sender, stop_receiver) = async_channel::bounded(1);
+        let (ready_sender, ready_receiver) = mpsc::sync_channel(0);
+        let signal_alive = Arc::new(AtomicBool::new(true));
+        let listener_alive = Arc::clone(&signal_alive);
+        let thread = std::thread::Builder::new()
+            .name("termeric-notification-signals".into())
+            .spawn(move || {
+                pollster::block_on(notification_signal_listener(
+                    async_connection,
+                    commands,
+                    stop_receiver,
+                    ready_sender,
+                ));
+                listener_alive.store(false, Ordering::Release);
+            })
+            .map_err(|error| format!("could not start notification signal listener: {error}"))?;
+        self.signal_stop = Some(stop_sender);
+        self.signal_thread = Some(thread);
+        self.signal_alive = Some(signal_alive);
+        match ready_receiver.recv_timeout(DBUS_METHOD_TIMEOUT) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.stop();
+                Err(error)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.stop();
+                Err("notification signal subscription timed out".into())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.stop();
+                Err("notification signal listener stopped during startup".into())
+            }
+        }
+    }
+
     fn show(&mut self, request: &NotificationRequest, replaces_id: u32) -> Result<u32, String> {
         let connection = self.connection()?;
-        let result = (|| {
+        (|| {
             use std::collections::HashMap;
             use zbus::blocking::Proxy;
             use zbus::zvariant::Value;
@@ -403,13 +741,12 @@ impl TrackedNotificationBackend for FreedesktopBackend {
                     ),
                 )
                 .map_err(|error| format!("Notify call failed: {error}"))
-        })();
-        self.invalidate_after(result)
+        })()
     }
 
     fn close(&mut self, desktop_id: u32) -> Result<(), String> {
         let connection = self.connection()?;
-        let result = (|| {
+        (|| {
             let proxy = zbus::blocking::Proxy::new(
                 connection,
                 "org.freedesktop.Notifications",
@@ -420,8 +757,96 @@ impl TrackedNotificationBackend for FreedesktopBackend {
             proxy
                 .call("CloseNotification", &(desktop_id,))
                 .map_err(|error| format!("CloseNotification call failed: {error}"))
-        })();
-        self.invalidate_after(result)
+        })()
+    }
+
+    fn shutdown(&mut self) {
+        self.stop();
+    }
+}
+
+async fn notification_signal_listener(
+    connection: zbus::Connection,
+    commands: SyncSender<TrackedCommand>,
+    stop: async_channel::Receiver<()>,
+    ready: SyncSender<Result<(), String>>,
+) {
+    use futures_lite::{StreamExt, future};
+
+    let proxy = match zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+    )
+    .await
+    {
+        Ok(proxy) => proxy,
+        Err(error) => {
+            let _ = ready.send(Err(format!(
+                "notification interface is unavailable: {error}"
+            )));
+            return;
+        }
+    };
+    let mut signals = match proxy.receive_signal("NotificationClosed").await {
+        Ok(signals) => signals,
+        Err(error) => {
+            let _ = ready.send(Err(format!(
+                "notification close signals are unavailable: {error}"
+            )));
+            return;
+        }
+    };
+    if ready.send(Ok(())).is_err() {
+        return;
+    }
+
+    enum ListenerEvent {
+        Stop,
+        Signal(Option<zbus::Message>),
+    }
+
+    loop {
+        let event = future::race(
+            async {
+                let _ = stop.recv().await;
+                ListenerEvent::Stop
+            },
+            async { ListenerEvent::Signal(signals.next().await) },
+        )
+        .await;
+        match event {
+            ListenerEvent::Stop => break,
+            ListenerEvent::Signal(Some(message)) => {
+                let (desktop_id, _reason): (u32, u32) = match message.body().deserialize() {
+                    Ok(body) => body,
+                    Err(error) => {
+                        if commands
+                            .send(TrackedCommand::BackendFailure(format!(
+                                "invalid notification close signal: {error}"
+                            )))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                if commands
+                    .send(TrackedCommand::NativeClosed { desktop_id })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            ListenerEvent::Signal(None) => {
+                let _ = commands.send(TrackedCommand::BackendFailure(
+                    "notification close signal stream stopped".into(),
+                ));
+                break;
+            }
+        }
     }
 }
 
@@ -450,6 +875,7 @@ mod tests {
         show_error: Option<String>,
         show_delay: Duration,
         close_errors_remaining: usize,
+        shutdown_notice: Option<SyncSender<()>>,
     }
 
     impl TrackedNotificationBackend for FakeBackend {
@@ -475,6 +901,12 @@ mod tests {
             }
             Ok(())
         }
+
+        fn shutdown(&mut self) {
+            if let Some(notice) = self.shutdown_notice.take() {
+                let _ = notice.send(());
+            }
+        }
     }
 
     fn origin(tab_id: usize, pane_id: u32) -> TerminalEventOrigin {
@@ -489,6 +921,16 @@ mod tests {
             title: Some("title".into()),
             identifier: Some(identifier.into()),
             expiry,
+            ..NotificationRequest::default()
+        }
+    }
+
+    fn reporting_request(identifier: Option<&str>, use_8bit_controls: bool) -> NotificationRequest {
+        NotificationRequest {
+            title: Some("title".into()),
+            identifier: identifier.map(str::to_owned),
+            report_close: true,
+            reply_uses_8bit_controls: use_8bit_controls,
             ..NotificationRequest::default()
         }
     }
@@ -586,6 +1028,168 @@ mod tests {
     }
 
     #[test]
+    fn native_close_reports_once_and_alive_is_origin_scoped() {
+        let first_origin = origin(1, 1);
+        let second_origin = origin(2, 1);
+        let mut state = TrackedState::new(FakeBackend::default());
+        assert!(
+            state
+                .show(
+                    key(first_origin, "alpha"),
+                    reporting_request(Some("alpha"), false),
+                )
+                .is_empty()
+        );
+        assert!(
+            state
+                .show(
+                    key(first_origin, "beta"),
+                    request("beta", NotificationExpiry::System),
+                )
+                .is_empty()
+        );
+        assert!(
+            state
+                .show(
+                    key(second_origin, "alpha"),
+                    reporting_request(Some("alpha"), false),
+                )
+                .is_empty()
+        );
+
+        assert_eq!(
+            state.alive_reply(first_origin, "probe", false).data,
+            b"\x1b]99;i=probe:p=alive;alpha,beta\x1b\\"
+        );
+        assert_eq!(
+            state.native_closed(1),
+            Some(ProtocolReply {
+                origin: first_origin,
+                data: b"\x1b]99;i=alpha:p=close;\x1b\\".to_vec(),
+            })
+        );
+        assert_eq!(state.native_closed(1), None);
+        assert_eq!(
+            state.alive_reply(first_origin, "probe", false).data,
+            b"\x1b]99;i=probe:p=alive;beta\x1b\\"
+        );
+        assert_eq!(
+            state.alive_reply(second_origin, "probe", false).data,
+            b"\x1b]99;i=probe:p=alive;alpha\x1b\\"
+        );
+    }
+
+    #[test]
+    fn anonymous_close_report_uses_zero_and_captured_eight_bit_framing() {
+        let event_origin = origin(1, 1);
+        let mut state = TrackedState::new(FakeBackend::default());
+        assert!(
+            state
+                .show(
+                    TrackedKey {
+                        origin: event_origin,
+                        identifier: InternalIdentifier::Anonymous(1),
+                    },
+                    reporting_request(None, true),
+                )
+                .is_empty()
+        );
+
+        assert_eq!(
+            state.native_closed(1),
+            Some(ProtocolReply {
+                origin: event_origin,
+                data: b"\x9d99;i=0:p=close;\x9c".to_vec(),
+            })
+        );
+        assert_eq!(
+            state.alive_reply(event_origin, "probe", true).data,
+            b"\x9d99;i=probe:p=alive;\x9c"
+        );
+    }
+
+    #[test]
+    fn replacement_uses_only_the_latest_successful_close_report_policy() {
+        let event_origin = origin(1, 1);
+        let tracked_key = key(event_origin, "job");
+        let mut state = TrackedState::new(FakeBackend::default());
+        assert!(
+            state
+                .show(tracked_key.clone(), reporting_request(Some("job"), false),)
+                .is_empty()
+        );
+        assert!(
+            state
+                .show(tracked_key, request("job", NotificationExpiry::System),)
+                .is_empty()
+        );
+        assert_eq!(state.backend.shows[1].1, 1);
+        assert_eq!(state.native_closed(1), None);
+    }
+
+    #[test]
+    fn terminal_close_waits_for_signal_and_timeout_reports_untracked() {
+        let event_origin = origin(1, 1);
+        let mut state = TrackedState::new(FakeBackend::default());
+        let first = key(event_origin, "first");
+        assert!(
+            state
+                .show(first.clone(), reporting_request(Some("first"), false),)
+                .is_empty()
+        );
+        assert!(state.close(&first).is_empty());
+        assert!(!state.entries.contains_key(&first));
+        assert!(state.closing.contains_key(&1));
+        assert_eq!(
+            state.alive_reply(event_origin, "probe", false).data,
+            b"\x1b]99;i=probe:p=alive;\x1b\\"
+        );
+        assert_eq!(
+            state.native_closed(1),
+            Some(ProtocolReply {
+                origin: event_origin,
+                data: b"\x1b]99;i=first:p=close;\x1b\\".to_vec(),
+            })
+        );
+
+        let second = key(event_origin, "second");
+        assert!(
+            state
+                .show(second.clone(), reporting_request(Some("second"), false),)
+                .is_empty()
+        );
+        assert!(state.close(&second).is_empty());
+        let deadline = state.closing[&2].deadline;
+        let (failures, replies) = state.reap_unconfirmed_closes(deadline);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(
+            replies,
+            vec![ProtocolReply {
+                origin: event_origin,
+                data: b"\x1b]99;i=second:p=close;untracked\x1b\\".to_vec(),
+            }]
+        );
+        assert!(state.closing.is_empty());
+        assert_eq!(state.native_closed(999), None);
+
+        let third = key(event_origin, "third");
+        let mut expiring = reporting_request(Some("third"), false);
+        expiring.expiry = NotificationExpiry::AfterMillis(1);
+        assert!(state.show(third, expiring).is_empty());
+        let expiry = state.entries.values().next().unwrap().expires_at.unwrap();
+        assert!(state.expire_due(expiry).is_empty());
+        assert!(state.entries.is_empty());
+        assert!(state.closing.contains_key(&3));
+        assert_eq!(
+            state.native_closed(3),
+            Some(ProtocolReply {
+                origin: event_origin,
+                data: b"\x1b]99;i=third:p=close;\x1b\\".to_vec(),
+            })
+        );
+    }
+
+    #[test]
     fn capacity_evicts_the_oldest_native_handle() {
         let mut state = TrackedState::new(FakeBackend::default());
         for index in 0..=MAX_TRACKED_NOTIFICATIONS {
@@ -602,6 +1206,34 @@ mod tests {
         assert_eq!(state.entries.len(), MAX_TRACKED_NOTIFICATIONS);
         assert_eq!(state.backend.closes, vec![1]);
         assert!(!state.entries.contains_key(&key(origin(1, 1), "item-0")));
+    }
+
+    #[test]
+    fn pending_close_reports_have_a_visible_hard_ceiling() {
+        let event_origin = origin(1, 1);
+        let mut state = TrackedState::new(FakeBackend::default());
+        let mut failures = Vec::new();
+        for index in 0..=MAX_TRACKED_NOTIFICATIONS {
+            let identifier = format!("closing-{index}");
+            let tracked_key = key(event_origin, &identifier);
+            assert!(
+                state
+                    .show(
+                        tracked_key.clone(),
+                        reporting_request(Some(&identifier), false),
+                    )
+                    .is_empty()
+            );
+            failures.extend(state.close(&tracked_key));
+        }
+
+        assert_eq!(state.closing.len(), MAX_TRACKED_NOTIFICATIONS);
+        assert!(!state.closing.contains_key(&1));
+        assert!(state.closing.contains_key(&2));
+        assert_eq!(
+            failures,
+            vec!["notification close-report tracking capacity exceeded"]
+        );
     }
 
     #[test]
@@ -686,5 +1318,49 @@ mod tests {
             receiver.try_recv(),
             Ok(TrackedCompletion::Recovered)
         ));
+    }
+
+    #[test]
+    fn dropping_the_owner_stops_the_worker_without_native_io() {
+        let (shutdown_sender, shutdown_receiver) = mpsc::sync_channel(0);
+        let tracked = TrackedNotifications::new_with_backend(FakeBackend {
+            shutdown_notice: Some(shutdown_sender),
+            ..FakeBackend::default()
+        })
+        .unwrap();
+
+        drop(tracked);
+
+        assert!(
+            shutdown_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn signal_listener_failures_cross_the_bounded_worker_channel() {
+        let tracked = TrackedNotifications::new_with_backend(FakeBackend::default()).unwrap();
+        tracked
+            .commands
+            .send(TrackedCommand::BackendFailure(
+                "synthetic signal disconnect".into(),
+            ))
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let completions = tracked.drain_completions();
+            if completions.iter().any(
+                |completion| matches!(completion, TrackedCompletion::Failure(error) if error == "synthetic signal disconnect"),
+            ) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker did not surface the synthetic signal failure"
+            );
+            std::thread::yield_now();
+        }
     }
 }

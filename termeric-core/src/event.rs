@@ -44,6 +44,12 @@ pub enum TerminalEvent {
     /// Close one exact identified Kitty OSC 99 desktop notification.
     NotificationClose { identifier: String },
 
+    /// Query origin-owned live Kitty OSC 99 notification identifiers.
+    NotificationAliveQuery {
+        identifier: String,
+        reply_uses_8bit_controls: bool,
+    },
+
     /// Data that should be written back to the PTY (e.g., DSR responses)
     PtyWrite(Vec<u8>),
 
@@ -94,6 +100,11 @@ pub struct NotificationRequest {
     pub urgency: Option<NotificationUrgency>,
     /// Kitty OSC 99 expiry policy.
     pub expiry: NotificationExpiry,
+    /// Whether Kitty OSC 99 requested an asynchronous close report with `c=1`.
+    pub report_close: bool,
+    /// Control framing captured when an OSC 99 request that can report closes
+    /// was parsed.
+    pub reply_uses_8bit_controls: bool,
 }
 
 /// Clipboard request type

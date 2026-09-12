@@ -113,9 +113,12 @@ The notification fixtures cover bounded semicolon-preserving OSC 9/777 and
 Kitty OSC 99 title/body assembly. OSC 99 evidence fragments interleaved IDs,
 base64, completion, and capability discovery at every input split; focused
 tests add malformed cleanup, both base64 chunking forms, reset lifecycle,
-owner routing, retained-memory ceilings, strict expiry metadata, and explicit
-identified close. App-layer in-memory backend tests separately prove Linux
-replacement/close/expiry lifecycle without contacting a native service.
+owner routing, retained-memory ceilings, strict expiry metadata, explicit
+identified close, strict close-report policy, and empty alive queries. App-layer
+in-memory backend tests separately prove Linux replacement/close/expiry
+lifecycle, requested native close reports, owner-scoped alive snapshots,
+captured reply framing, timeout recovery, and delayed exact-pane routing without
+contacting a native service.
 The xterm keyboard fixtures fragment resource-zero modifyKeyboard/formatKeyboard,
 the mutually exclusive legacy/VT220 keyboard-type modes 1060/1061,
 their shared DEC private-mode save/restore lifecycle and configured startup/RIS type,

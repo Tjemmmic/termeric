@@ -960,13 +960,23 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
         .map(|event| match event {
             TerminalEvent::Bell => "bell".to_string(),
             TerminalEvent::PtyWrite(bytes) => format!("pty:{}", encode_hex(&bytes)),
-            TerminalEvent::Notification(request) => format!(
-                "notification:{}:{}",
-                request.title.unwrap_or_default(),
-                request.body
-            ),
+            TerminalEvent::Notification(request) => {
+                let close_policy = if request.report_close {
+                    ":report-close"
+                } else {
+                    ""
+                };
+                format!(
+                    "notification:{}:{}{close_policy}",
+                    request.title.unwrap_or_default(),
+                    request.body
+                )
+            }
             TerminalEvent::NotificationClose { identifier } => {
                 format!("notification-close:{identifier}")
+            }
+            TerminalEvent::NotificationAliveQuery { identifier, .. } => {
+                format!("notification-alive:{identifier}")
             }
             TerminalEvent::TitleChanged(title) => format!("title:{title}"),
             TerminalEvent::ClipboardRequest {

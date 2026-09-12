@@ -1603,10 +1603,10 @@ impl App {
 
     /// Process PTY events for all tabs and panes
     fn process_pty_events(&mut self) -> bool {
-        let lifecycle_failures = self.notifications.drain_failures();
-        let lifecycle_changed = !lifecycle_failures.is_empty();
-        for error in lifecycle_failures {
-            self.toasts.warning(error);
+        let lifecycle_completions = self.notifications.drain_completions();
+        let mut lifecycle_changed = false;
+        for completion in lifecycle_completions {
+            lifecycle_changed |= self.handle_notification_completion(completion);
         }
         // Process events and collect results
         let (had_output, events, quick_exits) = {
@@ -1791,6 +1791,28 @@ impl App {
         }
 
         changed
+    }
+
+    fn handle_notification_completion(
+        &mut self,
+        completion: crate::notifications::NotificationCompletion,
+    ) -> bool {
+        match completion {
+            crate::notifications::NotificationCompletion::Warning(error) => {
+                self.toasts.warning(error);
+                true
+            }
+            crate::notifications::NotificationCompletion::ProtocolReply { origin, data } => {
+                if let Some(tabs) = &mut self.tabs
+                    && let Err(error) = tabs.write_to_origin(origin, &data)
+                {
+                    log::debug!(
+                        "Dropped notification lifecycle reply for stale origin {origin:?}: {error}"
+                    );
+                }
+                false
+            }
+        }
     }
 
     /// Handle window resize

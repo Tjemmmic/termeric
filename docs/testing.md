@@ -967,11 +967,17 @@ screen/DECSTR/RIS lifecycle, owner routing, the 16-pending and 256-KiB aggregate
 ceilings, 4-KiB/16-KiB completed-field bounds, typed `f`/`t`/`n`/`u` metadata,
 deduplication, per-value/per-list ceilings, strict `w` expiry parsing,
 payload-free identified `p=close`, and Linux-only close/expiry/urgency
-discovery. Pure Linux backend-state tests prove origin-scoped native-ID
-replacement and close, post-display expiry with bounded retry, 64-handle
-eviction, failure-safe replacement authority, markup escaping, and
-failure/recovery deduplication. They use an in-memory backend; no session bus or
-native notification service is contacted.
+discovery. The same fixtures strictly parse `c=0/1`, reject malformed close
+policy and alive payloads, and advertise Linux `c=1` plus `p=alive`. Pure Linux
+backend-state tests prove origin-scoped native-ID replacement and close,
+post-display expiry with bounded retry, requested close reports, owner-local
+sorted alive snapshots, replacement-policy changes, captured S7C1T/S8C1T
+framing, five-second unconfirmed-close behavior, 64-entry live/closing
+eviction, failure-safe replacement authority, markup escaping, worker shutdown,
+and failure/recovery deduplication. An app-level real-PTY fixture routes a
+delayed lifecycle reply to an inactive requesting pane and discards a stale
+origin without falling back to focus. These tests use an in-memory backend; no
+session bus or native notification service is contacted.
 
 Diff-review tests are provider-free state and accessibility fixtures. They
 cover bounded row/line construction, exact shared layout and pointer targets,

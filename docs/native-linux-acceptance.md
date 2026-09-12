@@ -48,6 +48,56 @@ a freedesktop notification service. They do not invoke an AI provider.
    printf '\033]99;i=termeric-origin:p=close;\033\\'
    ```
 
+5. From Bash, request a close report, then dismiss the notification using the
+   desktop notification UI. The command temporarily disables canonical input,
+   waits at most 20 seconds, restores the TTY, and prints the reply as hex. It
+   should contain one OSC 99 `i=termeric-report:p=close` reply ending in
+   `1b 5c`; it must not appear a second time:
+
+   ```bash
+   old_stty=$(stty -g)
+   trap 'stty "$old_stty"' EXIT INT TERM
+   stty -echo -icanon min 1 time 0
+   printf '\033]99;i=termeric-report:c=1;Dismiss this notification\033\\'
+   IFS= read -r -t 20 -d '\' reply
+   read_status=$?
+   stty "$old_stty"
+   trap - EXIT INT TERM
+   if [ "$read_status" -eq 0 ]; then printf '%s\\' "$reply" | od -An -tx1; else printf 'timed out waiting for close report\n'; fi
+   ```
+
+   Repeat using an explicit `p=close` command and a positive-expiry request.
+   Both should wait for the desktop's `NotificationClosed` signal before
+   reporting. If the service accepts the close but never confirms it, Termeric
+   should show one warning and reply with the literal payload `untracked` after
+   about five seconds.
+
+6. From Bash, create two non-expiring named notifications and query their live
+   IDs. The hex output should decode to one owner-local, sorted reply ending in
+   `termeric-alive-a,termeric-alive-b` (with the normal OSC terminator). Closing
+   either notification and querying again should remove only that ID:
+
+   ```bash
+   printf '\033]99;i=termeric-alive-b:w=0;Alive B\033\\'
+   printf '\033]99;i=termeric-alive-a:w=0;Alive A\033\\'
+   old_stty=$(stty -g)
+   trap 'stty "$old_stty"' EXIT INT TERM
+   stty -echo -icanon min 1 time 0
+   printf '\033]99;i=termeric-query:p=alive;\033\\'
+   IFS= read -r -t 5 -d '\' reply
+   read_status=$?
+   stty "$old_stty"
+   trap - EXIT INT TERM
+   if [ "$read_status" -eq 0 ]; then printf '%s\\' "$reply" | od -An -tx1; else printf 'timed out waiting for alive reply\n'; fi
+   printf '\033]99;i=termeric-alive-a:p=close;\033\\'
+   printf '\033]99;i=termeric-alive-b:p=close;\033\\'
+   ```
+
+   Repeat the query in a second pane that did not create the notifications; its
+   reply must have an empty payload. Optionally send `printf '\033 G'` before
+   the query to select S8C1T: the reply must then begin with byte `9d` and end
+   with `9c`. Restore S7C1T afterward with `printf '\033 F'`.
+
 Record the desktop environment and notification-daemon version, whether each
 observation passed, and a screenshot or short recording. A visible warning
 toast is the expected failure mode if the session bus or notification service

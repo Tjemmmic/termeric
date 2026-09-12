@@ -22,6 +22,7 @@ enum PayloadKind {
     Title,
     Body,
     Query,
+    Alive,
     Close,
     Unsupported,
 }
@@ -37,6 +38,7 @@ struct Metadata {
     icon_names: Vec<String>,
     urgency: Option<NotificationUrgency>,
     expiry: Option<NotificationExpiry>,
+    report_close: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -104,6 +106,7 @@ struct PendingNotification {
     icon_names: Vec<String>,
     urgency: Option<NotificationUrgency>,
     expiry: NotificationExpiry,
+    report_close: bool,
 }
 
 impl PendingNotification {
@@ -140,6 +143,9 @@ impl PendingNotification {
         if let Some(expiry) = metadata.expiry {
             self.expiry = expiry;
         }
+        if let Some(report_close) = metadata.report_close {
+            self.report_close = report_close;
+        }
         Ok(())
     }
 
@@ -165,6 +171,8 @@ impl PendingNotification {
             icon_names: self.icon_names,
             urgency: self.urgency,
             expiry: self.expiry,
+            report_close: self.report_close,
+            reply_uses_8bit_controls: false,
         })
     }
 }
@@ -173,6 +181,7 @@ impl PendingNotification {
 pub(super) enum Osc99Action {
     None,
     Query(String),
+    AliveQuery(String),
     Notify(NotificationRequest),
     Close(String),
 }
@@ -216,6 +225,12 @@ impl NotificationProtocol {
                 return Osc99Action::None;
             }
             return Osc99Action::Query(metadata.identifier.unwrap_or_else(|| "0".into()));
+        }
+        if metadata.payload == PayloadKind::Alive {
+            if !metadata.done || !payload.is_empty() {
+                return Osc99Action::None;
+            }
+            return Osc99Action::AliveQuery(metadata.identifier.unwrap_or_else(|| "0".into()));
         }
         if metadata.payload == PayloadKind::Close {
             let Some(identifier) = metadata.identifier else {
@@ -361,6 +376,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                     b"title" => PayloadKind::Title,
                     b"body" => PayloadKind::Body,
                     b"?" => PayloadKind::Query,
+                    b"alive" => PayloadKind::Alive,
                     b"close" => PayloadKind::Close,
                     _ => PayloadKind::Unsupported,
                 };
@@ -407,8 +423,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<Metadata, ()> {
                     }
                 });
             }
-            b'c' if value == b"0" => {}
-            b'c' => return Err(()),
+            b'c' => metadata.report_close = Some(parse_bool(value)?),
             b'o' if value == b"always" => {}
             b'o' => return Err(()),
             // Unknown keys are deliberately ignored for protocol extension.
@@ -646,6 +661,8 @@ mod tests {
                 icon_names: vec!["warning".into(), "my-app".into()],
                 urgency: Some(NotificationUrgency::Critical),
                 expiry: NotificationExpiry::System,
+                report_close: false,
+                reply_uses_8bit_controls: false,
             })
         );
         assert_eq!(
@@ -659,6 +676,8 @@ mod tests {
                 icon_names: vec!["info".into()],
                 urgency: Some(NotificationUrgency::Low),
                 expiry: NotificationExpiry::System,
+                report_close: false,
+                reply_uses_8bit_controls: false,
             })
         );
     }
@@ -732,6 +751,49 @@ mod tests {
         );
         assert_eq!(
             protocol.handle(&parts(b"i=bad:w=+1", b"ignored")),
+            Osc99Action::None
+        );
+    }
+
+    #[test]
+    fn close_reporting_and_alive_queries_are_strict_and_typed() {
+        let mut protocol = NotificationProtocol::default();
+        assert_eq!(
+            protocol.handle(&parts(b"i=job:d=0:c=1", b"Build")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=job:p=body", b"done")),
+            Osc99Action::Notify(NotificationRequest {
+                title: Some("Build".into()),
+                body: "done".into(),
+                identifier: Some("job".into()),
+                report_close: true,
+                ..NotificationRequest::default()
+            })
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=probe:p=alive", b"")),
+            Osc99Action::AliveQuery("probe".into())
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"p=alive", b"")),
+            Osc99Action::AliveQuery("0".into())
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=probe:p=alive:d=0", b"")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=probe:p=alive", b"payload")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=bad:c=1:c=0", b"ignored")),
+            Osc99Action::None
+        );
+        assert_eq!(
+            protocol.handle(&parts(b"i=bad:c=2", b"ignored")),
             Osc99Action::None
         );
     }
@@ -874,7 +936,7 @@ mod tests {
             Osc99Action::None
         );
         assert_eq!(
-            protocol.handle(&parts(b"c=1", b"no-close-report")),
+            protocol.handle(&parts(b"c=2", b"no-close-report")),
             Osc99Action::None
         );
         assert_eq!(

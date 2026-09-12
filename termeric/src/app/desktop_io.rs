@@ -578,6 +578,17 @@ impl App {
                     self.toasts.warning(error);
                 }
             }
+            TerminalEvent::NotificationAliveQuery {
+                identifier,
+                reply_uses_8bit_controls,
+            } => {
+                if let Some(error) =
+                    self.notifications
+                        .query_alive(origin, identifier, reply_uses_8bit_controls)
+                {
+                    self.toasts.warning(error);
+                }
+            }
             TerminalEvent::TitleChanged(title) => {
                 let updated = self
                     .tabs
