@@ -1006,6 +1006,9 @@ fn event_summaries(events: Vec<TerminalEvent>) -> Vec<String> {
             TerminalEvent::NotificationAliveQuery { identifier, .. } => {
                 format!("notification-alive:{identifier}")
             }
+            TerminalEvent::KittyFileTransfer(command) => {
+                format!("kitty-file-transfer:{:?}:{}", command.action, command.id)
+            }
             TerminalEvent::TitleChanged(title) => format!("title:{title}"),
             TerminalEvent::ClipboardRequest {
                 selection,

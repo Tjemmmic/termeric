@@ -295,6 +295,19 @@ and daemon action/signal behavior remain manual acceptance.
 
 [kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
 
+## Kitty terminal file transfer
+
+OSC 5113 is the only supported OSC path that can create terminal-host
+filesystem entries. Termeric implements only consent-gated Kitty `send`
+sessions on Linux. Approval is scoped to the exact originating shell or
+attached live-domain pane; focus changes cannot redirect replies, and detached
+domains fail closed. Payloads are streamed through bounded staging and
+published without overwrite only at `finish`. Host-to-child reads, quiet
+modes, bypass credentials, and rsync/deltas are unsupported. This authority is
+independent of the similarly named Kitty graphics file-read setting. The exact
+limits, link policy, lifecycle, and deferred native acceptance are documented
+in [`kitty-file-transfer.md`](kitty-file-transfer.md).
+
 ## Dynamic colors
 
 The supported color family is:

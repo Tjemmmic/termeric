@@ -2147,6 +2147,20 @@ impl ApplicationHandler<AppEvent> for App {
                     self.handle_file_upload_progress(request_id, bytes_sent, total_bytes);
                 }
             }
+            AppEvent::KittyFileTransferCompleted {
+                window_id,
+                token,
+                result,
+            } => {
+                if self
+                    .window
+                    .as_ref()
+                    .is_some_and(|window| window.id() == window_id)
+                {
+                    self.redraw_scheduler.request(RedrawReason::BackgroundTask);
+                    self.handle_kitty_file_transfer_completed(token, result);
+                }
+            }
             AppEvent::StructuredPluginCompleted(completion) => {
                 if self
                     .window
@@ -2227,6 +2241,7 @@ impl Drop for App {
                 .cancellation
                 .store(true, std::sync::atomic::Ordering::Release);
         }
+        self.shutdown_kitty_file_transfers();
         // Save the complete workspace before PTYs and renderer are dropped.
         self.auto_save_workspace();
 

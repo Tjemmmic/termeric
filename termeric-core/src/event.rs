@@ -4,6 +4,7 @@
 
 /// Events emitted by the terminal
 use crate::Color;
+use crate::file_transfer::KittyFileTransferCommand;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalEvent {
@@ -49,6 +50,10 @@ pub enum TerminalEvent {
         identifier: String,
         reply_uses_8bit_controls: bool,
     },
+
+    /// One validated Kitty OSC 5113 file-transfer command. Filesystem
+    /// authority remains with the embedding application.
+    KittyFileTransfer(KittyFileTransferCommand),
 
     /// Data that should be written back to the PTY (e.g., DSR responses)
     PtyWrite(Vec<u8>),

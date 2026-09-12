@@ -31,6 +31,7 @@ HIGHLIGHT = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
 HIGHLIGHT_CAPABILITIES = {
     "GPU rendering": {"GPU/software rendering"},
     "Safe file drops": {"File/directory drag and drop"},
+    "Consent-gated Kitty downloads": {"Kitty terminal file transfer"},
     "26 themes and bounded backgrounds": {"Themes", "Terminal background images"},
     "Tabs, panes, profiles, and workspaces": {
         "Tabs",

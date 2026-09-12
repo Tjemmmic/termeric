@@ -719,6 +719,9 @@ impl App {
                     self.toasts.warning(error);
                 }
             }
+            TerminalEvent::KittyFileTransfer(command) => {
+                self.handle_kitty_file_transfer(origin, command);
+            }
             TerminalEvent::TitleChanged(title) => {
                 let updated = self
                     .tabs

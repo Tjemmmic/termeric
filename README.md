@@ -8,6 +8,7 @@ A GPU-accelerated terminal emulator written in Rust, themed around roots and rhi
 - **26 themes and bounded backgrounds** — 12 "roots", 14 community ports, and optional static local PNG/JPEG terminal backgrounds with live fit/opacity controls
 - **Tabs, panes, profiles, and workspaces** — top or vertical-left tabs, reusable exact PTY launches, complete versioned layout snapshots, bounded text history, and transcript export
 - **Safe file drops** — local quoted-path insertion plus confirmed, bounded file/directory, progress-visible, cancellable, authenticated cross-process-resumable, atomic no-overwrite live-domain upload; neither presses Enter
+- **Consent-gated Kitty downloads** — bounded OSC 5113 regular-file, directory, symbolic-link, and hard-link transfers from a child or remote shell onto the Linux terminal host, with streamed staging and no overwrite
 - **Search** with regex and filter modes across scrollback
 - **Keyboard copy mode and quick select** for mouse-free history navigation, selection, links, paths, and configured matches
 - **Unicode character picker** — bounded Unicode 17.0 canonical-name discovery, CLDR 48 English emoji names/keywords with exact qualified sequences, and exact `U+`, `0x`, or bare-hex scalar entry
@@ -29,6 +30,9 @@ animation state through a bounded one-shot replica snapshot; ordinary-file
 media remains denied on both sides of the relay.
 See the [Kitty](docs/kitty-graphics.md) and
 [Sixel/iTerm2](docs/inline-images.md) capability contracts.
+Kitty OSC 5113 remote-to-host downloads have a separate
+[consent and security contract](docs/kitty-file-transfer.md); host-to-child
+uploads, bypass credentials, quiet modes, and rsync deltas are not claimed.
 Left-to-right Unicode grapheme geometry, SGR text effects, and pane-local
 legacy/xterm, xterm keyboard/cursor/function/keypad/modifier/special/other-key resources, and Kitty progressive keyboard input follow the documented [width policy](docs/unicode-support.md),
 [rendering policy](docs/sgr-rendering.md), and
@@ -478,6 +482,7 @@ termeric-core/      Library crate — terminal emulation
 - [`docs/terminal-conformance.md`](docs/terminal-conformance.md) — VT support manifest, reference traces, and fuzzing
 - [`docs/device-attributes-and-charsets.md`](docs/device-attributes-and-charsets.md) — conservative DA identity, G0-G3 invocation, DEC graphics mapping, and presentation-state reports
 - [`docs/kitty-graphics.md`](docs/kitty-graphics.md) — bounded static and frame-animation profile, Unix-local media, limits, and unsupported extensions
+- [`docs/kitty-file-transfer.md`](docs/kitty-file-transfer.md) — consent-gated OSC 5113 remote-to-host downloads, limits, security, and deferred native acceptance
 - [`docs/inline-images.md`](docs/inline-images.md) — bounded Sixel and iTerm2 PNG profiles, placement, and resource limits
 - [`docs/performance.md`](docs/performance.md) — release benchmarks, baselines, budgets, and profiling
 - [`docs/glyph-atlas.md`](docs/glyph-atlas.md) — bounded paged glyph storage, reclamation, diagnostics, and stress coverage

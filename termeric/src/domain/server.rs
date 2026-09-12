@@ -2240,6 +2240,28 @@ fn publish_output(state: &SharedState, domain_id: &str, pane_id: u32, data: &[u8
                 pane.title.clone_from(&title);
                 title_change = Some(title);
             }
+            TerminalEvent::KittyFileTransfer(command) if pane.attachments.is_empty() => {
+                let reply = termeric_core::KittyFileTransferStatus {
+                    id: command.id,
+                    file_id: command.file_id,
+                    code: termeric_core::KittyFileTransferStatusCode::PermissionDenied,
+                    message: Some(
+                        "file transfer requires an attached consenting Termeric window".into(),
+                    ),
+                    name: None,
+                    size: None,
+                    transmission_type: termeric_core::KittyFileTransmissionType::Simple,
+                }
+                .canonical_reply();
+                let reply = termeric_core::Terminal::frame_pty_reply_for_mode(
+                    &reply,
+                    command.reply_uses_8bit_controls,
+                );
+                if let Err(error) = queue_pane_input(&pane.input, reply) {
+                    log::warn!("Could not deny detached-domain file transfer: {error}");
+                    pane.closed = true;
+                }
+            }
             _ => {}
         }
     }

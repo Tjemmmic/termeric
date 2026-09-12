@@ -30,6 +30,7 @@
 
 pub mod ansi;
 pub mod event;
+pub mod file_transfer;
 pub mod graphics;
 pub mod grid;
 pub mod pty;
@@ -42,6 +43,13 @@ pub use event::{
     ClipboardRequest, DynamicColorOperation, DynamicColorTarget, NotificationExpiry,
     NotificationOccasion, NotificationRequest, NotificationSound, NotificationUrgency,
     TerminalEvent,
+};
+pub use file_transfer::{
+    KittyFileTransferAction, KittyFileTransferCommand, KittyFileTransferCompression,
+    KittyFileTransferStatus, KittyFileTransferStatusCode, KittyFileTransferType,
+    KittyFileTransmissionType, MAX_KITTY_TRANSFER_DATA_BYTES, MAX_KITTY_TRANSFER_FILE_ID_BYTES,
+    MAX_KITTY_TRANSFER_ID_BYTES, MAX_KITTY_TRANSFER_OSC_BYTES, MAX_KITTY_TRANSFER_PATH_BYTES,
+    MAX_KITTY_TRANSFER_STATUS_BYTES,
 };
 pub use graphics::{
     GraphicsManager, IMAGE_PLACEHOLDER, ImageId, ImagePlacement, PresentationImage, StoredImage,

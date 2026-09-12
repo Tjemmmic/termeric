@@ -10,6 +10,7 @@ mod event_loop;
 mod font_feature_editor;
 mod font_range_editor;
 mod ime;
+mod kitty_file_transfer;
 mod mouse;
 mod plugin_actions;
 mod redraw_scheduler;
@@ -121,6 +122,11 @@ pub(crate) enum AppEvent {
         request_id: u64,
         bytes_sent: u64,
         total_bytes: u64,
+    },
+    KittyFileTransferCompleted {
+        window_id: winit::window::WindowId,
+        token: u64,
+        result: kitty_file_transfer::WorkerCompletion,
     },
     StructuredPluginCompleted(crate::plugin::structured::StructuredHandlerCompletion),
     AccessKit(accesskit_winit::Event),
@@ -1198,6 +1204,8 @@ pub struct App {
     pending_file_upload: Option<PendingFileUpload>,
     /// At most one background file upload may be active per native window.
     active_file_upload: Option<ActiveFileUpload>,
+    /// Consent and transaction state for bounded Kitty OSC 5113 downloads.
+    kitty_file_transfers: kitty_file_transfer::KittyFileTransferManager,
     /// Harvest mode (command visualization)
     harvest: Option<HarvestMode>,
     /// URL detector for auto-detecting URLs in terminal output
@@ -1415,6 +1423,7 @@ impl App {
             runtime_plugin_test_paths: None,
             pending_file_upload: None,
             active_file_upload: None,
+            kitty_file_transfers: kitty_file_transfer::KittyFileTransferManager::default(),
             harvest: None,
             url_detector: UrlDetector::new(),
             url_cache: UrlCache::new(0),
@@ -1649,6 +1658,7 @@ impl App {
         if topology_changed {
             self.reconcile_broadcast_state();
         }
+        let file_transfers_pruned = self.prune_stale_kitty_file_transfers();
         let mut changed = lifecycle_changed
             || had_output
             || had_terminal_events
@@ -1656,6 +1666,7 @@ impl App {
             || !persistence_notices.is_empty()
             || !user_notices.is_empty()
             || topology_changed
+            || file_transfers_pruned
             || should_exit;
 
         self.show_persistence_notices(persistence_notices, true);

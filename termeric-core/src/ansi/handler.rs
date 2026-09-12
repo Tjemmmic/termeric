@@ -1511,6 +1511,36 @@ impl Perform for Handler<'_> {
                 }
             }
 
+            // Kitty terminal file transfer. Core validates and decodes the
+            // wire command; the embedding application owns consent and every
+            // filesystem effect.
+            5113 => {
+                match crate::file_transfer::parse_kitty_file_transfer(
+                    &params[1..],
+                    self.terminal.uses_8bit_controls(),
+                ) {
+                    Ok(command) => self
+                        .terminal
+                        .push_event(TerminalEvent::KittyFileTransfer(command)),
+                    Err(error) => {
+                        if let Some(id) = error.id {
+                            let reply = crate::file_transfer::KittyFileTransferStatus {
+                                id,
+                                file_id: error.file_id.unwrap_or_default(),
+                                code: crate::file_transfer::KittyFileTransferStatusCode::Invalid,
+                                message: Some(error.message),
+                                name: None,
+                                size: None,
+                                transmission_type:
+                                    crate::file_transfer::KittyFileTransmissionType::Simple,
+                            }
+                            .canonical_reply();
+                            self.terminal.push_event(TerminalEvent::PtyWrite(reply));
+                        }
+                    }
+                }
+            }
+
             // Desktop notification (OSC 777) - rxvt-unicode style
             // Format: OSC 777 ; notify ; title ; body ST
             777 => {
@@ -2038,6 +2068,33 @@ mod osc_tests {
         let first = vec![b'a'; MAX_TITLE_BYTES / 2];
         let second = vec![b'b'; MAX_TITLE_BYTES - first.len()];
         assert!(parse_osc_title(&[&first, &second]).is_none());
+    }
+
+    #[test]
+    fn kitty_file_transfer_dispatch_is_typed_bounded_and_mode_captured() {
+        let mut terminal = Terminal::new(80, 24);
+        terminal.process(
+            b"\x1b G\x1b]5113;ac=file;id=request;fid=f1;ft=regular;sz=5;n=L3RtcC9maWxl;d=aGVsbG8=\x1b\\",
+        );
+        let events = terminal.drain_events();
+        let TerminalEvent::KittyFileTransfer(command) = &events[0] else {
+            panic!("expected typed file-transfer event: {events:?}");
+        };
+        assert_eq!(command.action, crate::KittyFileTransferAction::File);
+        assert_eq!(command.id, "request");
+        assert_eq!(command.file_id, "f1");
+        assert_eq!(command.name.as_deref(), Some("/tmp/file"));
+        assert_eq!(&*command.data, b"hello");
+        assert!(command.reply_uses_8bit_controls);
+
+        terminal.process(b"\x1b]5113;ac=send;id=one;id=two\x1b\\");
+        let events = terminal.drain_events();
+        assert!(matches!(
+            events.as_slice(),
+            [TerminalEvent::PtyWrite(reply)]
+                if reply.starts_with(b"\x9d5113;ac=status;id=one;")
+                    && reply.ends_with(b"\x9c")
+        ));
     }
 
     #[test]

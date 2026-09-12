@@ -164,6 +164,15 @@ same-named desktop files. Ordinary-file graphics are therefore unsupported in
 local and remote live domains; the SSH transport transfers decoded pixels for
 an already accepted image and never transfers or reopens the file.
 
+Kitty OSC 5113 has a different authority boundary. An attached live-domain
+pane may request a remote-to-host `send` transfer, but the desktop app must show
+request-scoped consent and all replies stay on that exact pane relay. The
+daemon does not write host files. If no consenting GUI attachment exists, it
+returns `EPERM`; it never queues a transfer for a future attachment. The
+reverse `receive` direction, which would let terminal output request reads from
+the host, is unsupported. See
+[`kitty-file-transfer.md`](kitty-file-transfer.md).
+
 The authenticated stdio protocol does provide one narrow transfer path: an
 explicit CLI request or confirmed GUI drop can stream one regular local file or
 bounded deterministic directory archive (64 MiB maximum) to the exact pane's

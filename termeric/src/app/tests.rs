@@ -342,6 +342,103 @@ fn live_domain_drop_requires_request_scoped_confirmation_without_reading_content
     assert!(app.pending_file_upload.is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
+    if !std::path::Path::new("/bin/sh").exists() {
+        return;
+    }
+    let mut config = Config::default();
+    config.shell.program = Some("/bin/sh".into());
+    config.shell.args = vec!["-c".into(), "sleep 2".into()];
+    let mut app = App::new_headless(config).unwrap();
+    app.allow_auto_restore = false;
+    app.init_tabs().unwrap();
+    let tab_id = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
+    let origin = TerminalEventOrigin::Tab { tab_id };
+    let request = termeric_core::KittyFileTransferCommand {
+        action: termeric_core::KittyFileTransferAction::Send,
+        compression: termeric_core::KittyFileTransferCompression::None,
+        file_type: termeric_core::KittyFileTransferType::Regular,
+        transmission_type: termeric_core::KittyFileTransmissionType::Simple,
+        id: "download-1".into(),
+        file_id: String::new(),
+        quiet: 0,
+        mtime_ns: None,
+        permissions: None,
+        size: None,
+        name: None,
+        status: None,
+        parent: None,
+        data: Box::default(),
+        bypass_present: false,
+        reply_uses_8bit_controls: true,
+    };
+
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin,
+        event: TerminalEvent::KittyFileTransfer(request.clone()),
+    });
+    let confirmation = app.info_overlay.request_id();
+    assert!(app.info_overlay.is_awaiting(confirmation));
+    assert!(
+        app.kitty_file_transfers
+            .pending
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.request_id == confirmation
+                    && pending.key.origin == origin
+                    && pending.key.id == "download-1"
+                    && pending.reply_uses_8bit_controls
+            })
+    );
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id: confirmation.wrapping_add(1),
+        choice_id: "kitty-download-allow".into(),
+    });
+    assert!(app.kitty_file_transfers.pending.is_some());
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id: confirmation,
+        choice_id: "kitty-download-deny".into(),
+    });
+    assert!(app.kitty_file_transfers.pending.is_none());
+    assert!(app.kitty_file_transfers.active.is_empty());
+
+    std::thread::sleep(Duration::from_millis(250));
+    app.info_overlay.update_animation();
+    let mut stale_request = request.clone();
+    stale_request.id = "download-stale".into();
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin,
+        event: TerminalEvent::KittyFileTransfer(stale_request),
+    });
+    assert!(app.kitty_file_transfers.pending.is_some());
+    let replacement = app.info_overlay.show("Replacement", vec!["content".into()]);
+    assert!(app.prune_stale_kitty_file_transfers());
+    assert!(app.kitty_file_transfers.pending.is_none());
+    app.info_overlay.dismiss(replacement);
+    std::thread::sleep(Duration::from_millis(250));
+    app.info_overlay.update_animation();
+
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .tab_type = crate::tabs::TabType::Plugin {
+        plugin_id: "untrusted".into(),
+    };
+    let mut plugin_request = request;
+    plugin_request.id = "plugin-download".into();
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin,
+        event: TerminalEvent::KittyFileTransfer(plugin_request),
+    });
+    assert!(!app.info_overlay.is_active());
+    assert!(app.kitty_file_transfers.pending.is_none());
+    assert!(app.kitty_file_transfers.active.is_empty());
+}
+
 #[test]
 fn file_upload_completion_is_request_scoped_and_distinguishes_partial_success() {
     let mut app = App::new_headless(Config::default()).unwrap();

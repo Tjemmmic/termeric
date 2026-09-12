@@ -314,7 +314,10 @@ awaiting evidence:
   Kitty's multiple-cursor extension now has bounded parser, state, color,
   query, pane-rendering, synchronized-output, and local-domain replay coverage;
   native visual acceptance remains deferred. Kitty's terminal file-transfer
-  extension remains unimplemented. The
+  extension now has a bounded, consent-gated Linux `send` direction for
+  remote-to-host files, directories, and links, but real-client acceptance is
+  deferred and host-to-child reads, quiet modes, bypass credentials, and
+  rsync/deltas remain unsupported. The
   [kitty protocol index](https://sw.kovidgoyal.net/kitty/protocol-extensions/)
   is the moving reference. These should be demand-driven after the beta gates;
   implementing every new private protocol is not a prerequisite for terminal

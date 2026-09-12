@@ -854,6 +854,21 @@ and local-domain snapshot replay. Renderer tests validate fractional alignment,
 block clipping, and expanded cursor geometry. Native font and compositor
 quality remains the deferred checklist in [`text-sizing.md`](text-sizing.md).
 
+Kitty OSC 5113 file-transfer tests keep the wire parser separate from host
+filesystem authority. Core fixtures cover bounded base64 fields, duplicate and
+invalid metadata, canonical status replies, and S7/S8 framing. Application and
+Unix transaction fixtures cover request-scoped consent, terminal-type gating,
+stale overlays, staging before `finish`, regular files, directories, zlib,
+internal hard links, internal and external-target symbolic links, metadata,
+no-overwrite collisions, duplicate IDs/paths, traversal, declared-size
+mismatch, decompression expansion, cancellation cleanup, and a destination
+ancestor changed to a symlink before commit. The normal client may pipeline a
+bounded number of commands through a filesystem worker; it never performs file
+I/O on the renderer/input path. Detached-domain denial is owned by the domain
+server, while an attached GUI processes the raw OSC at the exact relay origin.
+The native `kitten transfer` rows remain deferred in
+[`kitty-file-transfer.md`](kitty-file-transfer.md).
+
 The Kitty graphics lane covers APC framing across PTY chunks, strict controls,
 padded and raw-unpadded standard base64, current-Kitty 128-KiB chunks,
 raw/PNG/zlib decoding, bounded uploads, capability queries, quiet and

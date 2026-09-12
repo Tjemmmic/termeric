@@ -3925,6 +3925,17 @@ impl ApplicationHandler<AppEvent> for Application {
                 self.remove_closed_windows(event_loop);
                 return;
             }
+            AppEvent::KittyFileTransferCompleted {
+                window_id,
+                token,
+                result,
+            } => {
+                if let Some(window) = self.windows.get_mut(&window_id) {
+                    window.handle_kitty_file_transfer_completed(token, result);
+                }
+                self.remove_closed_windows(event_loop);
+                return;
+            }
             AppEvent::StructuredPluginCompleted(completion) => {
                 self.handle_structured_plugin_completed(completion);
                 self.remove_closed_windows(event_loop);

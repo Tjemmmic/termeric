@@ -8,6 +8,13 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Kitty OSC 5113 now has a consent-gated Linux `send` profile for bounded
+  remote-to-host regular files, directories, symbolic links, and hard links.
+  Simple/no-compression and zlib sessions use exact-origin S7/S8 replies,
+  streamed staging, no-overwrite publication, progress, cancellation, timeout,
+  and shutdown cleanup; detached domains and unsupported read/bypass/quiet/
+  rsync paths fail closed. Native `kitten transfer` acceptance remains deferred.
+
 - The displayed Linux resource soak now samples bounded standardized DRM fdinfo
   memory across Termeric's process tree, deduplicates shared clients, records
   per-region requested and resident bytes (including AMDGPU's deprecated alias),

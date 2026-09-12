@@ -307,6 +307,44 @@ state, visible result, and PTY reply. For Sixel/iTerm2, verify color, aspect,
 cursor placement, resize, scrollback, pane clipping, and cleanup. These are the
 manual gates for issues #12 and #31.
 
+### 5a. Kitty terminal file-transfer client
+
+This row is deliberately separate from Kitty graphics: the similarly named
+`allow_kitty_file_transfers` setting controls graphics `t=f` reads and has no
+effect on OSC 5113. No configuration change is needed for the transfer test;
+each session must display its own approval dialog.
+
+From a shell inside the candidate Termeric window, use expendable paths and run
+the current Kitty client in normal/simple mode:
+
+```bash
+probe_root="$(mktemp -d)"
+printf 'termeric kitty transfer\n' > "$probe_root/source.txt"
+mkdir "$probe_root/source-tree"
+mkdir "$probe_root/received-root"
+printf 'nested\n' > "$probe_root/source-tree/nested.txt"
+
+kitten transfer --compress=never \
+  "$probe_root/source.txt" "$probe_root/received.txt"
+kitten transfer --compress=always \
+  "$probe_root/source-tree" "$probe_root/received-root/"
+```
+
+Approve each request. Verify the prompt identifies the originating tab/pane,
+progress remains responsive, the commands return normally, and the copied
+bytes/tree match. Repeat one transfer from a non-focused pane and, if used,
+from an attached live-domain pane; replies and the dialog must remain bound to
+the origin. Deny another request and confirm the client reports `EPERM` and no
+destination appears. Pre-create a destination with sentinel content, retry,
+and confirm Termeric reports a collision without changing it. Start a larger
+transfer, cancel it, and confirm no destination is published.
+
+Record candidate SHA, `kitten --version`, compositor, commands, source and
+destination hashes, dialog result, and any protocol error. Quiet levels 1/2,
+`--permissions-bypass`, `--transmit-deltas`, `--direction=upload`, overwrite,
+and resume are outside the supported profile and should fail explicitly. The
+feature matrix stays Partial until this real-client row has accepted evidence.
+
 ### 6. Resource and optimization evidence
 
 Run the release benchmark suite and retain its JSON:

@@ -1328,6 +1328,7 @@ impl App {
             }
             InfoOverlayAction::Dismiss { request_id } => {
                 if self.info_overlay.dismiss(request_id) {
+                    self.dismiss_pending_kitty_download(request_id);
                     // A replacement notice may have superseded a profile
                     // picker. Any older hidden action context is obsolete too.
                     self.pending_profile_selection = None;
@@ -1343,6 +1344,9 @@ impl App {
             } => {
                 let choice_is_current = self.info_overlay.choice(request_id, &choice_id).is_some();
                 if !choice_is_current {
+                    return;
+                }
+                if self.handle_kitty_download_choice(request_id, &choice_id) {
                     return;
                 }
                 if self.handle_font_feature_manager_choice(request_id, &choice_id) {
@@ -1394,6 +1398,7 @@ impl App {
                     && !self.submit_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
+                    self.dismiss_pending_kitty_download(request_id);
                     self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
                     self.pending_font_range_management = None;
@@ -1407,6 +1412,7 @@ impl App {
                     && !self.cancel_runtime_plugin_manager_input(request_id)
                     && self.info_overlay.dismiss(request_id)
                 {
+                    self.dismiss_pending_kitty_download(request_id);
                     self.pending_profile_selection = None;
                     self.pending_runtime_plugin_management = None;
                     self.pending_font_range_management = None;

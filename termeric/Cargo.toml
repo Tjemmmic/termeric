@@ -37,6 +37,8 @@ unicode_names2 = "=4.0.0"
 
 # Image loading for window icon
 image = "0.25"
+flate2 = "1.1"
+tempfile = "3"
 
 # Clipboard (wayland-data-control needed for Wayland support)
 arboard = { version = "3.4", features = ["wayland-data-control"] }
