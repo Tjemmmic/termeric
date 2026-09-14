@@ -1141,6 +1141,11 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Snapshot saves explicitly unlock their scope-owned writer guard before file
+  close, including errors and unwinding. A duplicate descriptor can no longer
+  extend a finished save's lock lifetime. Nonblocking admission, stable lock
+  inode, staging cleanup and publication rules remain unchanged.
+
 - Core/native soak evidence now uses schema 4/6 with measured, pinned Linux
   executable launches and source provenance checked around build and execution.
   Concurrent checkout/rebuild drift can no longer relabel a run with a later

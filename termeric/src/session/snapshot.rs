@@ -188,7 +188,24 @@ fn check_owned(file: &File) -> Result<()> {
     Ok(())
 }
 
-fn writer_lock(directory: &Path) -> Result<File> {
+/// A save owns the lock until scope exit, not until every possibly inherited
+/// descriptor has closed. Closing only this file can leave a duplicate holding
+/// the advisory lock while another thread's child is still between fork/exec.
+struct WriterLock {
+    file: File,
+}
+
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        // Unlock while the owning descriptor is still alive. Do not unlink the
+        // stable rendezvous inode or panic if cleanup fails during unwinding.
+        if let Err(error) = self.file.unlock() {
+            log::warn!("Could not release snapshot writer lock: {:?}", error.kind());
+        }
+    }
+}
+
+fn writer_lock(directory: &Path) -> Result<WriterLock> {
     let path = directory.join(LOCK);
     #[cfg(not(unix))]
     if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
@@ -203,7 +220,7 @@ fn writer_lock(directory: &Path) -> Result<File> {
     file.try_lock().map_err(|error| {
         anyhow::anyhow!("Snapshot writer lock unavailable; retry the save: {error}")
     })?;
-    Ok(file)
+    Ok(WriterLock { file })
 }
 
 /// Only this reserved, bounded, recognizable file is recoverable. Never sweep
@@ -596,6 +613,104 @@ mod tests {
                 .to_string()
                 .contains("writer lock unavailable")
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn writer_scope_ends_lock_even_with_duplicate_descriptor_alive() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let lock = writer_lock(dir.path()).unwrap();
+        let inode = fs::metadata(dir.path().join(LOCK)).unwrap().ino();
+        let duplicate = lock.file.try_clone().unwrap();
+        assert!(
+            writer_lock(dir.path()).is_err(),
+            "active writer must exclude others"
+        );
+        drop(lock);
+        let next = writer_lock(dir.path())
+            .expect("scope end must release the writer lock even while a duplicate exists");
+        drop(duplicate);
+        assert!(
+            writer_lock(dir.path()).is_err(),
+            "dropping the old duplicate must not release the next writer's lock"
+        );
+        drop(next);
+        let _next = writer_lock(dir.path()).unwrap();
+        assert_eq!(fs::metadata(dir.path().join(LOCK)).unwrap().ino(), inode);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn writer_scope_unlocks_after_error_and_unwind_with_duplicate_alive() {
+        for panic in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut duplicate = None;
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
+                    let lock = writer_lock(dir.path())?;
+                    duplicate = Some(lock.file.try_clone()?);
+                    assert!(writer_lock(dir.path()).is_err());
+                    if panic {
+                        panic!("injected writer-scope unwind");
+                    }
+                    anyhow::bail!("injected writer-scope error")
+                }));
+            match (panic, result) {
+                (false, Ok(error)) => assert_eq!(
+                    error.unwrap_err().to_string(),
+                    "injected writer-scope error"
+                ),
+                (true, Err(error)) => assert_eq!(
+                    error.downcast_ref::<&str>(),
+                    Some(&"injected writer-scope unwind")
+                ),
+                _ => panic!("unexpected scope outcome"),
+            }
+            assert!(duplicate.is_some());
+            let next = writer_lock(dir.path()).expect("failed scope must release its lock");
+            drop(duplicate);
+            assert!(writer_lock(dir.path()).is_err());
+            drop(next);
+            save(&fixture(), dir.path(), &[]).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_save_hooks_release_lock_and_preserve_the_previous_snapshot() {
+        for panic in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let session = fixture();
+            save(&session, dir.path(), &["previous".into()]).unwrap();
+            let original = fs::read(dir.path().join("session.toml")).unwrap();
+            let result = std::panic::catch_unwind(|| {
+                save_with_hook(&session, dir.path(), &["unpublished".into()], || {
+                    assert!(writer_lock(dir.path()).is_err());
+                    if panic {
+                        panic!("injected save-hook unwind");
+                    }
+                    anyhow::bail!("injected save-hook error")
+                })
+            });
+            match (panic, result) {
+                (false, Ok(error)) => {
+                    assert_eq!(error.unwrap_err().to_string(), "injected save-hook error")
+                }
+                (true, Err(error)) => assert_eq!(
+                    error.downcast_ref::<&str>(),
+                    Some(&"injected save-hook unwind")
+                ),
+                _ => panic!("unexpected save-hook outcome"),
+            }
+            assert_eq!(fs::read(dir.path().join("session.toml")).unwrap(), original);
+            assert!(!dir.path().join(PENDING).exists());
+            save(&session, dir.path(), &["next".into()]).unwrap();
+            let selected = read_metadata(&dir.path().join("session.toml")).unwrap();
+            assert_eq!(
+                read_selected(&dir.path().join("session.toml"), &selected).unwrap(),
+                ["next"]
+            );
+        }
     }
 
     #[test]

@@ -74,6 +74,14 @@ this protocol; neither file is opened with truncation. On Unix the files are
 private (`0600`), and lock/recovery validation requires a regular, owned,
 non-hard-linked file without group/other permissions.
 
+The writer owns an explicit scope guard: it unlocks before closing its file on
+normal return, error, or unwinding. On Linux, merely closing one descriptor can
+leave a duplicate (including one inherited around concurrent process creation)
+holding the same advisory lock. Explicit unlock prevents that duplicate from
+extending a completed save's lock lifetime. Unlock failures are logged without
+snapshot paths/content and do not panic during cleanup; they are not hidden by
+blocking retries or replacement of the persistent lock inode.
+
 A reader uses one open descriptor for metadata and embedded text. Replacement
 cannot mix generations or remove that reader's data. If a selected metadata
 header differs when reopened for restore, restore reports an explicit stale
@@ -147,6 +155,10 @@ before topology cleanup. Storage tests inject a failure after complete staging
 and before commit; read at both publication boundaries; retain an old open
 descriptor across replacement; reject stale selections before tab creation;
 exercise independent-process lock contention and concurrent writers/readers;
+keep duplicate descriptors alive across normal/error/unwind guard exits while
+checking immediate reacquisition, continued exclusion by the next writer, and
+the same persistent inode; verify failed save hooks clean staging and preserve
+the previous snapshot;
 and repeat interrupted staging at every magic-prefix boundary with constant file
 counts. Exact 5-MiB production writes, metadata overflow, corrupt payloads,
 symlink/permission checks, v1–v4 upgrades, and first-save identity failure are
