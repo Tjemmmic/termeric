@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
+use super::file_io::{MAX_SESSION_METADATA_BYTES, read_text};
 use super::{Session, session_dir};
 
 /// Restore a named session by its ID
@@ -12,8 +13,10 @@ pub fn restore_named_session(name: &str) -> Result<Option<Session>> {
         .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
 
     let session_file = dir.join("session.toml");
-    if !session_file.exists() {
-        return Ok(None);
+    match fs::symlink_metadata(&session_file) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
     }
 
     restore_session_from_path(&session_file).map(Some)
@@ -21,7 +24,7 @@ pub fn restore_named_session(name: &str) -> Result<Option<Session>> {
 
 /// Restore a session from a specific path
 pub fn restore_session_from_path(path: &Path) -> Result<Session> {
-    let content = fs::read_to_string(path)?;
+    let content = read_text(path, MAX_SESSION_METADATA_BYTES)?;
     let session: Session = toml::from_str(&content)?;
 
     if !session.is_compatible() {
@@ -49,7 +52,7 @@ pub fn load_scrollback_text(session_id: &str, scrollback_file: &str) -> Result<V
         .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
 
     let filepath = dir.join(scrollback_file);
-    let content = fs::read_to_string(&filepath)
+    let content = read_text(&filepath, super::MAX_SCROLLBACK_FILE_SIZE)
         .with_context(|| format!("read scrollback from {}", filepath.display()))?;
     let lines: Vec<String> = content.lines().map(String::from).collect();
     log::info!(
@@ -180,5 +183,37 @@ updated_at = "2020-01-01T00:00:00Z"
             .unwrap_err()
             .to_string();
         assert!(error.contains("Invalid scrollback filename"));
+    }
+
+    #[test]
+    fn production_scrollback_restore_enforces_the_writer_byte_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("fixture");
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join("scrollback.txt");
+        fs::write(&path, "界\nlast line\n").unwrap();
+        super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
+        let valid = load_scrollback_text("fixture", "scrollback.txt");
+        fs::File::create(&path)
+            .unwrap()
+            .set_len(super::super::MAX_SCROLLBACK_FILE_SIZE as u64 + 1)
+            .unwrap();
+        let oversized = load_scrollback_text("fixture", "scrollback.txt");
+        super::super::set_test_sessions_base_dir(None);
+        assert_eq!(valid.unwrap(), ["界", "last line"]);
+        assert!(format!("{:#}", oversized.unwrap_err()).contains("limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn named_restore_reports_a_broken_metadata_symlink_as_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("fixture");
+        fs::create_dir(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("absent"), dir.join("session.toml")).unwrap();
+        super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
+        let result = restore_named_session("fixture");
+        super::super::set_test_sessions_base_dir(None);
+        assert!(result.is_err());
     }
 }

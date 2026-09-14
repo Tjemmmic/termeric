@@ -2,9 +2,9 @@
 
 use anyhow::Result;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
+use super::file_io::{MAX_SESSION_METADATA_BYTES, atomic_replace, read_text};
 use super::{MAX_SCROLLBACK_FILE_SIZE, Session, session_dir};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,106 +33,111 @@ pub fn save_session_to_dir(session: &Session, dir: &Path) -> Result<()> {
     // Write session metadata as TOML
     let session_file = dir.join("session.toml");
     let mut persisted = session.clone();
-    if let Ok(existing) = fs::read_to_string(&session_file)
+    if let Ok(existing) = read_text(&session_file, MAX_SESSION_METADATA_BYTES)
         && let Ok(existing) = toml::from_str::<Session>(&existing)
         && existing.id == session.id
     {
         persisted.created_at = existing.created_at;
     }
     let toml_string = toml::to_string_pretty(&persisted)?;
-    let temp_file = dir.join("session.toml.tmp");
-
-    // Write to temp file first
-    let mut file = fs::File::create(&temp_file)?;
-    file.write_all(toml_string.as_bytes())?;
-    file.sync_all()?; // Flush to disk, not just userspace buffer
-
-    // Atomically rename to final location
-    fs::rename(&temp_file, &session_file)?;
+    if toml_string.len() > MAX_SESSION_METADATA_BYTES {
+        anyhow::bail!("session metadata exceeds its {MAX_SESSION_METADATA_BYTES}-byte limit");
+    }
+    atomic_replace(&session_file, |file| file.write_all(toml_string.as_bytes()))?;
 
     log::info!("Saved session '{}' to {:?}", session.id, session_file);
     Ok(())
 }
 
-/// Save scrollback text for a session to a file within the session directory
+/// Save scrollback text for a session to a file within the session directory.
 ///
 /// Returns an explicit report so callers can surface truncation.
 pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<ScrollbackSave> {
     let dir = session_dir(session_id)
         .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
-
     fs::create_dir_all(&dir)?;
-
-    let filename = "scrollback.txt".to_string();
-    let filepath = dir.join(&filename);
-
-    let mut file = fs::File::create(&filepath)?;
-    let mut bytes_written: usize = 0;
-    let mut truncated = false;
-
-    for line in lines {
-        let line_bytes = line.as_bytes();
-        // Check if adding this line would exceed the cap
-        if bytes_written + line_bytes.len() + 1 > MAX_SCROLLBACK_FILE_SIZE {
-            log::warn!(
-                "Scrollback for session '{}' truncated at {} bytes (cap: {} bytes)",
-                session_id,
-                bytes_written,
-                MAX_SCROLLBACK_FILE_SIZE
-            );
-            truncated = true;
-            break;
-        }
-        file.write_all(line_bytes)?;
-        file.write_all(b"\n")?;
-        bytes_written += line_bytes.len() + 1;
+    let filepath = dir.join("scrollback.txt");
+    let report = save_scrollback_to_path(&filepath, lines, MAX_SCROLLBACK_FILE_SIZE)?;
+    if report.truncated {
+        log::warn!(
+            "Scrollback for session '{}' truncated at {} bytes (cap: {} bytes)",
+            session_id,
+            report.bytes_written,
+            MAX_SCROLLBACK_FILE_SIZE
+        );
     }
-
-    file.flush()?;
     log::info!(
         "Saved scrollback for session '{}' ({} bytes) to {:?}",
         session_id,
-        bytes_written,
+        report.bytes_written,
         filepath
     );
-
-    Ok(ScrollbackSave {
-        filename,
-        bytes_written,
-        truncated,
-    })
+    Ok(report)
 }
 
-#[cfg(test)]
+/// Production and boundary tests share the exact same atomic write path.
 fn save_scrollback_to_path(
     filepath: &Path,
     lines: &[String],
     max_size: usize,
 ) -> Result<ScrollbackSave> {
-    let mut file = fs::File::create(filepath)?;
-    let mut bytes_written = 0;
-    let mut truncated = false;
-    for line in lines {
-        let needed = line.len() + 1;
-        if bytes_written + needed > max_size {
-            truncated = true;
-            break;
+    let filename = filepath
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("scrollback path has no filename"))?
+        .to_string_lossy()
+        .into_owned();
+    Ok(atomic_replace(filepath, |file| {
+        let mut bytes_written: usize = 0;
+        let mut truncated = false;
+        for line in lines {
+            let needed = line.len().saturating_add(1);
+            if bytes_written.saturating_add(needed) > max_size {
+                truncated = true;
+                break;
+            }
+            writeln!(file, "{line}")?;
+            bytes_written += needed;
         }
-        writeln!(file, "{line}")?;
-        bytes_written += needed;
-    }
-    file.flush()?;
-    Ok(ScrollbackSave {
-        filename: filepath.file_name().unwrap().to_string_lossy().into_owned(),
-        bytes_written,
-        truncated,
-    })
+        Ok(ScrollbackSave {
+            filename,
+            bytes_written,
+            truncated,
+        })
+    })?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::Session;
+    use std::io::Write;
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_metadata_staging_symlink_does_not_modify_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("private-sentinel");
+        fs::write(&target, "must remain unchanged").unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("session.toml.tmp")).unwrap();
+        save_session_to_dir(&Session::new("new snapshot".into(), None), dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(target).unwrap(), "must remain unchanged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_scrollback_destination_symlink_does_not_modify_target() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("fixture");
+        fs::create_dir(&dir).unwrap();
+        let target = root.path().join("private-sentinel");
+        fs::write(&target, "must remain unchanged").unwrap();
+        std::os::unix::fs::symlink(&target, dir.join("scrollback.txt")).unwrap();
+        crate::session::set_test_sessions_base_dir(Some(root.path().to_owned()));
+        let result = save_scrollback_text("fixture", &["new text".into()]);
+        crate::session::set_test_sessions_base_dir(None);
+        result.unwrap();
+        assert_eq!(fs::read_to_string(target).unwrap(), "must remain unchanged");
+    }
 
     #[test]
     fn test_save_session() {
@@ -214,5 +219,22 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn oversized_metadata_save_preserves_the_previous_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = Session::new("original".into(), None);
+        save_session_to_dir(&session, dir.path()).unwrap();
+        let previous = fs::read(dir.path().join("session.toml")).unwrap();
+        session.title = "x".repeat(MAX_SESSION_METADATA_BYTES);
+        assert!(
+            save_session_to_dir(&session, dir.path())
+                .unwrap_err()
+                .to_string()
+                .contains("limit")
+        );
+        assert_eq!(fs::read(dir.path().join("session.toml")).unwrap(), previous);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

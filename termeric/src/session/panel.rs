@@ -571,8 +571,9 @@ fn legacy_session_entries() -> Vec<SessionEntry> {
     super::list_sessions()
         .into_iter()
         .map(|name| {
-            let session_text = super::session_file_path(&name)
-                .and_then(|path| std::fs::read_to_string(&path).ok());
+            let session_text = super::session_file_path(&name).and_then(|path| {
+                super::file_io::read_text(&path, super::file_io::MAX_SESSION_METADATA_BYTES).ok()
+            });
             let field = |key: &str| -> Option<String> {
                 session_text.as_ref().and_then(|text| {
                     text.lines()
@@ -612,6 +613,31 @@ fn legacy_session_entries() -> Vec<SessionEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_metadata_limits_apply_to_restore_title_list_and_panel() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("oversized-fixture");
+        std::fs::create_dir(&dir).unwrap();
+        let mut file = std::fs::File::create(dir.join("session.toml")).unwrap();
+        file.write_all(b"title = \"must not be parsed\"\n").unwrap();
+        file.set_len(super::super::file_io::MAX_SESSION_METADATA_BYTES as u64 + 1)
+            .unwrap();
+        super::super::set_test_sessions_base_dir(Some(root.path().to_owned()));
+        let restored = super::super::restore::restore_named_session("oversized-fixture");
+        let titles = super::super::list_sessions_with_titles();
+        let entries = legacy_session_entries();
+        super::super::set_test_sessions_base_dir(None);
+        assert!(restored.unwrap_err().to_string().contains("limit"));
+        assert_eq!(
+            titles,
+            [("oversized-fixture".into(), "oversized-fixture".into())]
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].display_name, "oversized-fixture");
+        assert!(entries[0].subtitle.is_empty());
+    }
 
     #[test]
     fn workspace_rename_is_inline_and_never_activates_for_legacy_sessions() {

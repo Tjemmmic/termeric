@@ -48,7 +48,45 @@ version and malformed TOML fail visibly instead of being partially inferred.
 Scrollback is written once, one complete line at a time, to `scrollback.txt`.
 The file is capped at exactly 5 MiB; a line that would cross the boundary is not
 partially written, and the save result produces a visible truncation warning.
-Metadata is replaced atomically while retaining the original creation time.
+Metadata is limited to 1 MiB and retains the original creation time for a valid
+same-ID update. Oversized metadata saves fail without replacing the old file.
+
+Both files use exclusively created, same-directory staging files (mode `0600`
+on Unix), buffered writes, flush/sync, and atomic **per-file** replacement. A
+failed write or publication preserves the prior final file and cleans up only
+the owned staging file. The predictable `session.toml.tmp` name is no longer
+used. A final output symlink can be replaced itself, but its target is never
+opened for truncation. Existing unrelated staging-name entries are left alone.
+Directory sync after publication is best effort; a failure is logged rather
+than falsely reporting that an already-replaced file was not published.
+
+Restore, creation-time preservation, the title list, and the legacy session
+panel share bounded regular-file reads: 1 MiB for metadata and 5 MiB for
+scrollback. The read itself permits at most one extra probe byte, so growth
+after metadata inspection cannot evade the limit. Oversized/invalid UTF-8 input
+is rejected rather than silently truncated. On Unix, nonblocking/no-follow
+opens reject final-component symlinks and let descriptor validation reject a
+FIFO without waiting for a writer. A broken metadata symlink is an error, not
+an absent snapshot. Lists retain a safe session-ID fallback when metadata is
+unreadable. These checks do not confine user-selected parent directories or
+establish a non-Unix symlink-race guarantee. See
+[#106](https://github.com/Tjemmmic/termeric/issues/106).
+
+### Remaining transaction boundary
+
+`scrollback.txt` and `session.toml` are still published separately. A failure
+after scrollback replacement but before metadata replacement, or a concurrent
+reader at that boundary, can observe metadata and text from different saves.
+Consequently legacy snapshots remain **Partial** until
+[#107](https://github.com/Tjemmmic/termeric/issues/107) establishes a complete
+generation, concurrency, retention, and restore contract. Atomic replacement
+of each file alone does not fix that problem.
+
+Snapshot capture and filesystem operations also remain synchronous. Nonblocking
+open flags do not make ordinary file reads/writes or metadata calls real-time,
+and byte ceilings are not total-RSS limits for parsed metadata or line vectors.
+These are separate boundaries from background transcript export and complete
+workspace archives.
 
 ## Regression evidence
 
@@ -59,3 +97,12 @@ then verifies close-time autosave persists only the focused command/history
 before topology cleanup. Separate tests exercise the exact 5 MiB boundary,
 versions 1 and 3, current focused-pane files, malformed files, newer versions,
 missing scrollback, and traversal-resistant filenames.
+
+Private sentinel regressions reproduce both original symlink-write defects and
+verify the targets stay unchanged after saving. Shared production I/O tests
+cover partial-staging and publication failure, cleanup, concurrent replacement
+without mixed bytes, private output permissions, exact read ceilings, invalid
+UTF-8, growth beyond inspected length, and bounded FIFO rejection. Restore and
+both legacy listing surfaces are checked against an oversized metadata fixture;
+production scrollback restore enforces the writer's 5 MiB ceiling. No native
+GUI or provider execution is required by these fixtures.

@@ -683,6 +683,14 @@ one unit. Version 1, version 3, and current focused-pane fixtures protect format
 compatibility; the scrollback boundary test writes exactly 5 MiB without
 partial or duplicated lines. See
 [`session-snapshots.md`](session-snapshots.md).
+Legacy snapshot I/O tests additionally cover predictable staging/final symlink
+targets, partial-write preservation, concurrent complete-file replacement,
+private output permissions, 1-MiB metadata and 5-MiB scrollback read rails,
+growth beyond inspected length, invalid UTF-8, and bounded FIFO rejection.
+Oversized metadata is tested through restore, title listing, and the legacy
+session panel. These are per-file guarantees; metadata/text generation
+transactions remain separately tracked in
+[#107](https://github.com/Tjemmmic/termeric/issues/107).
 
 Complete workspace coverage separately round-trips shell, terminal-profile,
 and plugin launches with a nested three-pane tree, pane and tab focus, titles,

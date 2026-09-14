@@ -10,6 +10,7 @@
 
 pub mod export;
 pub(crate) mod export_job;
+mod file_io;
 pub mod panel;
 pub mod restore;
 pub mod save;
@@ -254,7 +255,9 @@ pub fn list_sessions_with_titles() -> Vec<(String, String)> {
         .into_iter()
         .map(|id| {
             let title = session_file_path(&id)
-                .and_then(|path| std::fs::read_to_string(&path).ok())
+                .and_then(|path| {
+                    file_io::read_text(&path, file_io::MAX_SESSION_METADATA_BYTES).ok()
+                })
                 .and_then(|content| {
                     content
                         .lines()

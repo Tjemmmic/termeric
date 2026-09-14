@@ -1126,6 +1126,14 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Legacy snapshot saves no longer follow predictable temporary-name or final
+  scrollback symlinks into unrelated files. Unique private staging, sync, and
+  atomic per-file replacement preserve the old destination on write failure.
+  Metadata/scrollback reads now share 1-MiB/5-MiB regular-file limits and Unix
+  nonblocking/no-follow opens across restore and listing surfaces. A separate
+  metadata-plus-text transaction gap remains tracked; legacy snapshots are
+  marked Partial until it is resolved.
+
 - Session export now runs on a bounded background worker. An ordered recorder
   checkpoint binds Markdown and JSONL to one verified byte prefix while
   recording continues; streaming conversion avoids whole-session input,

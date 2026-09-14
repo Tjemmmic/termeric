@@ -391,13 +391,15 @@ real-host acceptance and a native TLS transport are not yet available. See
 the [live-domain contract](docs/live-domains.md) and
 [remote threat model](docs/remote-domains.md).
 
-Legacy single-terminal sessions include metadata and up to 5 MB of terminal scrollback. Termeric
+Legacy single-terminal sessions include up to 1 MiB of metadata and 5 MiB of terminal scrollback. Termeric
 shows a warning when that scrollback limit is reached, and reports save,
 restore, deletion, corruption, and partial-recovery failures in the UI.
 Restoring a session launches a new shell; it does not restore a running process
 or a complete pane/workspace layout. In a split tab, a legacy session captures only the
 focused pane's cwd, last command, and bounded text history; the UI labels that
 reduced scope when saving and browsing snapshots.
+Individual files are safely replaced, but metadata and text are not yet one
+transaction; see the [snapshot boundary](docs/session-snapshots.md#remaining-transaction-boundary).
 
 AI transcript recording writes JSONL up to 50 MiB and reports the first cap or
 write failure instead of silently discarding data. Background export produces
