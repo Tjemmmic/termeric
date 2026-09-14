@@ -3577,10 +3577,7 @@ fn read_ordinary_file(
         ));
     }
 
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(&canonical_path)
+    let mut file = open_local_graphics_file(&canonical_path)
         .map_err(|error| filesystem_error(error, "ordinary file could not be opened"))?;
     let opened = file
         .metadata()
@@ -3685,16 +3682,7 @@ fn read_and_remove_temporary_file(
         ));
     }
 
-    let mut file = std::fs::File::open(path)
-        .map_err(|error| filesystem_error(error, "temporary file could not be opened"))?;
-    let opened = file
-        .metadata()
-        .map_err(|error| filesystem_error(error, "temporary file metadata is unavailable"))?;
-    if !opened.file_type().is_file() || !same_file(&before, &opened) {
-        return Err(ProtocolError::invalid(
-            "temporary file changed before it could be read",
-        ));
-    }
+    let (mut file, opened) = open_unchanged_temporary_file(path, &before)?;
 
     let read_result = (|| {
         let available = opened
@@ -3731,6 +3719,36 @@ fn read_and_remove_temporary_file(
 }
 
 #[cfg(unix)]
+fn open_local_graphics_file(path: &Path) -> std::io::Result<std::fs::File> {
+    // Type validation occurs on the descriptor. A FIFO substituted before
+    // open must not wait for a peer before that validation can reject it.
+    // O_NONBLOCK has no effect on reads from the required regular files.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+}
+
+#[cfg(unix)]
+fn open_unchanged_temporary_file(
+    path: &Path,
+    before: &std::fs::Metadata,
+) -> Result<(std::fs::File, std::fs::Metadata), ProtocolError> {
+    let file = open_local_graphics_file(path)
+        .map_err(|error| filesystem_error(error, "temporary file could not be opened"))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| filesystem_error(error, "temporary file metadata is unavailable"))?;
+    if !opened.file_type().is_file() || !same_file(before, &opened) {
+        return Err(ProtocolError::invalid(
+            "temporary file changed before it could be read",
+        ));
+    }
+
+    Ok((file, opened))
+}
+
+#[cfg(unix)]
 fn read_and_unlink_shared_memory(
     name: &[u8],
     offset: u64,
@@ -3755,19 +3773,8 @@ fn read_and_unlink_shared_memory(
     normalized_name.extend_from_slice(component);
     let name = std::ffi::CString::new(normalized_name)
         .map_err(|_| ProtocolError::invalid("shared-memory name contains NUL"))?;
-    // SAFETY: `name` is a live NUL-terminated C string, the flags do not
-    // create an object, and the returned descriptor is checked before it is
-    // transferred into `File` ownership.
-    let descriptor = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC, 0) };
-    if descriptor < 0 {
-        return Err(filesystem_error(
-            std::io::Error::last_os_error(),
-            "shared-memory object is unavailable",
-        ));
-    }
-    // SAFETY: `descriptor` is a newly returned owned descriptor and this is
-    // its sole transfer into a type that closes it on drop.
-    let mut file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+    let mut file = open_graphics_shared_memory(&name)
+        .map_err(|error| filesystem_error(error, "shared-memory object is unavailable"))?;
     let metadata = file
         .metadata()
         .map_err(|error| filesystem_error(error, "shared-memory metadata is unavailable"))?;
@@ -3877,18 +3884,9 @@ fn unlink_shared_memory_if_unchanged(
     name: &std::ffi::CStr,
     opened: &std::fs::Metadata,
 ) -> Result<(), ProtocolError> {
-    // SAFETY: `name` is a live NUL-terminated C string and the returned
-    // descriptor is checked before ownership is transferred to `File`.
-    let descriptor = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC, 0) };
-    if descriptor < 0 {
-        return Err(filesystem_error(
-            std::io::Error::last_os_error(),
-            "shared-memory object disappeared before cleanup",
-        ));
-    }
-    // SAFETY: `descriptor` is a newly returned owned descriptor and this is
-    // its sole transfer into a type that closes it on drop.
-    let current = unsafe { std::fs::File::from_raw_fd(descriptor) };
+    let current = open_graphics_shared_memory(name).map_err(|error| {
+        filesystem_error(error, "shared-memory object disappeared before cleanup")
+    })?;
     let current_metadata = current
         .metadata()
         .map_err(|error| filesystem_error(error, "shared-memory metadata is unavailable"))?;
@@ -3907,6 +3905,30 @@ fn unlink_shared_memory_if_unchanged(
         ));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn open_graphics_shared_memory(name: &std::ffi::CStr) -> std::io::Result<std::fs::File> {
+    // Linux shm names refer to /dev/shm entries: initial and cleanup opens
+    // must reject FIFO/symlink substitutions without waiting for a writer.
+    // Other platforms use their existing native shared-memory flag contract.
+    #[cfg(target_os = "linux")]
+    let extra_flags = libc::O_NONBLOCK | libc::O_NOFOLLOW;
+    #[cfg(not(target_os = "linux"))]
+    let extra_flags = 0;
+    // SAFETY: name is a live C string; flags never create or truncate an object.
+    let descriptor = unsafe {
+        libc::shm_open(
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC | extra_flags,
+            0,
+        )
+    };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: this is the sole adoption of the newly owned valid descriptor.
+    Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
 }
 
 #[cfg(unix)]
@@ -4542,6 +4564,164 @@ fn blend_source_over(destination: &mut [u8], source: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    fn fifo_fixture(directory: &Path) -> tempfile::TempPath {
+        let file = tempfile::Builder::new()
+            .prefix("termeric-tty-graphics-protocol-fifo-")
+            .tempfile_in(directory)
+            .unwrap();
+        replace_fixture_with_fifo(file).0
+    }
+
+    #[cfg(target_os = "linux")]
+    fn replace_fixture_with_fifo(
+        file: tempfile::NamedTempFile,
+    ) -> (tempfile::TempPath, std::fs::File) {
+        // Holding the original descriptor prevents inode reuse during rechecks.
+        let original = file.as_file().try_clone().unwrap();
+        let path = file.into_temp_path();
+        // Replace only our exclusively created fixture, retaining RAII cleanup.
+        std::fs::remove_file(&path).unwrap();
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name is a live C string in the fixture's selected directory.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        (path, original)
+    }
+
+    /// A regression must fail rather than hanging the entire test lane. Open a
+    /// private rescue peer only if the production operation did not return.
+    #[cfg(target_os = "linux")]
+    fn check_fifo_open_does_not_wait<T: Send + 'static>(
+        path: &Path,
+        operation: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = tx.send(operation());
+        });
+        let (result, waited) = match rx.recv_timeout(std::time::Duration::from_millis(300)) {
+            Ok(result) => (result, false),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let _rescue = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+                    .open(path)
+                    .unwrap();
+                (
+                    rx.recv_timeout(std::time::Duration::from_secs(2))
+                        .expect("FIFO regression did not release with a rescue peer"),
+                    true,
+                )
+            }
+            Err(error) => panic!("FIFO fixture worker failed: {error}"),
+        };
+        worker.join().unwrap();
+        assert!(
+            !waited,
+            "graphics object open waited for a FIFO peer before type validation"
+        );
+        result
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ordinary_graphics_fifo_is_rejected_without_waiting_for_a_writer() {
+        let path = fifo_fixture(&std::env::temp_dir());
+        let encoded = path.as_os_str().as_bytes().to_vec();
+        let result =
+            check_fifo_open_does_not_wait(&path, move || read_ordinary_file(&encoded, 0, Some(4)));
+        assert_eq!(result.unwrap_err().code, "EINVAL");
+        assert!(path.exists(), "rejected FIFO was deleted");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_memory_graphics_fifo_is_rejected_without_waiting_for_a_writer() {
+        let path = fifo_fixture(Path::new("/dev/shm"));
+        let name = path.file_name().unwrap().as_bytes().to_vec();
+        let result = check_fifo_open_does_not_wait(&path, move || {
+            read_and_unlink_shared_memory(&name, 0, Some(4))
+        });
+        assert_eq!(result.unwrap_err().code, "EINVAL");
+        assert!(path.exists(), "rejected FIFO was unlinked");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn temporary_graphics_open_rejects_fifo_and_symlink_substitution() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let (path, original) = replace_fixture_with_fifo(file);
+        let before = original.metadata().unwrap();
+        let probe_path = path.to_path_buf();
+        let result = check_fifo_open_does_not_wait(&path, move || {
+            open_unchanged_temporary_file(&probe_path, &before)
+        });
+        assert_eq!(result.unwrap_err().code, "EINVAL");
+        assert!(path.exists());
+
+        let target = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(target.path(), b"private fixture pixels").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(target.path(), &path).unwrap();
+        assert!(open_unchanged_temporary_file(&path, &original.metadata().unwrap()).is_err());
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read(target.path()).unwrap(),
+            b"private fixture pixels"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_memory_cleanup_rejects_substituted_fifo_without_waiting_or_unlinking() {
+        let file = tempfile::Builder::new()
+            .prefix("termeric-graphics-cleanup-")
+            .tempfile_in("/dev/shm")
+            .unwrap();
+        let (path, original) = replace_fixture_with_fifo(file);
+        let before = original.metadata().unwrap();
+        let name =
+            std::ffi::CString::new([b"/", path.file_name().unwrap().as_bytes()].concat()).unwrap();
+        let result = check_fifo_open_does_not_wait(&path, move || {
+            unlink_shared_memory_if_unchanged(&name, &before)
+        });
+        assert_eq!(result.unwrap_err().code, "EINVAL");
+        assert!(path.exists(), "cleanup removed a substituted FIFO");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fifo_protocol_errors_preserve_quiet_policy_and_next_image_progress() {
+        let path = fifo_fixture(Path::new("/dev/shm"));
+        let name = path.file_name().unwrap().as_bytes().to_vec();
+        check_fifo_open_does_not_wait(&path, move || {
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            let mut manager = GraphicsManager::new();
+            for quiet in [0, 1, 2] {
+                let payload = format!(
+                    "a=t,t=s,f=32,s=1,v=1,S=4,i=243,q={quiet};{}",
+                    STANDARD.encode(&name)
+                );
+                let result = manager.handle_command(command(payload.as_bytes()), false);
+                if quiet == 2 {
+                    assert!(result.response.is_none());
+                } else {
+                    assert_eq!(result.response.unwrap().error_code, Some("EINVAL"));
+                }
+                assert!(manager.get_image(ImageId(243)).is_none());
+            }
+            let next = manager.handle_command(command(b"a=t,f=32,s=1,v=1,i=244;AQIDBA=="), false);
+            assert!(next.response.unwrap().ok);
+            assert!(manager.get_image(ImageId(244)).is_some());
+        });
+        assert!(path.exists());
+    }
     use super::*;
 
     fn command(value: &[u8]) -> KittyCommand {

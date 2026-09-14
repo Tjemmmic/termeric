@@ -1126,6 +1126,14 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Kitty local-media loading no longer waits for a FIFO writer before rejecting
+  an invalid object. Unix ordinary/temporary-file opens and Linux shared-memory
+  load/cleanup opens are nonblocking and refuse final-component symlink
+  substitution. Descriptor type/identity checks and rejected-object preservation
+  remain intact; five Linux regressions cover direct opens, substitution,
+  cleanup, quiet replies, and next-image recovery. Regular-file I/O remains
+  synchronous; this does not establish native visual acceptance.
+
 - `control new-window` now counts its mandatory initial tab against the same
   256-tab process inventory ceiling as other running-GUI tab creation. A full
   process fails before source lookup, pending-window insertion, native creation,

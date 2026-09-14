@@ -159,6 +159,14 @@ normalized renderer; see [their capability contract](inline-images.md).
   POSIX shared-memory descriptors are not ordinary readable files. Other Unix
   targets use bounded reads. Automated runtime evidence currently comes from
   Linux; native Apple acceptance remains a platform release gate.
+- Unix ordinary/temporary-file descriptor opens use `O_NONBLOCK` and
+  `O_NOFOLLOW` before type/identity validation. Linux shared-memory opens,
+  including the cleanup identity recheck, use the same flags. A FIFO cannot
+  wait for a writer before being rejected; rejected or substituted FIFOs are
+  not read or unlinked. Temporary-file final-component symlink substitutions
+  are refused as well. This is not a filesystem deadline: metadata operations
+  and regular-file reads remain synchronous, including on slow or unusual
+  filesystems. See [the FIFO-open fix](https://github.com/Tjemmmic/termeric/issues/103).
 - For local media, `S` limits bytes read and a shorter object naturally ends at
   EOF. This applies to ordinary files as well as temporary files and shared
   memory. For compressed PNG it additionally declares the exact decompressed

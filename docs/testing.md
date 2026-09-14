@@ -943,6 +943,16 @@ fixtures cover private shared-memory range reads, leading-slash and
 current-Kitty bare-name addressing, early unlink, capability queries,
 public-object and malformed-name denial, and oversized-object cleanup. Early
 parse and APC-overflow fixtures prove `q=2` never emits a reply into the PTY.
+Linux FIFO fixtures cover ordinary-file and shared-memory rejection before a
+blocking open, temporary-file FIFO/symlink substitution after path validation,
+and shared-memory FIFO substitution at cleanup revalidation. A 300-ms guard
+opens a private rescue peer on regression so these tests fail instead of
+hanging; the timeout is a test guard, not a production I/O deadline. Original
+descriptors stay open during substitution tests to prevent inode reuse.
+Protocol fixtures additionally check `q=0/1/2`, no image storage or unlink on
+rejection, and successful processing of the next valid image. They create only
+owned temporary objects in the process temporary directory and `/dev/shm` and
+require no GUI, external image client, or provider.
 Tab/domain fixtures prove an enabled local policy reaches existing and future
 ordinary tabs and panes but is forced off for domain-owned PTYs and every GUI
 relay replica, including after config reapplication.
