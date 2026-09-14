@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.soak_provenance import provenance_checks, validate_record_binding
 from scripts.gui_acceptance import AcceptanceError, read_records
 from scripts.drm_memory import (
     DRM_MEMORY_INTERFACE,
@@ -306,6 +307,7 @@ def validate_record(
             "recorded_at_utc",
             "environment",
             "binary",
+            "provenance",
             "artifact_policy",
             "artifacts",
             "duration_seconds",
@@ -322,7 +324,8 @@ def validate_record(
         "record",
     )
     if (
-        root["schema"] != NATIVE_SOAK_SCHEMA_VERSION
+        type(root["schema"]) is not int
+        or root["schema"] != NATIVE_SOAK_SCHEMA_VERSION
         or root["kind"] != NATIVE_SOAK_RECORD_KIND
     ):
         raise SoakValidationError("record schema or kind is unsupported")
@@ -339,6 +342,11 @@ def validate_record(
     source = source.resolve()
     source_clean = validate_environment(root["environment"], source)
     binary = validate_file_evidence(root["binary"], source, "binary")
+    try:
+        provenance_results = provenance_checks(root["provenance"], ["displayed"])
+        validate_record_binding(root["provenance"], root["environment"], root["binary"])
+    except ValueError as error:
+        raise SoakValidationError(str(error)) from error
     validate_artifact_policy(root["artifact_policy"])
     artifacts = validate_artifacts(root["artifacts"], record_path)
     if binary == record_path.resolve() or binary in artifacts.values():
@@ -383,6 +391,7 @@ def validate_record(
     if root["drm_memory_summary"] != expected_drm_summary:
         raise SoakValidationError("DRM memory summary does not match samples")
     expected_checks = build_native_soak_checks(samples, thresholds, outcomes)
+    expected_checks.extend(provenance_results)
     if root["checks"] != expected_checks:
         raise SoakValidationError("reported checks do not match reconstructed checks")
     passed = all(check["passed"] is True for check in expected_checks)

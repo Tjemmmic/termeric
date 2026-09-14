@@ -52,10 +52,11 @@ from scripts.run_soak import (
     summarize_resource_inventories,
     write_json_atomic,
 )
+from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_identity
 
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
-NATIVE_SOAK_SCHEMA_VERSION = 5
+NATIVE_SOAK_SCHEMA_VERSION = 6
 NATIVE_SOAK_RECORD_KIND = "termeric-native-resource-soak"
 MAX_NATIVE_SOAK_ARTIFACTS = 512
 MAX_NATIVE_SOAK_ARTIFACT_BYTES = 128 * 1024 * 1024
@@ -149,23 +150,7 @@ def native_artifact_manifest(root: Path) -> list[dict[str, object]]:
 
 
 def git_provenance() -> dict[str, object]:
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        check=True,
-    ).stdout.strip()
-    dirty = bool(
-        subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            check=True,
-        ).stdout.strip()
-    )
-    return {"commit": commit, "worktree_dirty": dirty}
+    return source_identity(ROOT)
 
 
 def require_clean_candidate(provenance: dict[str, object], required: bool) -> None:
@@ -427,7 +412,7 @@ def main() -> int:
     if args.binary.is_symlink() or not binary.is_file():
         parser.error(f"Termeric binary does not exist: {binary}")
     try:
-        binary_relative = relative_file_path(ROOT, binary, "Termeric binary")
+        relative_file_path(ROOT, binary, "Termeric binary")
     except ValueError as error:
         parser.error(str(error))
     for tool in ("sway", "swaymsg", "tic", "wtype"):
@@ -439,13 +424,18 @@ def main() -> int:
     except AcceptanceError as error:
         parser.error(str(error))
 
-    if args.artifacts.is_symlink():
-        parser.error("native soak artifact directory must not be a symlink")
-    artifacts = args.artifacts.resolve()
     try:
-        prepare_artifact_directory(artifacts)
-    except AcceptanceError as error:
+        with PinnedExecutable(ROOT, binary, provenance) as executable:
+            return run_displayed(args, executable)
+    except (OSError, ValueError, AcceptanceError) as error:
         parser.error(str(error))
+
+
+def run_displayed(args: argparse.Namespace, executable: PinnedExecutable) -> int:
+    if args.artifacts.is_symlink():
+        raise AcceptanceError("native soak artifact directory must not be a symlink")
+    artifacts = args.artifacts.resolve()
+    prepare_artifact_directory(artifacts)
     transcript = artifacts / "pty-transcript.jsonl"
     environment = dict(os.environ)
     environment.setdefault("WGPU_BACKEND", "gl")
@@ -476,7 +466,7 @@ def main() -> int:
     try:
         environment, sway = sway_environment(environment, artifacts)
         app = AppProcess(
-            binary,
+            executable.launch("displayed"),
             artifacts / "application",
             "wayland",
             sys.executable,
@@ -564,7 +554,7 @@ def main() -> int:
 
         app.close_normally("wayland")
         assert_no_runtime_errors(app)
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
         failure = bounded_driver_error(error)
         if app is not None:
             app.stop_after_failure()
@@ -631,9 +621,11 @@ def main() -> int:
         "runtime_errors": runtime_error_count(log_text),
         "driver_error": failure,
     }
+    provenance = executable.finish()
     checks = build_native_soak_checks(samples, thresholds, outcomes)
+    checks.extend(provenance_checks(provenance, ["displayed"]))
     passed = all(check["passed"] for check in checks)
-    candidate_eligible = passed and provenance["worktree_dirty"] is False
+    candidate_eligible = passed and provenance["source_initial"]["worktree_dirty"] is False
     eligibility = (
         "candidate"
         if candidate_eligible
@@ -652,17 +644,14 @@ def main() -> int:
         "environment": {
             "platform": platform.platform(),
             "python": sys.version.split()[0],
-            **provenance,
+            **provenance["source_initial"],
             "backend": "wayland",
             "compositor": "sway-headless",
             "wgpu_backend": environment.get("WGPU_BACKEND"),
             "gpu_memory_interface": DRM_MEMORY_INTERFACE,
         },
-        "binary": {
-            "path": binary_relative,
-            "bytes": binary.stat().st_size,
-            "sha256": file_sha256(binary),
-        },
+        "binary": executable.file_evidence,
+        "provenance": provenance,
         "artifact_policy": {
             "max_files": MAX_NATIVE_SOAK_ARTIFACTS,
             "max_file_bytes": MAX_NATIVE_SOAK_ARTIFACT_BYTES,
@@ -684,7 +673,7 @@ def main() -> int:
     write_json_atomic(output, report)
     for check in checks:
         label = "PASS" if check["passed"] else "FAIL"
-        boundary = check.get("max", check.get("min", check.get("allowed")))
+        boundary = check.get("max", check.get("min", check.get("allowed", check.get("expected"))))
         print(f"{label}: {check['name']} (actual={check['actual']}, boundary={boundary})")
     print(f"Artifacts: {artifacts}")
     return 0 if passed else 1

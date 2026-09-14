@@ -26,6 +26,8 @@ from scripts.run_soak import (
     summarize_resource_inventories,
 )
 from scripts.validate_native_gui_soak import SoakValidationError, validate_record
+from scripts.soak_provenance import provenance_checks
+from scripts.test_validate_soak import provenance_fixture, mark_provenance_dirty
 
 
 COMMIT = "c" * 40
@@ -112,7 +114,9 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             "runtime_errors": 0,
             "driver_error": None,
         }
+        provenance = provenance_fixture(self.source, self.binary, COMMIT, ["displayed"])
         checks = build_native_soak_checks(samples, thresholds, outcomes)
+        checks.extend(provenance_checks(provenance, ["displayed"]))
         self.record = {
             "schema": NATIVE_SOAK_SCHEMA_VERSION,
             "kind": NATIVE_SOAK_RECORD_KIND,
@@ -130,6 +134,7 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
                 "wgpu_backend": "gl",
                 "gpu_memory_interface": "linux-drm-fdinfo-v1",
             },
+            "provenance": provenance,
             "binary": {
                 "path": "target/debug/termeric",
                 "bytes": self.binary.stat().st_size,
@@ -183,6 +188,36 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
     def test_authentic_clean_bundle_validates(self) -> None:
         self.assertEqual(self.validate()["status"], "pass")
 
+    def test_missing_tampered_or_old_launch_provenance_is_rejected(self):
+        original = copy.deepcopy(self.record)
+        mutations = [
+            lambda record: record.pop("provenance"),
+            lambda record: record.update(schema=5),
+            lambda record: record.update(schema=6.0),
+            lambda record: record["provenance"].update(pinned_final=None),
+            lambda record: record["provenance"]["source_final"].update(commit="d" * 40),
+            lambda record: record["provenance"]["binary_initial"].update(sha256="0" * 64),
+            lambda record: record["provenance"]["launches"].clear(),
+            lambda record: record["provenance"]["launches"][0].update(role="scenario"),
+        ]
+        for mutation in mutations:
+            self.record = copy.deepcopy(original)
+            self.assert_mutation_rejected(mutation)
+
+    def test_missing_final_identity_is_diagnostic_not_a_successful_candidate(self):
+        self.record["provenance"]["binary_final"] = None
+        self.record["checks"] = build_native_soak_checks(
+            self.record["samples"], self.record["thresholds"], self.record["outcomes"],
+        ) + provenance_checks(self.record["provenance"], ["displayed"])
+        self.write_record()
+        with self.assertRaises(SoakValidationError):
+            self.validate(allow_ineligible=True)
+        self.record.update(status="fail", candidate_eligible=False, eligibility="failed")
+        self.write_record()
+        with self.assertRaises(SoakValidationError):
+            self.validate()
+        self.assertFalse(self.validate(allow_ineligible=True)["candidate_eligible"])
+
     def test_required_measured_drm_memory_bundle_validates(self) -> None:
         for index, sample in enumerate(self.record["samples"]):
             sample["gpu_memory"] = aggregate_drm_fdinfos(
@@ -203,6 +238,7 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             self.record["thresholds"],
             self.record["outcomes"],
         )
+        self.record["checks"].extend(provenance_checks(self.record["provenance"], ["displayed"]))
         self.write_record()
         self.assertEqual(self.validate()["status"], "pass")
 
@@ -302,6 +338,7 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             self.validate()
 
     def test_dirty_bundle_is_only_accepted_as_diagnostic(self) -> None:
+        mark_provenance_dirty(self.record["provenance"])
         self.record["environment"]["worktree_dirty"] = True
         self.record["candidate_eligible"] = False
         self.record["eligibility"] = "dirty-dry-run"
@@ -321,6 +358,7 @@ class NativeSoakRecordValidationTests(unittest.TestCase):
             self.record["thresholds"],
             self.record["outcomes"],
         )
+        self.record["checks"].extend(provenance_checks(self.record["provenance"], ["displayed"]))
         self.record["status"] = "fail"
         self.record["candidate_eligible"] = False
         self.record["eligibility"] = "failed"

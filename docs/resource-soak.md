@@ -66,25 +66,57 @@ longer report zero growth from a single point and pass the memory-stability gate
 
 ## Running it
 
-### Known launch-provenance defect
+### Launch provenance contract
 
-[#108](https://github.com/Tjemmmic/termeric/issues/108) tracks a reproduced
-candidate-binding defect in the current runners. The schema-3 core runner reads
-Git identity and hashes the test-binary pathname after execution. The schema-5
-displayed runner captures initial Git identity but also hashes the binary
-pathname after execution, without reconciling final source state. A checkout or
-rebuild during a soak can therefore misattribute results to a different
-candidate/executable. A private fake-process reproduction exercised the real
-core report construction and validator: both accepted a clean B record even
-though the scenario had launched A's different bytes.
+Schema **4 core / 6 displayed** fixes the reproduced launch-attribution defect
+in [#108](https://github.com/Tjemmmic/termeric/issues/108). Earlier core records
+read Git identity and hashed the executable pathname after the scenario; older
+displayed records also hashed that pathname after execution. A checkout/rebuild
+could relabel a run with bytes that were not executed. A private reproduction
+demonstrated this acceptance before the fix; those old schemas are now rejected
+by the current validators, not silently upgraded into stronger evidence.
 
-The current validators still check log/artifact integrity and reconstruct
-resource results, but that is **not proof of launch identity**. Do not treat
-their `candidate_eligible` flag alone as reliable source/executable provenance
-until #108 is fixed and the strengthened lane is rerun. Keep the checkout and
-build tree unchanged during local runs; this operating precaution is not a
-replacement for fixing the runner. Historical measurements below remain useful
-resource observations, not evidence that this drift-detection gap is closed.
+Both runners now use one read-only, nonblocking, no-follow, close-on-exec Linux
+descriptor for a regular executable of at most **2 GiB**. Its length, SHA-256,
+device/inode, and nanosecond modification/change times are measured through
+that descriptor, using at most 1 MiB read chunks and checks for changes during
+measurement. Children execute through the runner's `/proc/<pid>/fd/<fd>` path,
+not the original build pathname; they do not inherit the descriptor. Pathname
+replacement therefore cannot substitute another executable after a launch is
+prepared, and core GPU smoke and the sustained scenario use the same pinned
+object. No extra executable copy or accumulating staging directory is created.
+The runner closes its descriptor on normal return, launch/setup failure,
+timeout, and interruption. Restricted `/proc` execution fails; there is no
+fallback to launching an unmeasured pathname.
+
+Core source identity/cleanliness is captured **before building**, checked again
+after the binary is measured, recorded at each launch, and checked after the
+run. Displayed runs apply the same checks around their supplied prebuilt binary
+and native setup/launch. A changed source refuses a later launch; a final
+source change, original-path replacement, pinned-object change, missing final
+identity, or incomplete launch inventory makes the provenance checks fail.
+The initial source and measured binary remain the record's identity rather
+than being replaced by a newer checkout or file digest. Both validators check
+the bounded, typed provenance fields, their linkage to the main record, and
+reconstruct all three provenance checks. Dirty-but-unchanged runs remain
+ineligible diagnostic runs; observed drift makes the record failed.
+The `launches` entries record measured attempts, including refused or failed
+attempts; their presence does not claim that a process started or completed.
+The separate exit-status and workload checks must also pass.
+
+Keep source and build outputs unchanged throughout a run. Checks detect
+**observed drift** in a trusted runner, not arbitrary malicious same-user edits
+that are completely restored between observations. This is not signed compiler
+provenance; in particular, the displayed runner's supplied binary must still be
+built for the chosen candidate using the documented workflow. It pins exactly
+that supplied executable, not proof of which source compiled it.
+
+Failures after scenario setup are retained as diagnostic records. A missing or
+replaced original source/binary can prevent independent validation even with
+`--allow-ineligible`; that flag never waives the validator's external identity
+checks. Constructor/build/pre-artifact failures abort without claiming a run.
+Neither runner overwrites an existing evidence destination. Historical
+measurements below remain observations under their stated older schemas.
 
 ### Commands
 
@@ -211,7 +243,7 @@ child cleanup. Resize and pane-churn counts have independent minimums; one
 workload cannot compensate for the other in the aggregate action count. These
 are broad regression rails, not expected steady-state consumption targets.
 
-The schema-5 native report records UTC time, candidate commit, explicit
+The schema-6 native report records UTC time, candidate commit, explicit
 worktree-dirty and eligibility state, a source-relative tested binary with byte
 length and SHA-256, backend/compositor/WGPU identity, every raw process sample,
 reconstructable exit/driver/cleanup/workload outcomes, resource-category
@@ -255,7 +287,7 @@ sample do not define the growth result. Tighten these budgets only with repeated
 artifacts from the same class of runner; do not hide a regression by raising
 them without an investigation.
 
-The schema-3 core runner JSON records UTC time, commit plus dirty-worktree
+The schema-4 core runner JSON records UTC time, commit plus dirty-worktree
 disclosure, explicit pass/eligibility state, WGPU backend, a source-relative
 test-binary path with byte length and SHA-256, every raw sample, reconstructable
 terminal outcomes, scenario progress, resource-category summaries, explicit
@@ -276,12 +308,24 @@ separately proves that children of non-leader threads are included exactly
 once:
 
 ```bash
-python3 -m unittest scripts.test_run_soak scripts.test_validate_soak
+python3 -m unittest scripts.test_run_soak scripts.test_validate_soak \
+  scripts.test_run_native_gui_soak scripts.test_validate_native_gui_soak \
+  scripts.test_soak_provenance
 ```
 
 The validator tests deliberately alter samples, thresholds, outcomes, stored
 checks, summaries, binary/log bytes, paths, numeric types, and source identity.
 They establish fail-closed record handling; they are not performance runs.
+
+Launch-provenance fixtures additionally exercise the actual core/native report
+paths with private fake processes, source changes during build and run,
+clean-to-dirty transitions, rebuilds between GPU and scenario launches,
+replacement and restoration of executable paths, launch failure, timeout,
+interruption, and descriptor cleanup. A harmless real Python-interpreter fixture
+proves Linux executes the pinned bytes after pathname replacement without
+inheriting the runner's descriptor. Native-runner fixtures never start a
+compositor or GUI. CI's ordinary quality lane includes both validators and these
+fixtures; native acceptance remains a separate deferred lane.
 
 `python3 -m unittest scripts.test_ci_resource_contract` separately fails if the
 native macOS/Windows build/unit plus PTY-lifecycle matrix, either 30-second
@@ -300,7 +344,7 @@ the JSON plus its scenario log. The ordinary CI upload does not include the
 often-large test executable, so a downloaded JSON/log pair preserves the
 recorded candidate identity and log integrity but cannot, by itself, re-prove
 the binary bytes on another host. Portable binary bundling or signed provenance
-is future work. The schema-5 displayed/native report uses its own manifest
+is future work. The schema-6 displayed/native report uses its own manifest
 validator rather than `validate_soak.py`.
 
 ## Evidence and limitations

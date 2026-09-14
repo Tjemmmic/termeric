@@ -165,16 +165,24 @@ feeds mixed ASCII/Unicode/styled output, resizes and searches bounded
 scrollback, replaces images, creates and closes real PTY-backed panes/tabs,
 saves sessions, and durably closes bounded transcript writers. Its runner
 samples RSS, threads, file descriptors, and children, and scans a companion GPU
-smoke log for validation/device-loss errors. The current schema-3 core record
+smoke log for validation/device-loss errors. The current schema-4 core record
 seals that log, binds the tested binary and exact clean source candidate, and is
 independently validated by reconstructing every check and summary. The separate
-schema-5 displayed report seals an exact bounded artifact manifest and
+schema-6 displayed report seals an exact bounded artifact manifest and
 reconstructs transcript, log, resource, outcome, and process-attributed DRM
 memory checks. Missing optional driver fields remain explicit rather than zero.
 Both reports
 reconcile privacy-safe descriptor/thread/child inventories and summarize
 category quartile growth and peaks without retaining paths, arguments, or
 environment data.
+
+Both lanes now launch from a pinned Linux executable descriptor and retain
+initial, ready, launch, and final provenance. A changed checkout/build, missing
+final identity, or incomplete launch inventory is a failed record, not a new
+candidate label. Older core/native schemas do not satisfy this stronger
+contract. These are observed-drift checks, not signed compiler attestation;
+the displayed binary still needs to be built for the selected candidate.
+See [the launch contract](resource-soak.md#launch-provenance-contract).
 
 A 30-second local change-gate run plus headless Vulkan smoke on 2026-08-25
 completed 322 iterations and all ten configured checks. It peaked at 33.9 MiB

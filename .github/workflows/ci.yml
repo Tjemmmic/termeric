@@ -44,6 +44,7 @@ jobs:
       - name: Prove resource-ceiling regression detection
         run: |
           python3 -m unittest scripts.test_run_soak
+          python3 -m unittest scripts.test_validate_soak scripts.test_run_native_gui_soak scripts.test_validate_native_gui_soak scripts.test_drm_memory scripts.test_soak_provenance
           python3 -m unittest scripts.test_ci_resource_contract
       - name: Prove terminal fuzz-corpus encoding
         run: python3 -m unittest scripts.test_materialize_fuzz_corpus

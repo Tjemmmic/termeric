@@ -18,7 +18,12 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_SOAK_SCHEMA_VERSION = 3
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_identity
+
+CORE_SOAK_SCHEMA_VERSION = 4
 CORE_SOAK_RECORD_KIND = "termeric-core-resource-soak"
 SOAK_PREFIX = "TERMERIC_SOAK "
 TRANSCRIPT_ENTRIES_PER_ITERATION = 68
@@ -553,6 +558,7 @@ def build_core_soak_checks(
     outcomes: dict[str, Any],
     *,
     gpu_smoke_requested: bool,
+    provenance: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Reconstruct every core-soak check from retained raw inputs."""
     checks = evaluate_resource_ceilings(
@@ -580,6 +586,10 @@ def build_core_soak_checks(
             gpu_error_count=outcomes["gpu_error_count"],
         )
     )
+    if provenance is not None:
+        checks.extend(provenance_checks(
+            provenance, ["gpu-smoke", "scenario"] if gpu_smoke_requested else ["scenario"]
+        ))
     return checks
 
 
@@ -642,63 +652,81 @@ def main() -> None:
     except ValueError:
         parser.error("the scenario log must be inside the report directory")
 
+    if any(path.exists() or path.is_symlink() for path in (args.output, args.log)):
+        parser.error("refusing to overwrite an existing soak report or log")
+    initial_source = source_identity(ROOT)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
     binary = build_test_binary()
+    with PinnedExecutable(ROOT, binary, initial_source) as executable:
+        run_scenario(args, executable)
+
+
+def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None:
     environment = os.environ.copy()
     environment["TERMERIC_RUN_SOAK"] = "1"
     environment["TERMERIC_SOAK_DURATION_SECONDS"] = str(args.duration_seconds)
     environment.setdefault("RUST_LOG", "warn")
 
-    gpu_exit_status: int | None = None
+    gpu_exit_status: int | None = 125 if args.gpu_smoke else None
+    exit_status = 125
+    samples: list[dict[str, Any]] = []
+    observed_children: set[int] = set()
+    process = None
     with args.log.open("w", encoding="utf-8") as log:
-        if args.gpu_smoke:
-            gpu_environment = environment.copy()
-            gpu_environment["TERMERIC_GPU_SMOKE"] = "1"
-            gpu = subprocess.run(
+        try:
+            if args.gpu_smoke:
+                gpu_environment = environment.copy()
+                gpu_environment["TERMERIC_GPU_SMOKE"] = "1"
+                gpu = subprocess.run(
+                    [
+                        executable.launch("gpu-smoke"),
+                        "test_support::linux_headless_gpu_render_smoke_when_requested",
+                        "--exact", "--nocapture",
+                    ],
+                    cwd=ROOT,
+                    env=gpu_environment,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    timeout=60,
+                )
+                gpu_exit_status = gpu.returncode
+
+            process = subprocess.Popen(
                 [
-                    binary,
-                    "test_support::linux_headless_gpu_render_smoke_when_requested",
-                    "--exact",
-                    "--nocapture",
+                    executable.launch("scenario"),
+                    "test_support::scheduled_resource_soak_scenario", "--exact",
+                    "--ignored", "--nocapture", "--test-threads=1",
                 ],
                 cwd=ROOT,
-                env=gpu_environment,
+                env=environment,
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
-            gpu_exit_status = gpu.returncode
+            started = time.monotonic()
+            timeout = args.duration_seconds + 30
+            while process.poll() is None and time.monotonic() - started < timeout:
+                try:
+                    snapshot = process_snapshot(process.pid, started)
+                except (FileNotFoundError, ProcessLookupError):
+                    # A vanished /proc sample is not proof that the process exited.
+                    time.sleep(args.sample_interval)
+                    continue
+                samples.append(snapshot)
+                observed_children.update(snapshot["children"])
+                time.sleep(args.sample_interval)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            exit_status = process.returncode
+        except (Exception, KeyboardInterrupt) as error:
+            print(f"soak driver failed: {type(error).__name__}", file=log)
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
 
-        process = subprocess.Popen(
-            [
-                binary,
-                "test_support::scheduled_resource_soak_scenario",
-                "--exact",
-                "--ignored",
-                "--nocapture",
-                "--test-threads=1",
-            ],
-            cwd=ROOT,
-            env=environment,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-        )
-        started = time.monotonic()
-        samples: list[dict[str, Any]] = []
-        observed_children: set[int] = set()
-        timeout = args.duration_seconds + 30
-        while process.poll() is None and time.monotonic() - started < timeout:
-            try:
-                snapshot = process_snapshot(process.pid, started)
-            except (FileNotFoundError, ProcessLookupError):
-                break
-            samples.append(snapshot)
-            observed_children.update(snapshot["children"])
-            time.sleep(args.sample_interval)
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=5)
-        exit_status = process.returncode
+    provenance = executable.finish()
 
     progress = parse_progress(args.log)
     minimum_samples = minimum_sample_count(args.duration_seconds, args.sample_interval)
@@ -735,24 +763,11 @@ def main() -> None:
         thresholds,
         outcomes,
         gpu_smoke_requested=args.gpu_smoke,
+        provenance=provenance,
     )
     passed = all(check["passed"] for check in checks)
-    commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        check=True,
-    ).stdout.strip()
-    worktree_dirty = bool(
-        subprocess.run(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            check=True,
-        ).stdout.strip()
-    )
+    commit = provenance["source_initial"]["commit"]
+    worktree_dirty = provenance["source_initial"]["worktree_dirty"]
     candidate_eligible = passed and not worktree_dirty
     eligibility = (
         "candidate"
@@ -761,7 +776,6 @@ def main() -> None:
         if passed
         else "failed"
     )
-    binary_relative = relative_file_path(ROOT, binary, "test binary")
     log_relative = relative_file_path(args.output.parent, args.log, "scenario log")
     report = {
         "schema_version": CORE_SOAK_SCHEMA_VERSION,
@@ -789,11 +803,8 @@ def main() -> None:
         "minimum_resource_samples": minimum_samples,
         "maximum_transcript_queue_bytes": max_transcript_queue_bytes,
         "gpu_smoke_requested": args.gpu_smoke,
-        "test_binary": {
-            "path": binary_relative,
-            "bytes": binary.stat().st_size,
-            "sha256": file_sha256(binary),
-        },
+        "test_binary": executable.file_evidence,
+        "provenance": provenance,
         "artifacts": {
             "scenario_log": {
                 "path": log_relative,
@@ -811,7 +822,7 @@ def main() -> None:
     write_json_atomic(args.output, report)
     for check in checks:
         label = "PASS" if check["passed"] else "FAIL"
-        boundary = check.get("max", check.get("min"))
+        boundary = check.get("max", check.get("min", check.get("expected")))
         print(f"{label}: {check['name']} (actual={check['actual']}, boundary={boundary})")
     if not passed:
         raise SystemExit("resource soak ceilings failed")

@@ -32,6 +32,7 @@ from scripts.run_soak import (
     parse_progress,
     summarize_resource_inventories,
 )
+from scripts.soak_provenance import provenance_checks, validate_record_binding
 
 
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -418,6 +419,7 @@ def validate_record(
             "maximum_transcript_queue_bytes",
             "gpu_smoke_requested",
             "test_binary",
+            "provenance",
             "artifacts",
             "thresholds",
             "outcomes",
@@ -429,7 +431,8 @@ def validate_record(
         "record",
     )
     if (
-        root["schema_version"] != CORE_SOAK_SCHEMA_VERSION
+        type(root["schema_version"]) is not int
+        or root["schema_version"] != CORE_SOAK_SCHEMA_VERSION
         or root["kind"] != CORE_SOAK_RECORD_KIND
     ):
         raise SoakValidationError("record schema or kind is unsupported")
@@ -468,6 +471,11 @@ def validate_record(
         raise SoakValidationError("transcript queue ceiling differs from the record")
 
     binary = validate_file_evidence(root["test_binary"], source, "test_binary")
+    try:
+        provenance_checks(root["provenance"], ["gpu-smoke", "scenario"] if root["gpu_smoke_requested"] else ["scenario"])
+        validate_record_binding(root["provenance"], root["environment"], root["test_binary"])
+    except ValueError as error:
+        raise SoakValidationError(str(error)) from error
     artifacts = require_exact_keys(root["artifacts"], {"scenario_log"}, "artifacts")
     log = validate_file_evidence(
         artifacts["scenario_log"], record_path.parent, "artifacts.scenario_log"
@@ -488,6 +496,7 @@ def validate_record(
         thresholds,
         outcomes,
         gpu_smoke_requested=root["gpu_smoke_requested"],
+        provenance=root["provenance"],
     )
     if root["checks"] != expected_checks:
         raise SoakValidationError("reported checks do not match reconstructed checks")

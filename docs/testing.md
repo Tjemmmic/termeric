@@ -750,13 +750,21 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
 python3 scripts/validate_soak.py target/soak/local.json --source .
 ```
 
-Run `python3 -m unittest scripts.test_run_soak scripts.test_validate_soak` to
+Run `python3 -m unittest scripts.test_run_soak scripts.test_validate_soak scripts.test_soak_provenance` to
 prove deliberate RSS, thread, fd, transcript-backlog, incomplete-drain,
 dropped-entry, missing-metric, malformed/mismatched inventory, bounded-label,
 category-summary, and serialized-record tampering fixtures fail or summarize
 exactly as required. Exact scenario boundaries, ceilings, artifact fields, and
 known blind spots are documented in
 [`resource-soak.md`](resource-soak.md).
+
+Core schema 4 and native schema 6 pin the measured executable through a Linux
+parent-owned descriptor and retain source state before build/setup, at launch,
+and after execution. Fake runner-path and pure validator tests reject drift,
+missing/malformed provenance, stale schema versions, incomplete launch lists,
+and false candidate promotion. Real private descriptor tests cover replacement,
+non-inheritance, unsafe file kinds, bounds, interruption, and cleanup; they do
+not launch the GUI or any provider-backed workflow.
 
 The separate `scripts/run_native_gui_soak.py` runner samples the displayed
 Wayland application while continuous PTY output, compositor resize, and exact

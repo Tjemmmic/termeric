@@ -41,7 +41,7 @@ def sample(index: int, *, rss: float = 100_000, threads: int = 4, fds: int = 12)
 
 class SoakCeilingTests(unittest.TestCase):
     def test_report_schema_is_versioned_for_resource_inventories(self):
-        self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 3)
+        self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 4)
 
     def test_binary_digest_is_exact_and_content_bound(self):
         with TemporaryDirectory() as directory:

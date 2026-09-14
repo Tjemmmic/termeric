@@ -47,7 +47,7 @@ def sample(index: int, *, rss_kib: float = 200_000, fds: int = 30) -> dict:
 
 class NativeGuiSoakTests(unittest.TestCase):
     def test_report_schema_is_versioned_for_drm_memory(self) -> None:
-        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 5)
+        self.assertEqual(NATIVE_SOAK_SCHEMA_VERSION, 6)
 
     def evaluate(self, samples: list[dict], **overrides: object) -> list[dict]:
         arguments = {

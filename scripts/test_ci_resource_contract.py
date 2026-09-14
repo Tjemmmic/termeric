@@ -98,6 +98,14 @@ class CiResourceContractTests(unittest.TestCase):
         self.assertIn("target/integration-acceptance/record.json", block)
         self.assertIn("name: hermetic-integration-acceptance", block)
 
+    def test_quality_lane_exercises_both_soak_validators_and_launch_provenance(self):
+        block = job_block(self.workflow, "quality-and-package")
+        for module in (
+            "scripts.test_soak_provenance", "scripts.test_validate_soak",
+            "scripts.test_run_native_gui_soak", "scripts.test_validate_native_gui_soak",
+        ):
+            self.assertIn(module, block)
+
 
 if __name__ == "__main__":
     unittest.main()

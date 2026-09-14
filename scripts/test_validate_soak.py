@@ -23,6 +23,32 @@ from scripts.validate_soak import SoakValidationError, validate_record
 COMMIT = "a" * 40
 
 
+def provenance_fixture(source: Path, binary: Path, commit: str, roles: list[str]) -> dict:
+    # Pure serialized fixture: validators must not require a Linux /proc mount.
+    initial = {"commit": commit, "worktree_dirty": False}
+    metadata = binary.stat()
+    identity = {
+        "device": metadata.st_dev, "inode": metadata.st_ino,
+        "bytes": metadata.st_size, "mtime_ns": metadata.st_mtime_ns,
+        "ctime_ns": metadata.st_ctime_ns, "sha256": file_sha256(binary),
+    }
+    from scripts.soak_provenance import POLICY
+    return {
+        "policy": POLICY, "source_initial": dict(initial),
+        "source_ready": dict(initial), "source_final": dict(initial),
+        "binary_initial": dict(identity), "binary_final": dict(identity),
+        "pinned_final": dict(identity),
+        "launches": [{"role": role, "source": dict(initial), "binary": dict(identity)} for role in roles],
+    }
+
+
+def mark_provenance_dirty(record: dict) -> None:
+    for key in ("source_initial", "source_ready", "source_final"):
+        record[key]["worktree_dirty"] = True
+    for launch in record["launches"]:
+        launch["source"]["worktree_dirty"] = True
+
+
 def resource_sample(index: int) -> dict[str, object]:
     return {
         "elapsed_seconds": float(index + 1),
@@ -91,12 +117,14 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
             "remaining_observed_children": 0,
             "gpu_error_count": 0,
         }
+        provenance = provenance_fixture(self.source, self.binary, COMMIT, ["scenario"])
         checks = build_core_soak_checks(
             samples,
             self.progress,
             thresholds,
             outcomes,
             gpu_smoke_requested=False,
+            provenance=provenance,
         )
         self.record = {
             "schema_version": CORE_SOAK_SCHEMA_VERSION,
@@ -123,6 +151,7 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
                 "bytes": self.binary.stat().st_size,
                 "sha256": file_sha256(self.binary),
             },
+            "provenance": provenance,
             "artifacts": {
                 "scenario_log": {
                     "path": "scenario.log",
@@ -166,6 +195,42 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
     def test_authentic_clean_record_validates(self) -> None:
         validated = self.validate()
         self.assertEqual(validated["status"], "pass")
+
+    def test_missing_tampered_and_legacy_provenance_cannot_validate(self):
+        original = copy.deepcopy(self.record)
+        mutations = [
+            lambda record: record.pop("provenance"),
+            lambda record: record.update(schema_version=3),
+            lambda record: record.update(schema_version=4.0),
+            lambda record: record["provenance"].update(policy="unbound"),
+            lambda record: record["provenance"].update(extra=True),
+            lambda record: record["provenance"].update(source_ready=None),
+            lambda record: record["provenance"].update(pinned_final=None),
+            lambda record: record["provenance"]["source_final"].update(commit="b" * 40),
+            lambda record: record["provenance"]["binary_initial"].update(bytes=True),
+            lambda record: record["provenance"]["binary_final"].update(sha256="f" * 64),
+            lambda record: record["provenance"]["launches"].clear(),
+            lambda record: record["provenance"]["launches"][0].update(role=[]),
+            lambda record: record["provenance"]["launches"][0]["source"].update(worktree_dirty=True),
+        ]
+        for mutation in mutations:
+            self.record = copy.deepcopy(original)
+            self.assert_mutation_rejected(mutation)
+
+    def test_observed_drift_remains_ineligible_after_original_context_is_restored(self):
+        self.record["provenance"]["source_ready"]["commit"] = "b" * 40
+        self.record["checks"] = build_core_soak_checks(
+            self.record["samples"], self.record["progress"], self.record["thresholds"],
+            self.record["outcomes"], gpu_smoke_requested=False, provenance=self.record["provenance"],
+        )
+        self.write_record()
+        with self.assertRaises(SoakValidationError):
+            self.validate(allow_ineligible=True)  # Even a claimed "pass" is rejected.
+        self.record.update(status="fail", candidate_eligible=False, eligibility="failed")
+        self.write_record()
+        with self.assertRaises(SoakValidationError):
+            self.validate()
+        self.assertFalse(self.validate(allow_ineligible=True)["candidate_eligible"])
 
     def test_unknown_field_is_rejected(self) -> None:
         self.assert_mutation_rejected(lambda record: record.update({"surprise": True}))
@@ -235,6 +300,7 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
             self.validate()
 
     def test_dirty_record_is_only_accepted_as_ineligible_diagnostic(self) -> None:
+        mark_provenance_dirty(self.record["provenance"])
         self.record["environment"]["worktree_dirty"] = True
         self.record["candidate_eligible"] = False
         self.record["eligibility"] = "dirty-dry-run"
@@ -271,6 +337,7 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
             self.record["thresholds"],
             self.record["outcomes"],
             gpu_smoke_requested=False,
+            provenance=self.record["provenance"],
         )
         self.record["status"] = "fail"
         self.record["candidate_eligible"] = False

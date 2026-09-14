@@ -1126,6 +1126,12 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Core/native soak evidence now uses schema 4/6 with measured, pinned Linux
+  executable launches and source provenance checked around build and execution.
+  Concurrent checkout/rebuild drift can no longer relabel a run with a later
+  pathname's binary digest. Failed diagnostics retain the initial identity,
+  validators reconstruct eligibility, and older schemas remain historical.
+
 - Session snapshot v5 now atomically publishes metadata and embedded text in
   one bounded file. Metadata-only listings avoid decoding text; restore checks
   the selected generation and content checksum before spawning a shell.
