@@ -36,6 +36,7 @@ pub struct TabLaunch {
     /// Per-launch child environment overlay. Runtime control requests are
     /// validated before populating this map; ordinary CLI plans leave it empty.
     pub environment: HashMap<String, String>,
+    pub environment_policy: termeric_core::pty::EnvironmentPolicy,
     pub splits: Vec<CliSplitDirection>,
 }
 
@@ -95,6 +96,7 @@ impl Default for TabLaunch {
             title: None,
             target: LaunchTarget::Shell,
             environment: HashMap::new(),
+            environment_policy: Default::default(),
             splits: Vec::new(),
         }
     }
@@ -646,6 +648,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 working_directory: launch.working_directory.clone(),
                 title: launch.title.clone(),
                 environment: launch.environment.clone(),
+                environment_policy: launch.environment_policy.clone(),
             }
             .validate()
             .map_err(anyhow::Error::msg)?;
@@ -658,6 +661,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                     working_directory: launch.working_directory,
                     title: launch.title,
                     environment: launch.environment,
+                    environment_policy: launch.environment_policy,
                     request_id: launch.request_id,
                     json: launch.json,
                 },
@@ -688,6 +692,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 working_directory: launch.working_directory.clone(),
                 title: launch.title.clone(),
                 environment: launch.environment.clone(),
+                environment_policy: launch.environment_policy.clone(),
             }
             .validate()
             .map_err(anyhow::Error::msg)?;
@@ -700,6 +705,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                     working_directory: launch.working_directory,
                     title: launch.title,
                     environment: launch.environment,
+                    environment_policy: launch.environment_policy,
                     request_id: launch.request_id,
                     json: launch.json,
                 },
@@ -1001,6 +1007,7 @@ struct ParsedControlLaunch {
     working_directory: Option<String>,
     title: Option<String>,
     environment: Vec<crate::control::protocol::EnvironmentVariable>,
+    environment_policy: termeric_core::pty::EnvironmentPolicy,
     request_id: Option<String>,
     json: bool,
 }
@@ -1015,6 +1022,7 @@ fn parse_control_launch(
     let mut request_id = None;
     let mut json = false;
     let mut environment = Vec::new();
+    let mut environment_policy = termeric_core::pty::EnvironmentPolicy::default();
     let command_index = loop {
         let option = domain_utf8(
             arguments.get(index),
@@ -1046,6 +1054,14 @@ fn parse_control_launch(
                     name: name.to_string(),
                     value: value.to_string(),
                 });
+            }
+            "--clear-env" if !environment_policy.clear => environment_policy.clear = true,
+            "--unset-env" => {
+                index += 1;
+                environment_policy.unset.push(domain_utf8(
+                    arguments.get(index),
+                    "--unset-env requires NAME",
+                )?);
             }
             "--request-id" if request_id.is_none() => {
                 index += 1;
@@ -1084,6 +1100,7 @@ fn parse_control_launch(
         working_directory,
         title,
         environment,
+        environment_policy,
         request_id,
         json,
     })
@@ -1119,9 +1136,9 @@ Commands for already-running local GUI processes:\n  \
   get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
-  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
+  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
   new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
-  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
+  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
   split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
   focus-window PROCESS WINDOW [--request-id ID] [--json]\n      Request native focus for one exact stable window\n  \
   select-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Select one exact stable tab without focusing its native window\n  \
@@ -1938,6 +1955,52 @@ authority for topology, controls, focus, and every pane relay."
 #[cfg(test)]
 mod tests {
     #[test]
+    fn exact_launch_environment_flags_are_explicit_and_order_independent() {
+        for verb in ["launch-tab", "launch-window"] {
+            for flags in [
+                vec!["--clear-env", "--env", "EMPTY="],
+                vec!["--unset-env", "PATH", "--env", "EMPTY="],
+            ] {
+                let mut args = vec!["control", verb, "42", "7"];
+                args.extend(flags);
+                args.extend(["--", "/bin/true"]);
+                let outcome = parse(args.into_iter().map(OsString::from)).unwrap();
+                let (environment, policy) = match outcome {
+                    ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
+                        environment,
+                        environment_policy,
+                        ..
+                    })
+                    | ParseOutcome::Control(crate::control::ControlCommand::LaunchWindow {
+                        environment,
+                        environment_policy,
+                        ..
+                    }) => (environment, environment_policy),
+                    _ => panic!("wrong launch command"),
+                };
+                assert_eq!(environment[0].value, "");
+                assert!(policy.clear || policy.unset == ["PATH"]);
+            }
+            for flags in [
+                vec!["--clear-env", "--clear-env"],
+                vec!["--unset-env"],
+                vec!["--unset-env", "A=B"],
+                vec!["--unset-env", "TERM"],
+                vec!["--unset-env", "SHELL"],
+                vec!["--unset-env", "PATH", "--unset-env", "PATH"],
+                vec!["--clear-env", "--unset-env", "PATH"],
+                vec!["--unset-env", "PATH", "--clear-env"],
+                vec!["--env", "PATH=x", "--unset-env", "PATH"],
+                vec!["--unset-env", "PATH", "--env", "PATH=x"],
+            ] {
+                let mut args = vec!["control", verb, "42", "7"];
+                args.extend(flags);
+                args.extend(["--", "/bin/true"]);
+                assert!(parse(args.into_iter().map(OsString::from)).is_err());
+            }
+        }
+    }
+    #[test]
     fn wait_launch_accepts_only_bounded_unique_options() {
         let id = "a".repeat(32);
         for args in [
@@ -2411,6 +2474,7 @@ mod tests {
                 working_directory: Some(cwd),
                 title: Some(title),
                 environment,
+                environment_policy: _,
                 request_id: Some(request_id),
                 json: true,
             }) if program == "/bin/printf"
@@ -2464,6 +2528,7 @@ mod tests {
                 working_directory: Some(cwd),
                 title: Some(title),
                 environment,
+                environment_policy: _,
                 request_id: Some(request_id),
                 json: true,
             }) if program == "/bin/printf"

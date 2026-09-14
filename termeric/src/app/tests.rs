@@ -6985,6 +6985,7 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
                     program: "/bin/sh".into(),
                     args: vec!["-c".into(), "printf CLI_ARGV_28; sleep 1".into()],
                 },
+                environment_policy: Default::default(),
                 environment: HashMap::new(),
                 splits: Vec::new(),
             },
@@ -7076,6 +7077,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
                     value: "line one\nENV_UNICODE_λ".into(),
                 },
             ],
+            &Default::default(),
         )
         .unwrap();
     assert_eq!(exact_id, 0);
@@ -7147,6 +7149,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
                 name: "PRIVATE_BUILD_VALUE".into(),
                 value: "must-not-appear-in-errors".into(),
             }],
+            &Default::default(),
         )
         .unwrap_err();
     assert!(!error.contains("PRIVATE_BUILD_VALUE"));
@@ -7159,6 +7162,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
             Some("/definitely/missing/termeric-cwd"),
             None,
             &[],
+            &Default::default(),
         )
         .is_err()
     );

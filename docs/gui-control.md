@@ -12,6 +12,8 @@ a general remote-control API. [#100](https://github.com/Tjemmmic/termeric/issues
 adds retained child completion queries for those launches.
 [#101](https://github.com/Tjemmmic/termeric/issues/101) adds client-side waiting
 and script exit-code propagation using that same protocol.
+[#102](https://github.com/Tjemmmic/termeric/issues/102) adds explicit child-local
+environment clearing and variable removal in GUI protocol v17.
 
 ## Command line
 
@@ -97,7 +99,7 @@ window or stable success result.
 `new-tab` targets one exact stable window ID and returns its stable window-local
 tab ID only after the PTY-backed tab exists. An ordinary target creates the same
 local shell tab as the in-app New Tab action. If the active tab belongs to a live
-domain, protocol v16 keeps the socket worker off the GUI event loop while the
+domain, protocol v17 keeps the socket worker off the GUI event loop while the
 daemon creates the authoritative tab, reconciles the returned snapshot, and
 then returns the resulting GUI-local stable ID.
 
@@ -109,7 +111,7 @@ arguments, whitespace, Unicode, leading hyphens, and shell metacharacters
 therefore remain literal. `--cwd` accepts an existing absolute UTF-8 directory
 and `--title` supplies an optional initial title. If no cwd is supplied, the
 child uses the same GUI-process working-directory behavior as other direct
-command tabs. The child inherits the GUI process environment, then each
+command tabs. By default the child inherits the GUI process environment, then each
 repeatable `--env NAME=VALUE` replaces or adds one variable without shell
 evaluation. Empty values, whitespace, Unicode, additional `=` characters, and
 shell metacharacters remain literal. Ordering has no child-visible meaning and
@@ -121,13 +123,45 @@ without inserting a tab. Use `termeric domain spawn DOMAIN -- PROGRAM [ARG ...]`
 for a daemon-owned command instead of implicitly crossing that authority
 boundary.
 
+### Per-launch environment inheritance
+
+Both `launch-tab` and `launch-window` accept repeatable `--unset-env NAME` to
+remove inherited variables, or `--clear-env` to discard the inherited map.
+Assignments from `--env NAME=VALUE` are applied afterward. Setting an empty
+value (`--env NAME=`) is different from removing the variable. Assignments and
+removals share the same 64-entry/64-KiB budget; duplicate removals, set/remove
+conflicts, and a removal list combined with clear mode are rejected regardless
+of CLI ordering. Names are canonicalized for replay, but changing the policy
+with an existing request ID is a different action and is refused.
+
+Cleared means a fresh base, **not zero variables or a sandbox**. Termeric still
+sets `TERM`, `COLORTERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, any selected
+terminfo configuration (which can include the GUI's search path), and `PWD`
+when cwd is supplied. Unix portable-pty 0.8 also supplies `SHELL`; explicit
+removal of `SHELL` is therefore refused, while an explicit `--env SHELL=VALUE`
+remains permitted. Terminal identity and `PWD` cannot be set or removed through
+environment flags. Programs may initialize additional variables themselves.
+
+Use an absolute program path when PATH is removed or cleared, or provide an
+explicit `--env PATH=...`. Neither the GUI process nor sibling/future launches
+are modified. This policy is transient launch state: environments are not
+stored in workspace archives or reapplied by splits, and ordinary startup,
+profile, plugin, and daemon launches keep their existing behavior. Clearing
+does not remove arguments, change account/filesystem permissions, or make
+literal CLI values secret-safe.
+
+```bash
+termeric control launch-tab PROCESS WINDOW --unset-env PYTHONPATH -- /usr/bin/python3 script.py
+termeric control launch-window PROCESS SOURCE_WINDOW --clear-env --cwd /absolute/project --env PATH=/usr/bin:/bin -- /usr/bin/make
+```
+
 `split-pane` targets one exact process/window/tab/pane path plus a typed
 `horizontal` or `vertical` direction. A fresh unsplit tab starts with pane ID
 `0`; a pane surviving collapse keeps its existing ID, so automation always uses
 the current inventory rather than assuming zero. Success creates exactly one
 local shell pane, focuses it within its tab, preserves the window's active-tab
 choice, and returns the new tab-local pane ID. A live-domain target uses the
-same deferred protocol-v16 acknowledgement as `new-tab`: the response is sent
+same deferred protocol-v17 acknowledgement as `new-tab`: the response is sent
 only after the daemon snapshot has been reconciled and the new remote pane has
 an authoritative GUI-local stable ID.
 
@@ -163,7 +197,7 @@ claim that animation, persistence, or process teardown already finished.
 mutation, removes the exact pane synchronously, and returns both the remaining
 pane count and focused pane ID. If two panes collapse to one terminal owner, the
 survivor keeps its stable ID through inventory, workspace capture/restore, and
-the next split. For live-domain tabs and panes, protocol v16 defers the response
+the next split. For live-domain tabs and panes, protocol v17 defers the response
 until the authoritative daemon snapshot proves the exact remote object was
 removed and GUI reconciliation can report the surviving local pane state. The
 domain's last pane and last tab remain protected; terminating the domain is a
@@ -193,7 +227,7 @@ pane must move with its whole tab. Moving within the same tab is currently
 rejected because that requires an explicit layout-tree rearrangement contract,
 not an ownership transfer. Live-domain panes can move between different tabs in
 the same domain and native window. Domain protocol v10 carries the exact remote
-anchor and requested direction; protocol v16 responds only after the source
+anchor and requested direction; protocol v17 responds only after the source
 route disappears, the destination layout contains that exact split, and the
 moved relay has a destination-local stable ID. Cross-window, cross-domain, and
 mixed ordinary/live moves fail before mutation.
@@ -352,7 +386,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 16 accepts exactly `inventory`, `launch_status`, ID-targeted `read_text`,
+Protocol version 17 accepts exactly `inventory`, `launch_status`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,
@@ -373,13 +407,13 @@ not written to process logs. A failed private window launch may return its
 detailed startup diagnostic to the authenticated requester while logging only a
 generic initialization failure.
 
-Environment overlays are intentionally narrow. One launch accepts at most 64
+Environment changes are intentionally narrow. One launch accepts at most 64
 unique ASCII names matching `[A-Za-z_][A-Za-z0-9_]*`, with names capped at 128
 bytes, values at 8 KiB each, and the combined names and values at 64 KiB.
 Values must be NUL-free UTF-8. `PWD` is controlled only by `--cwd`; `TERM`,
 `COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`, `TERM_PROGRAM`, and
 `TERM_PROGRAM_VERSION` remain owned by Termeric and cannot be overridden. The
-protocol does not unset variables or provide a clean environment. Literal
+same names cannot be explicitly removed; `SHELL` removal is also refused. Literal
 `--env` values are **not secret-safe**: they may be retained by shell history
 or visible through process-argument inspection before Termeric receives them.
 
@@ -416,9 +450,10 @@ and persistence policies.
   at 4 KiB and an
   optional initial title at 256 UTF-8 bytes. NUL-bearing argv and control or
   bidirectional-formatting metadata fail before process or tab creation.
-- One direct launch accepts at most 64 unique environment overlays, with a
+- One direct launch accepts at most 64 unique environment assignments/removals, with a
   128-byte portable ASCII name, an 8 KiB NUL-free UTF-8 value, and 64 KiB total
-  across names and values. Terminal-identity variables and `PWD` are reserved.
+  across names and values. Terminal-identity variables and `PWD` are reserved;
+  `SHELL` cannot be removed. Clear mode and removal lists are mutually exclusive.
 - Reads and writes time out after 12 seconds. The GUI event-loop request must
   answer within 10 seconds, and socket I/O never runs on that event loop. A
   timed-out live-domain mutation can be retried with the same request ID to
@@ -459,8 +494,10 @@ I/O. No test launches a plugin, provider-backed AI command, or network service.
 
 The acknowledged topology surface now covers every live-domain mutation exposed
 by the running-GUI commands without pretending daemon topology can place tabs
-across native windows. Richer typed workspace/query actions, environment
-overrides, and process-exit observation can be added only by demonstrated
-automation demand. Arbitrary byte input and implicit
+across native windows. Exact child-local environment overlays/clearing/removal
+and process-exit observation/waiting are now implemented. Secret-safe value
+transport, atomic launch-and-wait options, event subscriptions, and richer
+workspace/query actions still require demonstrated automation demand and their
+own authority review. Arbitrary byte input and implicit
 focus-following actions remain deliberately excluded rather than becoming
 consequences of the control socket.

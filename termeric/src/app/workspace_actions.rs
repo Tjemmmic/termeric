@@ -2800,6 +2800,7 @@ impl App {
         working_directory: Option<&str>,
         title: Option<&str>,
         environment: &[crate::control::protocol::EnvironmentVariable],
+        environment_policy: &termeric_core::pty::EnvironmentPolicy,
     ) -> std::result::Result<u64, String> {
         let tab_count = self.tabs.as_ref().map_or(0, TabManager::count);
         validate_ordinary_tab_creation_capacity(tab_count)?;
@@ -2826,7 +2827,7 @@ impl App {
             .as_mut()
             .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
         let id = tabs
-            .new_tab_with_command(
+            .new_tab_with_command_environment_policy(
                 program,
                 args,
                 working_directory,
@@ -2836,6 +2837,7 @@ impl App {
                     .iter()
                     .map(|entry| (entry.name.clone(), entry.value.clone()))
                     .collect(),
+                environment_policy,
             )
             .map_err(|error| format!("Could not launch command tab: {error:#}"))?;
         self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });

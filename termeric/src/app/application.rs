@@ -2029,6 +2029,7 @@ impl Application {
                 working_directory,
                 title,
                 environment,
+                environment_policy,
             } => self.launch_control_window(
                 event_loop,
                 request_id,
@@ -2038,6 +2039,7 @@ impl Application {
                 working_directory.as_deref(),
                 title.as_deref(),
                 environment,
+                environment_policy,
             ),
             Request::CreateTab {
                 request_id,
@@ -2051,6 +2053,7 @@ impl Application {
                 working_directory,
                 title,
                 environment,
+                environment_policy,
             } => self.launch_control_tab(
                 request_id,
                 *window_id,
@@ -2059,6 +2062,7 @@ impl Application {
                 working_directory.as_deref(),
                 title.as_deref(),
                 environment,
+                environment_policy,
             ),
             Request::SplitPane {
                 request_id,
@@ -2803,6 +2807,7 @@ impl Application {
         working_directory: Option<&str>,
         title: Option<&str>,
         environment: &[crate::control::protocol::EnvironmentVariable],
+        environment_policy: &termeric_core::pty::EnvironmentPolicy,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         self.control_launches.prepare(request_id)?;
         let result_index = self.prepare_control_launch_window(
@@ -2812,6 +2817,7 @@ impl Application {
             working_directory,
             title,
             environment,
+            environment_policy,
         )?;
         let creation = self
             .create_pending_windows(event_loop)
@@ -2851,6 +2857,7 @@ impl Application {
         working_directory: Option<&str>,
         title: Option<&str>,
         environment: &[crate::control::protocol::EnvironmentVariable],
+        environment_policy: &termeric_core::pty::EnvironmentPolicy,
     ) -> std::result::Result<usize, String> {
         let total_tabs = process_tab_count(&self.windows);
         validate_control_window_creation_capacity(
@@ -2913,6 +2920,7 @@ impl Application {
                     .iter()
                     .map(|entry| (entry.name.clone(), entry.value.clone()))
                     .collect(),
+                environment_policy: environment_policy.clone(),
                 splits: Vec::new(),
             }],
             ..WindowLaunch::default()
@@ -2974,6 +2982,7 @@ impl Application {
         working_directory: Option<&str>,
         title: Option<&str>,
         environment: &[crate::control::protocol::EnvironmentVariable],
+        environment_policy: &termeric_core::pty::EnvironmentPolicy,
     ) -> std::result::Result<crate::control::protocol::Response, String> {
         self.control_launches.prepare(request_id)?;
         let native_id = self
@@ -3002,7 +3011,14 @@ impl Application {
             .windows
             .get_mut(&native_id)
             .expect("validated control window disappeared")
-            .launch_control_tab(program, args, working_directory, title, environment)?;
+            .launch_control_tab(
+                program,
+                args,
+                working_directory,
+                title,
+                environment,
+                environment_policy,
+            )?;
         self.record_control_launch(request_id, window_id, tab_id);
         Ok(crate::control::protocol::Response::TabCreated {
             process_id: std::process::id(),
@@ -4271,6 +4287,131 @@ impl ApplicationHandler<AppEvent> for Application {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn control_environment_policy_child_probe() {
+        let Some(marker) = std::env::var_os("TERMERIC_TEST_CONTROL_ENV_POLICY_MARKER") else {
+            return;
+        };
+        assert!(std::env::var_os("PATH").is_none());
+        assert_eq!(std::env::var("EMPTY_VALUE").unwrap(), "");
+        assert_eq!(std::env::var("EXACT_VALUE").unwrap(), "= literal $HOME;λ");
+        assert_eq!(std::env::var("TERM_PROGRAM").unwrap(), "Termeric");
+        assert_eq!(
+            std::env::var_os("PWD").unwrap(),
+            std::env::current_dir().unwrap().as_os_str()
+        );
+        std::fs::write(marker, b"environment policy applied").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_environment_policy_reaches_tab_and_prepared_window_children() {
+        use crate::control::protocol::{EnvironmentVariable, LaunchState};
+        use termeric_core::pty::EnvironmentPolicy;
+        let executable = std::env::current_exe().unwrap();
+        let args = [
+            "--exact".into(),
+            "app::application::tests::control_environment_policy_child_probe".into(),
+            "--nocapture".into(),
+        ];
+        for window_launch in [false, true] {
+            for clear in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let marker = directory.path().join("observed");
+                let policy = EnvironmentPolicy {
+                    clear,
+                    unset: if clear { vec![] } else { vec!["PATH".into()] },
+                };
+                let environment = [
+                    EnvironmentVariable {
+                        name: "TERMERIC_TEST_CONTROL_ENV_POLICY_MARKER".into(),
+                        value: marker.to_str().unwrap().into(),
+                    },
+                    EnvironmentVariable {
+                        name: "EMPTY_VALUE".into(),
+                        value: String::new(),
+                    },
+                    EnvironmentVariable {
+                        name: "EXACT_VALUE".into(),
+                        value: "= literal $HOME;λ".into(),
+                    },
+                ];
+                let mut application =
+                    Application::from_config(Config::default(), None, LaunchPlan::default())
+                        .unwrap();
+                application.pending.clear();
+                let native_id = WindowId::dummy();
+                let mut window = App::new_headless(Config::default()).unwrap();
+                window.tabs = Some(crate::tabs::TabManager::new(
+                    80,
+                    24,
+                    Config::default().shell,
+                    100,
+                    1024 * 1024,
+                ));
+                application.windows.insert(native_id, window);
+                application.control_window_ids.insert(native_id, 7);
+                application.window_order.push(native_id);
+                let request_id = "a".repeat(32);
+                if window_launch {
+                    let index = application
+                        .prepare_control_launch_window(
+                            7,
+                            executable.to_str().unwrap(),
+                            &args,
+                            directory.path().to_str(),
+                            None,
+                            &environment,
+                            &policy,
+                        )
+                        .unwrap();
+                    let mut prepared = application.pending.remove(index);
+                    assert_eq!(prepared.launch.tabs[0].environment_policy, policy);
+                    prepared.init_tabs().unwrap();
+                    // Native creation itself remains deferred; exercise its real
+                    // prepared startup plan, then the same completion registrar.
+                    application.windows.insert(native_id, prepared);
+                    application.control_launches.prepare(&request_id).unwrap();
+                    application.record_control_launch(&request_id, 7, 0);
+                } else {
+                    application
+                        .launch_control_tab(
+                            &request_id,
+                            7,
+                            executable.to_str().unwrap(),
+                            &args,
+                            directory.path().to_str(),
+                            None,
+                            &environment,
+                            &policy,
+                        )
+                        .unwrap();
+                }
+                let deadline = Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    application
+                        .windows
+                        .get_mut(&native_id)
+                        .unwrap()
+                        .process_pty_events();
+                    if let (LaunchState::Exited { exit_code, success }, _) =
+                        application.control_launches.query(&request_id).unwrap()
+                    {
+                        assert_eq!(exit_code, 0, "controlled environment probe failed");
+                        assert!(success);
+                        break;
+                    }
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                assert_eq!(
+                    std::fs::read(marker).unwrap(),
+                    b"environment policy applied"
+                );
+            }
+        }
+    }
     use super::*;
 
     #[test]
@@ -4394,6 +4535,7 @@ mod tests {
             args: vec!["%s".into(), "exact".into()],
             working_directory: Some("/tmp".into()),
             title: Some("build".into()),
+            environment_policy: Default::default(),
             environment: vec![crate::control::protocol::EnvironmentVariable {
                 name: "BUILD_MODE".into(),
                 value: "exact".into(),
@@ -4415,6 +4557,7 @@ mod tests {
                 args: vec!["%s".into(), "different".into()],
                 working_directory: Some("/tmp".into()),
                 title: Some("build".into()),
+                environment_policy: Default::default(),
                 environment: vec![crate::control::protocol::EnvironmentVariable {
                     name: "BUILD_MODE".into(),
                     value: "exact".into(),
@@ -4430,6 +4573,10 @@ mod tests {
             args: vec!["%s".into(), "exact".into()],
             working_directory: Some("/tmp".into()),
             title: Some("window build".into()),
+            environment_policy: termeric_core::pty::EnvironmentPolicy {
+                clear: false,
+                unset: vec!["REMOVE_Z".into(), "REMOVE_A".into()],
+            },
             environment: vec![
                 crate::control::protocol::EnvironmentVariable {
                     name: "WINDOW_Z".into(),
@@ -4463,6 +4610,10 @@ mod tests {
             args: vec!["%s".into(), "exact".into()],
             working_directory: Some("/tmp".into()),
             title: Some("window build".into()),
+            environment_policy: termeric_core::pty::EnvironmentPolicy {
+                clear: false,
+                unset: vec!["REMOVE_A".into(), "REMOVE_Z".into()],
+            },
             environment: vec![
                 crate::control::protocol::EnvironmentVariable {
                     name: "WINDOW_A".into(),
@@ -4491,6 +4642,10 @@ mod tests {
             args: vec!["%s".into(), "exact".into()],
             working_directory: Some("/tmp".into()),
             title: Some("window build".into()),
+            environment_policy: termeric_core::pty::EnvironmentPolicy {
+                clear: false,
+                unset: vec!["REMOVE_A".into(), "REMOVE_Z".into()],
+            },
             environment: vec![
                 crate::control::protocol::EnvironmentVariable {
                     name: "WINDOW_Z".into(),
@@ -4507,6 +4662,20 @@ mod tests {
             cache.replay(&changed_window_launch_request),
             Some(Err(error)) if error.contains("different action")
         ));
+
+        let mut changed_policy = window_launch_request.clone();
+        if let Request::LaunchWindow {
+            environment_policy, ..
+        } = &mut changed_policy
+        {
+            *environment_policy = termeric_core::pty::EnvironmentPolicy {
+                clear: true,
+                unset: vec![],
+            };
+        }
+        assert!(
+            matches!(cache.replay(&changed_policy), Some(Err(error)) if error.contains("different action"))
+        );
 
         let terminal_failure = Request::CreateTab {
             request_id: "1".repeat(32),
@@ -4688,6 +4857,7 @@ mod tests {
                 None,
                 Some("wrong target"),
                 &[],
+                &Default::default(),
             )
             .unwrap_err();
         assert!(missing.contains("does not exist"), "{missing}");
@@ -4709,6 +4879,7 @@ mod tests {
                 None,
                 Some("targeted"),
                 &[],
+                &Default::default(),
             )
             .unwrap();
         assert!(matches!(
@@ -4763,6 +4934,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                &Default::default(),
             )
             .unwrap();
         let deadline = Instant::now() + std::time::Duration::from_secs(2);
@@ -4858,6 +5030,7 @@ mod tests {
                 Some("/definitely/missing/termeric-launch-window-cwd"),
                 None,
                 &[],
+                &Default::default(),
             )
             .unwrap_err();
         assert!(missing_cwd.contains("pass an existing absolute directory"));
@@ -4886,6 +5059,7 @@ mod tests {
                         value: "= exact $HOME;🙂".into(),
                     },
                 ],
+                &Default::default(),
             )
             .unwrap();
         assert_eq!(result_index, 0);
@@ -4969,6 +5143,7 @@ mod tests {
                 temp.path().to_str(),
                 None,
                 &private_environment,
+                &Default::default(),
             )
             .unwrap();
         let mut prepared = application.pending.remove(result_index);
@@ -4982,13 +5157,29 @@ mod tests {
 
         application.windows.get_mut(&native_id).unwrap().should_exit = true;
         let error = application
-            .prepare_control_launch_window(7, "/bin/true", &[], temp.path().to_str(), None, &[])
+            .prepare_control_launch_window(
+                7,
+                "/bin/true",
+                &[],
+                temp.path().to_str(),
+                None,
+                &[],
+                &Default::default(),
+            )
             .unwrap_err();
         assert!(error.contains("closing"));
         assert!(application.pending.is_empty());
 
         let error = application
-            .prepare_control_launch_window(8, "/bin/true", &[], temp.path().to_str(), None, &[])
+            .prepare_control_launch_window(
+                8,
+                "/bin/true",
+                &[],
+                temp.path().to_str(),
+                None,
+                &[],
+                &Default::default(),
+            )
             .unwrap_err();
         assert!(error.contains("does not exist"));
         assert!(application.pending.is_empty());
@@ -5141,7 +5332,14 @@ mod tests {
         );
         let domain_tab_count = window.tabs.as_ref().unwrap().count();
         let local_launch = window
-            .launch_control_tab("/bin/true", &[], None, Some("must not launch"), &[])
+            .launch_control_tab(
+                "/bin/true",
+                &[],
+                None,
+                Some("must not launch"),
+                &[],
+                &Default::default(),
+            )
             .unwrap_err();
         assert!(local_launch.contains("domain spawn"), "{local_launch}");
         assert_eq!(window.tabs.as_ref().unwrap().count(), domain_tab_count);

@@ -1,5 +1,18 @@
 # Testing Termeric
 
+## Child-local launch environment policies
+
+The workspace suite checks `--env`, `--unset-env`, and `--clear-env` through
+CLI parsing, authenticated launch frames, combined entry/byte budgets, strict
+policy decoding, canonical replay, PTY creation, headless existing-tab launch,
+and fresh-window startup plans. Isolated copies of the Rust test executable
+verify the actual child's unset PATH, exact/empty synthetic values, selected
+cwd, retained terminal identity, and cleared-map minimum. The tests check that
+parent state and subsequently inherited siblings remain unchanged and that
+portable exit tracking still works. Fixtures print no inherited environment
+values or provider credentials. Native window creation/visual acceptance and
+authenticated providers remain outside these tests and deferred.
+
 ## Running-GUI child wait CLI
 
 `cargo test -p termeric --test gui_launch_wait --locked` runs the actual CLI

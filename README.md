@@ -307,7 +307,9 @@ WINDOW`, and `termeric control split-pane PROCESS WINDOW TAB PANE DIRECTION`.
 `termeric control launch-tab PROCESS WINDOW [options] -- PROGRAM [ARG ...]`
 adds direct, bounded, exact-argv launch into an ordinary local tab with optional
 absolute cwd, initial title, and repeatable non-secret `--env NAME=VALUE`
-overlays; it performs no implicit shell evaluation and returns the new stable
+overlays, explicit `--unset-env NAME` removal, or `--clear-env` inheritance
+clearing that retains the required terminal identity; it performs no implicit
+shell evaluation and returns the new stable
 tab ID.
 `termeric control launch-window PROCESS SOURCE_WINDOW [options] -- PROGRAM
 [ARG ...]` creates a fresh native window from the exact source configuration,

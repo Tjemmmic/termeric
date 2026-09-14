@@ -257,6 +257,34 @@ impl Tab {
         tab_type: Option<TabType>,
         extra_env: HashMap<String, String>,
     ) -> anyhow::Result<Self> {
+        Self::new_with_command_environment_policy(
+            id,
+            geometry,
+            program,
+            args,
+            working_dir,
+            title,
+            scrollback_lines,
+            scrollback_bytes,
+            tab_type,
+            extra_env,
+            &termeric_core::pty::EnvironmentPolicy::default(),
+        )
+    }
+
+    pub(crate) fn new_with_command_environment_policy(
+        id: usize,
+        geometry: TerminalGeometry,
+        program: &str,
+        args: &[String],
+        working_dir: Option<&str>,
+        title: Option<&str>,
+        scrollback_lines: usize,
+        scrollback_bytes: usize,
+        tab_type: Option<TabType>,
+        extra_env: HashMap<String, String>,
+        policy: &termeric_core::pty::EnvironmentPolicy,
+    ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
         terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
@@ -270,7 +298,13 @@ impl Tab {
             env.push((key, value));
         }
 
-        let pty = Pty::new_with_env_and_size(geometry.pty_size(), Some(program), args, &env)?;
+        let pty = Pty::new_with_environment_policy(
+            geometry.pty_size(),
+            Some(program),
+            args,
+            &env,
+            policy,
+        )?;
         terminal.set_term_name(pty.term_name());
         let (handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread_with_waker(reader, crate::app::pty_event_waker());

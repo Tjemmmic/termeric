@@ -472,6 +472,7 @@ pub fn launch_window(
     working_directory: Option<String>,
     title: Option<String>,
     environment: Vec<protocol::EnvironmentVariable>,
+    environment_policy: termeric_core::pty::EnvironmentPolicy,
     request_id: Option<String>,
     json: bool,
 ) -> anyhow::Result<String> {
@@ -491,6 +492,7 @@ pub fn launch_window(
         working_directory,
         title,
         environment,
+        environment_policy,
     };
     request_frame.canonicalize();
     request_frame.validate().map_err(anyhow::Error::msg)?;
@@ -608,6 +610,7 @@ pub fn launch_tab(
     working_directory: Option<String>,
     title: Option<String>,
     environment: Vec<protocol::EnvironmentVariable>,
+    environment_policy: termeric_core::pty::EnvironmentPolicy,
     request_id: Option<String>,
     json: bool,
 ) -> anyhow::Result<String> {
@@ -627,6 +630,7 @@ pub fn launch_tab(
         working_directory,
         title,
         environment,
+        environment_policy,
     };
     request_frame.canonicalize();
     request_frame.validate().map_err(anyhow::Error::msg)?;

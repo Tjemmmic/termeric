@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -75,6 +75,7 @@ pub enum Request {
         working_directory: Option<String>,
         title: Option<String>,
         environment: Vec<EnvironmentVariable>,
+        environment_policy: termeric_core::pty::EnvironmentPolicy,
     },
     CreateTab {
         request_id: String,
@@ -88,6 +89,7 @@ pub enum Request {
         working_directory: Option<String>,
         title: Option<String>,
         environment: Vec<EnvironmentVariable>,
+        environment_policy: termeric_core::pty::EnvironmentPolicy,
     },
     SplitPane {
         request_id: String,
@@ -532,13 +534,21 @@ pub enum ServerFrame {
 
 impl Request {
     pub fn canonicalize(&mut self) {
-        let environment = match self {
-            Self::LaunchWindow { environment, .. } | Self::LaunchTab { environment, .. } => {
-                environment
+        let (environment, environment_policy) = match self {
+            Self::LaunchWindow {
+                environment,
+                environment_policy,
+                ..
             }
+            | Self::LaunchTab {
+                environment,
+                environment_policy,
+                ..
+            } => (environment, environment_policy),
             _ => return,
         };
         environment.sort_by(|left, right| left.name.cmp(&right.name));
+        environment_policy.unset.sort();
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -637,6 +647,7 @@ impl Request {
                 working_directory,
                 title,
                 environment,
+                environment_policy,
             } => {
                 if !valid_request_id(request_id) {
                     return Err(
@@ -652,6 +663,7 @@ impl Request {
                     working_directory.as_deref(),
                     title.as_deref(),
                     environment,
+                    environment_policy,
                 )
             }
             Self::LaunchWindow {
@@ -662,6 +674,7 @@ impl Request {
                 working_directory,
                 title,
                 environment,
+                environment_policy,
             } => {
                 if !valid_request_id(request_id) {
                     return Err(
@@ -677,6 +690,7 @@ impl Request {
                     working_directory.as_deref(),
                     title.as_deref(),
                     environment,
+                    environment_policy,
                 )
             }
             Self::SplitPane {
@@ -852,6 +866,7 @@ fn validate_control_launch(
     working_directory: Option<&str>,
     title: Option<&str>,
     environment: &[EnvironmentVariable],
+    environment_policy: &termeric_core::pty::EnvironmentPolicy,
 ) -> Result<(), String> {
     if program.is_empty() || program.chars().any(unsafe_control_metadata_character) {
         return Err(
@@ -894,18 +909,30 @@ fn validate_control_launch(
             "GUI control launch title must be nonempty UTF-8 of at most {MAX_CONTROL_LAUNCH_TITLE_BYTES} bytes without control or bidirectional formatting text"
         ));
     }
-    validate_control_launch_environment(environment)?;
+    validate_control_launch_environment(environment, environment_policy)?;
     Ok(())
 }
 
-fn validate_control_launch_environment(environment: &[EnvironmentVariable]) -> Result<(), String> {
-    if environment.len() > MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES {
+fn validate_control_launch_environment(
+    environment: &[EnvironmentVariable],
+    policy: &termeric_core::pty::EnvironmentPolicy,
+) -> Result<(), String> {
+    if environment.len().saturating_add(policy.unset.len()) > MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES
+    {
         return Err(format!(
             "GUI control launch environment is limited to {MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES} entries"
         ));
     }
     let mut names = HashSet::with_capacity(environment.len());
+    policy.validate().map_err(str::to_string)?;
     let mut total_bytes = 0usize;
+    for name in &policy.unset {
+        if name.len() > MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES {
+            return Err("GUI control launch environment removal name is too long".into());
+        }
+        names.insert(name.as_str());
+        total_bytes = total_bytes.saturating_add(name.len());
+    }
     for entry in environment {
         let mut bytes = entry.name.bytes();
         let valid_name = bytes
@@ -1187,6 +1214,118 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     #[test]
+    fn launch_environment_policy_is_bounded_unambiguous_and_strict() {
+        use super::*;
+        use termeric_core::pty::EnvironmentPolicy;
+        let clear = EnvironmentPolicy {
+            clear: true,
+            unset: vec![],
+        };
+        let assignment = vec![EnvironmentVariable {
+            name: "BUILD_VALUE".into(),
+            value: String::new(),
+        }];
+        validate_control_launch_environment(&assignment, &clear).unwrap();
+        for unset in [
+            vec!["PATH".into(), "LANG".into()],
+            (0..MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES)
+                .map(|index| format!("VALUE_{index}"))
+                .collect(),
+        ] {
+            validate_control_launch_environment(
+                &[],
+                &EnvironmentPolicy {
+                    clear: false,
+                    unset,
+                },
+            )
+            .unwrap();
+        }
+        for policy in [
+            EnvironmentPolicy {
+                clear: true,
+                unset: vec!["PATH".into()],
+            },
+            EnvironmentPolicy {
+                clear: false,
+                unset: vec!["PATH".into(), "PATH".into()],
+            },
+            EnvironmentPolicy {
+                clear: false,
+                unset: vec!["BUILD_VALUE".into()],
+            },
+            EnvironmentPolicy {
+                clear: false,
+                unset: vec!["X".repeat(MAX_CONTROL_LAUNCH_ENVIRONMENT_NAME_BYTES + 1)],
+            },
+            EnvironmentPolicy {
+                clear: false,
+                unset: (0..MAX_CONTROL_LAUNCH_ENVIRONMENT_ENTRIES)
+                    .map(|index| format!("V_{index}"))
+                    .collect(),
+            },
+        ] {
+            assert!(validate_control_launch_environment(&assignment, &policy).is_err());
+        }
+        for name in [
+            "",
+            "1BAD",
+            "A=B",
+            "A\0B",
+            "λ",
+            "TERM",
+            "COLORTERM",
+            "TERMINFO",
+            "TERMINFO_DIRS",
+            "TERM_PROGRAM",
+            "TERM_PROGRAM_VERSION",
+            "PWD",
+            "SHELL",
+        ] {
+            assert!(
+                validate_control_launch_environment(
+                    &[],
+                    &EnvironmentPolicy {
+                        clear: false,
+                        unset: vec![name.into()]
+                    }
+                )
+                .is_err()
+            );
+        }
+        let mut budget = MAX_CONTROL_LAUNCH_ENVIRONMENT_BYTES;
+        let mut assignments = Vec::new();
+        while budget > 0 {
+            let name = format!("K{:03}", assignments.len());
+            let bytes = (budget - name.len()).min(MAX_CONTROL_LAUNCH_ENVIRONMENT_VALUE_BYTES);
+            budget -= name.len() + bytes;
+            assignments.push(EnvironmentVariable {
+                name,
+                value: "x".repeat(bytes),
+            });
+        }
+        validate_control_launch_environment(&assignments, &Default::default()).unwrap();
+        assert!(
+            validate_control_launch_environment(
+                &assignments,
+                &EnvironmentPolicy {
+                    clear: false,
+                    unset: vec!["MISSING_FROM_SET".into()]
+                }
+            )
+            .unwrap_err()
+            .contains("bytes")
+        );
+        for wire in [
+            r#"{"clear":true,"unset":[],"extra":true}"#,
+            r#"{"clear":"true","unset":[]}"#,
+            r#"{"clear":true}"#,
+        ] {
+            assert!(serde_json::from_str::<EnvironmentPolicy>(wire).is_err());
+        }
+    }
+
+    #[test]
     fn launch_status_is_read_only_strict_and_preserves_portable_results() {
         use super::*;
         let request = Request::LaunchStatus {
@@ -1426,6 +1565,7 @@ mod tests {
             ],
             working_directory: Some("/tmp/launch space".into()),
             title: Some("Exact launch 🙂".into()),
+            environment_policy: Default::default(),
             environment: vec![EnvironmentVariable {
                 name: "EXACT_VALUE".into(),
                 value: "= two words $HOME;🙂".into(),
@@ -1458,6 +1598,7 @@ mod tests {
             args,
             working_directory,
             title,
+            environment_policy: Default::default(),
             environment: Vec::new(),
         };
         assert!(invalid("".into(), vec![], None, None).validate().is_err());
@@ -1533,6 +1674,7 @@ mod tests {
             args: vec!["".into(), "two words".into(), "$HOME;🙂".into()],
             working_directory: Some("/tmp/launch space".into()),
             title: Some("Exact window 🙂".into()),
+            environment_policy: Default::default(),
             environment: vec![EnvironmentVariable {
                 name: "EMPTY_VALUE".into(),
                 value: String::new(),
@@ -1574,6 +1716,7 @@ mod tests {
                 args: Vec::new(),
                 working_directory: None,
                 title: None,
+                environment_policy: Default::default(),
                 environment: Vec::new(),
             }
             .validate()
@@ -1587,6 +1730,7 @@ mod tests {
                 args: vec!["x".into(); MAX_CONTROL_LAUNCH_ARGS + 1],
                 working_directory: None,
                 title: None,
+                environment_policy: Default::default(),
                 environment: Vec::new(),
             }
             .validate()
@@ -1604,6 +1748,7 @@ mod tests {
             working_directory: None,
             title: None,
             environment,
+            environment_policy: Default::default(),
         };
         request(vec![
             EnvironmentVariable {
@@ -1719,6 +1864,7 @@ mod tests {
             args: Vec::new(),
             working_directory: None,
             title: None,
+            environment_policy: Default::default(),
             environment: vec![
                 EnvironmentVariable {
                     name: "Z_VALUE".into(),

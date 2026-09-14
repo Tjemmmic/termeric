@@ -8,6 +8,15 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- GUI control protocol v17 adds repeatable `--unset-env NAME` and `--clear-env`
+  for both direct tab and fresh-window launches. Child-local builder policies
+  preserve terminal identity and literal overlays without modifying the GUI or
+  siblings. Combined budgets, reserved names, duplicate/conflict rejection,
+  strict wire decoding, and canonical replay protect the existing boundaries.
+  Cleared environments still include host terminal/cwd metadata and Unix
+  portable-pty's `SHELL`; explicit `SHELL` removal fails instead of being ignored.
+  Policies are one-shot, not persisted workspace or secret-injection state.
+
 - `control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]` adds
   client-side waiting and portable child exit-code propagation over existing
   GUI protocol v16. Short, deadline-bound status exchanges, a 250 ms poll delay,

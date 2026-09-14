@@ -903,6 +903,10 @@ mod tests {
             args: vec!["%s".into(), "$HOME;🙂".into()],
             working_directory: Some("/tmp".into()),
             title: Some("exact window".into()),
+            environment_policy: termeric_core::pty::EnvironmentPolicy {
+                clear: true,
+                unset: vec![],
+            },
             environment: vec![protocol::EnvironmentVariable {
                 name: "WINDOW_MODE".into(),
                 value: "direct".into(),
@@ -997,6 +1001,10 @@ mod tests {
             args: vec!["%s".into(), "$HOME;🙂".into()],
             working_directory: Some("/tmp".into()),
             title: Some("exact".into()),
+            environment_policy: termeric_core::pty::EnvironmentPolicy {
+                clear: false,
+                unset: vec!["PATH".into()],
+            },
             environment: vec![protocol::EnvironmentVariable {
                 name: "TAB_MODE".into(),
                 value: "direct".into(),

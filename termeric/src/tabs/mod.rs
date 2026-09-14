@@ -260,10 +260,31 @@ impl TabManager {
         tab_type: Option<TabType>,
         env: HashMap<String, String>,
     ) -> anyhow::Result<usize> {
+        self.new_tab_with_command_environment_policy(
+            program,
+            args,
+            working_dir,
+            title,
+            tab_type,
+            env,
+            &termeric_core::pty::EnvironmentPolicy::default(),
+        )
+    }
+
+    pub(crate) fn new_tab_with_command_environment_policy(
+        &mut self,
+        program: &str,
+        args: &[String],
+        working_dir: Option<&str>,
+        title: Option<&str>,
+        tab_type: Option<TabType>,
+        env: HashMap<String, String>,
+        policy: &termeric_core::pty::EnvironmentPolicy,
+    ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
 
-        let mut tab = Tab::new_with_command_geometry(
+        let mut tab = Tab::new_with_command_environment_policy(
             id,
             self.geometry,
             program,
@@ -274,6 +295,7 @@ impl TabManager {
             self.scrollback_bytes,
             tab_type,
             env,
+            policy,
         )?;
         tab.set_split_shell_config(self.shell.clone());
         tab.set_screen_checksum_reporting(self.screen_checksum_reporting);

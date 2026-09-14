@@ -212,13 +212,14 @@ impl App {
                     self.tabs
                         .as_mut()
                         .context("tab manager was lost during startup")?
-                        .new_tab_with_command(
+                        .new_tab_with_command_environment_policy(
                             program,
                             args,
                             cwd.as_deref(),
                             spec.title.as_deref(),
                             None,
                             spec.environment.clone(),
+                            &spec.environment_policy,
                         )?;
                 }
                 crate::cli::LaunchTarget::TerminalProfile { name } => {

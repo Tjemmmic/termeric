@@ -5,10 +5,12 @@
 
 mod capabilities;
 mod child;
+mod environment;
 mod event;
 
 pub use capabilities::{COMPATIBILITY_TERM, TERMERIC_TERM};
 pub use child::{ChildExitStatus, ChildObservation, ChildObserver};
+pub use environment::{EnvironmentPolicy, terminal_identity_variable};
 pub use event::PtyEvent;
 pub use portable_pty::PtySize;
 
@@ -99,6 +101,26 @@ impl Pty {
         args: &[String],
         env: &[(String, String)],
     ) -> Result<Self, PtyError> {
+        Self::new_with_environment_policy(size, program, args, env, &EnvironmentPolicy::default())
+    }
+
+    /// Clear/remove inherited values before overlays and host terminal identity.
+    /// Unix portable-pty still supplies SHELL; this is not a zero-variable sandbox.
+    pub fn new_with_environment_policy(
+        size: PtySize,
+        program: Option<&str>,
+        args: &[String],
+        env: &[(String, String)],
+        policy: &EnvironmentPolicy,
+    ) -> Result<Self, PtyError> {
+        policy
+            .validate()
+            .map_err(|error| PtyError::Creation(error.into()))?;
+        if env.iter().any(|(key, _)| policy.unset.contains(key)) {
+            return Err(PtyError::Creation(
+                "Environment variable cannot be both set and removed".into(),
+            ));
+        }
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(size)?;
@@ -110,6 +132,12 @@ impl Pty {
         };
         if !args.is_empty() {
             cmd.args(args);
+        }
+        if policy.clear {
+            cmd.env_clear();
+        }
+        for name in &policy.unset {
+            cmd.env_remove(name);
         }
 
         // Advertise the dedicated identity only when its compiled terminfo
@@ -128,15 +156,7 @@ impl Pty {
 
         // Set additional environment variables (e.g., PWD for session restore)
         for (key, value) in env {
-            if !matches!(
-                key.as_str(),
-                "TERM"
-                    | "COLORTERM"
-                    | "TERMINFO"
-                    | "TERMINFO_DIRS"
-                    | "TERM_PROGRAM"
-                    | "TERM_PROGRAM_VERSION"
-            ) {
+            if !terminal_identity_variable(key) {
                 cmd.env(key, value);
             }
         }
@@ -386,6 +406,133 @@ mod tests {
     use std::io::Cursor;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    /// Runs only when explicitly selected in a child PTY. Reports no inherited
+    /// values or credentials; the normal workspace invocation is a no-op.
+    #[cfg(unix)]
+    #[test]
+    fn environment_policy_child_probe() {
+        let Ok(mode) = std::env::var("TERMERIC_POLICY_PROBE") else {
+            return;
+        };
+        assert_eq!(std::env::var("EMPTY_VALUE").unwrap(), "");
+        assert_eq!(std::env::var("EXACT_VALUE").unwrap(), "= two words $HOME;λ");
+        assert_eq!(std::env::var("TERM_PROGRAM").unwrap(), "Termeric");
+        assert_eq!(std::env::var("COLORTERM").unwrap(), "truecolor");
+        assert!(std::env::var_os("SHELL").is_some());
+        assert_eq!(
+            std::env::var_os("PWD").unwrap(),
+            std::env::current_dir().unwrap().as_os_str()
+        );
+        if mode == "inherit" {
+            assert_eq!(
+                std::env::var_os("PATH").is_some(),
+                std::env::var("EXPECTED_PATH_PRESENT").unwrap() == "true"
+            );
+        } else {
+            assert!(std::env::var_os("PATH").is_none());
+        }
+        if mode == "clear" {
+            assert!(
+                std::env::vars_os().all(|(name, _)| name.to_str().is_some_and(|name| {
+                    terminal_identity_variable(name)
+                        || matches!(
+                            name,
+                            "SHELL"
+                                | "PWD"
+                                | "TERMERIC_POLICY_PROBE"
+                                | "EXPECTED_PATH_PRESENT"
+                                | "EMPTY_VALUE"
+                                | "EXACT_VALUE"
+                        )
+                })),
+                "cleared child retained an unexpected variable (names/values withheld)"
+            );
+        }
+        println!("ENVIRONMENT_POLICY_PROBE_OK");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn environment_policy_reaches_real_child_without_changing_parent_or_siblings() {
+        let original_path = std::env::var_os("PATH");
+        let original_home = std::env::var_os("HOME");
+        let executable = std::env::current_exe().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let args = [
+            "--exact".into(),
+            "pty::tests::environment_policy_child_probe".into(),
+            "--nocapture".into(),
+        ];
+        for (mode, policy) in [
+            ("inherit", EnvironmentPolicy::default()),
+            (
+                "unset",
+                EnvironmentPolicy {
+                    clear: false,
+                    unset: vec!["PATH".into()],
+                },
+            ),
+            (
+                "clear",
+                EnvironmentPolicy {
+                    clear: true,
+                    unset: vec![],
+                },
+            ),
+            ("inherit", EnvironmentPolicy::default()),
+        ] {
+            let env = [
+                ("TERMERIC_POLICY_PROBE".into(), mode.into()),
+                (
+                    "EXPECTED_PATH_PRESENT".into(),
+                    original_path.is_some().to_string(),
+                ),
+                ("PWD".into(), directory.path().to_str().unwrap().into()),
+                ("EMPTY_VALUE".into(), String::new()),
+                ("EXACT_VALUE".into(), "= two words $HOME;λ".into()),
+                ("TERM".into(), "must-not-override-identity".into()),
+            ];
+            let pty = Pty::new_with_environment_policy(
+                default_pty_size(80, 24),
+                executable.to_str(),
+                &args,
+                &env,
+                &policy,
+            )
+            .unwrap();
+            let observer = pty.child_observer();
+            let (_handle, reader) = pty.take_reader();
+            let rx = spawn_reader_thread(reader);
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut output = Vec::new();
+            loop {
+                let timeout = deadline.saturating_duration_since(std::time::Instant::now());
+                match rx
+                    .recv_timeout(timeout)
+                    .expect("environment child did not finish")
+                {
+                    PtyEvent::Output(bytes) => {
+                        output.extend(bytes);
+                        assert!(output.len() < 16384);
+                    }
+                    PtyEvent::Closed | PtyEvent::Error(_) => break,
+                }
+            }
+            while observer.poll().unwrap().exit.is_none() {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(
+                observer.poll().unwrap().exit.unwrap().success,
+                "environment fixture failed: {}",
+                String::from_utf8_lossy(&output)
+            );
+            assert!(String::from_utf8_lossy(&output).contains("ENVIRONMENT_POLICY_PROBE_OK"));
+            assert_eq!(std::env::var_os("PATH"), original_path);
+            assert_eq!(std::env::var_os("HOME"), original_home);
+        }
+    }
 
     struct CountingByteReader {
         reads: Arc<AtomicUsize>,
