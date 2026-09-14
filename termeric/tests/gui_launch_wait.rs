@@ -45,6 +45,16 @@ impl Fixture {
     }
 
     fn run(&self, verb: &str, options: &[&str], serve: impl FnOnce(&Self) + Send) -> Output {
+        self.run_with_input(verb, options, Stdio::null(), serve)
+    }
+
+    fn run_with_input(
+        &self,
+        verb: &str,
+        options: &[&str],
+        input: Stdio,
+        serve: impl FnOnce(&Self) + Send,
+    ) -> Output {
         std::thread::scope(|scope| {
             let server = scope.spawn(|| serve(self));
             let mut child = Command::new(env!("CARGO_BIN_EXE_termeric"))
@@ -62,7 +72,7 @@ impl Fixture {
                 .env("XDG_RUNTIME_DIR", self.root.path())
                 .env_remove("DISPLAY")
                 .env_remove("WAYLAND_DISPLAY")
-                .stdin(Stdio::null())
+                .stdin(input)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -134,6 +144,193 @@ fn acknowledgement(verb: &str, id: &str) -> Value {
     json!({"result": if verb == "launch-tab" { "tab_created" } else { "window_launched" },
         "version": VERSION, "process_id": std::process::id(), "request_id": id,
         "window_id": if verb == "launch-tab" { 7 } else { 8 }, "tab_id": 3})
+}
+
+#[cfg(target_os = "linux")]
+fn input_file(bytes: &[u8]) -> Stdio {
+    use std::io::{Seek, SeekFrom};
+    let mut file = tempfile::tempfile().unwrap();
+    file.write_all(bytes).unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.into()
+}
+
+#[cfg(target_os = "linux")]
+fn input_pipe(bytes: &[u8]) -> (std::fs::File, std::fs::File) {
+    use std::os::fd::FromRawFd;
+    let mut fds = [-1; 2];
+    // SAFETY: two output descriptors are initialized by pipe2.
+    assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+    // SAFETY: each newly created descriptor is adopted exactly once.
+    let (reader, mut writer) = unsafe {
+        (
+            std::fs::File::from_raw_fd(fds[0]),
+            std::fs::File::from_raw_fd(fds[1]),
+        )
+    };
+    assert!(bytes.len() < 4096);
+    writer.write_all(bytes).unwrap();
+    (reader, writer)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_stdin_environment_reaches_both_launch_targets_without_argv_or_output_exposure() {
+    use std::os::fd::AsRawFd;
+    for verb in ["launch-tab", "launch-window"] {
+        for wait in [false, true] {
+            for pipe in [false, true] {
+                let fixture = Fixture::new();
+                let secret = "synthetic-private-not-a-real-credential";
+                let bytes = serde_json::to_vec(
+                    &json!({"PRIVATE_VALUE": secret, "EMPTY": "", "EXACT": "= $literal\n\t☺"}),
+                )
+                .unwrap();
+                let input = if pipe {
+                    let (reader, writer) = input_pipe(&bytes);
+                    drop(writer);
+                    reader.into()
+                } else {
+                    input_file(&bytes)
+                };
+                let mut options = vec![
+                    "--env-stdin",
+                    "--env",
+                    "LITERAL=ok",
+                    "--clear-env",
+                    "--json",
+                    "--request-id",
+                    ID,
+                ];
+                if wait {
+                    options.extend(["--wait", "--timeout", "2"]);
+                }
+                options.extend(["--", "/bin/true", "--env-stdin"]);
+                let output = fixture.run_with_input(verb, &options, input, |fixture| {
+                    let (stream, request) = fixture.read_request();
+                    assert_launch(&request, verb);
+                    assert_eq!(request["request"]["args"], json!(["--env-stdin"]));
+                    let entries = request["request"]["environment"].as_array().unwrap();
+                    assert_eq!(entries.len(), 4);
+                    assert!(entries.contains(&json!({"name": "PRIVATE_VALUE", "value": secret})));
+                    assert!(
+                        entries.contains(&json!({"name": "EXACT", "value": "= $literal\n\t☺"}))
+                    );
+                    assert!(entries.contains(&json!({"name": "EMPTY", "value": ""})));
+                    assert!(entries.contains(&json!({"name": "LITERAL", "value": "ok"})));
+                    assert_eq!(request["request"]["environment_policy"]["clear"], true);
+                    // Inspect the live CLI peer while it awaits our acknowledgement.
+                    // SAFETY: getsockopt writes a bounded ucred record for this live socket.
+                    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+                    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+                    assert_eq!(
+                        unsafe {
+                            libc::getsockopt(
+                                stream.as_raw_fd(),
+                                libc::SOL_SOCKET,
+                                libc::SO_PEERCRED,
+                                (&mut credentials as *mut libc::ucred).cast(),
+                                &mut length,
+                            )
+                        },
+                        0
+                    );
+                    let argv = fs::read(format!("/proc/{}/cmdline", credentials.pid)).unwrap();
+                    assert!(
+                        !argv
+                            .windows(secret.len())
+                            .any(|bytes| bytes == secret.as_bytes())
+                    );
+                    send(stream, acknowledgement(verb, ID));
+                    if wait {
+                        send(
+                            fixture.request(),
+                            response(json!({"status": "exited", "exit_code": 0, "success": true})),
+                        );
+                    }
+                });
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(!String::from_utf8_lossy(&output.stdout).contains(secret));
+                assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+                fixture.no_more_requests();
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_invalid_stdin_environment_is_redacted_and_never_sent() {
+    let marker = "synthetic-private";
+    let mut documents = vec![
+        br#"{"A":"synthetic-private","A":"second"}"#.to_vec(),
+        br#"{"A":123,"synthetic-private":"x"}"#.to_vec(),
+        br#"{"TERM":"synthetic-private"}"#.to_vec(),
+        br#"{"BAD-NAME":"synthetic-private"}"#.to_vec(),
+        br#"{"A":"synthetic-private\u0000"}"#.to_vec(),
+        b"{}synthetic-private".to_vec(),
+        b"{\"A\":\"\xffsynthetic-private\"}".to_vec(),
+    ];
+    documents.push(format!("{{\"A\":\"{marker}{}\"}}", "x".repeat(8192)).into_bytes());
+    documents.push(vec![b'x'; 256 * 1024 + 1]);
+    for verb in ["launch-tab", "launch-window"] {
+        for document in &documents {
+            let fixture = Fixture::new();
+            let output = fixture.run_with_input(
+                verb,
+                &["--env-stdin", "--wait", "--json", "--", "/bin/true"],
+                input_file(document),
+                |_| {},
+            );
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(marker));
+            fixture.no_more_requests();
+        }
+        for flags in [
+            vec!["--env-stdin", "--env-stdin"],
+            vec!["--env-stdin", "--env", "A=literal"],
+            vec!["--env-stdin", "--unset-env", "A"],
+        ] {
+            let fixture = Fixture::new();
+            let mut options = flags;
+            options.extend(["--", "/bin/true"]);
+            let output = fixture.run_with_input(
+                verb,
+                &options,
+                input_file(br#"{"A":"synthetic-private"}"#),
+                |_| {},
+            );
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(marker));
+            fixture.no_more_requests();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn executable_stdin_environment_requires_eof_and_times_out_before_contact() {
+    let fixture = Fixture::new();
+    let (reader, _writer) = input_pipe(b"{}");
+    let start = Instant::now();
+    let output = fixture.run_with_input(
+        "launch-tab",
+        &["--env-stdin", "--wait", "--timeout", "1", "--", "/bin/true"],
+        reader.into(),
+        |_| {},
+    );
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("input timed out before launch"));
+    assert!(start.elapsed() >= Duration::from_secs(5));
+    assert!(start.elapsed() < Duration::from_secs(7));
+    fixture.no_more_requests();
 }
 
 fn assert_launch(request: &Value, verb: &str) {

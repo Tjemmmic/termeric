@@ -8,6 +8,14 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- Linux controlled tab/window launches accept `--env-stdin` for a bounded,
+  EOF-terminated JSON environment object from a redirected pipe or regular file,
+  including launch `--wait`. A five-second input deadline, 256-KiB encoded cap,
+  strict duplicate/type parsing, shared environment budgets, redacted errors and
+  Debug values protect the input boundary before endpoint contact. Values need
+  not appear in Termeric argv/history, but remain in local request/replay/child
+  memory; this is not a secret vault or secure-erasure guarantee.
+
 - `control launch-tab` and `launch-window` accept `--wait` with optional
   `--timeout SECONDS`, returning one final child status and its portable exit
   code. Launch and observation share a pinned authenticated endpoint and

@@ -172,11 +172,21 @@ pub enum SplitDirection {
     Vertical,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentVariable {
     pub name: String,
     pub value: String,
+}
+
+impl std::fmt::Debug for EnvironmentVariable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EnvironmentVariable")
+            .field("name", &"[redacted]")
+            .field("value", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -913,7 +923,7 @@ fn validate_control_launch(
     Ok(())
 }
 
-fn validate_control_launch_environment(
+pub(super) fn validate_control_launch_environment(
     environment: &[EnvironmentVariable],
     policy: &termeric_core::pty::EnvironmentPolicy,
 ) -> Result<(), String> {

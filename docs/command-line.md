@@ -70,9 +70,9 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `control launch-status PROCESS REQUEST_ID [--json]` | Query the initial child of a retained exact command launch, including its portable exit result after terminal cleanup. The CLI status reports query success; inspect JSON for the child result. |
 | `control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]` | Wait for a retained initial child using short read-only queries. Return its portable code (0–255; larger codes map to 1). An optional 1–86400-second timeout stops only the waiter. Errors produce stderr and no result on stdout. |
 | `control new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]` | Create a native window from an exact running source window; an explicit request ID safely retries an ambiguous recent result. |
-| `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays as the initial tab of a new source-configured native window and return both stable IDs. |
+| `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays as the initial tab of a new source-configured native window and return both stable IDs. |
 | `control new-tab PROCESS WINDOW [--request-id ID] [--json]` | Create a local shell tab in an exact running window and return its stable ID. |
-| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays directly in a new ordinary local tab and return its stable ID. |
+| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays directly in a new ordinary local tab and return its stable ID. |
 | `control split-pane PROCESS WINDOW TAB PANE horizontal\|vertical [--request-id ID] [--json]` | Split an exact local pane and return the new stable pane ID. |
 | `control focus-window PROCESS WINDOW [--request-id ID] [--json]` | Request focus for an exact native window on supported backends; Wayland fails explicitly. |
 | `control select-tab PROCESS WINDOW TAB [--request-id ID] [--json]` | Select an exact stable tab without activating its native window. |
@@ -135,7 +135,15 @@ boundaries without invoking a shell, optionally applies an existing absolute
 cwd and initial title, activates the tab, and returns its stable ID. It inherits
 the GUI process environment by default; `--unset-env NAME` removes inherited
 variables, while `--clear-env` starts from Termeric's documented minimum instead.
-Each repeatable `--env NAME=VALUE` overlay is applied exactly afterward. These
+Each repeatable `--env NAME=VALUE` overlay is applied exactly afterward. Linux
+`--env-stdin` additionally reads one string-to-string JSON object from a
+redirected regular file or pipe (256 KiB encoded, EOF within five seconds)
+before endpoint contact. It merges under the same budgets and conflict rules,
+without literal values in Termeric argv/history or input-error diagnostics;
+local request/replay/child memory still contains the values. This preparation
+deadline precedes any launch/wait `--timeout`. See the
+[input exposure contract](gui-control.md#environment-input-without-literal-values-in-argv).
+These
 options affect only this child. An active live-domain target is rejected; use `domain spawn`
 for that authority. Literal values are not a secret-injection mechanism because
 shell history and process-argument inspection may expose them. `termeric control

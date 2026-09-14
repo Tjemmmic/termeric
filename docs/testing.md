@@ -1,5 +1,26 @@
 # Testing Termeric
 
+## Stdin environment overlays
+
+The provider-free workspace suite exercises Linux `--env-stdin` through the
+actual CLI against private fake GUI sockets for both tab/window launch and
+wait/no-wait modes. Pipe and private regular-file inputs carry only synthetic
+values. The fixture inspects the live CLI peer's `/proc/PID/cmdline` while it
+awaits acknowledgement, checks exact merged environment and literal child
+arguments, and rejects value disclosure in CLI output. Invalid types, duplicate
+keys/flags, names, UTF-8, NUL, trailing data, set/unset collisions and oversized
+input fail without endpoint contact. A held-open pipe verifies the five-second
+input timeout before discovery, independent of the later wait timeout.
+
+Pure tests cover encoded/decoded/entry/name/value budgets, exact empty/control/
+Unicode string preservation, redacted Debug output and atomic merge failure.
+Linux descriptor fixtures cover EOF, nonblocking pipe reads without changing
+parent open flags, regular-file offsets, write-only/directory/socket/device
+refusal, and real private-PTY interactive input refusal. Existing synthetic
+PTY/application environment-policy tests continue to verify actual child-local
+delivery and unchanged sibling/workspace boundaries. No fake endpoint executes
+its requested program; no real GUI, credential or provider is used.
+
 ## Child-local launch environment policies
 
 The workspace suite checks `--env`, `--unset-env`, and `--clear-env` through

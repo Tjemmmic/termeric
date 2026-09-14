@@ -300,6 +300,18 @@ still work. Record source commit, compositor, target IDs, command/result and
 visible behavior. Do not promote the running-GUI control row based only on the
 hermetic tests. See [the control contract](gui-control.md).
 
+For `--env-stdin`, create a private test file containing only the synthetic
+document `{"TERMERIC_TEST_INPUT":"synthetic-only","EMPTY":""}`. Redirect
+that file into each launch target with `--env-stdin`, once with and once without
+`--wait`, launching a local command that checks the synthetic variable and
+returns success without printing its value. Check the visible target and final
+exit status, then try duplicate keys, an unset/set collision and stdin from the
+interactive terminal; these must fail before creating a target. Confirm the
+source GUI environment and a later ordinary tab are unchanged. Do not use a
+real provider credential or program. The five-second stdin collection deadline
+precedes, and is separate from, any launch/wait `--timeout`. See the
+[input and exposure contract](gui-control.md#environment-input-without-literal-values-in-argv).
+
 ### 5. Independent graphics clients on real desktops
 
 On both a real X11 session and a real Wayland session, open Termeric in this

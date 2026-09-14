@@ -150,6 +150,59 @@ profile, plugin, and daemon launches keep their existing behavior. Clearing
 does not remove arguments, change account/filesystem permissions, or make
 literal CLI values secret-safe.
 
+### Environment input without literal values in argv
+
+On Linux, both command launches accept `--env-stdin`, including with `--wait`.
+Supply one EOF-terminated UTF-8 JSON object of string variable names to string
+values through a redirected regular file or pipe:
+
+```bash
+termeric control launch-tab PROCESS WINDOW --env-stdin --wait --json -- /absolute/program < /private/environment.json
+```
+
+The document has the form `{"VARIABLE":"value","EMPTY":""}`. Termeric does
+not expand shell syntax, read dotenv syntax, substitute variables, or send the
+document to the child's terminal input. Values remain exact strings. Use a
+private input file or a trusted producer that does not itself put sensitive
+values into its argv or shell history. Do not paste real secrets into an inline
+`echo`, shell here-document, or a command example.
+
+Raw JSON input is capped at 256 KiB and must reach EOF within five seconds.
+Duplicate keys (including escaped-equivalent names), non-string values,
+invalid UTF-8/JSON, trailing documents, and unsupported stdin types are refused.
+Interactive terminals are rejected before reading. Pipe input uses a separate
+nonblocking open-file description without changing the invoking shell's stdin
+flags; regular files retain the supplied file offset. Blocking regular-file
+I/O is not a real-time guarantee, but the deadline is checked between reads and
+before accepting completion. Named pipes should already be opened by the shell;
+Termeric cannot bound time spent by the shell opening a redirection before the
+CLI starts.
+
+The five-second input deadline is a separate preparation phase. With `--wait`,
+the optional launch/observation `--timeout` starts **after** input is collected
+and validated. No GUI discovery or launch request occurs for failed input.
+Timeout, Ctrl+C, invalid input, or missing EOF cannot send a partial launch.
+
+The parsed variables merge with literal `--env` entries and share all existing
+name/value/64-entry/64-KiB and wire-frame limits with assignments and removals.
+Duplicates across sources and set/remove collisions are errors, not overrides;
+`--clear-env` still controls only the inherited base. No flag means stdin is
+untouched. `--env-stdin` after `--` is a literal child argument. Repeated flags
+are rejected. Explicit replay of an ambiguous launch requires the same ID and
+the same environment document; changed values are a different action.
+
+This avoids values in **Termeric CLI argv and literal command history**, not all
+secret exposure. Values still exist in CLI/GUI memory, authenticated local
+socket frames, the bounded in-memory replay cache, and the child environment.
+Same-user/root inspection, swap/core dumps, a malicious child, and downstream
+printing/logging can expose them. There is no encrypted transport, secure
+erasure, secret store, or sandbox guarantee. The CLI creates no temporary input
+copy, input errors are redacted, and control environment Debug output redacts
+both names and values. Existing workspace/completion/inventory privacy remains
+unchanged; environment overlays are not persisted or inherited by future splits.
+
+Native acceptance remains deferred; tests use synthetic values only.
+
 ```bash
 termeric control launch-tab PROCESS WINDOW --unset-env PYTHONPATH -- /usr/bin/python3 script.py
 termeric control launch-window PROCESS SOURCE_WINDOW --clear-env --cwd /absolute/project --env PATH=/usr/bin:/bin -- /usr/bin/make

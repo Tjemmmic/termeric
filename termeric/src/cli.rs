@@ -654,6 +654,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             if launch.wait {
                 return Ok(ParseOutcome::Control(
                     crate::control::ControlCommand::LaunchAndWait {
+                        env_stdin: launch.env_stdin,
                         process_id,
                         request,
                         request_id: launch.request_id,
@@ -664,6 +665,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             }
             Ok(ParseOutcome::Control(
                 crate::control::ControlCommand::LaunchWindow {
+                    env_stdin: launch.env_stdin,
                     process_id,
                     source_window,
                     program: launch.program,
@@ -708,6 +710,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             if launch.wait {
                 return Ok(ParseOutcome::Control(
                     crate::control::ControlCommand::LaunchAndWait {
+                        env_stdin: launch.env_stdin,
                         process_id,
                         request,
                         request_id: launch.request_id,
@@ -718,6 +721,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             }
             Ok(ParseOutcome::Control(
                 crate::control::ControlCommand::LaunchTab {
+                    env_stdin: launch.env_stdin,
                     process_id,
                     window_id,
                     program: launch.program,
@@ -1022,6 +1026,7 @@ fn parse_control_process_id(value: Option<&OsString>) -> anyhow::Result<u32> {
 }
 
 struct ParsedControlLaunch {
+    env_stdin: bool,
     program: String,
     args: Vec<String>,
     working_directory: Option<String>,
@@ -1044,6 +1049,7 @@ fn parse_control_launch(
     let mut request_id = None;
     let mut json = false;
     let mut environment = Vec::new();
+    let mut env_stdin = false;
     let mut wait = false;
     let mut timeout_seconds = None;
     let mut environment_policy = termeric_core::pty::EnvironmentPolicy::default();
@@ -1054,6 +1060,7 @@ fn parse_control_launch(
         )?;
         match option.as_str() {
             "--" => break index + 1,
+            "--env-stdin" if !env_stdin => env_stdin = true,
             "--wait" if !wait => wait = true,
             "--timeout" if timeout_seconds.is_none() => {
                 index += 1;
@@ -1135,6 +1142,7 @@ fn parse_control_launch(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(ParsedControlLaunch {
+        env_stdin,
         program,
         args,
         working_directory,
@@ -1178,9 +1186,9 @@ Commands for already-running local GUI processes:\n  \
   get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
-  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
+  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
   new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
-  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
+  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
   split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
   focus-window PROCESS WINDOW [--request-id ID] [--json]\n      Request native focus for one exact stable window\n  \
   select-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Select one exact stable tab without focusing its native window\n  \
@@ -2043,6 +2051,20 @@ mod tests {
         }
     }
     #[test]
+    fn stdin_environment_launch_flag_is_available() {
+        for target in ["launch-tab", "launch-window"] {
+            for wait in [false, true] {
+                let mut args = vec!["control", target, "42", "7", "--env-stdin"];
+                if wait {
+                    args.push("--wait");
+                }
+                args.extend(["--", "/bin/true", "--env-stdin"]);
+                assert!(parse(args.into_iter().map(OsString::from)).is_ok());
+            }
+        }
+    }
+
+    #[test]
     fn combined_launch_wait_options_and_child_arguments() {
         for target in ["launch-tab", "launch-window"] {
             let result = parse(
@@ -2065,6 +2087,7 @@ mod tests {
                 .map(OsString::from),
             );
             let ParseOutcome::Control(crate::control::ControlCommand::LaunchAndWait {
+                env_stdin: false,
                 process_id: 42,
                 request,
                 request_id: None,
@@ -2571,6 +2594,7 @@ mod tests {
             )
             .unwrap(),
             ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
+                env_stdin: false,
                 process_id: 42,
                 window_id: 7,
                 program,
@@ -2625,6 +2649,7 @@ mod tests {
             )
             .unwrap(),
             ParseOutcome::Control(crate::control::ControlCommand::LaunchWindow {
+                env_stdin: false,
                 process_id: 42,
                 source_window: 7,
                 program,

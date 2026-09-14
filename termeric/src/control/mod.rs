@@ -2,10 +2,11 @@
 //!
 //! Inventory and bounded terminal-text queries are read-only; typed mutations
 //! are explicit and ID-targeted. Opt-in input accepts typed text only, while
-//! command launches accept bounded exact argv and non-secret environment
+//! command launches accept bounded exact argv and explicit environment
 //! overlays. Environment values stay out of inventory, responses, and logs;
 //! clipboard data and plugin/provider credentials stay hidden.
 
+mod environment_input;
 pub(crate) mod launches;
 pub mod protocol;
 
@@ -21,6 +22,7 @@ mod wait;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlCommand {
     LaunchAndWait {
+        env_stdin: bool,
         process_id: u32,
         // The parser validates a placeholder ID; execution replaces it with
         // this explicit ID or one freshly generated ID before any wire I/O.
@@ -70,6 +72,7 @@ pub enum ControlCommand {
         json: bool,
     },
     LaunchWindow {
+        env_stdin: bool,
         process_id: u32,
         source_window: u64,
         program: String,
@@ -88,6 +91,7 @@ pub enum ControlCommand {
         json: bool,
     },
     LaunchTab {
+        env_stdin: bool,
         process_id: u32,
         window_id: u64,
         program: String,
@@ -211,9 +215,11 @@ pub struct ControlOutput {
     pub exit_code: u8,
 }
 
-pub fn execute(command: ControlCommand) -> anyhow::Result<ControlOutput> {
+pub fn execute(mut command: ControlCommand) -> anyhow::Result<ControlOutput> {
+    environment_input::prepare(&mut command)?;
     #[cfg(unix)]
     if let ControlCommand::LaunchAndWait {
+        env_stdin: _,
         process_id,
         request,
         request_id,
@@ -285,6 +291,7 @@ fn execute_once(command: ControlCommand) -> anyhow::Result<String> {
                 json,
             } => client::new_window(process_id, source_window, request_id, json),
             ControlCommand::LaunchWindow {
+                env_stdin: _,
                 process_id,
                 source_window,
                 program,
@@ -314,6 +321,7 @@ fn execute_once(command: ControlCommand) -> anyhow::Result<String> {
                 json,
             } => client::new_tab(process_id, window_id, request_id, json),
             ControlCommand::LaunchTab {
+                env_stdin: _,
                 process_id,
                 window_id,
                 program,
