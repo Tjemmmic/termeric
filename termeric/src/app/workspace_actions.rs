@@ -3,8 +3,31 @@
 use super::redraw_scheduler::RedrawReason;
 use super::*;
 
-const MAX_COMMAND_REGION_COMMAND_BYTES: usize = 4 * 1024;
+const MAX_COMMAND_REGION_COMMAND_BYTES: usize = crate::harvest::MAX_HARVEST_COMMAND_BYTES;
 const MAX_COMMAND_REGION_OUTPUT_BYTES: usize = 64 * 1024;
+
+fn harvest_explain_context(
+    command: &str,
+    command_truncated: bool,
+    output: &str,
+    output_truncated: bool,
+) -> String {
+    let command_note = if command_truncated {
+        "\n\n[Command text truncated at 4 KiB; this is not the complete command.]"
+    } else {
+        ""
+    };
+    let output_note = if output_truncated {
+        "\n\n[Output snapshot truncated at 64 KiB.]"
+    } else {
+        ""
+    };
+    format!(
+        "Please explain this command and its output.\n\n$ {}{command_note}\n\n{}{output_note}",
+        command.trim(),
+        output.trim()
+    )
+}
 
 pub(super) fn validate_ordinary_tab_creation_capacity(
     tab_count: usize,
@@ -1308,6 +1331,40 @@ impl App {
         }
     }
 
+    /// Resolve command action text independently of its presentation caption.
+    /// An incomplete live extraction remains incomplete even when a snapshot
+    /// exists; never silently substitute a plausible shorter command.
+    pub(super) fn harvest_command_text(
+        &self,
+        target: &crate::harvest::CommandEntry,
+    ) -> (String, bool) {
+        self.terminal_for_harvest_source(target.source)
+            .filter(|terminal| {
+                !terminal
+                    .mode()
+                    .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
+            })
+            .and_then(|terminal| {
+                terminal
+                    .shell_integration()
+                    .prompt_tracker
+                    .completed_region_by_id(target.region_id)
+                    .filter(|region| region.content_available)
+                    .map(|region| Self::extract_command_text(terminal, region))
+            })
+            .filter(|(text, _)| !text.trim().is_empty())
+            .unwrap_or_else(|| {
+                (
+                    if target.command_available() {
+                        target.command_text().to_owned()
+                    } else {
+                        String::new()
+                    },
+                    target.command_truncated,
+                )
+            })
+    }
+
     pub(super) fn sprout_availability_for_entry(
         &self,
         target: &crate::harvest::CommandEntry,
@@ -1330,22 +1387,17 @@ impl App {
                 .filter(|region| region.content_available)
                 .map(|region| (terminal, region))
         });
-        let (live_command_available, live_output_available) =
-            live_region.map_or((false, false), |(terminal, region)| {
-                (
-                    !Self::extract_command_text(terminal, region)
-                        .0
-                        .trim()
-                        .is_empty(),
-                    !Self::extract_output_text(terminal, region)
-                        .0
-                        .trim()
-                        .is_empty(),
-                )
-            });
+        let live_output_available = live_region.is_some_and(|(terminal, region)| {
+            !Self::extract_output_text(terminal, region)
+                .0
+                .trim()
+                .is_empty()
+        });
+        let (command_text, command_truncated) = self.harvest_command_text(target);
 
         crate::harvest::SproutAvailability {
-            command_available: target.command_available() || live_command_available,
+            command_available: !command_text.trim().is_empty(),
+            command_truncated,
             output_available: !target.output.trim().is_empty() || live_output_available,
             source_terminal_available,
             live_content_available: live_region.is_some(),
@@ -1419,7 +1471,7 @@ impl App {
                         .mode()
                         .contains(termeric_core::term::TerminalMode::ALT_SCREEN)
                 });
-        let (region, live_command, live_output) = self
+        let (region, live_output) = self
             .terminal_for_harvest_source(target.source)
             .and_then(|terminal| {
                 if source_alternate_screen {
@@ -1433,19 +1485,14 @@ impl App {
                     return None;
                 }
                 let region = region.clone();
-                let command = Self::extract_command_text(terminal, &region).0;
                 let output = Self::extract_output_text(terminal, &region).0;
-                Some((region, command, output))
+                Some((region, output))
             })
             .map_or_else(
-                || (None, String::new(), String::new()),
-                |(region, command, output)| (Some(region), command, output),
+                || (None, String::new()),
+                |(region, output)| (Some(region), output),
             );
-        let command_text = if live_command.trim().is_empty() {
-            target.command.clone()
-        } else {
-            live_command
-        };
+        let (command_text, command_truncated) = self.harvest_command_text(&target);
         let used_output_snapshot =
             live_output.trim().is_empty() && !target.output.trim().is_empty();
         let output_text = if used_output_snapshot {
@@ -1461,7 +1508,14 @@ impl App {
                     self.toasts.warning("Command text is empty");
                     return;
                 }
-                self.copy_to_clipboard(text, "Copied command");
+                self.copy_to_clipboard(
+                    text,
+                    if command_truncated {
+                        "Copied partial command (truncated at 4 KiB)"
+                    } else {
+                        "Copied command"
+                    },
+                );
             }
             SproutAction::CopyOutput => {
                 let text = output_text;
@@ -1477,6 +1531,11 @@ impl App {
                 self.copy_to_clipboard(text, message);
             }
             SproutAction::Rerun => {
+                if command_truncated {
+                    self.toasts
+                        .warning("Re-run was not sent: the command text is truncated");
+                    return;
+                }
                 let trimmed = command_text.trim();
                 if trimmed.is_empty() {
                     self.toasts.warning("Nothing to rerun");
@@ -1633,15 +1692,11 @@ impl App {
                     self.toasts.warning("No command to explain");
                     return;
                 }
-                let truncation_note = if used_output_snapshot && target.output_truncated {
-                    "\n\n[Output snapshot truncated at 64 KiB.]"
-                } else {
-                    ""
-                };
-                let context = format!(
-                    "Please explain this command and its output.\n\n$ {}\n\n{}",
-                    cmd.trim(),
-                    format_args!("{}{}", out.trim(), truncation_note),
+                let context = harvest_explain_context(
+                    &cmd,
+                    command_truncated,
+                    &out,
+                    used_output_snapshot && target.output_truncated,
                 );
                 let plugin_id = match self.preferred_plugin_target() {
                     Ok(plugin_id) => plugin_id,
@@ -3922,6 +3977,33 @@ fn plugin_pane_layout_state(manager: &PaneManager) -> (Vec<u32>, u32, Option<u32
 #[cfg(test)]
 mod workspace_control_tests {
     use super::*;
+
+    #[test]
+    fn harvest_explain_context_discloses_each_partial_snapshot_without_provider_execution() {
+        for command_truncated in [false, true] {
+            for output_truncated in [false, true] {
+                let context = harvest_explain_context(
+                    "printf 'two  spaces'",
+                    command_truncated,
+                    "output",
+                    output_truncated,
+                );
+                assert!(context.contains("printf 'two  spaces'"));
+                assert_eq!(
+                    context.contains("Command text truncated"),
+                    command_truncated
+                );
+                assert_eq!(
+                    context.contains("not the complete command"),
+                    command_truncated
+                );
+                assert_eq!(
+                    context.contains("Output snapshot truncated"),
+                    output_truncated
+                );
+            }
+        }
+    }
 
     #[test]
     fn tab_rename_text_is_single_line_control_free_and_strictly_bounded() {

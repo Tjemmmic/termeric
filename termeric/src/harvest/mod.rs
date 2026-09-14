@@ -9,7 +9,9 @@ mod cellar;
 mod indicators;
 pub mod sprouts;
 
-pub use cellar::{CellarAction, CellarLayout, CellarRect, CommandEntry, RootCellar};
+pub use cellar::{
+    CellarAction, CellarLayout, CellarRect, CommandEntry, MAX_HARVEST_COMMAND_BYTES, RootCellar,
+};
 pub use indicators::GrowthIndicator;
 pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout, SproutMenuRect};
 
@@ -152,9 +154,11 @@ impl HarvestMode {
         source: HarvestSource,
         region: &CommandRegion,
         command: impl Into<String>,
+        command_truncated: bool,
         output: impl Into<String>,
     ) {
-        self.cellar.add_from_region(source, region, command, output);
+        self.cellar
+            .add_from_region(source, region, command, command_truncated, output);
     }
 
     /// Show sprout menu at the given position
@@ -287,7 +291,7 @@ mod tests {
             },
         ];
         for source in sources {
-            harvest.record_command(source, region, "fixture command", "fixture output");
+            harvest.record_command(source, region, "fixture command", false, "fixture output");
         }
         for source in sources {
             let entry = harvest.cellar.latest_for_source(source).unwrap();

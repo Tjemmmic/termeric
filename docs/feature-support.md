@@ -125,6 +125,13 @@ now has raw-PTY regression evidence for broadcast isolation, literal delivery,
 read-only/closed/closing refusal and source-bound destructive confirmation
 ([#114](https://github.com/Tjemmmic/termeric/issues/114)). This fixes a known
 fan-out bug without claiming native UI or authenticated-provider acceptance.
+Its separate 4-KiB presented-command snapshot now preserves whitespace and
+longer complete commands independently of the 512-character display caption.
+Both strings count toward the existing 8-MiB owned snapshot budget. Live and
+retained truncation disable rerun with execution-time revalidation; partial
+copy/Explain disclose incompleteness
+([#115](https://github.com/Tjemmmic/termeric/issues/115)). This does not reconstruct
+original shell input from terminal presentation.
 
 ## Performance and resource evidence
 

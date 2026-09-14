@@ -720,6 +720,7 @@ mod tests {
                 },
                 &region,
                 "printf harvest-smoke",
+                false,
                 "harvest-smoke",
             );
         }

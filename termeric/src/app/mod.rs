@@ -1749,6 +1749,7 @@ impl App {
                                     },
                                     &region,
                                     command.clone(),
+                                    command_truncated,
                                     output.clone(),
                                 );
                             }
@@ -1786,6 +1787,7 @@ impl App {
                                 },
                                 &region,
                                 command.clone(),
+                                command_truncated,
                                 output.clone(),
                             );
                         }

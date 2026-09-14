@@ -530,6 +530,9 @@ membership. Repeat with the source excluded from the two selected broadcast
 targets. An armed-but-unconfirmed broadcast or read-only source must refuse the
 action without a sent/success notice. Confirm that aliases and completion do not
 replace the historical command. Record native menu/focus/toast behavior; the
+retained-command path should also preserve quoted double spaces after live text
+is cleared. A command whose retained text exceeds 4 KiB must show a disabled
+Re-run action with a truncation reason, not execute a shortened caption. The
 raw-PTY regression evidence is not a native UI acceptance substitute. Do not
 run destructive commands to test confirmation; automated fixtures capture those
 bytes without evaluating them. This lane does not use Harvest Explain.

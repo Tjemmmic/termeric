@@ -72,6 +72,7 @@ impl SproutAction {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SproutAvailability {
     pub command_available: bool,
+    pub command_truncated: bool,
     pub output_available: bool,
     pub source_terminal_available: bool,
     pub live_content_available: bool,
@@ -84,7 +85,9 @@ impl SproutAvailability {
         match action {
             SproutAction::CopyOutput => self.output_available,
             SproutAction::CopyCommand | SproutAction::Explain => self.command_available,
-            SproutAction::Rerun => self.command_available && self.source_terminal_available,
+            SproutAction::Rerun => {
+                self.command_available && !self.command_truncated && self.source_terminal_available
+            }
             SproutAction::SearchOutput | SproutAction::ScrollTo => self.live_content_available,
         }
     }
@@ -97,6 +100,10 @@ impl SproutAvailability {
             }
             SproutAction::Rerun if !self.command_available => " (unavailable)",
             SproutAction::Rerun if !self.source_terminal_available => " (terminal closed)",
+            SproutAction::Rerun | SproutAction::Explain if self.command_truncated => {
+                " (truncated command)"
+            }
+            SproutAction::CopyCommand if self.command_truncated => " (truncated)",
             SproutAction::CopyOutput
                 if self.retained_output_truncated && !self.live_content_available =>
             {
@@ -120,6 +127,15 @@ impl SproutAvailability {
 
     pub fn action_description(self, action: SproutAction) -> Option<&'static str> {
         match action {
+            SproutAction::Rerun if self.command_truncated => {
+                Some("The command text is incomplete; a truncated prefix cannot be rerun")
+            }
+            SproutAction::CopyCommand if self.command_truncated => {
+                Some("Copies only a partial command snapshot, limited to 4 KiB")
+            }
+            SproutAction::Explain if self.command_truncated => Some(
+                "Sends partial command text with an explicit truncation warning to the chosen open AI plugin tab",
+            ),
             SproutAction::CopyOutput if !self.output_available => {
                 Some("No live or retained command output is available")
             }
@@ -391,9 +407,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn truncated_command_affordances_refuse_rerun_and_disclose_partial_copy_and_explain() {
+        let availability = SproutAvailability {
+            command_available: true,
+            command_truncated: true,
+            source_terminal_available: true,
+            ..Default::default()
+        };
+        assert!(!availability.action_enabled(SproutAction::Rerun));
+        assert_eq!(
+            availability.action_label(SproutAction::Rerun),
+            "Re-run (truncated command)"
+        );
+        assert!(
+            availability
+                .action_description(SproutAction::Rerun)
+                .unwrap()
+                .contains("incomplete")
+        );
+        for action in [SproutAction::CopyCommand, SproutAction::Explain] {
+            assert!(availability.action_enabled(action));
+            assert!(availability.action_label(action).contains("truncated"));
+            assert!(
+                availability
+                    .action_description(action)
+                    .unwrap()
+                    .contains("partial")
+            );
+        }
+    }
+
+    #[test]
     fn test_sprout_menu_navigation() {
         let availability = SproutAvailability {
             command_available: true,
+            command_truncated: false,
             output_available: true,
             source_terminal_available: true,
             live_content_available: true,
@@ -415,6 +463,7 @@ mod tests {
     fn navigation_and_selection_skip_actions_that_need_evicted_live_text() {
         let availability = SproutAvailability {
             command_available: true,
+            command_truncated: false,
             output_available: true,
             source_terminal_available: true,
             live_content_available: false,

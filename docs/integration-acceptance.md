@@ -183,14 +183,16 @@ scripts, command strings, daemon/language-server modes, and `-norc` launches
 are also preserved; missing Elvish rc setup and other unsupported shells receive
 a truthful Harvest explanation.
 
-The resulting Root Cellar stores bounded normalized command text, at most
-64 KiB of output per entry, and at most 8 MiB of aggregate owned snapshots,
+The resulting Root Cellar stores a normalized 512-character display caption,
+a separate command snapshot of at most 4 KiB, at most 64 KiB of output per entry,
+and at most 8 MiB of aggregate owned captions/command/output snapshots,
 then opens on the newest entry. Count- and memory-driven retention evictions
 are counted visibly, and clipped entries are labeled in visual and semantic
 surfaces. Monotonic OSC 133
 region identities remain observable exactly once across tracker-capacity
 rollover, negative scrollback rows, resize reflow, and live-text eviction.
-Evicted coordinates are explicitly unavailable: snapshot-backed copy/rerun can
+Evicted coordinates are explicitly unavailable: snapshot-backed copy and
+complete-command rerun can
 continue, while search/scroll are disabled and described as not retained
 rather than targeting replacement grid text. Execution revalidates the live
 region in case scrollback changes while the menu is open. An active alternate
@@ -210,6 +212,26 @@ never navigates primary-shell marks. Core state tests and a local two-way app
 action fixture cover this path without external services.
 
 ### Exact-source Harvest rerun
+
+[#115](https://github.com/Tjemmmic/termeric/issues/115) separates the display
+caption from command action text. Whitespace normalization and the caption's
+ellipsis are never used as retained rerun input. A UTF-8-safe 4-KiB command
+snapshot preserves interior spaces and line breaks in the presented text; its
+owned capacity is charged alongside the caption and output under the 8-MiB
+aggregate budget. This is terminal-presented text, not reconstruction of the
+shell's original keystrokes, prompt columns, line-editor state or AST/argv.
+
+Available live command extraction takes priority and carries its truncation
+flag. Otherwise actions use the retained snapshot and its preserved upstream or
+local truncation flag. Incomplete command text disables Re-run with a shared
+menu/accessibility explanation. The executor re-resolves the text and refuses
+truncated input before focus, confirmation or PTY writes, including when live
+text was evicted after an enabled menu opened. Complete commands longer than
+the caption limit remain usable within the snapshot bound. Copy command stays
+available for partial text with a truncation label and notice; Explain context
+includes an explicit incomplete-command warning independently of output
+truncation. Explain warning generation is pure-test covered without executing
+the action or invoking a provider.
 
 [#114](https://github.com/Tjemmmic/termeric/issues/114) fixes a reproduced input
 fan-out bug: Re-run previously entered the normal typing/broadcast path after

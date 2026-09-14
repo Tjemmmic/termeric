@@ -12,6 +12,7 @@ use termeric_core::CommandRegion;
 /// cellar via [`RootCellar::with_capacity`].
 const DEFAULT_MAX_COMMANDS: usize = 100;
 pub const MAX_HARVEST_COMMAND_CHARS: usize = 512;
+pub const MAX_HARVEST_COMMAND_BYTES: usize = 4 * 1024;
 /// Per-entry output snapshot ceiling. At the default 100-entry history this
 /// contributes at most 6.25 MiB plus string metadata.
 pub const MAX_HARVEST_OUTPUT_BYTES: usize = 64 * 1024;
@@ -31,6 +32,11 @@ pub struct CommandEntry {
     pub region_id: u64,
     /// Bounded one-line command text shown in history.
     pub command: String,
+    /// Presented command text, kept independently of the normalized caption.
+    /// None is only the pre-retention state of a freshly constructed entry.
+    pub command_snapshot: Option<String>,
+    /// The selected snapshot is incomplete; never execute it as a command.
+    pub command_truncated: bool,
     /// Bounded output snapshot retained after terminal scrollback eviction.
     pub output: String,
     /// Whether the retained output ended at the per-entry byte ceiling.
@@ -80,6 +86,8 @@ impl CommandEntry {
             id: 0,
             region_id: 0,
             command: String::new(),
+            command_snapshot: None,
+            command_truncated: false,
             output: String::new(),
             output_truncated: false,
             source,
@@ -116,7 +124,11 @@ impl CommandEntry {
     }
 
     pub fn command_available(&self) -> bool {
-        !self.command.trim().is_empty() && self.command != UNAVAILABLE_COMMAND_TEXT
+        !self.command_text().trim().is_empty() && self.command_text() != UNAVAILABLE_COMMAND_TEXT
+    }
+
+    pub fn command_text(&self) -> &str {
+        self.command_snapshot.as_deref().unwrap_or(&self.command)
     }
 }
 
@@ -323,11 +335,13 @@ impl RootCellar {
         source: HarvestSource,
         region: &CommandRegion,
         command: impl Into<String>,
+        command_truncated: bool,
         output: impl Into<String>,
     ) {
         let mut entry = CommandEntry::new_for_source(source, region.prompt_row, region.exit_code);
         entry.region_id = region.id;
-        entry.command = bounded_command(command.into());
+        entry.command = command.into();
+        entry.command_truncated = command_truncated;
         (entry.output, entry.output_truncated) = bounded_output(output.into());
         self.add(entry);
     }
@@ -335,7 +349,21 @@ impl RootCellar {
     /// Add a command entry
     pub fn add(&mut self, entry: CommandEntry) {
         let mut entry = entry;
-        entry.command = bounded_command(std::mem::take(&mut entry.command));
+        let mut snapshot = entry
+            .command_snapshot
+            .take()
+            .unwrap_or_else(|| std::mem::take(&mut entry.command));
+        if snapshot.len() > MAX_HARVEST_COMMAND_BYTES {
+            let mut end = MAX_HARVEST_COMMAND_BYTES;
+            while !snapshot.is_char_boundary(end) {
+                end -= 1;
+            }
+            snapshot.truncate(end);
+            entry.command_truncated = true;
+        }
+        snapshot.shrink_to_fit();
+        entry.command = bounded_command(snapshot.clone());
+        entry.command_snapshot = Some(snapshot);
         let (output, truncated) = bounded_output(std::mem::take(&mut entry.output));
         entry.output = output;
         entry.output_truncated |= truncated;
@@ -622,6 +650,7 @@ fn entry_snapshot_bytes(entry: &CommandEntry) -> usize {
     entry
         .command
         .capacity()
+        .saturating_add(entry.command_snapshot.as_ref().map_or(0, String::capacity))
         .saturating_add(entry.output.capacity())
 }
 
@@ -764,6 +793,7 @@ mod tests {
             },
             region,
             format!("  echo\n{}  ", "x".repeat(MAX_HARVEST_COMMAND_CHARS + 100)),
+            false,
             format!("{}終", "y".repeat(MAX_HARVEST_OUTPUT_BYTES + 100)),
         );
         let entry = cellar.latest().unwrap();
@@ -793,6 +823,61 @@ mod tests {
         assert!(entry.output_truncated);
         assert!(entry.output.capacity() <= MAX_HARVEST_OUTPUT_BYTES);
         assert_eq!(cellar.snapshot_bytes(), entry_snapshot_bytes(entry));
+    }
+
+    #[test]
+    fn retained_command_snapshot_is_distinct_bounded_and_capacity_accounted() {
+        for text in [
+            "printf '%s' 'two  spaces'\nnext".to_string(),
+            "x".repeat(MAX_HARVEST_COMMAND_BYTES),
+            "界".repeat(MAX_HARVEST_COMMAND_BYTES),
+        ] {
+            let mut cellar = RootCellar::new();
+            let mut entry = CommandEntry::new(0, Some(0));
+            entry.command = text.clone();
+            cellar.add(entry);
+            let entry = cellar.latest().unwrap();
+            assert!(text.starts_with(entry.command_text()));
+            assert!(entry.command_text().len() <= MAX_HARVEST_COMMAND_BYTES);
+            assert!(
+                entry.command_snapshot.as_ref().unwrap().capacity() <= MAX_HARVEST_COMMAND_BYTES
+            );
+            assert_eq!(
+                entry.command_truncated,
+                text.len() > MAX_HARVEST_COMMAND_BYTES
+            );
+            if !entry.command_truncated {
+                assert_eq!(entry.command_text(), text);
+            }
+            assert_eq!(
+                cellar.snapshot_bytes(),
+                entry.command.capacity()
+                    + entry.command_snapshot.as_ref().unwrap().capacity()
+                    + entry.output.capacity()
+            );
+        }
+    }
+
+    #[test]
+    fn upstream_truncation_survives_retention_and_budget_eviction_counts_command_snapshots() {
+        let mut cellar = RootCellar::with_capacity(100);
+        cellar.set_snapshot_budget(MAX_HARVEST_COMMAND_BYTES * 2);
+        for id in 0..4 {
+            let mut entry = CommandEntry::new(id, Some(0));
+            entry.command = "x".repeat(MAX_HARVEST_COMMAND_BYTES);
+            entry.command_truncated = true;
+            cellar.add(entry);
+        }
+        assert_eq!(cellar.len(), 1);
+        assert_eq!(cellar.evicted_commands(), 3);
+        let mut entry = cellar.latest().unwrap().clone();
+        entry.command = "edited caption is not action authority".into();
+        cellar.add(entry);
+        assert!(cellar.latest().unwrap().command_truncated);
+        assert_eq!(
+            cellar.latest().unwrap().command_text(),
+            "x".repeat(MAX_HARVEST_COMMAND_BYTES)
+        );
     }
 
     #[test]

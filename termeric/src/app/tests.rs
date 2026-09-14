@@ -3321,6 +3321,143 @@ fn harvest_rerun_is_literal_and_reports_only_successful_delivery() {
 
 #[cfg(unix)]
 #[test]
+fn harvest_retained_rerun_never_uses_the_normalized_or_shortened_caption() {
+    for command in [
+        "printf '%s' 'two  spaces'".to_string(),
+        "printf '%s' 'first\nsecond'".to_string(),
+        format!("echo {}", "x".repeat(700)),
+    ] {
+        let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture();
+        entry.command = command.clone();
+        let mut cellar = crate::harvest::RootCellar::new();
+        cellar.add(entry);
+        let retained = cellar.latest().unwrap().clone();
+        assert_ne!(retained.command, command);
+        app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(retained));
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert_eq!(bytes[0], command_keystrokes(&command).concat());
+        assert!(bytes[1..].iter().all(Vec::is_empty));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_locally_truncated_snapshot_cannot_be_rerun_or_change_focus() {
+    let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture();
+    let before = app.active_harvest_source();
+    entry.command = "x".repeat(crate::harvest::MAX_HARVEST_COMMAND_BYTES + 1);
+    let mut cellar = crate::harvest::RootCellar::new();
+    cellar.add(entry);
+    let entry = cellar.latest().unwrap().clone();
+    assert!(entry.command_truncated);
+    assert!(
+        !app.sprout_availability_for_entry(&entry)
+            .action_enabled(crate::harvest::sprouts::SproutAction::Rerun)
+    );
+    app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
+    assert!(
+        fenced_harvest_capture(&mut app, &captures)
+            .iter()
+            .all(Vec::is_empty)
+    );
+    assert_eq!(app.active_harvest_source(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_incomplete_command_refuses_live_retained_and_stale_menu_reruns() {
+    for split in [false, true] {
+        let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture_in(split);
+        let origin = captures[0].0;
+        app.harvest = Some(crate::harvest::HarvestMode::default());
+        let command = format!(
+            "echo {}",
+            "x".repeat(crate::harvest::MAX_HARVEST_COMMAND_BYTES + 100)
+        );
+        app.tabs.as_mut().unwrap().terminal_for_origin_mut(origin).unwrap().process(
+            format!("\r\n\x1b]133;A\x07\x1b]133;B\x07{command}\r\n\x1b]133;C\x07result\r\n\x1b]133;D;0\x07").as_bytes());
+        app.process_pty_events();
+        let recorded = app
+            .harvest
+            .as_ref()
+            .unwrap()
+            .cellar
+            .latest()
+            .unwrap()
+            .clone();
+        assert!(
+            recorded.command_truncated,
+            "app discarded extraction truncation"
+        );
+        assert_eq!(recorded.source, entry.source);
+        assert!(
+            !app.sprout_availability_for_entry(&recorded)
+                .action_enabled(crate::harvest::sprouts::SproutAction::Rerun)
+        );
+        app.execute_sprout_action(
+            crate::harvest::sprouts::SproutAction::Rerun,
+            Some(recorded.clone()),
+        );
+        assert!(
+            fenced_harvest_capture(&mut app, &captures)
+                .iter()
+                .all(Vec::is_empty)
+        );
+
+        // A complete live region can initially enable a menu whose retained
+        // snapshot is incomplete. Eviction must revoke that live authority.
+        app.tabs.as_mut().unwrap().terminal_for_origin_mut(origin).unwrap().process(
+            b"\x1b]133;A\x07\x1b]133;B\x07echo complete\r\n\x1b]133;C\x07ok\r\n\x1b]133;D;0\x07");
+        let region_id = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .terminal_for_origin(origin)
+            .unwrap()
+            .shell_integration()
+            .prompt_tracker
+            .completed_regions_after(recorded.region_id)
+            .next()
+            .unwrap()
+            .id;
+        entry.region_id = region_id;
+        entry.command_truncated = true;
+        let availability = app.sprout_availability_for_entry(&entry);
+        assert!(availability.action_enabled(crate::harvest::sprouts::SproutAction::Rerun));
+        app.harvest
+            .as_mut()
+            .unwrap()
+            .show_sprout_menu(0, 0, Some(entry), availability);
+        let request_id = app
+            .harvest
+            .as_ref()
+            .unwrap()
+            .sprout_menu
+            .as_ref()
+            .unwrap()
+            .request_id;
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .terminal_for_origin_mut(origin)
+            .unwrap()
+            .process(b"\x1b[2J\x1b[3J");
+        app.execute_sprout_request(request_id, crate::harvest::sprouts::SproutAction::Rerun);
+        assert!(
+            fenced_harvest_capture(&mut app, &captures)
+                .iter()
+                .all(|bytes| bytes == b"\0")
+        );
+        assert!(
+            app.toasts
+                .iter()
+                .all(|toast| toast.message != "Sent command to its source terminal")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_writes() {
     for refusal in [
         "armed",

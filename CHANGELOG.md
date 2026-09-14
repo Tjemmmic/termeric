@@ -1155,6 +1155,13 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Harvest retains a separate 4-KiB command snapshot instead of rerunning its
+  normalized/shortened display caption after live text disappears. Interior
+  whitespace and complete longer commands are preserved. Live and retained
+  truncation flags disable rerun and are revalidated after menu opening;
+  partial copy and Explain context disclose incompleteness. Command snapshots
+  count toward the existing 8-MiB aggregate history budget.
+
 - Harvest Re-run no longer broadcasts historical commands to sibling panes
   or rewrites them through current aliases/completions. One captured source
   receives the complete literal input, with read-only/closed/closing/armed

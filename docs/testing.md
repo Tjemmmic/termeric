@@ -1,5 +1,18 @@
 # Testing Termeric
 
+## Harvest command snapshot integrity
+
+Raw-PTY regressions prove that retained commands keep quoted interior whitespace,
+line breaks and text beyond the 512-character display-caption limit, without
+sending a display ellipsis. Separate tests cover the 4-KiB UTF-8/capacity ceiling,
+upstream truncation, aggregate snapshot-budget eviction, both single-terminal
+and split-pane recording paths, locally truncated input refusal before focus,
+and a formerly enabled menu whose complete live text is later erased. Partial
+copy/Explain labels use the shared availability model; Explain's independent
+command/output truncation warnings are tested as pure string formatting without
+executing the action or invoking a provider. See
+[the command-text contract](integration-acceptance.md#exact-source-harvest-rerun).
+
 ## Exact-source Harvest rerun regression
 
 The `harvest_rerun_*` tests use isolated raw PTYs that write received bytes to

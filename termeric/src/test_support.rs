@@ -81,6 +81,7 @@ fn ansi_hyperlink_and_semantic_marks_cross_the_parser_grid_and_harvest() {
         },
         &regions[0],
         "echo ok",
+        false,
         "ok",
     );
     assert_eq!(harvest.cellar.len(), 1);
