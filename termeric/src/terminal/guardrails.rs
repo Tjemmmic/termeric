@@ -46,11 +46,40 @@ pub enum GuardrailAction {
 pub(crate) struct GuardedWrite {
     pub(crate) origin: crate::tabs::TerminalEventOrigin,
     pub(crate) data: Vec<u8>,
+    /// Opt-in stable identity for writes that may outlive an ownership mode.
+    stable_pane: Option<crate::panes::PaneId>,
 }
 
 impl GuardedWrite {
     pub(crate) fn new(origin: crate::tabs::TerminalEventOrigin, data: Vec<u8>) -> Self {
-        Self { origin, data }
+        Self {
+            origin,
+            data,
+            stable_pane: None,
+        }
+    }
+
+    pub(crate) fn for_pane(tab_id: usize, pane_id: crate::panes::PaneId, data: Vec<u8>) -> Self {
+        Self {
+            origin: crate::tabs::TerminalEventOrigin::Pane { tab_id, pane_id },
+            data,
+            stable_pane: Some(pane_id),
+        }
+    }
+
+    pub(crate) fn resolve_origin(
+        &self,
+        tabs: &crate::tabs::TabManager,
+    ) -> Option<crate::tabs::TerminalEventOrigin> {
+        if let Some(pane_id) = self.stable_pane {
+            let tab_id = match self.origin {
+                crate::tabs::TerminalEventOrigin::Tab { tab_id }
+                | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id,
+            };
+            tabs.origin_for_pane(tab_id, pane_id)
+        } else {
+            tabs.terminal_for_origin(self.origin).map(|_| self.origin)
+        }
     }
 }
 

@@ -1551,20 +1551,11 @@ impl App {
                         .warning("Re-run was not sent while broadcast is armed");
                     return;
                 }
-                let origin = match target.source.pane_id {
-                    Some(pane_id) => crate::tabs::TerminalEventOrigin::Pane {
-                        tab_id: target.source.tab_id,
-                        pane_id: PaneId(pane_id),
-                    },
-                    None => crate::tabs::TerminalEventOrigin::Tab {
-                        tab_id: target.source.tab_id,
-                    },
-                };
-                if self.terminal_for_harvest_source(target.source).is_none() {
+                let Some(origin) = self.origin_for_harvest_source(target.source) else {
                     self.toasts
                         .warning("The command's terminal is no longer open");
                     return;
-                }
+                };
                 if self
                     .tabs
                     .as_ref()
@@ -1585,25 +1576,26 @@ impl App {
                         .warning("A destructive-command confirmation is already pending");
                     return;
                 }
-                if self.terminal_for_harvest_source(target.source).is_none() {
+                let Some(origin) = self.origin_for_harvest_source(target.source) else {
                     self.toasts
                         .warning("The command's terminal is no longer open");
                     return;
-                }
+                };
                 // Focus callbacks are not delivery authority. Capture all bytes,
                 // including line clearing, in one exact-owner user operation.
                 let wire = command_keystrokes(trimmed).concat();
                 if let Some(mut matched) = crate::terminal::guardrails::check_command(trimmed) {
-                    matched.target = match target.source.pane_id {
-                        Some(pane_id) => format!(
-                            "Harvest source tab {}, pane {pane_id}",
-                            target.source.tab_id
-                        ),
-                        None => format!("Harvest source tab {}", target.source.tab_id),
-                    };
+                    matched.target = format!(
+                        "Harvest source tab {}, pane {}",
+                        target.source.tab_id, target.source.pane_id
+                    );
                     self.guardrail.show(
                         matched,
-                        vec![crate::terminal::guardrails::GuardedWrite::new(origin, wire)],
+                        vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                            target.source.tab_id,
+                            PaneId(target.source.pane_id),
+                            wire,
+                        )],
                     );
                     self.toasts.info("Re-run is awaiting confirmation");
                     if let Some(window) = &self.window {
@@ -1717,27 +1709,28 @@ impl App {
         let tab = self.tabs.as_ref()?.active_tab()?;
         Some(crate::harvest::HarvestSource {
             tab_id: tab.id,
-            pane_id: tab.pane_manager.as_ref().map(|panes| panes.focused_id().0),
+            pane_id: tab
+                .pane_manager
+                .as_ref()
+                .map_or(tab.single_pane_id().0, |panes| panes.focused_id().0),
         })
+    }
+
+    fn origin_for_harvest_source(
+        &self,
+        source: crate::harvest::HarvestSource,
+    ) -> Option<crate::tabs::TerminalEventOrigin> {
+        self.tabs
+            .as_ref()?
+            .origin_for_pane(source.tab_id, PaneId(source.pane_id))
     }
 
     pub(super) fn terminal_for_harvest_source(
         &self,
         source: crate::harvest::HarvestSource,
     ) -> Option<&termeric_core::Terminal> {
-        let (_, tab) = self
-            .tabs
-            .as_ref()?
-            .iter()
-            .find(|(_, tab)| tab.id == source.tab_id && !tab.closed && !tab.is_closing())?;
-        match source.pane_id {
-            Some(pane_id) => {
-                let pane = tab.pane_manager.as_ref()?.get_pane(PaneId(pane_id))?;
-                (!pane.closed).then_some(&pane.terminal)
-            }
-            None if tab.pane_manager.is_none() => tab.focused_terminal(),
-            None => None,
-        }
+        let origin = self.origin_for_harvest_source(source)?;
+        self.tabs.as_ref()?.terminal_for_origin(origin)
     }
 
     /// Focus the exact live terminal that produced a harvested command before
@@ -1745,32 +1738,33 @@ impl App {
     /// old cellar entries from retargeting whichever terminal is currently
     /// active.
     fn focus_harvest_source(&mut self, source: crate::harvest::HarvestSource) -> bool {
-        let Some((index, _)) = self.tabs.as_ref().and_then(|tabs| {
-            tabs.iter().find(|(_, tab)| {
-                tab.id == source.tab_id
-                    && !tab.closed
-                    && !tab.is_closing()
-                    && match source.pane_id {
-                        Some(pane_id) => tab
-                            .pane_manager
-                            .as_ref()
-                            .is_some_and(|panes| panes.get_pane(PaneId(pane_id)).is_some()),
-                        None => tab.pane_manager.is_none() && tab.focused_terminal().is_some(),
-                    }
-            })
-        }) else {
+        if self.origin_for_harvest_source(source).is_none() {
+            return false;
+        }
+        let Some((index, _)) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.iter().find(|(_, tab)| tab.id == source.tab_id))
+        else {
             return false;
         };
 
         self.handle_action(crate::input::Action::SwitchToTab(index));
 
+        // Focus callbacks may alter topology or selection; they cannot grant
+        // permission to act on a different terminal.
+        if self.tabs.as_ref().and_then(TabManager::active_tab_id) != Some(source.tab_id)
+            || self.origin_for_harvest_source(source).is_none()
+        {
+            return false;
+        }
+
         let mut pane_changed = false;
         let mut live_focus = None;
-        if let Some(pane_id) = source.pane_id
-            && let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut)
+        if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut)
             && let Some(panes) = &mut tab.pane_manager
         {
-            let pane_id = PaneId(pane_id);
+            let pane_id = PaneId(source.pane_id);
             pane_changed = panes.focused_id() != pane_id;
             panes.focus(pane_id);
             live_focus = tab
@@ -1786,7 +1780,8 @@ impl App {
         {
             crate::domain::request_focus_background(authority, domain, pane);
         }
-        true
+        self.active_harvest_source() == Some(source)
+            && self.origin_for_harvest_source(source).is_some()
     }
 
     pub(super) fn active_shell_integration_message(&self) -> String {

@@ -537,6 +537,15 @@ raw-PTY regression evidence is not a native UI acceptance substitute. Do not
 run destructive commands to test confirmation; automated fixtures capture those
 bytes without evaluating them. This lane does not use Harvest Explain.
 
+Also retain a harmless command from a single terminal, split it, select its
+sibling, and use the old entry's Search, Scroll-to and Re-run actions. They
+should still select the original terminal. Close the sibling and repeat after
+another split; newly recorded commands should remain under the same source
+without duplicates. Repeat while keeping a newer, nonzero pane as the sole
+survivor. Closing the actual source must disable its live actions instead of
+redirecting them to a replacement. These visual checks can be done later;
+ownership and deferred-confirmation byte routing have local regression coverage.
+
 ## Authenticated Codex, Claude Code, and Harvest Explain
 
 This section is deliberately last. It is a manual test plan, not authorization

@@ -630,12 +630,10 @@ impl App {
         use crate::terminal::guardrails::GuardrailAction;
         match action {
             GuardrailAction::Confirm { request_id } => {
-                let Some(writes) = self.guardrail.confirm(request_id) else {
+                let Some(mut writes) = self.guardrail.confirm(request_id) else {
                     return;
                 };
-                let affects_focused_input = writes
-                    .iter()
-                    .any(|write| Some(write.origin) == self.active_terminal_origin());
+                let focused_origin = self.active_terminal_origin();
                 let result = self
                     .tabs
                     .as_mut()
@@ -649,14 +647,13 @@ impl App {
                         // Validate the entire captured route before sending any
                         // member. A vanished pane must not produce a partial
                         // broadcast or fall back to the current focus.
-                        if writes
-                            .iter()
-                            .any(|write| tabs.terminal_for_origin(write.origin).is_none())
-                        {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::NotFound,
-                                "one or more originating terminals no longer exist",
-                            ));
+                        for write in &mut writes {
+                            write.origin = write.resolve_origin(tabs).ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::NotFound,
+                                    "one or more originating terminals no longer exist",
+                                )
+                            })?;
                         }
                         if writes
                             .iter()
@@ -667,16 +664,19 @@ impl App {
                                 "one or more originating panes are read-only",
                             ));
                         }
+                        let affects_focused_input = writes
+                            .iter()
+                            .any(|write| Some(write.origin) == focused_origin);
                         for write in writes {
                             tabs.write_user_to_origin(write.origin, &write.data)?;
                         }
-                        Ok(())
+                        Ok(affects_focused_input)
                     });
                 if let Err(error) = result {
                     log::error!("Guarded command was not sent: {error}");
                     self.toasts
                         .error(format!("Guarded command was not sent: {error}"));
-                } else if affects_focused_input {
+                } else if matches!(result, Ok(true)) {
                     self.clear_terminal_input_tracking();
                     self.reset_cursor_blink();
                 }

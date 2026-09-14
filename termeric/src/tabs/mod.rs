@@ -2197,6 +2197,28 @@ impl TabManager {
         }
     }
 
+    /// Resolve a stable tab-local pane identity to its current owner. Unlike
+    /// an event's mode-specific route, this survives split/collapse, but never
+    /// crosses tab namespaces or substitutes a different single survivor.
+    pub(crate) fn origin_for_pane(
+        &self,
+        tab_id: usize,
+        pane_id: PaneId,
+    ) -> Option<TerminalEventOrigin> {
+        let tab = self.tabs.iter().find(|tab| tab.id == tab_id)?;
+        if tab.closed || tab.is_closing() {
+            return None;
+        }
+        if let Some(panes) = &tab.pane_manager {
+            panes.get_pane(pane_id).filter(|pane| !pane.closed)?;
+            Some(TerminalEventOrigin::Pane { tab_id, pane_id })
+        } else if tab.single_pane_id() == pane_id && tab.focused_terminal().is_some() {
+            Some(TerminalEventOrigin::Tab { tab_id })
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn origin_read_only(&self, origin: TerminalEventOrigin) -> Option<bool> {
         let tab_id = match origin {
             TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {

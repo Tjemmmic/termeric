@@ -213,6 +213,25 @@ action fixture cover this path without external services.
 
 ### Exact-source Harvest rerun
 
+[#117](https://github.com/Tjemmmic/termeric/issues/117) gives every internal
+Harvest source a stable tab ID and mandatory tab-local pane ID, including a
+single-terminal tab. Recording, latest-entry lookup, live text, action
+availability and accessibility metadata use that same identity. Single -> split
+-> collapse -> re-split does not orphan entries or duplicate completed regions;
+nonzero surviving panes retain their own source identity. Current-owner lookup
+rejects closed/closing tabs and closed, missing, or replaced panes, never falling
+back to whichever sibling happens to remain or have focus.
+
+Pending destructive Harvest reruns retain that stable source, resolve its
+current single/pane route at confirmation, and revalidate the full batch before
+any bytes are written. Confirmation survives an ownership-mode change only when
+the original owner survives and remains writable. Cancellation, source removal,
+read-only state and repeated confirmation cannot deliver the captured bytes to
+a replacement. This is a tab-local runtime contract: moving a pane across
+tab/window namespaces or relaunching a workspace does not migrate old history
+references. Plugin `CommandExecuted` event schemas and terminal protocol-reply
+routes are unchanged.
+
 [#115](https://github.com/Tjemmmic/termeric/issues/115) separates the display
 caption from command action text. Whitespace normalization and the caption's
 ellipsis are never used as retained rerun input. A UTF-8-safe 4-KiB command

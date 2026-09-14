@@ -133,6 +133,13 @@ copy/Explain disclose incompleteness
 ([#115](https://github.com/Tjemmmic/termeric/issues/115)). This does not reconstruct
 original shell input from terminal presentation.
 
+Harvest source keys now always include the stable tab-local pane ID, preserving
+recording, live actions and exact rerun/confirmation routing across split,
+collapse and re-split, including nonzero survivors. Removed or read-only sources
+cannot be replaced by the current sibling. Cross-tab/window history migration
+is not included, and native acceptance remains deferred
+([#117](https://github.com/Tjemmmic/termeric/issues/117)).
+
 ## Performance and resource evidence
 
 | Area | Status | Current boundary | Tracking |

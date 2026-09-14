@@ -77,7 +77,7 @@ fn ansi_hyperlink_and_semantic_marks_cross_the_parser_grid_and_harvest() {
     harvest.record_command(
         HarvestSource {
             tab_id: 1,
-            pane_id: None,
+            pane_id: 0,
         },
         &regions[0],
         "echo ok",

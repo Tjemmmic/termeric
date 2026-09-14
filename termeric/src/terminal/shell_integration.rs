@@ -716,7 +716,7 @@ mod tests {
             harvest.record_command(
                 crate::harvest::HarvestSource {
                     tab_id: 1,
-                    pane_id: None,
+                    pane_id: 0,
                 },
                 &region,
                 "printf harvest-smoke",

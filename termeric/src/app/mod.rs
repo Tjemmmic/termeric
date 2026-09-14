@@ -1745,7 +1745,7 @@ impl App {
                                 harvest.record_command(
                                     crate::harvest::HarvestSource {
                                         tab_id: tab.id,
-                                        pane_id: Some(pane.id.0),
+                                        pane_id: pane.id.0,
                                     },
                                     &region,
                                     command.clone(),
@@ -1783,7 +1783,7 @@ impl App {
                             harvest.record_command(
                                 crate::harvest::HarvestSource {
                                     tab_id: tab.id,
-                                    pane_id: None,
+                                    pane_id: tab.single_pane_id().0,
                                 },
                                 &region,
                                 command.clone(),

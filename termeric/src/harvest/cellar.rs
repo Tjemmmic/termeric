@@ -73,7 +73,7 @@ impl CommandEntry {
         Self::new_for_source(
             HarvestSource {
                 tab_id: 0,
-                pane_id: None,
+                pane_id: 0,
             },
             row,
             exit_code,
@@ -789,7 +789,7 @@ mod tests {
         cellar.add_from_region(
             HarvestSource {
                 tab_id: 1,
-                pane_id: None,
+                pane_id: 0,
             },
             region,
             format!("  echo\n{}  ", "x".repeat(MAX_HARVEST_COMMAND_CHARS + 100)),

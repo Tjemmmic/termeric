@@ -3003,9 +3003,10 @@ impl App {
                 Some(code) => format!("failed with exit code {code}"),
                 None => "still running".to_string(),
             };
-            let owner = entry.source.pane_id.map_or_else(
-                || format!("tab {}", entry.source.tab_id),
-                |pane| format!("tab {}, pane {}", entry.source.tab_id, pane + 1),
+            let owner = format!(
+                "tab {}, pane {}",
+                entry.source.tab_id,
+                u64::from(entry.source.pane_id) + 1,
             );
             let retention = if entry.output_truncated {
                 "; retained output is truncated at 64 KiB"
@@ -6028,7 +6029,7 @@ mod tests {
             let mut entry = crate::harvest::CommandEntry::new_for_source(
                 crate::harvest::HarvestSource {
                     tab_id: 7,
-                    pane_id: Some(2),
+                    pane_id: 2,
                 },
                 index as i32,
                 Some(if index % 3 == 0 { 1 } else { 0 }),
@@ -6115,7 +6116,7 @@ mod tests {
         let mut clipped = crate::harvest::CommandEntry::new_for_source(
             crate::harvest::HarvestSource {
                 tab_id: 7,
-                pane_id: Some(2),
+                pane_id: 2,
             },
             3,
             Some(0),

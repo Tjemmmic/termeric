@@ -18,11 +18,11 @@ pub use sprouts::{SproutAvailability, SproutMenu, SproutMenuLayout, SproutMenuRe
 use termeric_core::CommandRegion;
 use termeric_core::shell::PromptTracker;
 
-/// Identity of the terminal that produced a harvested command.
+/// Stable tab-local identity, independent of single/split ownership mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HarvestSource {
     pub tab_id: usize,
-    pub pane_id: Option<u32>,
+    pub pane_id: u32,
 }
 
 /// Per-terminal cursor and indicator state. Keeping this beside the terminal
@@ -279,15 +279,15 @@ mod tests {
         let sources = [
             HarvestSource {
                 tab_id: 7,
-                pane_id: Some(3),
+                pane_id: 3,
             },
             HarvestSource {
                 tab_id: 7,
-                pane_id: Some(4),
+                pane_id: 4,
             },
             HarvestSource {
                 tab_id: 8,
-                pane_id: None,
+                pane_id: 0,
             },
         ];
         for source in sources {
@@ -303,7 +303,7 @@ mod tests {
                 .cellar
                 .latest_for_source(HarvestSource {
                     tab_id: 9,
-                    pane_id: None,
+                    pane_id: 0,
                 })
                 .is_none()
         );

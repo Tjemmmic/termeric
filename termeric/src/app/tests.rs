@@ -3055,7 +3055,7 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
     let mut entry = crate::harvest::CommandEntry::new_for_source(
         crate::harvest::HarvestSource {
             tab_id: source_tab,
-            pane_id: None,
+            pane_id: 0,
         },
         region.prompt_row,
         Some(0),
@@ -3220,7 +3220,7 @@ fn harvest_rerun_capture_fixture_in(
     let mut entry = crate::harvest::CommandEntry::new_for_source(
         crate::harvest::HarvestSource {
             tab_id,
-            pane_id: split.then_some(source.0),
+            pane_id: source.0,
         },
         0,
         Some(0),
@@ -3271,13 +3271,298 @@ fn fenced_harvest_capture(
 }
 
 #[cfg(unix)]
+fn split_harvest_capture_owner(app: &mut App, directory: &std::path::Path) -> PaneId {
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec![
+            "-c".into(),
+            "stty raw -echo; printf READY; cat > \"$CAPTURE_DIR/$$\"".into(),
+        ],
+        env: std::collections::BTreeMap::from([(
+            "CAPTURE_DIR".into(),
+            directory.display().to_string(),
+        )]),
+    };
+    let mut panes = PaneManager::from_existing(
+        tab.take_terminal_owner().unwrap(),
+        shell,
+        100,
+        1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    let sibling = panes.split(SplitDirection::Vertical).unwrap();
+    tab.pane_manager = Some(panes);
+    sibling
+}
+
+#[cfg(unix)]
+fn current_harvest_capture_routes(
+    app: &mut App,
+    directory: &std::path::Path,
+) -> Vec<(crate::tabs::TerminalEventOrigin, std::path::PathBuf)> {
+    use crate::tabs::TerminalEventOrigin;
+    let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+    let captures = if let Some(panes) = &tab.pane_manager {
+        panes
+            .pane_ids()
+            .into_iter()
+            .map(|pane_id| {
+                let pid = panes.get_pane(pane_id).unwrap().pty.child_id().unwrap();
+                (
+                    TerminalEventOrigin::Pane {
+                        tab_id: tab.id,
+                        pane_id,
+                    },
+                    directory.join(pid.to_string()),
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![(
+            TerminalEventOrigin::Tab { tab_id: tab.id },
+            directory.join(tab.single_child_id().unwrap().to_string()),
+        )]
+    };
+    let deadline = Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        app.process_pty_events();
+        if captures.iter().all(|(_, path)| path.is_file()) {
+            return captures;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "capture readers did not become ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_source_survives_single_split_and_collapse() {
+    use crate::harvest::sprouts::SproutAction;
+    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
+    let source = entry.source;
+    app.harvest = Some(crate::harvest::HarvestMode::default());
+    app.active_terminal_mut().unwrap().process(
+        b"\r\n\x1b]133;A\x07\x1b]133;B\x07echo original\r\n\x1b]133;C\x07original output\r\n\x1b]133;D;0\x07");
+    app.process_pty_events();
+    let entry = app
+        .harvest
+        .as_ref()
+        .unwrap()
+        .cellar
+        .latest_for_source(source)
+        .unwrap()
+        .clone();
+    let mut expected_input = Vec::new();
+    for cycle in 0..3 {
+        let sibling = split_harvest_capture_owner(&mut app, directory.path());
+        let captures = current_harvest_capture_routes(&mut app, directory.path());
+        assert_ne!(app.active_harvest_source(), Some(source));
+        assert!(
+            app.terminal_for_harvest_source(source).is_some(),
+            "splitting must not orphan a retained source"
+        );
+        let availability = app.sprout_availability_for_entry(&entry);
+        assert!(availability.live_content_available);
+        for action in [
+            SproutAction::SearchOutput,
+            SproutAction::ScrollTo,
+            SproutAction::Rerun,
+        ] {
+            assert!(availability.action_enabled(action));
+            app.focus_control_pane(source.tab_id as u64, sibling.0)
+                .unwrap();
+            app.execute_sprout_action(action, Some(entry.clone()));
+            assert_eq!(app.active_harvest_source(), Some(source));
+        }
+        assert!(app.search.is_active());
+        expected_input.extend_from_slice(b"\x15echo original\r");
+        assert_eq!(
+            fenced_harvest_capture(&mut app, &captures),
+            vec![expected_input.clone(), vec![]]
+        );
+        expected_input.push(0);
+        assert_eq!(
+            app.harvest.as_ref().unwrap().cellar.len(),
+            cycle + 1,
+            "adoption must not duplicate completed regions"
+        );
+        app.close_control_pane(source.tab_id as u64, sibling.0)
+            .unwrap();
+        assert_eq!(app.active_harvest_source(), Some(source));
+        assert!(
+            app.sprout_availability_for_entry(&entry)
+                .live_content_available
+        );
+        // Later commands from the collapsed owner use the same source key.
+        app.active_terminal_mut().unwrap().process(format!(
+            "\x1b]133;A\x07\x1b]133;B\x07echo after{cycle}\r\n\x1b]133;C\x07after{cycle}\r\n\x1b]133;D;0\x07"
+        ).as_bytes());
+        app.process_pty_events();
+        let cellar = &app.harvest.as_ref().unwrap().cellar;
+        assert_eq!(cellar.len(), cycle + 2);
+        assert_eq!(
+            cellar.latest_for_source(source).unwrap().command_text(),
+            format!("echo after{cycle}")
+        );
+        assert!(cellar.entries().all(|entry| entry.source == source));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_nonzero_survivor_keeps_live_regions_and_rerun_after_collapse() {
+    use crate::harvest::sprouts::SproutAction;
+    let (mut app, directory, _, _) = harvest_rerun_capture_fixture();
+    let source = app.active_harvest_source().unwrap();
+    assert_eq!(source.pane_id, 2);
+    app.harvest = Some(crate::harvest::HarvestMode::default());
+    app.active_terminal_mut().unwrap().process(
+        b"\r\n\x1b]133;A\x07\x1b]133;B\x07echo nonzero\r\n\x1b]133;C\x07nonzero output\r\n\x1b]133;D;0\x07");
+    app.process_pty_events();
+    let entry = app
+        .harvest
+        .as_ref()
+        .unwrap()
+        .cellar
+        .latest_for_source(source)
+        .unwrap()
+        .clone();
+    app.close_control_pane(source.tab_id as u64, 0).unwrap();
+    app.close_control_pane(source.tab_id as u64, 1).unwrap();
+    assert_eq!(app.active_harvest_source(), Some(source));
+    assert!(
+        app.sprout_availability_for_entry(&entry)
+            .live_content_available
+    );
+    assert_eq!(app.harvest_command_text(&entry).0, "echo nonzero");
+    for action in [
+        SproutAction::SearchOutput,
+        SproutAction::ScrollTo,
+        SproutAction::Rerun,
+    ] {
+        app.execute_sprout_action(action, Some(entry.clone()));
+        assert_eq!(app.active_harvest_source(), Some(source));
+    }
+    let captures = current_harvest_capture_routes(&mut app, directory.path());
+    assert_eq!(
+        fenced_harvest_capture(&mut app, &captures),
+        vec![b"\x15echo nonzero\r".to_vec()]
+    );
+    assert_eq!(app.harvest.as_ref().unwrap().cellar.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_confirmation_resolves_stable_owner_after_topology_changes() {
+    use crate::terminal::guardrails::GuardrailAction;
+    for transition in [
+        "split",
+        "collapse",
+        "nonzero-collapse",
+        "removed",
+        "read-only-split",
+        "read-only-collapse",
+        "cancel",
+    ] {
+        let (mut app, directory, mut entry, initial_captures) =
+            harvest_rerun_capture_fixture_in(transition == "nonzero-collapse");
+        if transition == "nonzero-collapse" {
+            entry.source = app.active_harvest_source().unwrap();
+        }
+        entry.command = "rm -rf /synthetic-never-executed".into();
+        app.execute_sprout_action(
+            crate::harvest::sprouts::SproutAction::Rerun,
+            Some(entry.clone()),
+        );
+        let request_id = app.guardrail.request_id();
+        assert!(app.guardrail.is_awaiting(request_id));
+        assert!(
+            fenced_harvest_capture(&mut app, &initial_captures)
+                .iter()
+                .all(Vec::is_empty)
+        );
+        let tab_id = entry.source.tab_id as u64;
+        if transition == "nonzero-collapse" {
+            app.close_control_pane(tab_id, 0).unwrap();
+            app.close_control_pane(tab_id, 1).unwrap();
+        } else {
+            let sibling = split_harvest_capture_owner(&mut app, directory.path());
+            if transition.ends_with("collapse") {
+                app.close_control_pane(tab_id, sibling.0).unwrap();
+            } else if transition == "removed" {
+                app.close_control_pane(tab_id, entry.source.pane_id)
+                    .unwrap();
+                // Same tab, different surviving owner: never alias the old source.
+                assert!(app.terminal_for_harvest_source(entry.source).is_none());
+            }
+        }
+        if transition.starts_with("read-only") {
+            app.focus_control_pane(tab_id, entry.source.pane_id)
+                .unwrap();
+            app.toggle_focused_pane_read_only();
+        }
+        let captures = current_harvest_capture_routes(&mut app, directory.path());
+        let before = fenced_harvest_capture(&mut app, &captures);
+        assert!(
+            before.iter().flatten().all(|byte| *byte == 0),
+            "input before confirmation: {transition}"
+        );
+        let focused = app.active_harvest_source();
+        app.input_line_buffer = "preserve pending input".into();
+        if transition == "cancel" {
+            app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+        }
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        let sent = matches!(transition, "split" | "collapse" | "nonzero-collapse");
+        let source_origin = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .origin_for_pane(entry.source.tab_id, PaneId(entry.source.pane_id));
+        let expected = captures
+            .iter()
+            .zip(before)
+            .map(|((origin, _), mut bytes)| {
+                bytes.push(0);
+                if sent && Some(*origin) == source_origin {
+                    bytes.extend_from_slice(b"\x15rm -rf /synthetic-never-executed\r");
+                }
+                bytes
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fenced_harvest_capture(&mut app, &captures),
+            expected,
+            "{transition}"
+        );
+        assert_eq!(app.active_harvest_source(), focused);
+        assert_eq!(
+            app.input_line_buffer,
+            if sent && focused == Some(entry.source) {
+                ""
+            } else {
+                "preserve pending input"
+            }
+        );
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn harvest_rerun_never_broadcasts_the_source_command() {
     for excluded in [false, true] {
         let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
         app.toggle_broadcast();
         if excluded {
-            app.toggle_armed_broadcast_target(PaneId(entry.source.pane_id.unwrap()));
+            app.toggle_armed_broadcast_target(PaneId(entry.source.pane_id));
         }
         app.toggle_broadcast();
         let before = app.broadcast_targets().unwrap();
@@ -3481,11 +3766,11 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
                     .pane_manager
                     .as_mut()
                     .unwrap()
-                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .get_pane_mut(PaneId(entry.source.pane_id))
                     .unwrap()
                     .read_only = true
             }
-            "stale" => entry.source.pane_id = Some(u32::MAX),
+            "stale" => entry.source.pane_id = u32::MAX,
             "pane-closed" => {
                 app.tabs
                     .as_mut()
@@ -3495,7 +3780,7 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
                     .pane_manager
                     .as_mut()
                     .unwrap()
-                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .get_pane_mut(PaneId(entry.source.pane_id))
                     .unwrap()
                     .closed = true
             }
@@ -3599,7 +3884,7 @@ fn harvest_rerun_confirmation_is_exact_revocable_and_revalidates_source() {
                     .pane_manager
                     .as_mut()
                     .unwrap()
-                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .get_pane_mut(PaneId(entry.source.pane_id))
                     .unwrap()
                     .read_only = true
             }
@@ -3612,7 +3897,7 @@ fn harvest_rerun_confirmation_is_exact_revocable_and_revalidates_source() {
                     .pane_manager
                     .as_mut()
                     .unwrap()
-                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .get_pane_mut(PaneId(entry.source.pane_id))
                     .unwrap()
                     .closed = true
             }
@@ -3652,7 +3937,7 @@ fn harvest_rerun_confirmation_is_exact_revocable_and_revalidates_source() {
 #[test]
 fn harvest_rerun_single_tab_origin_uses_the_same_exact_user_write_policy() {
     let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture_in(false);
-    assert_eq!(entry.source.pane_id, None);
+    assert_eq!(entry.source.pane_id, 0);
     app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
     assert_eq!(
         fenced_harvest_capture(&mut app, &captures),
@@ -3751,7 +4036,7 @@ fn closed_guarded_destination_rejects_the_whole_batch_before_any_user_write() {
         .pane_manager
         .as_mut()
         .unwrap()
-        .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+        .get_pane_mut(PaneId(entry.source.pane_id))
         .unwrap()
         .closed = true;
     app.apply_guardrail_action(crate::terminal::guardrails::GuardrailAction::Confirm {
@@ -5127,7 +5412,7 @@ fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
     app.config.security.allow_gui_control_input = true;
     let tab_id = entry.source.tab_id;
     // Keep a history action addressed to a pane that is about to disappear.
-    entry.source.pane_id = Some(1);
+    entry.source.pane_id = 1;
     let original_pid = app
         .tabs
         .as_ref()
