@@ -40,6 +40,7 @@ pub(crate) struct SessionCapture {
 /// Complete ownership bundle for a tab that has not entered pane mode.
 pub(crate) struct TabTerminalOwner {
     pub pane_id: crate::panes::PaneId,
+    pub pane_allocation: crate::panes::PaneAllocationState,
     pub terminal: Terminal,
     pub pty: PtyHandle,
     pub pty_rx: Receiver<PtyEvent>,
@@ -127,6 +128,8 @@ pub struct Tab {
     /// Stable tab-local identity retained when pane mode collapses back to one
     /// terminal owner.
     single_pane_id: crate::panes::PaneId,
+    /// Allocation history while the tab directly owns its surviving terminal.
+    pane_allocation: crate::panes::PaneAllocationState,
     /// Transient user-input lock while the tab owns one terminal directly.
     single_read_only: bool,
     /// Harvest cursor/indicator state owned by this terminal.
@@ -200,6 +203,7 @@ impl Tab {
             transcript: None,
             pane_manager: None,
             single_pane_id: crate::panes::PaneId(0),
+            pane_allocation: Default::default(),
             single_read_only: false,
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
@@ -340,6 +344,7 @@ impl Tab {
             transcript: None,
             pane_manager: None,
             single_pane_id: crate::panes::PaneId(0),
+            pane_allocation: Default::default(),
             single_read_only: false,
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: ShellIntegrationSupport::Unavailable(
@@ -579,6 +584,7 @@ impl Tab {
     pub(crate) fn set_single_pane_id(&mut self, id: crate::panes::PaneId) {
         debug_assert!(self.pane_manager.is_none());
         self.single_pane_id = id;
+        self.pane_allocation.next_pane = self.pane_allocation.next_pane.max(id.0.saturating_add(1));
     }
 
     pub(crate) fn focused_pane_read_only(&self) -> bool {
@@ -870,6 +876,7 @@ impl Tab {
             transcript: None,
             pane_manager: None,
             single_pane_id: crate::panes::PaneId(0),
+            pane_allocation: Default::default(),
             single_read_only: false,
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
@@ -980,6 +987,7 @@ impl Tab {
         }
         Some(TabTerminalOwner {
             pane_id: self.single_pane_id,
+            pane_allocation: self.pane_allocation,
             terminal: self.terminal.take().unwrap(),
             pty: self.pty.take().unwrap(),
             pty_rx: self.pty_rx.take().unwrap(),
@@ -997,10 +1005,12 @@ impl Tab {
     }
 
     /// Restore the final pane as the tab's single live terminal owner.
-    pub(crate) fn restore_terminal_owner(&mut self, pane: crate::panes::Pane) {
+    pub(crate) fn restore_terminal_owner(&mut self, owner: crate::panes::CollapsedPaneOwner) {
         assert!(self.terminal.is_none());
         assert!(self.pty.is_none());
         assert!(self.pty_rx.is_none());
+        let crate::panes::CollapsedPaneOwner { pane, allocation } = owner;
+        self.pane_allocation = allocation;
         self.single_pane_id = pane.id;
         self.single_read_only = pane.read_only;
         self.closed = pane.closed;

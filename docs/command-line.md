@@ -205,6 +205,10 @@ subject to visible exact-destination confirmation.
 been scheduled; `close-pane` acknowledges only after the pane has been removed
 and reports the surviving count and focused pane ID. A pane surviving collapse
 to a single terminal retains its ID through persistence and the next split.
+Retired pane and ordinary divider IDs are not reused after collapse/re-split
+within that live tab; stale requests fail instead of addressing replacement
+owners. Relaunching a workspace is a new runtime, not a continuation of old
+control request identities.
 For a live-domain tab or pane, the command waits for the authoritative daemon
 snapshot and GUI reconciliation before acknowledging the exact removal. Closing
 the domain's last pane or last tab is rejected; domain termination remains an

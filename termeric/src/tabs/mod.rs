@@ -3419,7 +3419,7 @@ mod tests {
         assert!(panes.close_focused());
         let mut panes = tab.pane_manager.take().unwrap();
         let remaining = panes.take_remaining_pane().unwrap();
-        assert_eq!(remaining.id, attached);
+        assert_eq!(remaining.pane.id, attached);
         tab.restore_terminal_owner(remaining);
         let collapsed = tab.capture_workspace_tab(1, false).unwrap();
         assert_eq!(

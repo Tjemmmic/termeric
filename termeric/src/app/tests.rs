@@ -4983,6 +4983,16 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
         );
 
         let added = panes.split(SplitDirection::Vertical).unwrap();
+        assert_eq!(
+            added,
+            PaneId(cycle + 1),
+            "retired pane IDs must not be reused"
+        );
+        assert_eq!(
+            panes.get_dividers()[0].target,
+            crate::panes::DividerTarget::Local(u64::from(cycle + 1)),
+            "retired divider IDs must not be reused"
+        );
         assert_eq!(panes.spawned_shell_count(), 1);
         let added_pid = panes.get_pane(added).unwrap().pty.child_id().unwrap();
         assert_eq!(
@@ -5008,7 +5018,7 @@ fn split_adopts_one_owner_and_dissolve_preserves_output_without_orphans() {
         assert!(panes.close_focused());
         assert_eq!(panes.pane_count(), 1);
         let remaining = panes.take_remaining_pane().unwrap();
-        assert_eq!(remaining.pty.child_id(), Some(original_pid));
+        assert_eq!(remaining.pane.pty.child_id(), Some(original_pid));
         tab.restore_terminal_owner(remaining);
         assert!(tab.has_single_terminal_owner());
         assert_eq!(tab.single_child_id(), Some(original_pid));
@@ -5108,6 +5118,238 @@ fn pane_identity_survives_collapse_and_the_next_split() {
     );
     assert!(panes.get_pane(PaneId(1)).is_some());
     assert_eq!(panes.split(SplitDirection::Horizontal).unwrap(), PaneId(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn collapsed_tab_rejects_retired_pane_and_divider_requests_after_resplit() {
+    let (mut app, directory, mut entry, original_captures) = harvest_rerun_capture_fixture();
+    app.config.security.allow_gui_control_input = true;
+    let tab_id = entry.source.tab_id;
+    // Keep a history action addressed to a pane that is about to disappear.
+    entry.source.pane_id = Some(1);
+    let original_pid = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .pane_manager
+        .as_ref()
+        .unwrap()
+        .get_pane(PaneId(0))
+        .unwrap()
+        .pty
+        .child_id();
+    assert_eq!(app.close_control_pane(tab_id as u64, 2).unwrap(), (2, 1));
+    assert_eq!(app.close_control_pane(tab_id as u64, 1).unwrap(), (1, 0));
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+    assert!(tab.pane_manager.is_none());
+    assert_eq!(tab.single_child_id(), original_pid);
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec![
+            "-c".into(),
+            "stty raw -echo; printf READY; cat > \"$CAPTURE_DIR/$$\"".into(),
+        ],
+        env: std::collections::BTreeMap::from([(
+            "CAPTURE_DIR".into(),
+            directory.path().display().to_string(),
+        )]),
+    };
+    // Only the renderer-dependent first adoption is performed directly; all
+    // closure and stale control requests below use the real app handlers.
+    let mut panes = PaneManager::from_existing(
+        tab.take_terminal_owner().unwrap(),
+        shell,
+        100,
+        1024 * 1024,
+        800.0,
+        480.0,
+        10.0,
+        20.0,
+    );
+    let replacement = panes.split(SplitDirection::Vertical).unwrap();
+    assert_eq!(replacement, PaneId(3));
+    assert_eq!(
+        panes.get_dividers()[0].target,
+        crate::panes::DividerTarget::Local(3)
+    );
+    let replacement_pid = panes.get_pane(replacement).unwrap().pty.child_id().unwrap();
+    let survivor_capture = original_captures
+        .iter()
+        .find(|(origin, _)| {
+            *origin
+                == crate::tabs::TerminalEventOrigin::Pane {
+                    tab_id,
+                    pane_id: PaneId(0),
+                }
+        })
+        .unwrap()
+        .clone();
+    let captures = vec![
+        survivor_capture,
+        (
+            crate::tabs::TerminalEventOrigin::Pane {
+                tab_id,
+                pane_id: replacement,
+            },
+            directory.path().join(replacement_pid.to_string()),
+        ),
+    ];
+    tab.pane_manager = Some(panes);
+    let deadline = Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        app.process_pty_events();
+        if app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .terminal_for_origin(captures[1].0)
+            .unwrap()
+            .rows_text(0, 23)
+            .contains("READY")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "replacement capture did not become ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    for retired in [1, 2] {
+        assert!(
+            app.send_control_text(tab_id as u64, retired, "must not arrive", false, true)
+                .unwrap_err()
+                .contains("does not exist")
+        );
+        assert!(
+            app.focus_control_pane(tab_id as u64, retired)
+                .unwrap_err()
+                .contains("does not exist")
+        );
+        assert!(
+            app.close_control_pane(tab_id as u64, retired)
+                .unwrap_err()
+                .contains("does not exist")
+        );
+        assert!(
+            app.resize_control_divider(tab_id as u64, u64::from(retired), 700)
+                .unwrap_err()
+                .contains("does not exist")
+        );
+    }
+    app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
+    let panes = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .pane_manager
+        .as_ref()
+        .unwrap();
+    assert_eq!(panes.focused_id(), replacement);
+    assert_eq!(panes.pane_count(), 2);
+    assert_eq!(panes.get_dividers()[0].ratio_millis, 500);
+    assert_eq!(
+        panes.get_pane(PaneId(0)).unwrap().pty.child_id(),
+        original_pid
+    );
+    assert!(
+        fenced_harvest_capture(&mut app, &captures)
+            .iter()
+            .all(Vec::is_empty)
+    );
+    // Fresh IDs still route successfully; the fixture captures, never executes.
+    app.send_control_text(tab_id as u64, replacement.0, "fresh", false, false)
+        .unwrap();
+    assert_eq!(
+        fenced_harvest_capture(&mut app, &captures),
+        vec![b"\0".to_vec(), b"\0fresh".to_vec()]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pane_allocation_history_survives_failed_split_and_exhaustion() {
+    for (next_pane, next_divider, expected_error) in [
+        (u32::MAX, 7, "pane ID space exhausted"),
+        (7, u64::MAX, "divider ID space exhausted"),
+        (u32::MAX - 1, u64::MAX - 1, "divider ID space exhausted"),
+    ] {
+        let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let original_pid = tab.single_child_id();
+        let mut owner = tab.take_terminal_owner().unwrap();
+        owner.pane_allocation = crate::panes::PaneAllocationState {
+            next_pane,
+            next_divider,
+        };
+        let mut shell = ShellConfig {
+            program: Some("/definitely/missing/termeric-shell".into()),
+            args: vec!["-c".into(), "sleep 5".into()],
+            env: Default::default(),
+        };
+        let mut panes = PaneManager::from_existing(
+            owner,
+            shell.clone(),
+            100,
+            1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        );
+        assert!(panes.split(SplitDirection::Vertical).is_err());
+        assert_eq!(panes.spawned_shell_count(), 0);
+        tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
+        let owner = tab.take_terminal_owner().unwrap();
+        assert_eq!(owner.pane_allocation.next_pane, next_pane);
+        assert_eq!(owner.pane_allocation.next_divider, next_divider);
+        shell.program = Some("/bin/sh".into());
+        let mut panes = PaneManager::from_existing(
+            owner,
+            shell.clone(),
+            100,
+            1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        );
+        if next_pane == u32::MAX - 1 {
+            let last = panes.split(SplitDirection::Vertical).unwrap();
+            assert_eq!(last, PaneId(u32::MAX - 1));
+            assert_eq!(
+                panes.get_dividers()[0].target,
+                crate::panes::DividerTarget::Local(u64::MAX - 1)
+            );
+            assert!(panes.close(last));
+        }
+        tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
+        assert_eq!(tab.single_child_id(), original_pid);
+        let mut panes = PaneManager::from_existing(
+            tab.take_terminal_owner().unwrap(),
+            shell,
+            100,
+            1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        );
+        assert!(
+            panes
+                .split(SplitDirection::Vertical)
+                .unwrap_err()
+                .to_string()
+                .contains(expected_error)
+        );
+        assert_eq!(panes.spawned_shell_count(), 0);
+        assert_eq!(panes.pane_count(), 1);
+    }
 }
 
 #[cfg(unix)]

@@ -13,6 +13,30 @@ pub use tree::{PaneId, PaneTree, SplitDirection};
 pub const PANE_DIVIDER_THICKNESS: f32 = 4.0;
 pub const PANE_DIVIDER_HIT_MARGIN: f32 = 8.0;
 
+/// Tab-local allocation history, including IDs no longer present in the tree.
+/// This follows the tab's ownership mode, never an individually moved pane.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PaneAllocationState {
+    pub next_pane: u32,
+    pub next_divider: u64,
+}
+
+impl Default for PaneAllocationState {
+    fn default() -> Self {
+        Self {
+            next_pane: 1,
+            next_divider: 1,
+        }
+    }
+}
+
+/// Dissolving pane mode must transfer its allocation history as well as its
+/// final live owner. Keeping these together makes every collapse path explicit.
+pub(crate) struct CollapsedPaneOwner {
+    pub pane: Pane,
+    pub allocation: PaneAllocationState,
+}
+
 use crate::config::ShellConfig;
 use crate::terminal::container::{SplitContainer, TerminalContainer};
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
@@ -487,6 +511,7 @@ impl PaneManager {
         cell_height: f32,
     ) -> Self {
         let id = owner.pane_id;
+        let allocation = owner.pane_allocation;
         let split_launch = match &owner.launch {
             crate::workspace::WorkspaceLaunch::Profile { name } => {
                 crate::workspace::WorkspaceLaunch::Profile { name: name.clone() }
@@ -522,7 +547,7 @@ impl PaneManager {
         let mut panes = HashMap::new();
         panes.insert(id, pane);
         Self {
-            tree: PaneTree::new(id),
+            tree: PaneTree::with_next_local_split_id(id, allocation.next_divider),
             panes,
             focused: id,
             zoomed: None,
@@ -534,7 +559,7 @@ impl PaneManager {
             screen_checksum_reporting,
             kitty_file_transmission,
             xterm_keyboard_type,
-            next_id: id.0.saturating_add(1),
+            next_id: allocation.next_pane.max(id.0.saturating_add(1)),
             total_width,
             total_height,
             cell_width,
@@ -766,7 +791,7 @@ impl PaneManager {
                 continue;
             }
             let local_id = PaneId(next_id);
-            next_id = next_id.saturating_add(1);
+            next_id = next_id.checked_add(1).context("pane ID space exhausted")?;
             let geometry = TerminalGeometry::from_available_pixels(
                 self.total_width,
                 self.total_height,
@@ -1692,14 +1717,21 @@ impl PaneManager {
 
     /// Take the last remaining pane out of the manager.
     ///
-    /// Returns `Some(pane)` if exactly one pane remains, consuming it from the
-    /// internal map. Used when dissolving pane mode back to single-terminal tab.
-    pub fn take_remaining_pane(&mut self) -> Option<Pane> {
+    /// Returns the sole pane and both allocation high-water marks, consuming
+    /// the pane from the internal map. Used when dissolving pane mode back to a
+    /// single-terminal tab; retired IDs must remain retired on the next split.
+    pub(crate) fn take_remaining_pane(&mut self) -> Option<CollapsedPaneOwner> {
         if self.panes.len() != 1 {
             return None;
         }
         let id = *self.panes.keys().next()?;
-        self.panes.remove(&id)
+        Some(CollapsedPaneOwner {
+            pane: self.panes.remove(&id)?,
+            allocation: PaneAllocationState {
+                next_pane: self.next_id,
+                next_divider: self.tree.next_local_split_id(),
+            },
+        })
     }
 
     /// Iterate over all panes with their layouts
@@ -2184,6 +2216,44 @@ mod tests {
         assert_eq!(pair.pane_ids()[0], pair_focus);
         assert!(!pair.get_dividers()[0].vertical);
         assert_eq!(pair.get_dividers()[0].ratio_millis, 500);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_reconciliation_rejects_exhausted_local_pane_ids_before_relay_spawn() {
+        use crate::domain::model::{LivePaneLayout, LiveTopologyPane, LiveTopologyTab};
+        let mut manager = property_manager(1);
+        manager.next_id = u32::MAX;
+        let mut mapping = HashMap::from([(PaneId(0), 10)]);
+        let snapshot = LiveTopologyTab {
+            id: 0,
+            title: "replacement".into(),
+            user_title: None,
+            pinned: false,
+            focused_pane: 11,
+            layout: LivePaneLayout::Pane { pane: 11 },
+            panes: vec![LiveTopologyPane {
+                id: 11,
+                title: "new".into(),
+                closed: false,
+            }],
+        };
+        // A nonexistent executable proves rejection precedes any relay launch.
+        let relay = crate::domain::DomainAuthority::Local
+            .relay_command("/definitely/missing/termeric-relay".into());
+        for _ in 0..2 {
+            assert!(
+                manager
+                    .reconcile_domain(&mut mapping, "test", &snapshot, &relay)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("pane ID space exhausted")
+            );
+            assert_eq!(mapping, HashMap::from([(PaneId(0), 10)]));
+            assert_eq!(manager.pane_ids(), vec![PaneId(0)]);
+            assert_eq!(manager.focused_id(), PaneId(0));
+            assert_eq!(manager.next_id, u32::MAX);
+        }
     }
 
     #[cfg(unix)]
