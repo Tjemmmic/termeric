@@ -66,6 +66,28 @@ longer report zero growth from a single point and pass the memory-stability gate
 
 ## Running it
 
+### Known launch-provenance defect
+
+[#108](https://github.com/Tjemmmic/termeric/issues/108) tracks a reproduced
+candidate-binding defect in the current runners. The schema-3 core runner reads
+Git identity and hashes the test-binary pathname after execution. The schema-5
+displayed runner captures initial Git identity but also hashes the binary
+pathname after execution, without reconciling final source state. A checkout or
+rebuild during a soak can therefore misattribute results to a different
+candidate/executable. A private fake-process reproduction exercised the real
+core report construction and validator: both accepted a clean B record even
+though the scenario had launched A's different bytes.
+
+The current validators still check log/artifact integrity and reconstruct
+resource results, but that is **not proof of launch identity**. Do not treat
+their `candidate_eligible` flag alone as reliable source/executable provenance
+until #108 is fixed and the strengthened lane is rerun. Keep the checkout and
+build tree unchanged during local runs; this operating precaution is not a
+replacement for fixing the runner. Historical measurements below remain useful
+resource observations, not evidence that this drift-detection gap is closed.
+
+### Commands
+
 Run the same 30-second lane used for pushes and pull requests:
 
 ```bash
@@ -86,6 +108,22 @@ WGPU_BACKEND=vulkan python3 scripts/run_soak.py \
   --log target/soak/release.log
 python3 scripts/validate_soak.py target/soak/release.json --source .
 ```
+
+For an offscreen Mesa GL run on a host where the default GL enumeration exposes
+only a hardware adapter, explicitly select software rendering:
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=true WGPU_BACKEND=gl python3 scripts/run_soak.py \
+  --duration-seconds 30 --gpu-smoke \
+  --output target/soak/software-gl.json \
+  --log target/soak/software-gl.log
+```
+
+This combination passed the offscreen smoke on llvmpipe on the current Arch
+host. `WGPU_BACKEND=gl` alone exposed only its Radeon adapter and failed the
+software-only test. Retain such failures; a later successful probe must not be
+spliced into an earlier failed record. No desktop window is created by this
+core/offscreen lane, and the environment selection is scoped to that command.
 
 The log must be inside the report directory because the schema records its
 confined relative path, exact byte length, and SHA-256 digest. The independent
@@ -266,6 +304,29 @@ is future work. The schema-5 displayed/native report uses its own manifest
 validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
+
+On 2026-09-14, the unchanged `5eeded9` checkout completed a schema-3 600-second
+core scenario in `/tmp/termeric-core-soak-5eeded9-600s/results.json`: 1,199
+resource samples, 7,428 complete iterations, 45,828 KiB peak RSS, −64 KiB
+first-to-last-quartile RSS growth, zero thread/fd growth, four peak children,
+10,590-byte peak transcript backlog, no drops, zero queued bytes after every
+finish, and complete observed-child cleanup. Eighteen of nineteen checks passed;
+the initial software-only GPU smoke failed because default GL enumeration
+provided no CPU adapter. The overall record is **failed/ineligible**, and was
+validated only with `--allow-ineligible` to verify diagnostic consistency.
+
+A separate, explicitly software-selected 30-second run at the same unchanged
+checkout passed all nineteen checks and normal schema-3 validation in
+`/tmp/termeric-core-soak-5eeded9-software-30s/results.json`: 61 samples, 422
+iterations, 44,004 KiB peak RSS, 8,184 KiB quartile RSS growth, zero thread
+growth, −1 descriptor growth, complete transcript drainage with no drops,
+complete observed-child cleanup, and a passing llvmpipe offscreen smoke. An
+independent offscreen probe also passed with that environment. The short run
+overlapped the final portion of the long scenario; these are resource-ceiling
+observations, not throughput benchmarks. Neither short result repairs the
+long-run GPU failure, closes #108's launch-provenance gap, or supplies native
+desktop/provider acceptance. JSON and scenario logs were retained separately
+and validated before the documentation-only follow-up commit.
 
 On 2026-08-25, the local 30-second change-gate scenario plus headless Vulkan
 smoke completed 322 iterations with 61 samples and all ten checks in the
