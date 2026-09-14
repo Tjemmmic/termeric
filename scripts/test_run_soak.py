@@ -2,6 +2,7 @@ import unittest
 import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from scripts.run_soak import (
     COLLAPSED_INVENTORY_LABEL,
@@ -19,6 +20,7 @@ from scripts.run_soak import (
     minimum_sample_count,
     parse_progress,
     process_children,
+    process_snapshot,
     summarize_resource_inventories,
 )
 
@@ -40,6 +42,17 @@ def sample(index: int, *, rss: float = 100_000, threads: int = 4, fds: int = 12)
 
 
 class SoakCeilingTests(unittest.TestCase):
+    def test_exited_process_without_rss_is_an_unavailable_sample_not_zero_memory(self):
+        for state in ("Z (zombie)", "X (dead)", "x (dead)"):
+            with patch("pathlib.Path.read_text", return_value=f"Name:\tfixture\nState:\t{state}\n"):
+                with self.assertRaises(ProcessLookupError):
+                    process_snapshot(12345, 0)
+
+    def test_live_process_missing_rss_is_not_silently_accepted(self):
+        with patch("pathlib.Path.read_text", return_value="Name:\tfixture\nState:\tS (sleeping)\n"):
+            with self.assertRaises(KeyError):
+                process_snapshot(12345, 0)
+
     def test_report_schema_is_versioned_for_resource_inventories(self):
         self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 4)
 

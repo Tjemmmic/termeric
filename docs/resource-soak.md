@@ -89,6 +89,13 @@ The runner closes its descriptor on normal return, launch/setup failure,
 timeout, and interruption. Restricted `/proc` execution fails; there is no
 fallback to launching an unmeasured pathname.
 
+An unavailable `/proc` sample does not terminate a still-live core scenario.
+In particular, an exited zombie/dead process can lose `VmRSS` before the next
+child-status poll. The sampler reports that observation as unavailable, then
+the runner polls again; it does not invent a zero-RSS sample. Missing memory
+fields on a live process remain errors, and minimum sample coverage still
+applies.
+
 Core source identity/cleanliness is captured **before building**, checked again
 after the binary is measured, recorded at each launch, and checked after the
 run. Displayed runs apply the same checks around their supplied prebuilt binary

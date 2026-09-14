@@ -232,6 +232,11 @@ def process_snapshot(pid: int, started: float) -> dict[str, Any]:
         for line in status.splitlines()
         if ":" in line
     }
+    state = values.get("State", "").split(maxsplit=1)
+    if "VmRSS" not in values and state and state[0] in {"Z", "X", "x"}:
+        # exit_mm removes memory fields before the parent necessarily reaps the
+        # process. Do not invent zero RSS or fail an otherwise normal exit.
+        raise ProcessLookupError("process exited before memory could be sampled")
     rss_kib = float(values["VmRSS"].split()[0])
     tasks = process_tasks(proc)
     fd_entries = sorted((proc / "fd").iterdir(), key=lambda path: int(path.name))
