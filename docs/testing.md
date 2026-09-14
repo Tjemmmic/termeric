@@ -42,6 +42,11 @@ order-independent replay identity, and exact empty/whitespace/Unicode/shell-
 character environment delivery for both existing-tab and fresh-window launch.
 These tests do not open a native window; compositor visibility/placement
 acceptance is deferred to the operator and is not a release claim.
+Launch-status coverage adds real child exit/cleanup and ownership-transfer
+fixtures, consumed-status caching, explicit polling failures, bounded ledger
+admission/eviction, replay-expiry refusal, and strict CLI/wire/result validation.
+These fixtures run local shell helpers only. Native GUI status acceptance and
+any real provider child remain operator work.
 The separate `scripts/run_fake_provider_acceptance.py` runner resolves and
 executes only that exact fake-CLI test, strips the real-Codex opt-in variable,
 and emits a sealed partial integration record. CI uploads it with the tested

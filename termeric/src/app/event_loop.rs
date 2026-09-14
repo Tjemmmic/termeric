@@ -1991,6 +1991,9 @@ impl ApplicationHandler<AppEvent> for App {
                                 })
                         }
                     }
+                    crate::control::protocol::Request::LaunchStatus { .. } => Err(
+                        "Launch status requires the process-level application controller".into(),
+                    ),
                     crate::control::protocol::Request::CreateWindow { .. }
                     | crate::control::protocol::Request::LaunchWindow { .. }
                     | crate::control::protocol::Request::CreateTab { .. }

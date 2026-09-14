@@ -245,6 +245,72 @@ pub fn get_text(
     }
 }
 
+pub fn launch_status(
+    process_id: u32,
+    launch_request_id: String,
+    json: bool,
+) -> anyhow::Result<String> {
+    let query = Request::LaunchStatus {
+        launch_request_id: launch_request_id.clone(),
+    };
+    query.validate().map_err(anyhow::Error::msg)?;
+    let endpoint = ControlPaths::discover_all()?
+        .into_iter()
+        .find(|endpoint| endpoint.process_id == process_id)
+        .ok_or_else(|| anyhow::anyhow!("GUI process {process_id} was not found"))?;
+    format_launch_status(
+        request(&endpoint, query)?,
+        process_id,
+        &launch_request_id,
+        json,
+    )
+}
+
+fn format_launch_status(
+    frame: ServerFrame,
+    process_id: u32,
+    launch_request_id: &str,
+    json: bool,
+) -> anyhow::Result<String> {
+    match frame {
+        ServerFrame::LaunchStatus {
+            version,
+            process_id: returned_process,
+            launch_request_id: returned_id,
+            state,
+            terminal_closed,
+        } if version == protocol::PROTOCOL_VERSION
+            && process_id == returned_process
+            && launch_request_id == returned_id =>
+        {
+            state.validate().map_err(anyhow::Error::msg)?;
+            if json {
+                Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "schema_version": protocol::JSON_SCHEMA_VERSION,
+                    "process_id": process_id,
+                    "launch_request_id": launch_request_id,
+                    "state": state,
+                    "terminal_closed": terminal_closed,
+                }))?)
+            } else {
+                let result = match state {
+                    protocol::LaunchState::Running {} => "running".to_string(),
+                    protocol::LaunchState::Exited { exit_code, success } => {
+                        format!("exited with portable code {exit_code} (success: {success})")
+                    }
+                };
+                Ok(format!(
+                    "Launch {launch_request_id} in process {process_id}: {result}; terminal closed: {terminal_closed}."
+                ))
+            }
+        }
+        ServerFrame::Error { version, message } if version == protocol::PROTOCOL_VERSION => {
+            anyhow::bail!(message)
+        }
+        _ => anyhow::bail!("Invalid GUI launch-status response"),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn send_text(
     process_id: u32,
@@ -1689,6 +1755,41 @@ fn tab_kind_name(kind: &super::protocol::TabKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn launch_status_output_validates_identity_and_separates_child_from_cli_result() {
+        use super::*;
+        let id = "a".repeat(32);
+        let frame = ServerFrame::LaunchStatus {
+            version: protocol::PROTOCOL_VERSION,
+            process_id: 42,
+            launch_request_id: id.clone(),
+            state: protocol::LaunchState::Exited {
+                exit_code: 7,
+                success: false,
+            },
+            terminal_closed: true,
+        };
+        let json = format_launch_status(frame.clone(), 42, &id, true).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(json["state"]["exit_code"], 7);
+        assert_eq!(json["state"]["success"], false);
+        assert_eq!(json["terminal_closed"], true);
+        for private in ["program", "args", "environment", "cwd", "text"] {
+            assert!(json.get(private).is_none());
+        }
+        assert!(format_launch_status(frame.clone(), 43, &id, false).is_err());
+        assert!(format_launch_status(frame.clone(), 42, &"b".repeat(32), false).is_err());
+        let mut incompatible = frame.clone();
+        if let ServerFrame::LaunchStatus { version, .. } = &mut incompatible {
+            *version -= 1;
+        }
+        assert!(format_launch_status(incompatible, 42, &id, false).is_err());
+        assert!(
+            format_launch_status(frame, 42, &id, false)
+                .unwrap()
+                .contains("portable code 7")
+        );
+    }
     use super::*;
     use crate::control::protocol::{
         DividerInventory, DividerKind, PaneInventory, SplitDirection, TabInventory, TabKind,

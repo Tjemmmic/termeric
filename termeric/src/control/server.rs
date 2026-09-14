@@ -200,6 +200,24 @@ fn serve_client(
         }
     };
     let frame = match response {
+        Response::LaunchStatus {
+            process_id,
+            launch_request_id,
+            state,
+            terminal_closed,
+        } => {
+            if process_id == 0 || !protocol::valid_request_id(&launch_request_id) {
+                anyhow::bail!("Invalid GUI launch-status identity");
+            }
+            state.validate().map_err(anyhow::Error::msg)?;
+            ServerFrame::LaunchStatus {
+                version: protocol::PROTOCOL_VERSION,
+                process_id,
+                launch_request_id,
+                state,
+                terminal_closed,
+            }
+        }
         Response::Inventory(inventory) => {
             inventory.validate()?;
             ServerFrame::Inventory {
@@ -709,6 +727,59 @@ fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn authenticated_launch_status_round_trip_does_not_invoke_a_mutation() {
+        use super::*;
+        let id = "c".repeat(32);
+        let expected_id = id.clone();
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let worker = thread::spawn(move || {
+            serve_client(server, "fixture-token", |request| {
+                assert!(request.request_id().is_none());
+                assert_eq!(
+                    request,
+                    Request::LaunchStatus {
+                        launch_request_id: expected_id.clone()
+                    }
+                );
+                Ok(Response::LaunchStatus {
+                    process_id: 42,
+                    launch_request_id: expected_id,
+                    state: protocol::LaunchState::Exited {
+                        exit_code: 17,
+                        success: false,
+                    },
+                    terminal_closed: true,
+                })
+            })
+            .unwrap();
+        });
+        protocol::write_frame(
+            &mut client,
+            &ClientFrame {
+                version: protocol::PROTOCOL_VERSION,
+                token: "fixture-token".into(),
+                request: Request::LaunchStatus {
+                    launch_request_id: id.clone(),
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            protocol::read_frame::<ServerFrame>(&mut client).unwrap(),
+            ServerFrame::LaunchStatus {
+                version: protocol::PROTOCOL_VERSION,
+                process_id: 42,
+                launch_request_id: id,
+                state: protocol::LaunchState::Exited {
+                    exit_code: 17,
+                    success: false
+                },
+                terminal_closed: true,
+            }
+        );
+        worker.join().unwrap();
+    }
     use super::*;
 
     #[test]

@@ -145,6 +145,10 @@ pub struct Tab {
 }
 
 impl Tab {
+    pub(crate) fn child_observer(&self) -> Option<termeric_core::pty::ChildObserver> {
+        self.pty.as_ref().map(PtyHandle::child_observer)
+    }
+
     pub(crate) fn new_with_geometry(
         id: usize,
         geometry: TerminalGeometry,

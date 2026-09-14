@@ -439,6 +439,24 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
         return Ok(ParseOutcome::Print(control_help_text()));
     }
     match command {
+        "launch-status" => {
+            let process_id = parse_control_process_id(arguments.get(1))?;
+            let launch_request_id =
+                domain_utf8(arguments.get(2), "launch-status requires REQUEST_ID")?;
+            crate::control::protocol::Request::LaunchStatus {
+                launch_request_id: launch_request_id.clone(),
+            }
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+            let json = parse_only_json(&arguments[3..], "control launch-status")?;
+            Ok(ParseOutcome::Control(
+                crate::control::ControlCommand::LaunchStatus {
+                    process_id,
+                    launch_request_id,
+                    json,
+                },
+            ))
+        }
         "list" => Ok(ParseOutcome::Control(
             crate::control::ControlCommand::List {
                 json: parse_only_json(&arguments[1..], "control list")?,
@@ -1056,6 +1074,7 @@ fn control_help_text() -> String {
     "Usage: termeric control SUBCOMMAND\n\n\
 Commands for already-running local GUI processes:\n  \
   list [--json]\n      List bounded window, tab, and pane metadata\n  \
+  launch-status PROCESS REQUEST_ID [--json]\n      Observe the initial child of a retained command launch\n  \
   get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
@@ -1877,6 +1896,23 @@ authority for topology, controls, focus, and every pane relay."
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn launch_status_requires_exact_launch_identity_and_only_optional_json() {
+        let id = "a".repeat(32);
+        assert!(
+            matches!(parse(["control", "launch-status", "42", &id, "--json"].into_iter().map(OsString::from)).unwrap(),
+            ParseOutcome::Control(crate::control::ControlCommand::LaunchStatus { process_id: 42, launch_request_id, json: true }) if launch_request_id == id)
+        );
+        for args in [
+            vec!["control", "launch-status", "42"],
+            vec!["control", "launch-status", "42", "invalid"],
+            vec!["control", "launch-status", "0", &id],
+            vec!["control", "launch-status", "42", &id, "--json", "--json"],
+            vec!["control", "launch-status", "42", &id, "--wait"],
+        ] {
+            assert!(parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
     use super::*;
 
     fn run(arguments: &[&str]) -> LaunchPlan {

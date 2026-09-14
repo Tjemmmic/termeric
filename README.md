@@ -314,6 +314,9 @@ tab ID.
 starts one exact local command under the same bounded environment-overlay
 contract as its initial tab, and returns both new stable IDs only after native,
 renderer, and PTY initialization succeed.
+`termeric control launch-status PROCESS REQUEST_ID [--json]` observes the
+initial child's portable completion result across tab/pane moves and cleanup,
+within a 256-record process-local retention limit.
 Exact window-focus requests, tab selection, and pane focus are available through
 `focus-window`, `select-tab`, and `focus-pane`; Wayland window activation remains
 compositor-controlled and fails explicitly.

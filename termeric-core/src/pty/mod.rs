@@ -4,13 +4,16 @@
 //! using the portable-pty crate.
 
 mod capabilities;
+mod child;
 mod event;
 
 pub use capabilities::{COMPATIBILITY_TERM, TERMERIC_TERM};
+pub use child::{ChildExitStatus, ChildObservation, ChildObserver};
 pub use event::PtyEvent;
 pub use portable_pty::PtySize;
 
-use portable_pty::{Child, CommandBuilder, MasterPty, native_pty_system};
+use child::PtyChild;
+use portable_pty::{CommandBuilder, MasterPty, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -45,7 +48,7 @@ pub struct Pty {
     /// Writer for PTY input
     writer: Box<dyn Write + Send>,
     /// The child shell process
-    child: Box<dyn Child + Send + Sync>,
+    child: PtyChild,
 }
 
 impl Pty {
@@ -147,7 +150,7 @@ impl Pty {
         }
 
         // Spawn the shell on the slave side
-        let child = pair.slave.spawn_command(cmd)?;
+        let child = PtyChild::new(pair.slave.spawn_command(cmd)?);
 
         // Drop the slave - we only need the master
         drop(pair.slave);
@@ -203,6 +206,11 @@ impl Pty {
         self.child.try_wait().ok().flatten().is_none()
     }
 
+    /// Observe this exact child across reader detachment and terminal cleanup.
+    pub fn child_observer(&self) -> ChildObserver {
+        self.child.observer()
+    }
+
     /// Wait for the child process to exit
     pub fn wait(&mut self) -> Option<portable_pty::ExitStatus> {
         self.child.wait().ok()
@@ -230,10 +238,15 @@ impl Pty {
 pub struct PtyHandle {
     master: Box<dyn MasterPty + Send>,
     writer: Option<Box<dyn Write + Send>>,
-    child: Box<dyn Child + Send + Sync>,
+    child: PtyChild,
 }
 
 impl PtyHandle {
+    /// Observe this exact child across pane/window ownership changes and cleanup.
+    pub fn child_observer(&self) -> ChildObserver {
+        self.child.observer()
+    }
+
     /// Resize the PTY
     pub fn resize(&self, size: PtySize) -> Result<(), PtyError> {
         if self.master.get_size()? != size {
@@ -286,16 +299,6 @@ fn detached_writer_error() -> std::io::Error {
         std::io::ErrorKind::BrokenPipe,
         "PTY writer is owned by another worker",
     )
-}
-
-impl Drop for PtyHandle {
-    fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none()
-            && let Err(error) = self.child.kill()
-        {
-            log::warn!("Failed to terminate dropped PTY child: {error}");
-        }
-    }
 }
 
 /// Spawn a reader thread that sends PTY output via a channel.
@@ -386,6 +389,81 @@ mod tests {
 
     struct CountingByteReader {
         reads: Arc<AtomicUsize>,
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_observation_survives_wait_detach_and_output_drain() {
+        for code in [0, 7] {
+            let args = vec![
+                "-c".into(),
+                format!("printf FINAL_CHILD_OUTPUT; exit {code}"),
+            ];
+            let mut pty = Pty::new_with_command(80, 24, Some("/bin/sh"), &args).unwrap();
+            let observer = pty.child_observer();
+            assert_eq!(pty.wait().unwrap().exit_code(), code);
+            assert!(!pty.is_running());
+            let expected = ChildExitStatus {
+                exit_code: code,
+                success: code == 0,
+            };
+            assert_eq!(observer.poll().unwrap().exit, Some(expected));
+            let (handle, reader) = pty.take_reader();
+            let rx = spawn_reader_thread(reader);
+            let mut output = Vec::new();
+            loop {
+                match rx.recv_timeout(Duration::from_secs(2)) {
+                    Ok(PtyEvent::Output(bytes)) => output.extend(bytes),
+                    Ok(PtyEvent::Closed | PtyEvent::Error(_)) => break,
+                    other => panic!("reader did not finish: {other:?}"),
+                }
+            }
+            assert_eq!(output, b"FINAL_CHILD_OUTPUT");
+            assert!(!observer.poll().unwrap().terminal_closed);
+            drop(handle);
+            for _ in 0..3 {
+                assert_eq!(
+                    observer.poll().unwrap(),
+                    ChildObservation {
+                        exit: Some(expected),
+                        terminal_closed: true
+                    }
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_observer_does_not_keep_a_closed_terminal_child_alive() {
+        let pty =
+            Pty::new_with_command(80, 24, Some("/bin/sh"), &["-c".into(), "read value".into()])
+                .unwrap();
+        let (handle, reader) = pty.take_reader();
+        let observer = handle.child_observer();
+        assert_eq!(
+            observer.poll().unwrap(),
+            ChildObservation {
+                exit: None,
+                terminal_closed: false
+            }
+        );
+        drop(handle);
+        drop(reader);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let observation = observer.poll().unwrap();
+            assert!(observation.terminal_closed);
+            if let Some(exit) = observation.exit {
+                assert!(!exit.success);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "closed terminal child remained alive"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     impl Read for CountingByteReader {

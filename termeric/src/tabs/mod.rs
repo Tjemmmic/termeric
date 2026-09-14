@@ -2942,6 +2942,92 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn launched_child_observer_follows_split_pane_transfer_collapse_and_window_transfer() {
+        use termeric_core::pty::ChildExitStatus;
+        let shell = ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "read value".into()],
+            env: Default::default(),
+        };
+        let mut source = TabManager::new(80, 24, shell.clone(), 100, 1024 * 1024);
+        source
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "read value; exit 19".into()],
+                None,
+                None,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let observer = source.active_tab().unwrap().child_observer().unwrap();
+        let owner = source
+            .active_tab_mut()
+            .unwrap()
+            .take_terminal_owner()
+            .unwrap();
+        let mut panes =
+            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+        panes.split(SplitDirection::Vertical).unwrap();
+        panes.focus(PaneId(0));
+        source.active_tab_mut().unwrap().pane_manager = Some(panes);
+        source
+            .new_tab_with_command(
+                "/bin/sh",
+                &["-c".into(), "read value; exit 27".into()],
+                None,
+                None,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        source.switch_to(0);
+        let moved = source
+            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
+            .unwrap();
+        // Drop the destination's unrelated original pane so the tracked owner
+        // collapses back into a single-terminal tab.
+        source
+            .active_tab_mut()
+            .unwrap()
+            .pane_manager
+            .as_mut()
+            .unwrap()
+            .get_pane_mut(PaneId(0))
+            .unwrap()
+            .closed = true;
+        source.cleanup_closed(false, false);
+        assert!(source.active_tab().unwrap().pane_manager.is_none());
+        assert_eq!(source.active_tab().unwrap().single_pane_id(), moved);
+        let mut destination = source.empty_like();
+        let tab = source.detach_active_tab_for_window_transfer().unwrap();
+        destination.attach_window_transferred_tab(tab);
+        drop(source);
+        assert_eq!(observer.poll().unwrap().exit, None);
+        assert!(!observer.poll().unwrap().terminal_closed);
+        destination.active_tab_mut().unwrap().write(b"\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            destination.poll_events();
+            destination.cleanup_closed(false, false);
+            let result = observer.poll().unwrap();
+            if result.terminal_closed && result.exit.is_some() {
+                assert_eq!(
+                    result.exit,
+                    Some(ChildExitStatus {
+                        exit_code: 19,
+                        success: false
+                    })
+                );
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn moving_any_pane_between_tabs_preserves_child_and_restore_identity() {
         if !std::path::Path::new("/bin/sh").exists() {
             return;

@@ -67,6 +67,7 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `--renderer auto\|gpu\|software` | Override adapter selection for every initial window. `auto` tries hardware then WGPU software; forced modes are strict. |
 | `domain protocol-version [--json]` | Print the local executable's expected live-domain wire version without starting or contacting a daemon. |
 | `control list [--json]` | Inspect bounded metadata for every already-running local GUI process without opening a display. |
+| `control launch-status PROCESS REQUEST_ID [--json]` | Query the initial child of a retained exact command launch, including its portable exit result after terminal cleanup. The CLI status reports query success; inspect JSON for the child result. |
 | `control new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]` | Create a native window from an exact running source window; an explicit request ID safely retries an ambiguous recent result. |
 | `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays as the initial tab of a new source-configured native window and return both stable IDs. |
 | `control new-tab PROCESS WINDOW [--request-id ID] [--json]` | Create a local shell tab in an exact running window and return its stable ID. |

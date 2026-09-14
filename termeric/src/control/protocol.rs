@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -44,6 +44,9 @@ pub struct ClientFrame {
 #[serde(deny_unknown_fields)]
 pub enum Request {
     Inventory,
+    LaunchStatus {
+        launch_request_id: String,
+    },
     ReadText {
         window_id: u64,
         tab_id: u64,
@@ -175,6 +178,24 @@ pub struct EnvironmentVariable {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LaunchState {
+    Running {},
+    Exited { exit_code: u32, success: bool },
+}
+
+impl LaunchState {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Self::Exited { exit_code, success } = self
+            && *success != (*exit_code == 0)
+        {
+            return Err("Inconsistent GUI child exit result".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextScreen {
     Primary,
@@ -191,6 +212,12 @@ pub enum InputDisposition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
     Inventory(ProcessInventory),
+    LaunchStatus {
+        process_id: u32,
+        launch_request_id: String,
+        state: LaunchState,
+        terminal_closed: bool,
+    },
     Text {
         process_id: u32,
         window_id: u64,
@@ -333,6 +360,13 @@ pub enum Response {
 #[serde(tag = "result", rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 pub enum ServerFrame {
+    LaunchStatus {
+        version: u32,
+        process_id: u32,
+        launch_request_id: String,
+        state: LaunchState,
+        terminal_closed: bool,
+    },
     Inventory {
         version: u32,
         inventory: ProcessInventory,
@@ -510,6 +544,12 @@ impl Request {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Inventory => Ok(()),
+            Self::LaunchStatus { launch_request_id } => {
+                if !valid_request_id(launch_request_id) {
+                    return Err("Launch request ID must be exactly 32 lowercase hex digits".into());
+                }
+                Ok(())
+            }
             Self::ReadText {
                 window_id,
                 history_lines,
@@ -784,7 +824,7 @@ impl Request {
 
     pub fn request_id(&self) -> Option<&str> {
         match self {
-            Self::Inventory | Self::ReadText { .. } => None,
+            Self::Inventory | Self::ReadText { .. } | Self::LaunchStatus { .. } => None,
             Self::CreateWindow { request_id, .. }
             | Self::LaunchWindow { request_id, .. }
             | Self::CreateTab { request_id, .. }
@@ -1146,6 +1186,73 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> anyhow::Result
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn launch_status_is_read_only_strict_and_preserves_portable_results() {
+        use super::*;
+        let request = Request::LaunchStatus {
+            launch_request_id: "1".repeat(32),
+        };
+        request.validate().unwrap();
+        assert!(request.request_id().is_none());
+        let frame = ClientFrame {
+            version: PROTOCOL_VERSION,
+            token: "fixture".into(),
+            request,
+        };
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &frame).unwrap();
+        assert_eq!(
+            read_frame::<ClientFrame>(&mut wire.as_slice()).unwrap(),
+            frame
+        );
+        assert!(
+            Request::LaunchStatus {
+                launch_request_id: "wrong".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LaunchState::Exited {
+                exit_code: 0,
+                success: false
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            LaunchState::Exited {
+                exit_code: 7,
+                success: true
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<LaunchState>(r#"{"status":"running","exit_code":0}"#).is_err()
+        );
+        for state in [
+            LaunchState::Running {},
+            LaunchState::Exited {
+                exit_code: 7,
+                success: false,
+            },
+        ] {
+            let response = ServerFrame::LaunchStatus {
+                version: PROTOCOL_VERSION,
+                process_id: 42,
+                launch_request_id: "1".repeat(32),
+                state,
+                terminal_closed: true,
+            };
+            let mut wire = Vec::new();
+            write_frame(&mut wire, &response).unwrap();
+            assert_eq!(
+                read_frame::<ServerFrame>(&mut wire.as_slice()).unwrap(),
+                response
+            );
+        }
+    }
     use super::*;
 
     #[test]

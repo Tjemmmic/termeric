@@ -27,6 +27,7 @@ pub struct Application {
     control_window_ids: HashMap<WindowId, u64>,
     next_control_window_id: u64,
     control_replays: ControlReplayCache,
+    control_launches: crate::control::launches::LaunchLedger,
     pending_domain_controls: Vec<PendingDomainControl>,
     pending: Vec<App>,
     /// Most recent process-wide desktop preferences, applied to existing and
@@ -317,6 +318,7 @@ impl Application {
             control_window_ids: HashMap::new(),
             next_control_window_id: 1,
             control_replays: ControlReplayCache::default(),
+            control_launches: crate::control::launches::LaunchLedger::default(),
             pending_domain_controls: Vec::new(),
             pending,
             system_accessibility:
@@ -1985,6 +1987,21 @@ impl Application {
         if let Some(replay) = self.control_replays.replay(&request) {
             return replay;
         }
+        if let Request::LaunchStatus { launch_request_id } = &request {
+            let (state, terminal_closed) = self.control_launches.query(launch_request_id)?;
+            return Ok(Response::LaunchStatus {
+                process_id: std::process::id(),
+                launch_request_id: launch_request_id.clone(),
+                state,
+                terminal_closed,
+            });
+        }
+        if request
+            .request_id()
+            .is_some_and(|id| self.control_launches.contains(id))
+        {
+            return Err("Launch request ID remains retained but its mutation replay expired; query launch-status or use a new request ID".into());
+        }
         if request == Request::Inventory {
             return Ok(Response::Inventory(self.control_inventory()));
         }
@@ -2147,7 +2164,7 @@ impl Application {
             } => self.send_control_text(
                 request_id, *window_id, *tab_id, *pane_id, text, *paste, *enter,
             ),
-            Request::Inventory | Request::ReadText { .. } => {
+            Request::Inventory | Request::ReadText { .. } | Request::LaunchStatus { .. } => {
                 unreachable!("read-only requests returned before mutation dispatch")
             }
         }
@@ -2186,6 +2203,10 @@ impl Application {
         }
         if let Some(replay) = self.control_replays.replay(request) {
             let _ = responder.send(replay);
+            return None;
+        }
+        if self.control_launches.contains(request_id) {
+            let _ = responder.send(Err("Launch request ID remains retained but its mutation replay expired; query launch-status or use a new request ID".into()));
             return None;
         }
 
@@ -2783,6 +2804,7 @@ impl Application {
         title: Option<&str>,
         environment: &[crate::control::protocol::EnvironmentVariable],
     ) -> std::result::Result<crate::control::protocol::Response, String> {
+        self.control_launches.prepare(request_id)?;
         let result_index = self.prepare_control_launch_window(
             source_window,
             program,
@@ -2796,12 +2818,29 @@ impl Application {
             .into_iter()
             .nth(result_index)
             .ok_or_else(|| "New command window creation produced no result".to_string())??;
+        self.record_control_launch(request_id, creation.window_id, creation.initial_tab_id);
         Ok(crate::control::protocol::Response::WindowLaunched {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
             window_id: creation.window_id,
             tab_id: creation.initial_tab_id,
         })
+    }
+
+    fn record_control_launch(&mut self, request_id: &str, window_id: u64, tab_id: u64) {
+        let native_id = self
+            .control_window_ids
+            .iter()
+            .find_map(|(native, id)| (*id == window_id).then_some(native))
+            .expect("successfully launched window has a control ID");
+        let child = self
+            .windows
+            .get(native_id)
+            .and_then(|window| window.tabs.as_ref())
+            .and_then(|tabs| tabs.all_tabs().iter().find(|tab| tab.id as u64 == tab_id))
+            .and_then(|tab| tab.child_observer())
+            .expect("successfully launched command has an initial child");
+        self.control_launches.record(request_id, child);
     }
 
     fn prepare_control_launch_window(
@@ -2936,6 +2975,7 @@ impl Application {
         title: Option<&str>,
         environment: &[crate::control::protocol::EnvironmentVariable],
     ) -> std::result::Result<crate::control::protocol::Response, String> {
+        self.control_launches.prepare(request_id)?;
         let native_id = self
             .control_window_ids
             .iter()
@@ -2963,6 +3003,7 @@ impl Application {
             .get_mut(&native_id)
             .expect("validated control window disappeared")
             .launch_control_tab(program, args, working_directory, title, environment)?;
+        self.record_control_launch(request_id, window_id, tab_id);
         Ok(crate::control::protocol::Response::TabCreated {
             process_id: std::process::id(),
             request_id: request_id.to_string(),
@@ -4015,9 +4056,10 @@ impl ApplicationHandler<AppEvent> for Application {
                 return;
             }
             AppEvent::ControlRequest {
-                request,
+                mut request,
                 respond_to,
             } => {
+                request.canonicalize();
                 let Some(respond_to) = self.defer_live_domain_control(&request, respond_to) else {
                     return;
                 };
@@ -4680,6 +4722,88 @@ mod tests {
         let tabs = application.windows[&native_id].tabs.as_ref().unwrap();
         assert_eq!(tabs.count(), 1);
         assert_eq!(tabs.active_tab().unwrap().title, "targeted");
+        assert!(
+            application
+                .control_launches
+                .contains("44444444444444444444444444444444")
+        );
+        assert!(
+            !application
+                .control_launches
+                .contains("33333333333333333333333333333333")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launch_status_survives_fast_exit_window_cleanup_and_replay_expiry() {
+        use crate::control::protocol::{LaunchState, Request};
+        let mut application =
+            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+        application.pending.clear();
+        let native_id = WindowId::dummy();
+        let mut window = App::new_headless(Config::default()).unwrap();
+        window.tabs = Some(crate::tabs::TabManager::new(
+            80,
+            24,
+            Config::default().shell,
+            100,
+            1024 * 1024,
+        ));
+        application.windows.insert(native_id, window);
+        application.window_order.push(native_id);
+        application.control_window_ids.insert(native_id, 7);
+        let id = "a".repeat(32);
+        application
+            .launch_control_tab(
+                &id,
+                7,
+                "/bin/sh",
+                &["-c".into(), "exit 23".into()],
+                None,
+                None,
+                &[],
+            )
+            .unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            application
+                .windows
+                .get_mut(&native_id)
+                .unwrap()
+                .process_pty_events();
+            let (state, closed) = application.control_launches.query(&id).unwrap();
+            if closed && matches!(state, LaunchState::Exited { .. }) {
+                assert_eq!(
+                    state,
+                    LaunchState::Exited {
+                        exit_code: 23,
+                        success: false
+                    }
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        application.windows.remove(&native_id);
+        assert_eq!(
+            application.control_launches.query(&id).unwrap(),
+            (
+                LaunchState::Exited {
+                    exit_code: 23,
+                    success: false
+                },
+                true
+            )
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let reused = Request::CreateTab {
+            request_id: id,
+            window_id: 7,
+        };
+        assert!(application.defer_live_domain_control(&reused, tx).is_none());
+        assert!(rx.recv().unwrap().unwrap_err().contains("replay expired"));
     }
 
     #[cfg(unix)]

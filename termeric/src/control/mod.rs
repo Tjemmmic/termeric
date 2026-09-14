@@ -6,6 +6,7 @@
 //! overlays. Environment values stay out of inventory, responses, and logs;
 //! clipboard data and plugin/provider credentials stay hidden.
 
+pub(crate) mod launches;
 pub mod protocol;
 
 #[cfg(unix)]
@@ -17,6 +18,11 @@ mod server;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlCommand {
+    LaunchStatus {
+        process_id: u32,
+        launch_request_id: String,
+        json: bool,
+    },
     List {
         json: bool,
     },
@@ -185,6 +191,11 @@ pub fn execute(command: ControlCommand) -> anyhow::Result<String> {
     #[cfg(unix)]
     {
         match command {
+            ControlCommand::LaunchStatus {
+                process_id,
+                launch_request_id,
+                json,
+            } => client::launch_status(process_id, launch_request_id, json),
             ControlCommand::List { json } => client::list(json),
             ControlCommand::GetText {
                 process_id,

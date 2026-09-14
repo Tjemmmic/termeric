@@ -8,6 +8,15 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- GUI control protocol v16 adds `control launch-status PROCESS REQUEST_ID`
+  with optional JSON. A bounded process ledger retains the initial child's
+  portable exit result across tab/pane ownership changes and cleanup. Queries
+  distinguish child completion from terminal closure, reject unavailable
+  results, and never expose launch arguments or environment. At 256 records,
+  new launches evict the oldest completed result or fail before spawning when
+  all retained children are still running. No native/provider acceptance is
+  implied; results last only for the GUI process and retention window.
+
 - Running-GUI control protocol v15 adds repeatable bounded `--env NAME=VALUE`
   overlays to `control launch-tab` and `control launch-window`. Children inherit
   the GUI environment before exact NUL-free UTF-8 values are applied; portable

@@ -8,7 +8,8 @@ local command-tab launch. [#97](https://github.com/Tjemmmic/termeric/issues/97)
 added the bounded fresh-window companion, and
 [#98](https://github.com/Tjemmmic/termeric/issues/98) added bounded non-secret
 environment overlays to both direct launch actions. This remains narrower than
-a general remote-control API.
+a general remote-control API. [#100](https://github.com/Tjemmmic/termeric/issues/100)
+adds retained child completion queries for those launches.
 
 ## Command line
 
@@ -18,6 +19,7 @@ current Unix user:
 ```bash
 termeric control list
 termeric control list --json
+termeric control launch-status PROCESS REQUEST_ID --json
 termeric control get-text PROCESS WINDOW TAB PANE --history-lines 40 --bytes 16384
 termeric control get-text PROCESS WINDOW TAB PANE --json
 termeric control send-text PROCESS WINDOW TAB PANE 'cargo test' --enter
@@ -92,7 +94,7 @@ window or stable success result.
 `new-tab` targets one exact stable window ID and returns its stable window-local
 tab ID only after the PTY-backed tab exists. An ordinary target creates the same
 local shell tab as the in-app New Tab action. If the active tab belongs to a live
-domain, protocol v15 keeps the socket worker off the GUI event loop while the
+domain, protocol v16 keeps the socket worker off the GUI event loop while the
 daemon creates the authoritative tab, reconciles the returned snapshot, and
 then returns the resulting GUI-local stable ID.
 
@@ -122,7 +124,7 @@ boundary.
 the current inventory rather than assuming zero. Success creates exactly one
 local shell pane, focuses it within its tab, preserves the window's active-tab
 choice, and returns the new tab-local pane ID. A live-domain target uses the
-same deferred protocol-v15 acknowledgement as `new-tab`: the response is sent
+same deferred protocol-v16 acknowledgement as `new-tab`: the response is sent
 only after the daemon snapshot has been reconciled and the new remote pane has
 an authoritative GUI-local stable ID.
 
@@ -158,7 +160,7 @@ claim that animation, persistence, or process teardown already finished.
 mutation, removes the exact pane synchronously, and returns both the remaining
 pane count and focused pane ID. If two panes collapse to one terminal owner, the
 survivor keeps its stable ID through inventory, workspace capture/restore, and
-the next split. For live-domain tabs and panes, protocol v15 defers the response
+the next split. For live-domain tabs and panes, protocol v16 defers the response
 until the authoritative daemon snapshot proves the exact remote object was
 removed and GUI reconciliation can report the surviving local pane state. The
 domain's last pane and last tab remain protected; terminating the domain is a
@@ -188,7 +190,7 @@ pane must move with its whole tab. Moving within the same tab is currently
 rejected because that requires an explicit layout-tree rearrangement contract,
 not an ownership transfer. Live-domain panes can move between different tabs in
 the same domain and native window. Domain protocol v10 carries the exact remote
-anchor and requested direction; protocol v15 responds only after the source
+anchor and requested direction; protocol v16 responds only after the source
 route disappears, the destination layout contains that exact split, and the
 moved relay has a destination-local stable ID. Cross-window, cross-domain, and
 mixed ordinary/live moves fail before mutation.
@@ -262,6 +264,48 @@ confirmation request never creates a second prompt.
 After an ID ages out of that explicitly bounded cache, its at-most-once replay
 guarantee no longer applies.
 
+## Observing launched children
+
+`termeric control launch-status PROCESS REQUEST_ID [--json]` reads the status
+of the initial child created by a successful `launch-tab` or `launch-window`.
+Use the launch result's request ID, or supply `--request-id` at launch. The
+identity follows the child through pane splits, collapse, tab moves, and window
+transfers, and remains queryable after terminal cleanup while this GUI process
+is alive and the record is retained.
+
+For example, the JSON result of a completed unsuccessful child is:
+
+```json
+{
+  "schema_version": 3,
+  "process_id": 42,
+  "launch_request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state": { "status": "exited", "exit_code": 7, "success": false },
+  "terminal_closed": true
+}
+```
+
+A running child has `"state": { "status": "running" }`. `terminal_closed`
+independently reports that the terminal's PTY owner was dropped; it does not
+prove child success. A temporarily surviving child can be both running and
+terminal-closed. The endpoint reports the initial child's portable exit code:
+normal codes are preserved, but portable-pty 0.8 normalizes signal termination
+to `1` and supplies no typed signal identifier. It does not report individual
+commands in an interactive shell, descendants, or completion of output draining.
+
+The CLI exits successfully when the **query** succeeds, including a running or
+unsuccessful child. Scripts inspect the JSON state and success/code fields.
+Queries are read-only, never replay a cached running result, and use the normal
+short connection timeouts. There is no blocking wait or event subscription.
+
+The process retains at most 256 launch records. At capacity, admission of a new
+launch evicts the oldest completed record; if every record is still running or
+cannot be observed, the launch fails before spawning. Unknown, evicted, and
+failed-launch IDs return an error. Closing the final GUI window ends the
+process and its endpoint; loss of the endpoint is never proof of child success.
+There is no disk history. A retained launch ID whose mutation replay expired
+cannot be reused for another mutation; query its status or use a new ID.
+
 ## Security and privacy boundary
 
 Each GUI process owns a separate `gui-v1-PID.sock` and `gui-v1-PID.token` under
@@ -273,7 +317,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 15 accepts exactly `inventory`, ID-targeted `read_text`,
+Protocol version 16 accepts exactly `inventory`, `launch_status`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,
@@ -313,6 +357,13 @@ sandbox boundary between applications owned by one Unix user. Even when
 `security.allow_gui_control_input` is false, possession of the token authorizes
 the explicitly bounded `launch_tab` and `launch_window` operations and therefore
 direct local process execution as that user.
+
+Launch status exposes only request/process identity, portable completion state,
+and terminal-owner closure. Its records retain neither command arguments nor
+environment, working directory, or output. The observer retains bounded child
+control state and does not keep the PTY, terminal grid, renderer, or a waiting
+thread alive. Ordinary terminal output remains governed by the existing text
+and persistence policies.
 
 ## Resource and failure policy
 
