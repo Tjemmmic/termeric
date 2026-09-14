@@ -642,12 +642,7 @@ impl Tab {
                 "pane is read-only",
             ));
         }
-        if let Some(ref mut recorder) = self.transcript {
-            if let Ok(text) = std::str::from_utf8(data) {
-                let result = recorder.record_input(text);
-                self.handle_transcript_write(result);
-            }
-        }
+        self.record_user_input(data);
         if let Some(panes) = &mut self.pane_manager {
             panes
                 .focused_pane_mut()
@@ -668,6 +663,16 @@ impl Tab {
                     )
                 })?
                 .write_all(data)
+        }
+    }
+
+    /// Shared tab-scoped transcript accounting for focused and exact user input.
+    pub(super) fn record_user_input(&mut self, data: &[u8]) {
+        if let Some(ref mut recorder) = self.transcript
+            && let Ok(text) = std::str::from_utf8(data)
+        {
+            let result = recorder.record_input(text);
+            self.handle_transcript_write(result);
         }
     }
 

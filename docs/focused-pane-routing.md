@@ -8,6 +8,11 @@ has lost its focused pane.
 
 ## Routing contract
 
+- Harvest Re-run is an exact-source action, not keyboard input. It may focus
+  its producing terminal for visibility, but writes only to that captured
+  owner, bypassing broadcast/alias/completion routing. Destructive confirmation
+  preserves the same origin; read-only and closed/closing targets refuse user
+  writes even if confirmation arrives after a focus/lifecycle change.
 - Input, paste, selection, search, scrolling, synchronized-output checks,
   session metadata, plugin context, Git working directory, and tab title updates
   use the focused live terminal or its focused PTY. A local-authority OSC 7

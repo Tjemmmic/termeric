@@ -519,6 +519,21 @@ python3 scripts/native_acceptance_record.py validate \
 Use `--require-pass` only when release policy requires every native row to
 pass. This record supplies the remaining evidence for issues #17, #32, and #33.
 
+## Deferred Harvest rerun isolation (no provider)
+
+When convenient, enable Harvest in a disposable workspace with three ordinary
+shell panes and run a harmless marked command such as
+`printf 'harvest-rerun-probe\n'` in one pane. Select another pane, activate
+broadcast, then use the original command's Re-run action. Only its source pane
+should receive the rerun; the other panes must retain their input and broadcast
+membership. Repeat with the source excluded from the two selected broadcast
+targets. An armed-but-unconfirmed broadcast or read-only source must refuse the
+action without a sent/success notice. Confirm that aliases and completion do not
+replace the historical command. Record native menu/focus/toast behavior; the
+raw-PTY regression evidence is not a native UI acceptance substitute. Do not
+run destructive commands to test confirmation; automated fixtures capture those
+bytes without evaluating them. This lane does not use Harvest Explain.
+
 ## Authenticated Codex, Claude Code, and Harvest Explain
 
 This section is deliberately last. It is a manual test plan, not authorization

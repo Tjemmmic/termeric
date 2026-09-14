@@ -209,6 +209,37 @@ the navigation cursor, scrollback eviction retires it, and the alternate screen
 never navigates primary-shell marks. Core state tests and a local two-way app
 action fixture cover this path without external services.
 
+### Exact-source Harvest rerun
+
+[#114](https://github.com/Tjemmmic/termeric/issues/114) fixes a reproduced input
+fan-out bug: Re-run previously entered the normal typing/broadcast path after
+focusing its source. It now captures one source tab/pane, validates it, and
+delivers Ctrl+U, literal historical command text and Enter as one exact-origin
+user write. Current aliases and Git completion cannot reinterpret the command.
+The source may be excluded from active broadcast membership; rerun still targets
+only that source and does not change the selected broadcast target set. Armed
+broadcast blocks rerun before focus or input changes.
+
+Closed, closing, stale or read-only sources and already-pending confirmations
+refuse delivery. Destructive commands from ordinary and plugin sources require
+confirmation before even the line-clear byte is sent. The captured destination
+survives a later focus change, and confirmation revalidates writability and
+lifecycle state. Cancellation and stale confirmation send nothing. Shared
+exact-origin user writes reject closed/closing destinations; protocol replies
+retain their separate route. Editable-line tracking is cleared only for a
+successfully written currently focused destination. Feedback says "sent", not
+"executed": a PTY write is not evidence that a shell accepted or completed it.
+Successful exact-pane user writes retain tab-scoped transcript input accounting
+once; protocol replies and refused reruns are not recorded as user input.
+
+The regression suite uses three raw byte-capture PTYs plus a single-terminal
+fixture. It observes complete sibling isolation, literals, refusal, ordinary
+and synthetic-plugin confirmation/cancellation, focus changes, read-only/closure
+transitions, batch prevalidation and stale requests. Per-stream fences wait for
+new capture bytes, so old buffered results cannot satisfy a later assertion.
+Even destructive-looking payloads are captured as bytes, never executed. Native
+menu/confirmation presentation and real-provider acceptance remain deferred.
+
 Semantic marks are authoritative only while their primary-grid rows remain
 backed. ED2 and RIS retire regions intersecting erased viewport rows while
 preserving fully historical regions; ED3 and the user Clear Scrollback action

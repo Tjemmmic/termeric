@@ -1482,13 +1482,96 @@ impl App {
                     self.toasts.warning("Nothing to rerun");
                     return;
                 }
+                if self.guardrail.is_awaiting_current() {
+                    self.toasts
+                        .warning("A destructive-command confirmation is already pending");
+                    return;
+                }
+                if matches!(self.broadcast, BroadcastState::Armed { .. }) {
+                    self.toasts
+                        .warning("Re-run was not sent while broadcast is armed");
+                    return;
+                }
+                let origin = match target.source.pane_id {
+                    Some(pane_id) => crate::tabs::TerminalEventOrigin::Pane {
+                        tab_id: target.source.tab_id,
+                        pane_id: PaneId(pane_id),
+                    },
+                    None => crate::tabs::TerminalEventOrigin::Tab {
+                        tab_id: target.source.tab_id,
+                    },
+                };
+                if self.terminal_for_harvest_source(target.source).is_none() {
+                    self.toasts
+                        .warning("The command's terminal is no longer open");
+                    return;
+                }
+                if self
+                    .tabs
+                    .as_ref()
+                    .and_then(|tabs| tabs.origin_read_only(origin))
+                    != Some(false)
+                {
+                    self.toasts
+                        .warning("Re-run was not sent: the source terminal is read-only");
+                    return;
+                }
                 if !self.focus_harvest_source(target.source) {
                     self.toasts
                         .warning("The command's terminal is no longer open");
                     return;
                 }
-                self.run_custom_command(trimmed);
-                self.toasts.info("Re-ran command");
+                if self.guardrail.is_awaiting_current() {
+                    self.toasts
+                        .warning("A destructive-command confirmation is already pending");
+                    return;
+                }
+                if self.terminal_for_harvest_source(target.source).is_none() {
+                    self.toasts
+                        .warning("The command's terminal is no longer open");
+                    return;
+                }
+                // Focus callbacks are not delivery authority. Capture all bytes,
+                // including line clearing, in one exact-owner user operation.
+                let wire = command_keystrokes(trimmed).concat();
+                if let Some(mut matched) = crate::terminal::guardrails::check_command(trimmed) {
+                    matched.target = match target.source.pane_id {
+                        Some(pane_id) => format!(
+                            "Harvest source tab {}, pane {pane_id}",
+                            target.source.tab_id
+                        ),
+                        None => format!("Harvest source tab {}", target.source.tab_id),
+                    };
+                    self.guardrail.show(
+                        matched,
+                        vec![crate::terminal::guardrails::GuardedWrite::new(origin, wire)],
+                    );
+                    self.toasts.info("Re-run is awaiting confirmation");
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+                let result = self
+                    .tabs
+                    .as_mut()
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "source terminal no longer exists",
+                        )
+                    })
+                    .and_then(|tabs| tabs.write_user_to_origin(origin, &wire));
+                match result {
+                    Ok(()) => {
+                        if self.active_harvest_source() == Some(target.source) {
+                            self.clear_terminal_input_tracking();
+                            self.reset_cursor_blink();
+                        }
+                        self.toasts.info("Sent command to its source terminal");
+                    }
+                    Err(error) => self.toasts.error(format!("Re-run was not sent: {error}")),
+                }
             }
             SproutAction::ScrollTo => {
                 let Some(region) = region.as_ref() else {
@@ -1593,12 +1676,10 @@ impl App {
             .iter()
             .find(|(_, tab)| tab.id == source.tab_id && !tab.closed && !tab.is_closing())?;
         match source.pane_id {
-            Some(pane_id) => Some(
-                &tab.pane_manager
-                    .as_ref()?
-                    .get_pane(PaneId(pane_id))?
-                    .terminal,
-            ),
+            Some(pane_id) => {
+                let pane = tab.pane_manager.as_ref()?.get_pane(PaneId(pane_id))?;
+                (!pane.closed).then_some(&pane.terminal)
+            }
             None if tab.pane_manager.is_none() => tab.focused_terminal(),
             None => None,
         }

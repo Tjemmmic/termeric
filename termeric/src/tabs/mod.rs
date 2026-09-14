@@ -2166,6 +2166,12 @@ impl TabManager {
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotFound, "terminal tab no longer exists")
             })?;
+        if tab.closed || tab.is_closing() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "terminal tab is closed or closing",
+            ));
+        }
         match origin {
             TerminalEventOrigin::Tab { .. } => {
                 if tab.pane_manager.is_some() {
@@ -2176,14 +2182,18 @@ impl TabManager {
                 }
                 tab.write(data)
             }
-            TerminalEventOrigin::Pane { pane_id, .. } => tab
-                .pane_manager
-                .as_mut()
-                .and_then(|panes| panes.get_pane_mut(pane_id))
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "originating pane no longer exists")
-                })?
-                .write(data),
+            TerminalEventOrigin::Pane { pane_id, .. } => {
+                tab.pane_manager
+                    .as_mut()
+                    .and_then(|panes| panes.get_pane_mut(pane_id))
+                    .filter(|pane| !pane.closed)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotFound, "originating pane no longer exists")
+                    })?
+                    .write(data)?;
+                tab.record_user_input(data);
+                Ok(())
+            }
         }
     }
 
@@ -2194,11 +2204,19 @@ impl TabManager {
             }
         };
         let tab = self.tabs.iter().find(|tab| tab.id == tab_id)?;
+        if tab.closed || tab.is_closing() {
+            return None;
+        }
         match origin {
             TerminalEventOrigin::Tab { .. } if tab.pane_manager.is_none() => {
                 tab.pane_read_only(tab.single_pane_id())
             }
-            TerminalEventOrigin::Pane { pane_id, .. } => tab.pane_read_only(pane_id),
+            TerminalEventOrigin::Pane { pane_id, .. } => tab
+                .pane_manager
+                .as_ref()?
+                .get_pane(pane_id)
+                .filter(|pane| !pane.closed)
+                .map(|pane| pane.read_only),
             TerminalEventOrigin::Tab { .. } => None,
         }
     }

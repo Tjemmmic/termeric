@@ -1,5 +1,19 @@
 # Testing Termeric
 
+## Exact-source Harvest rerun regression
+
+The `harvest_rerun_*` tests use isolated raw PTYs that write received bytes to
+temporary capture files; no submitted command text is evaluated. They cover
+active broadcast with the source included/excluded, literal historical input
+despite aliases/completion, source focus, single-terminal ownership, armed and
+read-only refusal, stale/closed/closing targets, existing confirmations, and
+ordinary/synthetic-plugin destructive confirmation after focus/read-only/closure
+changes. Stream fences require new bytes before assertions. A separate closed
+destination test proves that an entire guarded batch is refused before its
+first user write. See [the routing contract](integration-acceptance.md#exact-source-harvest-rerun).
+Single-terminal and split-pane transcript fixtures also assert one input record
+per delivered rerun and no user-input record for protocol fences or refusals.
+
 ## Candidate-bound shell acceptance
 
 `scripts/run_shell_acceptance.py` runs only the required Bash/Zsh/Fish real-PTY

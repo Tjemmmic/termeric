@@ -633,6 +633,9 @@ impl App {
                 let Some(writes) = self.guardrail.confirm(request_id) else {
                     return;
                 };
+                let affects_focused_input = writes
+                    .iter()
+                    .any(|write| Some(write.origin) == self.active_terminal_origin());
                 let result = self
                     .tabs
                     .as_mut()
@@ -673,6 +676,9 @@ impl App {
                     log::error!("Guarded command was not sent: {error}");
                     self.toasts
                         .error(format!("Guarded command was not sent: {error}"));
+                } else if affects_focused_input {
+                    self.clear_terminal_input_tracking();
+                    self.reset_cursor_blink();
                 }
             }
             GuardrailAction::Cancel { request_id } => {

@@ -1155,6 +1155,14 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Harvest Re-run no longer broadcasts historical commands to sibling panes
+  or rewrites them through current aliases/completions. One captured source
+  receives the complete literal input, with read-only/closed/closing/armed
+  refusal and destructive-command confirmation before any bytes (including
+  line clearing) are sent. Confirmation remains exact after focus changes;
+  cancelled/stale requests are inert. Delivery feedback no longer claims a
+  refused or pending command was rerun.
+
 - Snapshot saves explicitly unlock their scope-owned writer guard before file
   close, including errors and unwinding. A duplicate descriptor can no longer
   extend a finished save's lock lifetime. Nonblocking admission, stable lock

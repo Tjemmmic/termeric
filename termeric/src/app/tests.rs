@@ -3117,6 +3117,517 @@ fn harvest_search_switches_to_the_exact_producing_terminal() {
 }
 
 #[cfg(unix)]
+fn harvest_rerun_capture_fixture() -> (
+    App,
+    tempfile::TempDir,
+    crate::harvest::CommandEntry,
+    Vec<(crate::tabs::TerminalEventOrigin, std::path::PathBuf)>,
+) {
+    harvest_rerun_capture_fixture_in(true)
+}
+
+#[cfg(unix)]
+fn harvest_rerun_capture_fixture_in(
+    split: bool,
+) -> (
+    App,
+    tempfile::TempDir,
+    crate::harvest::CommandEntry,
+    Vec<(crate::tabs::TerminalEventOrigin, std::path::PathBuf)>,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec![
+            "-c".into(),
+            "stty raw -echo; printf READY; cat > \"$CAPTURE_DIR/$$\"".into(),
+        ],
+        env: std::collections::BTreeMap::from([(
+            "CAPTURE_DIR".into(),
+            directory.path().display().to_string(),
+        )]),
+    };
+    let mut tabs = TabManager::new(80, 24, shell.clone(), 100, 1024 * 1024);
+    let tab_id = tabs
+        .new_tab_with_command(
+            "/bin/sh",
+            &shell.args,
+            None,
+            Some("capture"),
+            None,
+            shell.env.clone().into_iter().collect(),
+        )
+        .unwrap();
+    let owner = tabs
+        .active_tab_mut()
+        .unwrap()
+        .take_terminal_owner()
+        .unwrap();
+    let mut panes =
+        PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+    let source = panes.focused_id();
+    if split {
+        panes.split(SplitDirection::Vertical).unwrap();
+        panes.split(SplitDirection::Horizontal).unwrap();
+    }
+    let captures = panes
+        .pane_ids()
+        .into_iter()
+        .map(|id| {
+            let pid = panes.get_pane(id).unwrap().pty.child_id().unwrap();
+            (
+                if split {
+                    crate::tabs::TerminalEventOrigin::Pane {
+                        tab_id,
+                        pane_id: id,
+                    }
+                } else {
+                    crate::tabs::TerminalEventOrigin::Tab { tab_id }
+                },
+                directory.path().join(pid.to_string()),
+            )
+        })
+        .collect::<Vec<_>>();
+    if split {
+        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+    } else {
+        tabs.active_tab_mut()
+            .unwrap()
+            .restore_terminal_owner(panes.take_remaining_pane().unwrap());
+    }
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    let deadline = Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        app.process_pty_events();
+        if captures.iter().all(|(origin, _)| {
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .terminal_for_origin(*origin)
+                .unwrap()
+                .rows_text(0, 23)
+                .contains("READY")
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "capture PTYs did not become ready"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let mut entry = crate::harvest::CommandEntry::new_for_source(
+        crate::harvest::HarvestSource {
+            tab_id,
+            pane_id: split.then_some(source.0),
+        },
+        0,
+        Some(0),
+    );
+    entry.command = "echo harvest".into();
+    (app, directory, entry, captures)
+}
+
+#[cfg(unix)]
+fn fenced_harvest_capture(
+    app: &mut App,
+    captures: &[(crate::tabs::TerminalEventOrigin, std::path::PathBuf)],
+) -> Vec<Vec<u8>> {
+    let previous_lengths = captures
+        .iter()
+        .map(|(_, path)| std::fs::metadata(path).map_or(0, |metadata| metadata.len() as usize))
+        .collect::<Vec<_>>();
+    for (origin, _) in captures {
+        // A protocol-only fence drains prior input even when testing read-only refusal.
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .write_to_origin(*origin, b"\0")
+            .unwrap();
+    }
+    let deadline = Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let bytes = captures
+            .iter()
+            .map(|(_, path)| std::fs::read(path).unwrap_or_default())
+            .collect::<Vec<_>>();
+        if bytes
+            .iter()
+            .zip(&previous_lengths)
+            .all(|(data, previous)| data.len() > *previous && data.last() == Some(&0))
+        {
+            return bytes
+                .into_iter()
+                .map(|mut data| {
+                    data.pop();
+                    data
+                })
+                .collect();
+        }
+        assert!(Instant::now() < deadline, "capture fences did not arrive");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_rerun_never_broadcasts_the_source_command() {
+    for excluded in [false, true] {
+        let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
+        app.toggle_broadcast();
+        if excluded {
+            app.toggle_armed_broadcast_target(PaneId(entry.source.pane_id.unwrap()));
+        }
+        app.toggle_broadcast();
+        let before = app.broadcast_targets().unwrap();
+        assert_eq!(before.1.len(), if excluded { 2 } else { 3 });
+        app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert_eq!(bytes[0], b"\x15echo harvest\r");
+        assert!(
+            bytes[1..].iter().all(Vec::is_empty),
+            "rerun leaked to siblings: {bytes:?}"
+        );
+        assert_eq!(app.broadcast_targets().unwrap(), before);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_rerun_is_literal_and_reports_only_successful_delivery() {
+    let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
+    app.config.commands.push(crate::config::CustomCommand {
+        name: "echo".into(),
+        command: "different".into(),
+        alias: None,
+    });
+    app.input_line_buffer = "old editable input".into();
+    app.git_completions_visible = true;
+    app.git_completions = vec!["unrelated".into()];
+    app.git_completion_index = Some(0);
+    app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
+    let bytes = fenced_harvest_capture(&mut app, &captures);
+    assert_eq!(bytes[0], b"\x15echo harvest\r");
+    assert!(bytes[1..].iter().all(Vec::is_empty));
+    assert!(app.input_line_buffer.is_empty());
+    assert!(!app.git_completions_visible);
+    assert!(
+        app.toasts
+            .iter()
+            .any(|toast| toast.message == "Sent command to its source terminal")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_writes() {
+    for refusal in [
+        "armed",
+        "read-only",
+        "stale",
+        "pane-closed",
+        "tab-closed",
+        "closing",
+        "pending",
+    ] {
+        let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture();
+        let before = app.active_harvest_source();
+        match refusal {
+            "armed" => app.toggle_broadcast(),
+            "read-only" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .pane_manager
+                    .as_mut()
+                    .unwrap()
+                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .unwrap()
+                    .read_only = true
+            }
+            "stale" => entry.source.pane_id = Some(u32::MAX),
+            "pane-closed" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .pane_manager
+                    .as_mut()
+                    .unwrap()
+                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .unwrap()
+                    .closed = true
+            }
+            "tab-closed" => app.tabs.as_mut().unwrap().active_tab_mut().unwrap().closed = true,
+            "closing" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .closing_at = Some(Instant::now())
+            }
+            "pending" => {
+                app.guardrail.show(
+                    crate::terminal::guardrails::check_command("rm -rf /synthetic").unwrap(),
+                    vec![crate::terminal::guardrails::GuardedWrite::new(
+                        captures[1].0,
+                        b"pending\r".to_vec(),
+                    )],
+                );
+            }
+            _ => unreachable!(),
+        }
+        let pending_id = app.guardrail.request_id();
+        app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert!(bytes.iter().all(Vec::is_empty), "{refusal} wrote {bytes:?}");
+        assert_eq!(
+            app.active_harvest_source(),
+            before,
+            "{refusal} changed focus"
+        );
+        assert!(app.toasts.iter().all(|toast| toast.message
+            != "Sent command to its source terminal"
+            && toast.message != "Re-ran command"));
+        if refusal == "pending" {
+            assert!(app.guardrail.is_awaiting(pending_id));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_rerun_confirmation_is_exact_revocable_and_revalidates_source() {
+    use crate::terminal::guardrails::GuardrailAction;
+    for (plugin, disposition) in [false, true].into_iter().flat_map(|plugin| {
+        [
+            "confirm",
+            "confirm-focused",
+            "cancel",
+            "read-only",
+            "pane-closed",
+            "tab-closing",
+        ]
+        .map(move |disposition| (plugin, disposition))
+    }) {
+        let (mut app, _directory, mut entry, captures) = harvest_rerun_capture_fixture();
+        if plugin {
+            // Metadata only: the same raw capture PTYs remain in place.
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "synthetic-capture".into(),
+            };
+        }
+        entry.command = "rm -rf /synthetic-not-executed".into();
+        app.execute_sprout_action(
+            crate::harvest::sprouts::SproutAction::Rerun,
+            Some(entry.clone()),
+        );
+        let request_id = app.guardrail.request_id();
+        assert!(app.guardrail.is_awaiting(request_id));
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        assert!(
+            bytes.iter().all(Vec::is_empty),
+            "bytes leaked before confirmation"
+        );
+        if disposition != "confirm-focused" {
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .pane_manager
+                .as_mut()
+                .unwrap()
+                .focus(PaneId(1));
+        }
+        app.input_line_buffer = "preserve sibling input".into();
+        match disposition {
+            "cancel" => app.apply_guardrail_action(GuardrailAction::Cancel { request_id }),
+            "read-only" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .pane_manager
+                    .as_mut()
+                    .unwrap()
+                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .unwrap()
+                    .read_only = true
+            }
+            "pane-closed" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .pane_manager
+                    .as_mut()
+                    .unwrap()
+                    .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+                    .unwrap()
+                    .closed = true
+            }
+            "tab-closing" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .closing_at = Some(Instant::now())
+            }
+            _ => {}
+        }
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        // Stale confirm must never repeat a delivered command.
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        let bytes = fenced_harvest_capture(&mut app, &captures);
+        let expected = if disposition.starts_with("confirm") {
+            b"\0\x15rm -rf /synthetic-not-executed\r".as_slice()
+        } else {
+            b"\0".as_slice()
+        };
+        assert_eq!(bytes[0], expected, "{disposition}");
+        assert!(bytes[1..].iter().all(|data| data == b"\0"));
+        assert_eq!(
+            app.input_line_buffer,
+            if disposition == "confirm-focused" {
+                ""
+            } else {
+                "preserve sibling input"
+            }
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_rerun_single_tab_origin_uses_the_same_exact_user_write_policy() {
+    let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture_in(false);
+    assert_eq!(entry.source.pane_id, None);
+    app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
+    assert_eq!(
+        fenced_harvest_capture(&mut app, &captures),
+        vec![b"\x15echo harvest\r".to_vec()]
+    );
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .closing_at = Some(Instant::now());
+    assert!(
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .write_user_to_origin(captures[0].0, b"must not arrive")
+            .is_err()
+    );
+    assert_eq!(
+        fenced_harvest_capture(&mut app, &captures),
+        vec![b"\x15echo harvest\r\0".to_vec()]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusals() {
+    for split in [false, true] {
+        let (mut app, directory, entry, captures) = harvest_rerun_capture_fixture_in(split);
+        let recorder = crate::session::transcript::TranscriptRecorder::new(
+            directory.path(),
+            None,
+            None,
+            "fixture",
+            "capture",
+        )
+        .unwrap();
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .start_transcript(recorder);
+        app.execute_sprout_action(
+            crate::harvest::sprouts::SproutAction::Rerun,
+            Some(entry.clone()),
+        );
+        fenced_harvest_capture(&mut app, &captures);
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .closing_at = Some(Instant::now());
+        app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
+        fenced_harvest_capture(&mut app, &captures);
+        let mut recorder = app
+            .tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .stop_transcript()
+            .unwrap();
+        recorder.finish(std::time::Duration::from_secs(3)).unwrap();
+        let entries = std::fs::read_to_string(recorder.path())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        let input = entries
+            .iter()
+            .filter(|entry| entry["kind"] == "input")
+            .collect::<Vec<_>>();
+        assert_eq!(input.len(), 1, "{entries:?}");
+        assert_eq!(input[0]["content"], "\x15echo harvest\r");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_guarded_destination_rejects_the_whole_batch_before_any_user_write() {
+    let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
+    let request_id = app.guardrail.show(
+        crate::terminal::guardrails::check_command("rm -rf /synthetic").unwrap(),
+        vec![
+            crate::terminal::guardrails::GuardedWrite::new(captures[1].0, b"first".to_vec()),
+            crate::terminal::guardrails::GuardedWrite::new(captures[0].0, b"closed".to_vec()),
+        ],
+    );
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(PaneId(entry.source.pane_id.unwrap()))
+        .unwrap()
+        .closed = true;
+    app.apply_guardrail_action(crate::terminal::guardrails::GuardrailAction::Confirm {
+        request_id,
+    });
+    assert!(
+        fenced_harvest_capture(&mut app, &captures)
+            .iter()
+            .all(Vec::is_empty)
+    );
+}
+
+#[cfg(unix)]
 #[test]
 fn prompt_actions_walk_the_focused_terminals_scrollback_in_both_directions() {
     if !std::path::Path::new("/bin/sh").exists() {
