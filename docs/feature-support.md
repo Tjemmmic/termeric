@@ -64,6 +64,14 @@ cross-platform daily-driver terminal.
 | Shell-reported working directory | **Supported (Linux)** | Bounded OSC 7 `file://host/path` reports are terminal- and pane-local, fragmented/C1-safe, strict percent-decoded UTF-8, and preferred over Linux process inspection for titles, Git/plugin context, pane cwd inheritance, sessions, workspaces, and local-domain controls. Remote authorities remain display-only and never become local filesystem paths. Generated Bash/Zsh/Fish integration emits hostless local reports; modern Nushell's enabled native producer emits its own report. The opt-in Elvish module percent-escapes its hostless local report and also refreshes it after directory changes. Nushell and Elvish real-PTY acceptance is still pending. Other platforms retain portable parsing/policy code but lack native acceptance. | [OSC policy](osc-integration.md), [focused routing](focused-pane-routing.md), [#26](https://github.com/Tjemmmic/termeric/issues/26) |
 | Terminfo and capability negotiation | **Supported (Linux)** | The versioned `xterm-termeric` entry advertises verified color, cursor/editing, `ech`, `rep`, `cbt`, `tbc`, tmux-compatible `Enmg`/`Dsmg`/`Clmg`/`Cmg` horizontal margins and `Rect` rectangle fill, plus non-destructive DECSTR initialization/reset behavior. It is compiled into Linux packages and selected only when discoverable; the child pins `TERMINFO` to that exact root so inherited databases cannot contradict the selected identity. `xterm-256color` remains an explicit compatibility fallback; remote hosts need the entry installed before SSH forwards the custom name. | [terminfo contract](terminfo.md), [identity boundary](device-attributes-and-charsets.md), [#25](https://github.com/Tjemmmic/termeric/issues/25) |
 
+The shell versions above are historical observations, not a current candidate
+record. The [required-shell evidence runner](integration-acceptance.md#shell-and-harvest-contract)
+from [#113](https://github.com/Tjemmmic/termeric/issues/113) binds Bash/Zsh/Fish
+observations to exact source and executable identities. Missing required shells
+fail; zero observed capability replies remain explicit limitations. A green
+current three-shell artifact remains pending, independently of native/provider
+acceptance.
+
 ## Text and graphics
 
 | Capability | Status | Current boundary | Tracking |

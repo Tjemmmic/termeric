@@ -60,6 +60,7 @@ jobs:
         run: |
           python3 -m unittest scripts.test_integration_acceptance_record
           python3 -m unittest scripts.test_run_fake_provider_acceptance
+          python3 -m unittest scripts.test_run_shell_acceptance
       - name: Prove Debian package-checker contracts
         run: python3 -m unittest scripts.test_check_debian_package
       - name: Prove Arch package-builder and checker contracts
@@ -69,13 +70,17 @@ jobs:
           scripts.test_check_arch_package
       - name: Compile and exercise the terminfo contract
         run: python3 scripts/check_terminfo.py --require-apps
-      - name: Exercise Bash, Zsh, and Fish shell integration
-        env:
-          TERMERIC_REQUIRE_SHELL_ACCEPTANCE: "1"
+      - name: Record Bash, Zsh, and Fish shell integration
         run: >-
-          cargo test -p termeric --locked
-          supported_shells_preserve_user_rc_and_emit_multiline_exit_regions
-          -- --nocapture
+          python3 scripts/run_shell_acceptance.py
+          --output target/shell-acceptance
+          --operator "GitHub Actions (required real-shell subset)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: required-shell-acceptance
+          path: target/shell-acceptance/
+          if-no-files-found: error
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - name: Record hermetic fake-provider acceptance

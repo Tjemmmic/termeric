@@ -8,6 +8,12 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- A Linux candidate-bound Bash/Zsh/Fish acceptance runner produces sealed
+  partial integration records with exact shell paths/versions/digests, observed
+  capability-reply counts, bounded logs and pinned test-executable provenance.
+  Missing required shells fail rather than pass by skipping. Unexercised reply
+  paths remain explicit limitations; other integration rows are not promoted.
+
 - GUI control protocol v18 adds `launch-tab --background`, inserting an
   ordinary command tab without transiently selecting it or clearing the active
   pane's search, selection, copy mode or IME state. Quiet creation redraws tab

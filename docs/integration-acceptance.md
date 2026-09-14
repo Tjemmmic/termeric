@@ -101,6 +101,48 @@ uses only the fake executable above.
 
 ## Shell and Harvest contract
 
+The candidate-bound required-shell runner from
+[#113](https://github.com/Tjemmmic/termeric/issues/113) replaces console-only CI
+evidence. On Linux with Bash, Zsh and Fish installed, from a clean checkout:
+
+```bash
+python3 scripts/run_shell_acceptance.py \
+  --output target/shell-acceptance \
+  --operator "Local real-shell acceptance"
+python3 scripts/integration_acceptance_record.py validate \
+  target/shell-acceptance/record.json --allow-incomplete
+```
+
+`--output` is a **new directory**, unlike the fake-provider runner's record-file
+argument. Existing directories are refused. Use an ignored build directory or
+an external temporary directory so generated evidence cannot dirty the source.
+The runner requires all three shells, builds the exact test executable, removes
+provider opt-ins/known credential variables and inherited startup-path overrides,
+and runs only the fully qualified shell test with captured success output. The
+fixture uses private HOME/configuration and synthetic rc files, verifies their
+contents remain unchanged, and emits each shell's canonical path, version,
+digest and actual count of replies written to its own PTY only after its
+semantic assertions pass. No installed AI CLI or native GUI is launched.
+
+Source identity is observed before build, before test launch, after the test,
+and before record publication. A parent-owned Linux executable descriptor pins
+the measured test bytes through exec, and final source/path/descriptor drift
+prevents publication. Shell digests are checked across each probe and afterward.
+This detects observed drift; it is not signed compiler provenance or protection
+against hostile same-user changes. Build/test subprocess groups have 900/60
+second deadlines and separate 8-MiB output ceilings with retained logs. Missing
+shells, failed/zero/ignored tests, or incomplete/duplicate/malformed observations
+do not produce a passing record.
+
+Only `shell.bash`, `shell.zsh` and `shell.fish` are populated. An observed zero
+reply count yields `accepted_limitation` for
+`capability_replies_return_to_origin`, not a fabricated pass; the other four
+checks can still pass. This is a one-origin shell fixture, not multi-pane routing
+acceptance. Nushell/Elvish, fake-provider, Harvest, desktop and authenticated
+rows remain unrecorded. CI uploads this partial record separately. A green
+candidate-bound three-shell artifact is still required; historical prose passes
+and a default workspace suite that skips missing shells are not substitutes.
+
 Run the required three-shell lane with:
 
 ```bash

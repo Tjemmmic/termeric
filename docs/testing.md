@@ -1,5 +1,18 @@
 # Testing Termeric
 
+## Candidate-bound shell acceptance
+
+`scripts/run_shell_acceptance.py` runs only the required Bash/Zsh/Fish real-PTY
+fixture and writes a sealed partial integration record. Its pure and private
+process tests cover zero/ignored/wrong-test refusal, exact observation shape,
+missing/duplicate shells, unexercised reply-path limitations, unchanged unrelated
+rows, bounded output, timeouts, nonzero exits, no-overwrite behavior, dirty source
+and source/binary drift refusal. The shared executable-provenance tests cover
+pathname replacement while the launched descriptor remains pinned. CI installs
+the three shells and uploads the runner's artifact separately from fake-provider
+evidence. No provider or native GUI test is selected. See the exact command and
+limitations in [integration acceptance](integration-acceptance.md#shell-and-harvest-contract).
+
 ## Background controlled command tabs
 
 The provider-free suite checks `launch-tab --background` at CLI, strict v18 wire,
