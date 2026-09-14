@@ -1167,9 +1167,7 @@ impl Tab {
             Session::with_id(id.clone(), session_title, working_dir)
         } else {
             // Create new session
-            let s = Session::new(session_title, working_dir);
-            self.session_id = Some(s.id.clone());
-            s
+            Session::new(session_title, working_dir)
         };
 
         // Preserve last_command in the session metadata
@@ -1177,29 +1175,11 @@ impl Tab {
         session.capture_scope = capture.scope;
 
         let session_id = session.id.clone();
-        let mut scrollback_truncated = false;
-
-        // Save scrollback
-        if save_scrollback {
-            let lines = capture.scrollback;
-            if !lines.is_empty() {
-                match crate::session::save::save_scrollback_text(&session_id, &lines) {
-                    Ok(report) => {
-                        session.scrollback_file = Some(report.filename);
-                        scrollback_truncated = report.truncated;
-                    }
-                    Err(e) => {
-                        return Err(
-                            e.context(format!("save scrollback for session '{session_id}'"))
-                        );
-                    }
-                }
-            }
-        }
-
-        // Save session metadata
-        crate::session::save::save_session(&session)
-            .context(format!("save metadata for session '{session_id}'"))?;
+        let scrollback_truncated =
+            crate::session::save::save_snapshot(&session, &capture.scrollback)
+                .context(format!("save snapshot for session '{session_id}'"))?;
+        // Identity denotes a published snapshot, never a failed first attempt.
+        self.session_id = Some(session_id.clone());
         Ok(SessionSaveOutcome {
             id: session_id,
             scrollback_truncated,

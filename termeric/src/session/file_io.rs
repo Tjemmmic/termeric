@@ -1,12 +1,18 @@
 //! Per-file legacy snapshot safety. This is not a cross-file transaction.
 
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, Read};
+#[cfg(test)]
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 pub(crate) const MAX_SESSION_METADATA_BYTES: usize = 1024 * 1024;
 
 pub(super) fn read_text(path: &Path, limit: usize) -> io::Result<String> {
+    read_capped_text(open_regular(path, limit)?, limit)
+}
+
+pub(super) fn open_regular(path: &Path, limit: usize) -> io::Result<fs::File> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -27,7 +33,7 @@ pub(super) fn read_text(path: &Path, limit: usize) -> io::Result<String> {
         return Err(size_error(limit));
     }
     // The read itself is capped: metadata alone does not bound a growing file.
-    read_capped_text(file, limit)
+    Ok(file)
 }
 
 fn read_capped_text(reader: impl Read, limit: usize) -> io::Result<String> {
@@ -51,6 +57,7 @@ fn size_error(limit: usize) -> io::Error {
 
 /// Write only to an exclusive same-directory staging file. Persistence replaces
 /// a final symlink itself, never follows it to truncate the link's target.
+#[cfg(test)]
 pub(super) fn atomic_replace<T>(
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> io::Result<T>,

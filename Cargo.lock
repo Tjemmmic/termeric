@@ -3854,6 +3854,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "async-channel",
+ "base64",
  "bytemuck",
  "cosmic-text",
  "directories",

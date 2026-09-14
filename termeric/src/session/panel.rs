@@ -571,17 +571,18 @@ fn legacy_session_entries() -> Vec<SessionEntry> {
     super::list_sessions()
         .into_iter()
         .map(|name| {
-            let session_text = super::session_file_path(&name).and_then(|path| {
-                super::file_io::read_text(&path, super::file_io::MAX_SESSION_METADATA_BYTES).ok()
-            });
+            let session = super::session_file_path(&name)
+                .and_then(|path| super::snapshot::read_metadata(&path).ok());
             let field = |key: &str| -> Option<String> {
-                session_text.as_ref().and_then(|text| {
-                    text.lines()
-                        .find(|line| line.starts_with(key))
-                        .and_then(|line| line.split('=').nth(1))
-                        .map(|value| value.trim().trim_matches('"').to_string())
-                        .filter(|value| !value.is_empty())
-                })
+                session
+                    .as_ref()
+                    .and_then(|session| match key {
+                        "title" => Some(session.title.clone()),
+                        "last_command" => session.last_command.clone(),
+                        "working_directory" => session.working_directory.clone(),
+                        _ => None,
+                    })
+                    .filter(|value| !value.is_empty())
             };
             let display_name = field("title").unwrap_or_else(|| name.clone());
             let detail = field("last_command")
@@ -594,7 +595,9 @@ fn legacy_session_entries() -> Vec<SessionEntry> {
                     })
                 })
                 .unwrap_or_default();
-            let focused = field("capture_scope").as_deref() == Some("focused_pane");
+            let focused = session.as_ref().is_some_and(|session| {
+                session.capture_scope == super::SessionCaptureScope::FocusedPane
+            });
             let subtitle = match (focused, detail.is_empty()) {
                 (true, true) => "focused pane".into(),
                 (true, false) => format!("focused pane · {detail}"),

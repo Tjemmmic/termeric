@@ -1126,13 +1126,20 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Session snapshot v5 now atomically publishes metadata and embedded text in
+  one bounded file. Metadata-only listings avoid decoding text; restore checks
+  the selected generation and content checksum before spawning a shell.
+  Nonblocking writer locks and one recoverable staging slot prevent mixed
+  concurrent saves and unbounded orphan generations. Failed first saves no
+  longer assign a tab session identity. V1–v4 remain read-compatible; saving
+  upgrades to v5, with no automatic downgrade or backup history.
+
 - Legacy snapshot saves no longer follow predictable temporary-name or final
   scrollback symlinks into unrelated files. Unique private staging, sync, and
   atomic per-file replacement preserve the old destination on write failure.
   Metadata/scrollback reads now share 1-MiB/5-MiB regular-file limits and Unix
-  nonblocking/no-follow opens across restore and listing surfaces. A separate
-  metadata-plus-text transaction gap remains tracked; legacy snapshots are
-  marked Partial until it is resolved.
+  nonblocking/no-follow opens across restore and listing surfaces. Version 5
+  extends these per-file safeguards to complete metadata-plus-text publication.
 
 - Session export now runs on a bounded background worker. An ordered recorder
   checkpoint binds Markdown and JSONL to one verified byte prefix while

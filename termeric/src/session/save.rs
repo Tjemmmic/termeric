@@ -1,58 +1,46 @@
 //! Session saving functionality
 
 use anyhow::Result;
+#[cfg(test)]
 use std::fs;
+#[cfg(test)]
 use std::path::Path;
 
-use super::file_io::{MAX_SESSION_METADATA_BYTES, atomic_replace, read_text};
-use super::{MAX_SCROLLBACK_FILE_SIZE, Session, session_dir};
+#[cfg(test)]
+use super::MAX_SCROLLBACK_FILE_SIZE;
+#[cfg(test)]
+use super::file_io::{MAX_SESSION_METADATA_BYTES, atomic_replace};
+use super::{Session, session_dir};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ScrollbackSave {
     pub filename: String,
     pub bytes_written: usize,
     pub truncated: bool,
 }
 
-/// Save a session to its directory (determined by session ID)
-pub fn save_session(session: &Session) -> Result<()> {
+/// Publish metadata and captured text together; return whether text was capped.
+pub fn save_snapshot(session: &Session, lines: &[String]) -> Result<bool> {
     let dir = session_dir(&session.id).ok_or_else(|| {
         anyhow::anyhow!("Could not determine session directory for '{}'", session.id)
     })?;
 
-    save_session_to_dir(session, &dir)
+    super::snapshot::save(session, &dir, lines)
 }
 
 /// Save a session to a specific directory
 ///
 /// Uses an atomic write pattern: writes to a temp file, syncs, then renames.
+#[cfg(test)]
 pub fn save_session_to_dir(session: &Session, dir: &Path) -> Result<()> {
-    // Ensure session directory exists
-    fs::create_dir_all(dir)?;
-
-    // Write session metadata as TOML
-    let session_file = dir.join("session.toml");
-    let mut persisted = session.clone();
-    if let Ok(existing) = read_text(&session_file, MAX_SESSION_METADATA_BYTES)
-        && let Ok(existing) = toml::from_str::<Session>(&existing)
-        && existing.id == session.id
-    {
-        persisted.created_at = existing.created_at;
-    }
-    let toml_string = toml::to_string_pretty(&persisted)?;
-    if toml_string.len() > MAX_SESSION_METADATA_BYTES {
-        anyhow::bail!("session metadata exceeds its {MAX_SESSION_METADATA_BYTES}-byte limit");
-    }
-    atomic_replace(&session_file, |file| file.write_all(toml_string.as_bytes()))?;
-
-    log::info!("Saved session '{}' to {:?}", session.id, session_file);
+    super::snapshot::save(session, dir, &[])?;
     Ok(())
 }
 
-/// Save scrollback text for a session to a file within the session directory.
-///
-/// Returns an explicit report so callers can surface truncation.
-pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<ScrollbackSave> {
+/// Legacy fixture writer; application saves use the v5 transaction above.
+#[cfg(test)]
+fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<ScrollbackSave> {
     let dir = session_dir(session_id)
         .ok_or_else(|| anyhow::anyhow!("Could not determine session directory"))?;
     fs::create_dir_all(&dir)?;
@@ -75,7 +63,9 @@ pub fn save_scrollback_text(session_id: &str, lines: &[String]) -> Result<Scroll
     Ok(report)
 }
 
-/// Production and boundary tests share the exact same atomic write path.
+/// Preserve the legacy per-file regression fixtures. V5's production whole-line
+/// cap and transaction boundaries are tested separately in `snapshot`.
+#[cfg(test)]
 fn save_scrollback_to_path(
     filepath: &Path,
     lines: &[String],
@@ -235,6 +225,6 @@ mod tests {
                 .contains("limit")
         );
         assert_eq!(fs::read(dir.path().join("session.toml")).unwrap(), previous);
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 }

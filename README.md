@@ -398,8 +398,10 @@ Restoring a session launches a new shell; it does not restore a running process
 or a complete pane/workspace layout. In a split tab, a legacy session captures only the
 focused pane's cwd, last command, and bounded text history; the UI labels that
 reduced scope when saving and browsing snapshots.
-Individual files are safely replaced, but metadata and text are not yet one
-transaction; see the [snapshot boundary](docs/session-snapshots.md#remaining-transaction-boundary).
+Version 5 publishes metadata and text in one bounded atomic snapshot, rejects
+stale restore selections, and coordinates writers without waiting on a lock.
+Versions 1–4 remain readable; saving upgrades the format. See the
+[snapshot storage and rollback contract](docs/session-snapshots.md#storage-and-compatibility).
 
 AI transcript recording writes JSONL up to 50 MiB and reports the first cap or
 write failure instead of silently discarding data. Background export produces

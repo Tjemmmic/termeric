@@ -2,7 +2,7 @@
 //!
 //! Each session represents a single terminal tab's state:
 //! - Working directory
-//! - Scrollback history (as a text file)
+//! - Bounded text scrollback (embedded in the version 5 snapshot)
 //! - Title and metadata
 //!
 //! Sessions are identified by a timestamp-based ID (e.g., "2026-02-24_21h59m43").
@@ -14,6 +14,7 @@ mod file_io;
 pub mod panel;
 pub mod restore;
 pub mod save;
+mod snapshot;
 pub mod transcript;
 
 use serde::{Deserialize, Serialize};
@@ -43,7 +44,7 @@ pub enum SessionCaptureScope {
 }
 
 /// A saved terminal session (single tab)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     /// Version for compatibility checking
     pub version: u32,
@@ -67,11 +68,23 @@ pub struct Session {
     pub created_at: String,
     /// When this session was last updated (ISO 8601)
     pub updated_at: String,
+    /// Version 5 embeds text in the same atomically published file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_content: Option<SnapshotContent>,
+    /// Hash of the selected metadata header; never written to disk.
+    #[serde(skip)]
+    pub(crate) snapshot_identity: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotContent {
+    pub bytes: usize,
+    pub sha256: String,
 }
 
 impl Session {
     /// Current session format version
-    pub const CURRENT_VERSION: u32 = 4;
+    pub const CURRENT_VERSION: u32 = 5;
 
     /// Create a new session with a generated ID
     pub fn new(title: String, working_directory: Option<String>) -> Self {
@@ -87,6 +100,8 @@ impl Session {
             capture_scope: SessionCaptureScope::SingleTerminal,
             created_at: now.clone(),
             updated_at: now,
+            snapshot_content: None,
+            snapshot_identity: None,
         }
     }
 
@@ -103,6 +118,8 @@ impl Session {
             capture_scope: SessionCaptureScope::SingleTerminal,
             created_at: now.clone(),
             updated_at: now,
+            snapshot_content: None,
+            snapshot_identity: None,
         }
     }
 
@@ -255,19 +272,8 @@ pub fn list_sessions_with_titles() -> Vec<(String, String)> {
         .into_iter()
         .map(|id| {
             let title = session_file_path(&id)
-                .and_then(|path| {
-                    file_io::read_text(&path, file_io::MAX_SESSION_METADATA_BYTES).ok()
-                })
-                .and_then(|content| {
-                    content
-                        .lines()
-                        .find(|line| line.starts_with("title"))
-                        .and_then(|line| {
-                            line.split('=')
-                                .nth(1)
-                                .map(|v| v.trim().trim_matches('"').to_string())
-                        })
-                })
+                .and_then(|path| snapshot::read_metadata(&path).ok())
+                .map(|session| session.title)
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| id.clone());
             (id, title)

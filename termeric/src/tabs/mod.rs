@@ -2376,6 +2376,8 @@ impl TabManager {
     /// The new tab inherits the session's ID so subsequent saves update
     /// the same session entry.
     pub fn new_tab_from_session(&mut self, session: &Session) -> anyhow::Result<usize> {
+        let lines = crate::session::restore::load_snapshot_scrollback(session)
+            .map_err(|error| anyhow::anyhow!("Snapshot could not be recovered: {error:#}"))?;
         let id = self.next_id;
         self.next_id += 1;
 
@@ -2399,25 +2401,19 @@ impl TabManager {
         tab.last_command = session.last_command.clone();
 
         // Replay scrollback
-        if let Some(ref scrollback_file) = session.scrollback_file {
-            let lines = crate::session::restore::load_scrollback_text(&session.id, scrollback_file)
-                .map_err(|error| anyhow::anyhow!(
-                    "Session metadata restored, but scrollback could not be recovered: {error:#}"
-                ))?;
-            if !lines.is_empty() {
-                // Join lines with \r\n and add a trailing \r\n so the shell's
-                // new prompt appears on a fresh line below the scrollback.
-                // This is safe because export_scrollback_text() only includes
-                // scrollback lines, not the visible area (which has the prompt).
-                let text = lines.join("\r\n") + "\r\n";
-                if let Some(terminal) = tab.focused_terminal_mut() {
-                    terminal.process(text.as_bytes());
-                }
-                log::info!(
-                    "Replayed {} scrollback lines into restored tab",
-                    lines.len()
-                );
+        if !lines.is_empty() {
+            // Join lines with \r\n and add a trailing \r\n so the shell's
+            // new prompt appears on a fresh line below the scrollback.
+            // This is safe because export_scrollback_text() only includes
+            // scrollback lines, not the visible area (which has the prompt).
+            let text = lines.join("\r\n") + "\r\n";
+            if let Some(terminal) = tab.focused_terminal_mut() {
+                terminal.process(text.as_bytes());
             }
+            log::info!(
+                "Replayed {} scrollback lines into restored tab",
+                lines.len()
+            );
         }
 
         self.tabs.push(tab);
@@ -2711,15 +2707,66 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(restored.last_command.as_deref(), Some("right-command"));
-        let history = crate::session::restore::load_scrollback_text(
-            id,
-            restored.scrollback_file.as_deref().unwrap(),
-        )
-        .unwrap()
-        .join("\n");
+        let history = crate::session::restore::load_snapshot_scrollback(&restored)
+            .unwrap()
+            .join("\n");
         assert!(history.contains("right-history"));
         assert!(!history.contains("left-history"));
         crate::session::set_test_sessions_base_dir(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_snapshot_failure_does_not_assign_session_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let blocked = root.path().join("not-a-directory");
+        std::fs::write(&blocked, "sentinel").unwrap();
+        crate::session::set_test_sessions_base_dir(Some(blocked));
+        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        manager
+            .new_tab_with_command(
+                "/bin/cat",
+                &[],
+                None,
+                Some("snapshot"),
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let tab = manager.active_tab_mut().unwrap();
+        let result = tab.save_as_session(false);
+        crate::session::set_test_sessions_base_dir(None);
+        assert!(result.is_err());
+        assert!(tab.session_id.is_none());
+    }
+
+    #[test]
+    fn stale_snapshot_restore_does_not_allocate_or_spawn_a_tab() {
+        let root = tempfile::tempdir().unwrap();
+        crate::session::set_test_sessions_base_dir(Some(root.path().to_owned()));
+        let mut saved = Session::with_id("stale".into(), "old".into(), None);
+        crate::session::save::save_snapshot(&saved, &["old text".into()]).unwrap();
+        let selected = crate::session::restore::restore_named_session("stale")
+            .unwrap()
+            .unwrap();
+        saved.title = "new".into();
+        crate::session::save::save_snapshot(&saved, &["new text".into()]).unwrap();
+        let shell = ShellConfig {
+            program: Some("/bin/cat".into()),
+            ..Default::default()
+        };
+        let mut manager = TabManager::new(80, 24, shell, 1_000, 8 * 1024 * 1024);
+        let next_id = manager.next_id;
+        let result = manager.new_tab_from_session(&selected);
+        crate::session::set_test_sessions_base_dir(None);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("changed since selection")
+        );
+        assert!(manager.is_empty());
+        assert_eq!(manager.next_id, next_id);
     }
 
     #[cfg(unix)]

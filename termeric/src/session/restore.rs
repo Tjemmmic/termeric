@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
-use super::file_io::{MAX_SESSION_METADATA_BYTES, read_text};
+use super::file_io::read_text;
 use super::{Session, session_dir};
 
 /// Restore a named session by its ID
@@ -24,19 +24,22 @@ pub fn restore_named_session(name: &str) -> Result<Option<Session>> {
 
 /// Restore a session from a specific path
 pub fn restore_session_from_path(path: &Path) -> Result<Session> {
-    let content = read_text(path, MAX_SESSION_METADATA_BYTES)?;
-    let session: Session = toml::from_str(&content)?;
-
-    if !session.is_compatible() {
-        anyhow::bail!(
-            "Session file version {} is newer than supported version {}",
-            session.version,
-            Session::CURRENT_VERSION,
-        );
-    }
+    let session = super::snapshot::read_metadata(path)?;
 
     log::info!("Restored session '{}' from {:?}", session.id, path);
     Ok(session)
+}
+
+/// Validate a selection before spawning a shell or changing tab state.
+pub fn load_snapshot_scrollback(session: &Session) -> Result<Vec<String>> {
+    if session.version >= 5 {
+        let dir = session_dir(&session.id).context("Invalid session directory")?;
+        super::snapshot::read_selected(&dir.join("session.toml"), session)
+    } else if let Some(filename) = &session.scrollback_file {
+        load_scrollback_text(&session.id, filename)
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 /// Load scrollback text for a session from its directory
@@ -121,7 +124,7 @@ updated_at = "2026-02-24T21:59:43Z"
     }
 
     #[test]
-    fn current_fixture_records_focused_pane_scope() {
+    fn legacy_v4_fixture_records_focused_pane_scope() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.toml");
         fs::write(
@@ -130,7 +133,7 @@ updated_at = "2026-02-24T21:59:43Z"
         )
         .unwrap();
         let session = restore_session_from_path(&path).unwrap();
-        assert_eq!(session.version, Session::CURRENT_VERSION);
+        assert_eq!(session.version, 4);
         assert_eq!(
             session.capture_scope,
             super::super::SessionCaptureScope::FocusedPane

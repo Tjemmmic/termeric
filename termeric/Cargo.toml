@@ -39,6 +39,7 @@ unicode_names2 = "=4.0.0"
 image = "0.25"
 flate2 = "1.1"
 tempfile = "3"
+base64 = "0.22"
 
 # Clipboard (wayland-data-control needed for Wayland support)
 arboard = { version = "3.4", features = ["wayland-data-control"] }

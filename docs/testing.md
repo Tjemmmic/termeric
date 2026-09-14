@@ -688,9 +688,13 @@ targets, partial-write preservation, concurrent complete-file replacement,
 private output permissions, 1-MiB metadata and 5-MiB scrollback read rails,
 growth beyond inspected length, invalid UTF-8, and bounded FIFO rejection.
 Oversized metadata is tested through restore, title listing, and the legacy
-session panel. These are per-file guarantees; metadata/text generation
-transactions remain separately tracked in
-[#107](https://github.com/Tjemmmic/termeric/issues/107).
+session panel. Version 5 transaction tests additionally cover failure after
+complete text staging but before commit, pinned old readers, stale selections
+before shell creation, simultaneous writers/readers, independent-process
+nonblocking locks, constant-count interrupted-stage recovery, content checksum
+validation, legacy v1–v4 upgrade without text deletion, and failed first-save
+identity assignment. See [#107](https://github.com/Tjemmmic/termeric/issues/107)
+and the snapshot contract for disk, synchronous-I/O, and rollback boundaries.
 
 Complete workspace coverage separately round-trips shell, terminal-profile,
 and plugin launches with a nested three-pane tree, pane and tab focus, titles,

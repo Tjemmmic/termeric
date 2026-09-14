@@ -40,53 +40,102 @@ session file.
 
 ## Storage and compatibility
 
-Format version 4 adds `capture_scope`, whose values are `single_terminal` and
-`focused_pane`. The field has a `single_terminal` default, so versions 1–3
-continue loading without rewriting their files. Files newer than the supported
-version and malformed TOML fail visibly instead of being partially inferred.
+New saves use format version 5: **one self-contained `session.toml`** publishes
+metadata and text together. Explicit, automatic, and close-time saves all call
+the same storage transaction. A failed first save leaves the tab's session ID
+unset; an update failure preserves the previous complete snapshot.
 
-Scrollback is written once, one complete line at a time, to `scrollback.txt`.
-The file is capped at exactly 5 MiB; a line that would cross the boundary is not
-partially written, and the save result produces a visible truncation warning.
-Metadata is limited to 1 MiB and retains the original creation time for a valid
-same-ID update. Oversized metadata saves fail without replacing the old file.
+The file begins with a TOML comment,
+`# termeric-snapshot-v5 metadata-bytes=NNNNNNNN`, followed by a newline, exactly
+that many UTF-8 metadata bytes, and a `scrollback_base64` string inside the final
+`[snapshot_content]` table. Metadata includes decoded text length and SHA-256.
+The metadata-only reader bounds and reads the header without loading the base64
+body; title listings therefore do not decode multi-megabyte text. Listing checks
+the declared total file length, **not** the payload checksum. Actual restore
+validates framing, decoded length, SHA-256, and UTF-8 before creating a PTY.
 
-Both files use exclusively created, same-directory staging files (mode `0600`
-on Unix), buffered writes, flush/sync, and atomic **per-file** replacement. A
-failed write or publication preserves the prior final file and cleans up only
-the owned staging file. The predictable `session.toml.tmp` name is no longer
-used. A final output symlink can be replaced itself, but its target is never
-opened for truncation. Existing unrelated staging-name entries are left alone.
-Directory sync after publication is best effort; a failure is logged rather
-than falsely reporting that an already-replaced file was not published.
+Metadata remains limited to 1 MiB. Text remains limited to exactly 5 MiB,
+retaining whole lines from the start of captured history; the first line that
+would exceed the cap and all subsequent lines are omitted with a visible
+truncation report. Empty/disabled captures embed empty text. Base64 expansion
+plus framing gives a maximum container size of **8,039,155 bytes**. A valid
+same-ID update preserves the original creation time. Malformed, incompatible,
+unreadable, or differently identified existing metadata fails closed rather
+than being overwritten.
 
-Restore, creation-time preservation, the title list, and the legacy session
-panel share bounded regular-file reads: 1 MiB for metadata and 5 MiB for
-scrollback. The read itself permits at most one extra probe byte, so growth
-after metadata inspection cannot evade the limit. Oversized/invalid UTF-8 input
-is rejected rather than silently truncated. On Unix, nonblocking/no-follow
-opens reject final-component symlinks and let descriptor validation reject a
-FIFO without waiting for a writer. A broken metadata symlink is an error, not
-an absent snapshot. Lists retain a safe session-ID fallback when metadata is
-unreadable. These checks do not confine user-selected parent directories or
-establish a non-Unix symlink-race guarantee. See
-[#106](https://github.com/Tjemmmic/termeric/issues/106).
+### Publication, readers, and bounded recovery
 
-### Remaining transaction boundary
+Writers take a **nonblocking**, per-session OS file lock on the persistent
+`.snapshot-v5.lock` inode. A competing writer receives a visible retryable save
+error; the UI never waits for that lock. One `.snapshot-v5.pending` file is
+created exclusively, written, flushed, and synced, then atomically replaces
+`session.toml`. The lock is never unlinked by a save. The names are reserved for
+this protocol; neither file is opened with truncation. On Unix the files are
+private (`0600`), and lock/recovery validation requires a regular, owned,
+non-hard-linked file without group/other permissions.
 
-`scrollback.txt` and `session.toml` are still published separately. A failure
-after scrollback replacement but before metadata replacement, or a concurrent
-reader at that boundary, can observe metadata and text from different saves.
-Consequently legacy snapshots remain **Partial** until
-[#107](https://github.com/Tjemmmic/termeric/issues/107) establishes a complete
-generation, concurrency, retention, and restore contract. Atomic replacement
-of each file alone does not fix that problem.
+A reader uses one open descriptor for metadata and embedded text. Replacement
+cannot mix generations or remove that reader's data. If a selected metadata
+header differs when reopened for restore, restore reports an explicit stale
+selection error: refresh/retry; it does not silently switch captures. This check
+occurs before allocating a tab ID or starting a shell. Identical content and
+metadata are equivalent selections, even if republished.
 
-Snapshot capture and filesystem operations also remain synchronous. Nonblocking
-open flags do not make ordinary file reads/writes or metadata calls real-time,
-and byte ceilings are not total-RSS limits for parsed metadata or line vectors.
-These are separate boundaries from background transcript export and complete
-workspace archives.
+Normal errors clean up the owned staging file. After an interrupted save, the
+next writer under the same lock may recover only the reserved pending file if
+it meets ownership/type/size checks and has a full or partial expected magic
+prefix (including empty, for a crash before the first write). Unrecognized,
+oversized, symlinked, or otherwise unsafe entries fail closed and remain for
+manual inspection. No directory sweep or recursive cleanup runs during save.
+
+There is **one current container, at most one pending container, and one empty
+lock file per session**: at most 16,078,310 bytes of protocol-managed named file
+content. There are no backup generations or automatic rollback history. An
+already open reader can temporarily pin one additional old container, at most
+8,039,155 bytes per in-flight reader, until its descriptor closes. Saving does
+not accumulate named generations. Existing legacy text and unrelated files,
+including staging artifacts from earlier implementations, are not silently
+deleted and are outside this new managed-file budget.
+
+This selects the self-contained-container option in
+[#107](https://github.com/Tjemmmic/termeric/issues/107): roughly one-third text
+encoding overhead buys a single publication point and eliminates generation
+garbage collection. A bounded metadata header avoids the listing-cost drawback.
+Two independent renames cannot provide this contract; immutable text generations
+would instead require retention and stale-reader garbage-collection machinery.
+
+Directory sync after publication remains best effort; failure is logged, not
+reported as though publication had not happened. Atomic replacement is not a
+power-loss/filesystem-corruption guarantee. File locks coordinate cooperating
+v5 writers, not external in-place editors or binaries predating this protocol.
+
+### Legacy compatibility and rollback
+
+Versions 1–4 remain readable without rewriting files. Version 4's `capture_scope`
+still distinguishes `single_terminal` and `focused_pane`; earlier versions
+default to `single_terminal`. Their separate scrollback file retains the 5-MiB
+bounded reader. Concurrent old-binary saves retain the old two-file limitation;
+do not run old and new writers against the same session directory.
+
+Only saving upgrades an old snapshot to v5. Its old `scrollback.txt` is left
+untouched, but it is no longer referenced. V5 remains valid TOML, so older
+binaries reject its newer version (or their older metadata-size ceiling),
+rather than restoring it as a v4 snapshot. For rollback, preserve an external
+copy of the **complete v1–v4 session directory before saving with v5**. The
+leftover text alone is not a backup of the old metadata. There is no automatic
+down-converter or backup created during upgrade.
+
+All readers use bounded regular-file opens. Unix nonblocking/no-follow flags
+reject final symlinks and allow FIFO rejection without waiting for a writer;
+a broken metadata symlink is an error, not an absent snapshot. Lists fall back
+to the session ID for unreadable metadata. These checks do not confine
+user-selected parent directories or establish a non-Unix symlink-race guarantee.
+See [#106](https://github.com/Tjemmmic/termeric/issues/106).
+
+Snapshot capture and bounded filesystem operations remain synchronous. This
+change avoids blocking lock acquisition, not slow ordinary filesystem calls;
+it is not the background transcript-export worker. Byte ceilings also are not
+total-RSS limits for parsed metadata, decoded text, or line vectors.
 
 ## Regression evidence
 
@@ -94,9 +143,14 @@ Linux PTY coverage gives two panes distinct cwd, command, and terminal history,
 then changes focus and verifies every captured field changes together. The
 selected snapshot is serialized and loaded again. A simultaneous two-pane exit
 then verifies close-time autosave persists only the focused command/history
-before topology cleanup. Separate tests exercise the exact 5 MiB boundary,
-versions 1 and 3, current focused-pane files, malformed files, newer versions,
-missing scrollback, and traversal-resistant filenames.
+before topology cleanup. Storage tests inject a failure after complete staging
+and before commit; read at both publication boundaries; retain an old open
+descriptor across replacement; reject stale selections before tab creation;
+exercise independent-process lock contention and concurrent writers/readers;
+and repeat interrupted staging at every magic-prefix boundary with constant file
+counts. Exact 5-MiB production writes, metadata overflow, corrupt payloads,
+symlink/permission checks, v1–v4 upgrades, and first-save identity failure are
+covered in private fixtures. No GUI or provider-backed execution is required.
 
 Private sentinel regressions reproduce both original symlink-write defects and
 verify the targets stay unchanged after saving. Shared production I/O tests
