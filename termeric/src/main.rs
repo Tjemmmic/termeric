@@ -32,7 +32,7 @@ mod workspace;
 use anyhow::Result;
 use winit::event_loop::EventLoop;
 
-fn main() -> Result<()> {
+fn main() -> Result<std::process::ExitCode> {
     let outcome = cli::parse_env()?;
 
     // Initialize logging after deterministic parsing but before either GUI or
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         cli::ParseOutcome::QuickAccess(launch) => {
             if let Some(output) = control::toggle_existing_quick_access()? {
                 println!("{output}");
-                return Ok(());
+                return Ok(std::process::ExitCode::SUCCESS);
             }
             #[cfg(unix)]
             {
@@ -56,10 +56,10 @@ fn main() -> Result<()> {
         }
         cli::ParseOutcome::Control(command) => {
             let output = control::execute(command)?;
-            if !output.is_empty() {
-                println!("{output}");
+            if !output.text.is_empty() {
+                println!("{}", output.text);
             }
-            return Ok(());
+            return Ok(std::process::ExitCode::from(output.exit_code));
         }
         cli::ParseOutcome::Domain(command) => {
             if let Some(output) = domain::execute(command)?
@@ -67,22 +67,22 @@ fn main() -> Result<()> {
             {
                 println!("{output}");
             }
-            return Ok(());
+            return Ok(std::process::ExitCode::SUCCESS);
         }
         cli::ParseOutcome::Plugin(command) => {
             let output = plugin::runtime::execute_admin(command)?;
             if !output.is_empty() {
                 println!("{output}");
             }
-            return Ok(());
+            return Ok(std::process::ExitCode::SUCCESS);
         }
         cli::ParseOutcome::SerialBridge(options) => {
             serial::run_bridge(options)?;
-            return Ok(());
+            return Ok(std::process::ExitCode::SUCCESS);
         }
         cli::ParseOutcome::Print(text) => {
             println!("{text}");
-            return Ok(());
+            return Ok(std::process::ExitCode::SUCCESS);
         }
     };
 
@@ -112,5 +112,5 @@ fn main() -> Result<()> {
         anyhow::bail!(error);
     }
 
-    Ok(())
+    Ok(std::process::ExitCode::SUCCESS)
 }

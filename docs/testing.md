@@ -1,5 +1,19 @@
 # Testing Termeric
 
+## Running-GUI child wait CLI
+
+`cargo test -p termeric --test gui_launch_wait --locked` runs the actual CLI
+against private local fake GUI sockets with display variables removed. It
+checks running-to-exited progression, polling rate, exit codes 0/7/124/255/256,
+the unchanged one-shot query status, strict result identity/state/version,
+unknown records, disconnects, partial-response timeout, credential changes, and
+same-path socket replacement with unchanged credentials.
+Only status queries are accepted: no launch, cancellation, GUI, or provider
+workflow is executed. Unix socket access must be available to this test lane.
+The regular workspace suite additionally covers read/write backpressure under
+absolute deadlines, nonblocking refusal of FIFO token substitution, and CLI
+option validation. Native launch/window acceptance remains deferred.
+
 ## Cargo build-footprint contract
 
 `python3 scripts/build_footprint.py target` reports exact logical bytes and

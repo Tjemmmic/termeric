@@ -8,6 +8,14 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- `control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]` adds
+  client-side waiting and portable child exit-code propagation over existing
+  GUI protocol v16. Short, deadline-bound status exchanges, a 250 ms poll delay,
+  pinned endpoint credentials, and fail-closed errors keep waits bounded in
+  memory without holding GUI workers or mutating children. Timeout and Ctrl+C
+  stop only the waiter. Token validation also refuses substituted FIFOs without
+  blocking on open. No native GUI or provider acceptance is implied.
+
 - GUI control protocol v16 adds `control launch-status PROCESS REQUEST_ID`
   with optional JSON. A bounded process ledger retains the initial child's
   portable exit result across tab/pane ownership changes and cleanup. Queries

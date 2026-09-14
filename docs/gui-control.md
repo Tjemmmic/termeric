@@ -10,6 +10,8 @@ added the bounded fresh-window companion, and
 environment overlays to both direct launch actions. This remains narrower than
 a general remote-control API. [#100](https://github.com/Tjemmmic/termeric/issues/100)
 adds retained child completion queries for those launches.
+[#101](https://github.com/Tjemmmic/termeric/issues/101) adds client-side waiting
+and script exit-code propagation using that same protocol.
 
 ## Command line
 
@@ -20,6 +22,7 @@ current Unix user:
 termeric control list
 termeric control list --json
 termeric control launch-status PROCESS REQUEST_ID --json
+termeric control wait-launch PROCESS REQUEST_ID --timeout 300 --json
 termeric control get-text PROCESS WINDOW TAB PANE --history-lines 40 --bytes 16384
 termeric control get-text PROCESS WINDOW TAB PANE --json
 termeric control send-text PROCESS WINDOW TAB PANE 'cargo test' --enter
@@ -293,10 +296,42 @@ normal codes are preserved, but portable-pty 0.8 normalizes signal termination
 to `1` and supplies no typed signal identifier. It does not report individual
 commands in an interactive shell, descendants, or completion of output draining.
 
-The CLI exits successfully when the **query** succeeds, including a running or
+`launch-status` exits successfully when the **query** succeeds, including a running or
 unsuccessful child. Scripts inspect the JSON state and success/code fields.
 Queries are read-only, never replay a cached running result, and use the normal
-short connection timeouts. There is no blocking wait or event subscription.
+short connection timeouts. There is no server-side wait or event subscription.
+
+### Waiting from scripts
+
+`termeric control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]`
+polls the same retained initial child until exit. It prints exactly one final
+result in the same format as `launch-status`, but returns the child's portable
+code as its own CLI status. Codes 0 through 255 are preserved; larger portable
+codes map to CLI status 1 while the original code remains in the result. The
+current PTY library's signal result remains code 1, not `128 + signal`.
+
+No overall timeout is imposed unless `--timeout` is supplied. Its whole-second
+range is 1–86400. Every connection, request, and response shares an absolute
+12-second exchange deadline, shortened by the overall deadline when present;
+even a partial response cannot reset that deadline. Ordinary local filesystem
+discovery/token checks are synchronous and are not a real-time I/O guarantee.
+The client closes each connection and waits 250 ms after each running result.
+It retains only one bounded response and pins its original socket identity and
+token, refusing detected endpoint changes rather than switching GUI instances.
+
+Timeouts, disconnects, authentication failures, invalid responses, unknown or
+evicted records, and observation errors exit nonzero with a diagnostic on
+stderr and no result on stdout. Exit status 1 alone cannot distinguish a child
+failure from a query failure; JSON stdout provides the child result only when
+it was actually observed. A child can also legitimately exit 124; timeout is
+not represented by a reserved child exit code.
+
+Ctrl+C or a timeout ends only the standalone waiter: no cancellation, signal,
+terminal closure, or relaunch request is sent. Waiting does not keep the GUI
+process or completion record alive, and does not wait for descendants or final
+output draining. In particular, keep another window alive if the launched
+command owns the GUI's final window. Launch-and-wait is currently two commands,
+not an atomic launch option.
 
 The process retains at most 256 launch records. At capacity, admission of a new
 launch evicts the oldest completed record; if every record is still running or

@@ -8,7 +8,7 @@ use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
-const IO_TIMEOUT: Duration = Duration::from_secs(12);
+pub(super) const IO_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Serialize)]
 struct InventoryCollection {
@@ -266,7 +266,7 @@ pub fn launch_status(
     )
 }
 
-fn format_launch_status(
+pub(super) fn format_launch_status(
     frame: ServerFrame,
     process_id: u32,
     launch_request_id: &str,
@@ -1595,7 +1595,7 @@ fn generate_request_id() -> anyhow::Result<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
+pub(super) fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
     let mut credentials = libc::ucred {
         pid: 0,
         uid: 0,
@@ -1623,7 +1623,7 @@ fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
 }
 
 #[cfg(all(unix, not(target_os = "linux")))]
-fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
+pub(super) fn validate_peer(stream: &UnixStream) -> anyhow::Result<()> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
     // SAFETY: getpeereid receives a connected descriptor and valid output

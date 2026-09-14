@@ -317,6 +317,9 @@ renderer, and PTY initialization succeed.
 `termeric control launch-status PROCESS REQUEST_ID [--json]` observes the
 initial child's portable completion result across tab/pane moves and cleanup,
 within a 256-record process-local retention limit.
+`termeric control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]`
+waits in the CLI and returns the child's portable exit status, without keeping
+a GUI request open or canceling the child when the wait ends.
 Exact window-focus requests, tab selection, and pane focus are available through
 `focus-window`, `select-tab`, and `focus-pane`; Wayland window activation remains
 compositor-controlled and fails explicitly.

@@ -167,7 +167,9 @@ fn create_token(path: &Path) -> anyhow::Result<String> {
 pub(crate) fn read_token(path: &Path) -> anyhow::Result<String> {
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        // A replaced FIFO must not block before descriptor type validation.
+        // O_NONBLOCK does not change reads from the required regular file.
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)
         .with_context(|| format!("open Termeric token {}", path.display()))?;
     let metadata = file

@@ -15,9 +15,17 @@ mod client;
 mod paths;
 #[cfg(unix)]
 mod server;
+#[cfg(unix)]
+mod wait;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlCommand {
+    WaitLaunch {
+        process_id: u32,
+        launch_request_id: String,
+        timeout_seconds: Option<u32>,
+        json: bool,
+    },
     LaunchStatus {
         process_id: u32,
         launch_request_id: String,
@@ -187,10 +195,30 @@ pub fn toggle_existing_quick_access() -> anyhow::Result<Option<String>> {
     }
 }
 
-pub fn execute(command: ControlCommand) -> anyhow::Result<String> {
+pub struct ControlOutput {
+    pub text: String,
+    pub exit_code: u8,
+}
+
+pub fn execute(command: ControlCommand) -> anyhow::Result<ControlOutput> {
+    #[cfg(unix)]
+    if let ControlCommand::WaitLaunch {
+        process_id,
+        launch_request_id,
+        timeout_seconds,
+        json,
+    } = command
+    {
+        return wait::launch(process_id, launch_request_id, timeout_seconds, json);
+    }
+    execute_once(command).map(|text| ControlOutput { text, exit_code: 0 })
+}
+
+fn execute_once(command: ControlCommand) -> anyhow::Result<String> {
     #[cfg(unix)]
     {
         match command {
+            ControlCommand::WaitLaunch { .. } => unreachable!("wait dispatched separately"),
             ControlCommand::LaunchStatus {
                 process_id,
                 launch_request_id,

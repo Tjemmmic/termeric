@@ -439,6 +439,46 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
         return Ok(ParseOutcome::Print(control_help_text()));
     }
     match command {
+        "wait-launch" => {
+            let process_id = parse_control_process_id(arguments.get(1))?;
+            let launch_request_id =
+                domain_utf8(arguments.get(2), "wait-launch requires REQUEST_ID")?;
+            crate::control::protocol::Request::LaunchStatus {
+                launch_request_id: launch_request_id.clone(),
+            }
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+            let mut json = false;
+            let mut timeout_seconds = None;
+            let mut index = 3;
+            while index < arguments.len() {
+                match arguments[index].to_str() {
+                    Some("--json") if !json => json = true,
+                    Some("--timeout") if timeout_seconds.is_none() => {
+                        index += 1;
+                        let value =
+                            domain_utf8(arguments.get(index), "--timeout requires SECONDS")?;
+                        let seconds = value
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|seconds| (1..=86400).contains(seconds));
+                        timeout_seconds = Some(seconds.ok_or_else(|| {
+                            anyhow::anyhow!("--timeout must be 1–86400 whole seconds")
+                        })?);
+                    }
+                    _ => anyhow::bail!("unexpected or repeated control wait-launch option"),
+                }
+                index += 1;
+            }
+            Ok(ParseOutcome::Control(
+                crate::control::ControlCommand::WaitLaunch {
+                    process_id,
+                    launch_request_id,
+                    timeout_seconds,
+                    json,
+                },
+            ))
+        }
         "launch-status" => {
             let process_id = parse_control_process_id(arguments.get(1))?;
             let launch_request_id =
@@ -1074,6 +1114,7 @@ fn control_help_text() -> String {
     "Usage: termeric control SUBCOMMAND\n\n\
 Commands for already-running local GUI processes:\n  \
   list [--json]\n      List bounded window, tab, and pane metadata\n  \
+  wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]\n      Wait for a retained child and return its exit code; timeout does not cancel it\n  \
   launch-status PROCESS REQUEST_ID [--json]\n      Observe the initial child of a retained command launch\n  \
   get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
@@ -1896,6 +1937,71 @@ authority for topology, controls, focus, and every pane relay."
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wait_launch_accepts_only_bounded_unique_options() {
+        let id = "a".repeat(32);
+        for args in [
+            vec!["control", "wait-launch", "42", &id],
+            vec![
+                "control",
+                "wait-launch",
+                "42",
+                &id,
+                "--timeout",
+                "86400",
+                "--json",
+            ],
+            vec![
+                "control",
+                "wait-launch",
+                "42",
+                &id,
+                "--json",
+                "--timeout",
+                "1",
+            ],
+        ] {
+            assert!(matches!(
+                parse(args.into_iter().map(OsString::from)).unwrap(),
+                ParseOutcome::Control(crate::control::ControlCommand::WaitLaunch {
+                    process_id: 42,
+                    ..
+                })
+            ));
+        }
+        for args in [
+            vec!["control", "wait-launch", "42"],
+            vec!["control", "wait-launch", "0", &id],
+            vec!["control", "wait-launch", "42", "invalid"],
+            vec!["control", "wait-launch", "42", &id, "--timeout"],
+            vec!["control", "wait-launch", "42", &id, "--timeout", "0"],
+            vec!["control", "wait-launch", "42", &id, "--timeout", "86401"],
+            vec!["control", "wait-launch", "42", &id, "--timeout", "-1"],
+            vec!["control", "wait-launch", "42", &id, "--timeout", "1.5"],
+            vec![
+                "control",
+                "wait-launch",
+                "42",
+                &id,
+                "--timeout",
+                "999999999999999",
+            ],
+            vec![
+                "control",
+                "wait-launch",
+                "42",
+                &id,
+                "--timeout",
+                "1",
+                "--timeout",
+                "2",
+            ],
+            vec!["control", "wait-launch", "42", &id, "--json", "--json"],
+            vec!["control", "wait-launch", "42", &id, "--enter"],
+        ] {
+            assert!(parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
     #[test]
     fn launch_status_requires_exact_launch_identity_and_only_optional_json() {
         let id = "a".repeat(32);
