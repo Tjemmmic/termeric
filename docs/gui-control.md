@@ -364,8 +364,51 @@ Ctrl+C or a timeout ends only the standalone waiter: no cancellation, signal,
 terminal closure, or relaunch request is sent. Waiting does not keep the GUI
 process or completion record alive, and does not wait for descendants or final
 output draining. In particular, keep another window alive if the launched
-command owns the GUI's final window. Launch-and-wait is currently two commands,
-not an atomic launch option.
+command owns the GUI's final window.
+
+### Launch and wait in one invocation
+
+Both `launch-tab` and `launch-window` accept `--wait` and optional
+`--timeout SECONDS` before the `-- PROGRAM ARG...` boundary:
+
+```sh
+termeric control launch-tab PROCESS WINDOW --wait --timeout 300 --json -- /bin/sh -c 'exit 7'
+termeric control launch-window PROCESS SOURCE_WINDOW --wait -- /bin/true
+```
+
+The CLI sends exactly one launch attempt, validates the acknowledgement, then
+polls the retained initial child. Socket identity and token are pinned **before
+launch** and shared by both phases. No server worker is held while the child
+runs, and no new wire protocol or execution authority is introduced.
+
+With `--wait`, stdout contains exactly one final status result, in the same
+format as `wait-launch`; it does not contain intermediate launch JSON. The CLI
+returns the child's portable exit code. Without `--wait`, existing immediate
+launch output and success semantics are unchanged. Flags after `--` are literal
+child arguments, including `--wait` or `--timeout`.
+
+`--timeout` requires `--wait` and accepts 1–86400 whole seconds. Its deadline
+starts before launch discovery and includes launch acknowledgement and all
+observation, with the same per-exchange deadline described above. Local
+filesystem discovery remains synchronous rather than a real-time guarantee.
+Omitting `--timeout` permits indefinite observation, not an unbounded individual
+socket exchange.
+
+An error after ID assignment prints the process and launch request ID on stderr
+with `launch-status`/`wait-launch` recovery commands, and emits no stdout result.
+There is no automatic retry: a lost acknowledgement can mean the command
+already started. Inspect that ID first. Existing bounded replay guarantees
+still apply if explicitly retrying the same logical launch; expiry does not
+guarantee safety of replay. For recovery after abrupt CLI termination (including
+Ctrl+C), provide your own `--request-id` in advance; an abruptly killed CLI
+cannot report its generated ID.
+
+This is one invocation, **not an all-or-nothing transaction**. Timeout, error,
+or interruption does not cancel, signal, close, or roll back a child. It does
+not reserve the completion record, keep the GUI alive, wait for descendants,
+or prove output draining. Unknown/evicted results and detected endpoint changes
+fail rather than triggering a relaunch. Native real-window acceptance remains
+deferred; executable fixtures use private fake endpoints only.
 
 The process retains at most 256 launch records. At capacity, admission of a new
 launch evicts the oldest completed record; if every record is still running or

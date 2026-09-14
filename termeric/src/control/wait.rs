@@ -5,6 +5,7 @@ use super::{
     paths::ControlPaths,
     protocol::{self, ClientFrame, LaunchState, Request, ServerFrame},
 };
+use anyhow::Context;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::{ffi::OsStrExt, fs::MetadataExt, net::UnixStream};
@@ -13,42 +14,163 @@ use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-pub(super) fn launch(
+pub(super) fn launch_and_wait(
     process_id: u32,
-    launch_request_id: String,
+    mut request: Request,
+    request_id: Option<String>,
     timeout_seconds: Option<u32>,
     json: bool,
 ) -> anyhow::Result<ControlOutput> {
-    let started = Instant::now();
-    Request::LaunchStatus {
-        launch_request_id: launch_request_id.clone(),
+    let deadline = overall_deadline(process_id, timeout_seconds)?;
+    let id = request_id.map_or_else(client::generate_request_id, Ok)?;
+    match &mut request {
+        Request::LaunchTab { request_id, .. } | Request::LaunchWindow { request_id, .. } => {
+            *request_id = id.clone();
+        }
+        _ => anyhow::bail!("wait requires a tab or window command launch"),
     }
-    .validate()
-    .map_err(anyhow::Error::msg)?;
+    request.canonicalize();
+    request.validate().map_err(anyhow::Error::msg)?;
+    let result = (|| {
+        let endpoint = discover(process_id)?;
+        let token = endpoint.read_token()?;
+        let identity = socket_identity(&endpoint.socket)?;
+        launch_at(&endpoint, &token, identity, request, deadline, json)
+    })();
+    result.with_context(|| format!(
+        "launch or observation failed (process {process_id}, request {id}); no automatic relaunch or cancellation was sent; inspect with `control launch-status {process_id} {id}` or resume with `control wait-launch {process_id} {id}`"
+    ))
+}
+
+fn launch_at(
+    endpoint: &ControlPaths,
+    token: &str,
+    identity: (u64, u64),
+    request: Request,
+    deadline: Option<Instant>,
+    json: bool,
+) -> anyhow::Result<ControlOutput> {
+    let (id, target_window, fresh_window) = match &request {
+        Request::LaunchTab {
+            request_id,
+            window_id,
+            ..
+        } => (request_id.clone(), *window_id, false),
+        Request::LaunchWindow {
+            request_id,
+            source_window,
+            ..
+        } => (request_id.clone(), *source_window, true),
+        _ => anyhow::bail!("wait requires a tab or window command launch"),
+    };
+    request.validate().map_err(anyhow::Error::msg)?;
+    let exchange_deadline = exchange_deadline(deadline);
+    let frame = exchange(endpoint, token, identity, request, exchange_deadline)?;
+    let valid = match frame {
+        ServerFrame::TabCreated {
+            version,
+            process_id,
+            request_id,
+            window_id,
+            ..
+        } => {
+            !fresh_window
+                && version == protocol::PROTOCOL_VERSION
+                && process_id == endpoint.process_id
+                && request_id == id
+                && window_id == target_window
+        }
+        ServerFrame::WindowLaunched {
+            version,
+            process_id,
+            request_id,
+            window_id,
+            ..
+        } => {
+            fresh_window
+                && version == protocol::PROTOCOL_VERSION
+                && process_id == endpoint.process_id
+                && request_id == id
+                && window_id != 0
+        }
+        ServerFrame::Error { version, message } if version == protocol::PROTOCOL_VERSION => {
+            anyhow::bail!(message)
+        }
+        _ => false,
+    };
+    if !valid {
+        anyhow::bail!("invalid GUI launch acknowledgement");
+    }
+    remaining(exchange_deadline)?;
+    poll_launch(endpoint, token, identity, &id, deadline, json)
+}
+
+fn overall_deadline(
+    process_id: u32,
+    timeout_seconds: Option<u32>,
+) -> anyhow::Result<Option<Instant>> {
     if process_id == 0
         || process_id > i32::MAX as u32
         || timeout_seconds.is_some_and(|seconds| !(1..=86400).contains(&seconds))
     {
         anyhow::bail!("invalid wait-launch process ID or timeout");
     }
-    let deadline = timeout_seconds.map(|seconds| started + Duration::from_secs(seconds.into()));
-    let endpoint = ControlPaths::discover_all()?
+    Ok(timeout_seconds.map(|seconds| Instant::now() + Duration::from_secs(seconds.into())))
+}
+
+fn discover(process_id: u32) -> anyhow::Result<ControlPaths> {
+    ControlPaths::discover_all()?
         .into_iter()
         .find(|endpoint| endpoint.process_id == process_id)
-        .ok_or_else(|| anyhow::anyhow!("GUI process {process_id} was not found"))?;
+        .ok_or_else(|| anyhow::anyhow!("GUI process {process_id} was not found"))
+}
+
+fn exchange_deadline(deadline: Option<Instant>) -> Instant {
+    let exchange = Instant::now() + client::IO_TIMEOUT;
+    deadline.map_or(exchange, |deadline| deadline.min(exchange))
+}
+
+pub(super) fn launch(
+    process_id: u32,
+    launch_request_id: String,
+    timeout_seconds: Option<u32>,
+    json: bool,
+) -> anyhow::Result<ControlOutput> {
+    let deadline = overall_deadline(process_id, timeout_seconds)?;
+    Request::LaunchStatus {
+        launch_request_id: launch_request_id.clone(),
+    }
+    .validate()
+    .map_err(anyhow::Error::msg)?;
+    let endpoint = discover(process_id)?;
     let token = endpoint.read_token()?;
     let identity = socket_identity(&endpoint.socket)?;
+    poll_launch(
+        &endpoint,
+        &token,
+        identity,
+        &launch_request_id,
+        deadline,
+        json,
+    )
+}
+
+fn poll_launch(
+    endpoint: &ControlPaths,
+    token: &str,
+    identity: (u64, u64),
+    launch_request_id: &str,
+    deadline: Option<Instant>,
+    json: bool,
+) -> anyhow::Result<ControlOutput> {
     loop {
-        let exchange_deadline = Instant::now() + client::IO_TIMEOUT;
-        let exchange_deadline = deadline.map_or(exchange_deadline, |deadline| {
-            deadline.min(exchange_deadline)
-        });
+        let exchange_deadline = exchange_deadline(deadline);
         remaining(exchange_deadline)?;
         let frame = query(
-            &endpoint,
-            &token,
+            endpoint,
+            token,
             identity,
-            &launch_request_id,
+            launch_request_id,
             exchange_deadline,
         )?;
         // Validate every running response too: waiting must not conceal wrong
@@ -60,7 +182,8 @@ pub(super) fn launch(
             } => Some(*exit_code),
             _ => None,
         };
-        let text = client::format_launch_status(frame, process_id, &launch_request_id, json)?;
+        let text =
+            client::format_launch_status(frame, endpoint.process_id, launch_request_id, json)?;
         remaining(exchange_deadline)?;
         if let Some(exit_code) = exit_code {
             return Ok(ControlOutput {
@@ -101,6 +224,24 @@ fn query(
     id: &str,
     deadline: Instant,
 ) -> anyhow::Result<ServerFrame> {
+    exchange(
+        endpoint,
+        token,
+        identity,
+        Request::LaunchStatus {
+            launch_request_id: id.to_owned(),
+        },
+        deadline,
+    )
+}
+
+fn exchange(
+    endpoint: &ControlPaths,
+    token: &str,
+    identity: (u64, u64),
+    request: Request,
+    deadline: Instant,
+) -> anyhow::Result<ServerFrame> {
     let check_endpoint = || -> anyhow::Result<()> {
         if socket_identity(&endpoint.socket)? != identity || endpoint.read_token()? != token {
             anyhow::bail!("GUI wait endpoint changed; start a new query explicitly");
@@ -116,9 +257,7 @@ fn query(
         &ClientFrame {
             version: protocol::PROTOCOL_VERSION,
             token: token.to_owned(),
-            request: Request::LaunchStatus {
-                launch_request_id: id.to_owned(),
-            },
+            request,
         },
     )?;
     protocol::read_frame(&mut stream)

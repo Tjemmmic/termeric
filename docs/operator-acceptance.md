@@ -271,6 +271,35 @@ tool or scenario is not a silent skip. These private-compositor runs prove the
 technical input, PTY, surface, and renderer paths, not the policies of a real
 desktop session.
 
+#### Deferred real-window command launch and wait
+
+This manual row is separate from automated fake-endpoint coverage. Run it later
+in a disposable ordinary Termeric window, with another window kept alive.
+`target/debug/termeric control list --json` supplies the actual `PROCESS` and
+`WINDOW` runtime IDs; substitute them below. Use only the listed local commands,
+not a provider program.
+
+```bash
+target/debug/termeric control launch-tab PROCESS WINDOW --wait --timeout 10 --json -- /bin/sh -c 'exit 7'
+target/debug/termeric control launch-window PROCESS WINDOW --wait --timeout 10 --json -- /bin/true
+target/debug/termeric control launch-tab PROCESS WINDOW --wait --timeout 1 --request-id 10900000000000000000000000000001 --json -- /bin/sleep 5
+```
+
+Expect one final status JSON and CLI exit code 7 for the first, and code 0 for
+the second. Confirm the requested tab/window actually appears. The third should
+time out with no stdout JSON, retain its ID in the diagnostic, and leave the
+sleeping child alone. Then use
+`control wait-launch PROCESS 10900000000000000000000000000001 --timeout 10 --json`
+to observe that same child's eventual successful exit. Use a fresh 32-digit
+lowercase-hex ID for each new logical test, not a retained ID from a prior run.
+
+Repeat with an explicit request ID and Ctrl+C in the standalone waiting CLI;
+query that ID afterward and confirm no cancellation/relaunch occurred. Check
+the two-command `launch-status`/`wait-launch` workflow and no-wait launch output
+still work. Record source commit, compositor, target IDs, command/result and
+visible behavior. Do not promote the running-GUI control row based only on the
+hermetic tests. See [the control contract](gui-control.md).
+
 ### 5. Independent graphics clients on real desktops
 
 On both a real X11 session and a real Wayland session, open Termeric in this

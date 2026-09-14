@@ -48,7 +48,16 @@ impl Fixture {
         std::thread::scope(|scope| {
             let server = scope.spawn(|| serve(self));
             let mut child = Command::new(env!("CARGO_BIN_EXE_termeric"))
-                .args(["control", verb, &std::process::id().to_string(), ID])
+                .args([
+                    "control",
+                    verb,
+                    &std::process::id().to_string(),
+                    if matches!(verb, "launch-tab" | "launch-window") {
+                        "7"
+                    } else {
+                        ID
+                    },
+                ])
                 .args(options)
                 .env("XDG_RUNTIME_DIR", self.root.path())
                 .env_remove("DISPLAY")
@@ -77,6 +86,16 @@ impl Fixture {
     }
 
     fn request(&self) -> UnixStream {
+        let (stream, request) = self.read_request();
+        assert_eq!(
+            request,
+            json!({"version": VERSION, "token": TOKEN,
+            "request": {"operation": "launch_status", "launch_request_id": ID}})
+        );
+        stream
+    }
+
+    fn read_request(&self) -> (UnixStream, Value) {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut stream = loop {
             match self.listener.accept() {
@@ -101,12 +120,308 @@ impl Fixture {
         let mut payload = vec![0; size];
         stream.read_exact(&mut payload).unwrap();
         let request: Value = serde_json::from_slice(&payload).unwrap();
-        assert_eq!(
-            request,
-            json!({"version": VERSION, "token": TOKEN,
-            "request": {"operation": "launch_status", "launch_request_id": ID}})
+        (stream, request)
+    }
+
+    fn no_more_requests(&self) {
+        assert!(
+            matches!(self.listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
         );
-        stream
+    }
+}
+
+fn acknowledgement(verb: &str, id: &str) -> Value {
+    json!({"result": if verb == "launch-tab" { "tab_created" } else { "window_launched" },
+        "version": VERSION, "process_id": std::process::id(), "request_id": id,
+        "window_id": if verb == "launch-tab" { 7 } else { 8 }, "tab_id": 3})
+}
+
+fn assert_launch(request: &Value, verb: &str) {
+    assert_eq!(request["version"], VERSION);
+    assert_eq!(request["token"], TOKEN);
+    assert_eq!(request["request"]["operation"], verb.replace('-', "_"));
+    let target = if verb == "launch-tab" {
+        "window_id"
+    } else {
+        "source_window"
+    };
+    assert_eq!(request["request"][target], 7);
+    assert_eq!(request["request"]["program"], "/bin/true");
+}
+
+#[test]
+fn executable_combined_launch_wait_preserves_exit_and_final_only_output() {
+    for verb in ["launch-tab", "launch-window"] {
+        for code in [0, 7, 124, 255, 256] {
+            let fixture = Fixture::new();
+            let output = fixture.run(
+                verb,
+                &[
+                    "--wait",
+                    "--timeout",
+                    "3",
+                    "--json",
+                    "--request-id",
+                    ID,
+                    "--env",
+                    "MODE=two words",
+                    "--",
+                    "/bin/true",
+                    "--wait",
+                ],
+                |fixture| {
+                    let (stream, request) = fixture.read_request();
+                    assert_launch(&request, verb);
+                    assert_eq!(request["request"]["request_id"], ID);
+                    assert_eq!(request["request"]["args"], json!(["--wait"]));
+                    assert_eq!(
+                        request["request"]["environment"],
+                        json!([{"name": "MODE", "value": "two words"}])
+                    );
+                    send(stream, acknowledgement(verb, ID));
+                    if code != 0 {
+                        send(fixture.request(), response(json!({"status": "running"})));
+                    }
+                    send(
+                        fixture.request(),
+                        response(
+                            json!({"status": "exited", "exit_code": code, "success": code == 0}),
+                        ),
+                    );
+                },
+            );
+            assert_eq!(
+                output.status.code(),
+                Some(if code > 255 { 1 } else { code }),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stderr.is_empty());
+            let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(value["launch_request_id"], ID);
+            assert_eq!(value["state"]["exit_code"], code);
+            fixture.no_more_requests();
+        }
+    }
+}
+
+#[test]
+fn executable_combined_wait_lost_ack_keeps_generated_recovery_id_without_retry() {
+    for verb in ["launch-tab", "launch-window"] {
+        let fixture = Fixture::new();
+        let captured = std::sync::Mutex::new(String::new());
+        let output = fixture.run(verb, &["--wait", "--json", "--", "/bin/true"], |fixture| {
+            let (stream, request) = fixture.read_request();
+            assert_launch(&request, verb);
+            *captured.lock().unwrap() = request["request"]["request_id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            drop(stream);
+        });
+        let id = captured.into_inner().unwrap();
+        assert_eq!(id.len(), 32);
+        assert!(
+            id.bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+        assert_ne!(id, "0".repeat(32));
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains(&id));
+        assert!(error.contains("control launch-status"));
+        assert!(error.contains("control wait-launch"));
+        assert!(!error.contains(TOKEN));
+        fixture.no_more_requests();
+    }
+}
+
+#[test]
+fn executable_combined_wait_preserves_generated_id_through_success() {
+    let fixture = Fixture::new();
+    let output = fixture.run(
+        "launch-tab",
+        &["--wait", "--json", "--", "/bin/true"],
+        |fixture| {
+            let (stream, request) = fixture.read_request();
+            assert_launch(&request, "launch-tab");
+            let id = request["request"]["request_id"].as_str().unwrap();
+            assert_eq!(id.len(), 32);
+            send(stream, acknowledgement("launch-tab", id));
+            let (stream, status) = fixture.read_request();
+            assert_eq!(
+                status["request"],
+                json!({"operation": "launch_status", "launch_request_id": id})
+            );
+            let mut frame = response(json!({"status": "exited", "exit_code": 0, "success": true}));
+            frame["launch_request_id"] = json!(id);
+            send(stream, frame);
+        },
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["state"]["exit_code"], 0);
+    assert_ne!(result["launch_request_id"], "0".repeat(32));
+    fixture.no_more_requests();
+}
+
+#[test]
+fn executable_combined_wait_invalid_options_never_contact_endpoint() {
+    for verb in ["launch-tab", "launch-window"] {
+        for flags in [
+            vec!["--wait", "--wait"],
+            vec!["--timeout", "1"],
+            vec!["--wait", "--timeout", "0"],
+            vec!["--wait", "--request-id", "invalid"],
+        ] {
+            let fixture = Fixture::new();
+            let mut options = flags;
+            options.extend(["--", "/bin/true"]);
+            let output = fixture.run(verb, &options, |_| {});
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            fixture.no_more_requests();
+        }
+    }
+}
+
+#[test]
+fn executable_combined_wait_refuses_wrong_acknowledgement_before_polling() {
+    for verb in ["launch-tab", "launch-window"] {
+        let ack = acknowledgement(verb, ID);
+        let mut cases = Vec::new();
+        for (key, value) in [
+            ("version", json!(VERSION - 1)),
+            ("process_id", json!(0)),
+            ("request_id", json!("c".repeat(32))),
+            ("window_id", json!(0)),
+            ("result", json!("inventory")),
+        ] {
+            let mut wrong = ack.clone();
+            wrong[key] = value;
+            cases.push(wrong);
+        }
+        cases.push(json!({"result": "error", "version": VERSION, "message": "launch refused"}));
+        for frame in cases {
+            let fixture = Fixture::new();
+            let output = fixture.run(
+                verb,
+                &["--wait", "--json", "--request-id", ID, "--", "/bin/true"],
+                |fixture| {
+                    let (stream, request) = fixture.read_request();
+                    assert_launch(&request, verb);
+                    send(stream, frame);
+                },
+            );
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&output.stderr).contains(ID));
+            fixture.no_more_requests();
+        }
+    }
+}
+
+#[test]
+fn executable_combined_deadline_covers_launch_and_observation_without_cancellation() {
+    for during_launch in [true, false] {
+        let fixture = Fixture::new();
+        let started = Instant::now();
+        let output = fixture.run(
+            "launch-tab",
+            &[
+                "--wait",
+                "--timeout",
+                "1",
+                "--json",
+                "--request-id",
+                ID,
+                "--",
+                "/bin/true",
+            ],
+            |fixture| {
+                let (mut stream, request) = fixture.read_request();
+                assert_launch(&request, "launch-tab");
+                if !during_launch {
+                    // Time consumed by launch must reduce the observation budget.
+                    std::thread::sleep(Duration::from_millis(600));
+                    send(stream, acknowledgement("launch-tab", ID));
+                    stream = fixture.request();
+                }
+                stream.write_all(&[0, 0]).unwrap();
+                assert_eq!(stream.read(&mut [0]).unwrap(), 0);
+            },
+        );
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("timed out"));
+        assert!(error.contains(ID));
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        fixture.no_more_requests();
+    }
+}
+
+#[test]
+fn executable_combined_wait_pins_endpoint_across_launch_acknowledgement() {
+    for replace_socket in [false, true] {
+        let fixture = Fixture::new();
+        let output = fixture.run("launch-window", &["--wait", "--json", "--request-id", ID, "--", "/bin/true"], |fixture| {
+            let (stream, request) = fixture.read_request();
+            assert_launch(&request, "launch-window");
+            let replacement = if replace_socket {
+                let socket = fixture.token.with_extension("sock");
+                fs::rename(&socket, fixture.root.path().join("original.sock")).unwrap();
+                let replacement = UnixListener::bind(&socket).unwrap();
+                replacement.set_nonblocking(true).unwrap();
+                fs::set_permissions(socket, fs::Permissions::from_mode(0o600)).unwrap();
+                Some(replacement)
+            } else {
+                fs::write(&fixture.token, "c".repeat(64)).unwrap();
+                None
+            };
+            send(stream, acknowledgement("launch-window", ID));
+            std::thread::sleep(Duration::from_millis(300));
+            if let Some(listener) = replacement {
+                assert!(matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
+            }
+        });
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("endpoint changed"));
+        fixture.no_more_requests();
+    }
+}
+
+#[test]
+fn executable_non_wait_launches_keep_their_original_output() {
+    for verb in ["launch-tab", "launch-window"] {
+        let fixture = Fixture::new();
+        let output = fixture.run(
+            verb,
+            &["--json", "--request-id", ID, "--", "/bin/true"],
+            |fixture| {
+                let (stream, request) = fixture.read_request();
+                assert_launch(&request, verb);
+                send(stream, acknowledgement(verb, ID));
+            },
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["request_id"], ID);
+        assert_eq!(value["tab_id"], 3);
+        assert!(value.get("state").is_none());
+        fixture.no_more_requests();
     }
 }
 
@@ -182,13 +497,35 @@ fn executable_wait_refuses_invalid_or_unavailable_results() {
         response(json!({"status": "running", "exit_code": 0})),
         json!({"result": "error", "version": VERSION, "message": "GUI launch result is unknown or expired"}),
     ] {
-        let fixture = Fixture::new();
-        let output = fixture.run("wait-launch", &["--json", "--timeout", "2"], |fixture| {
-            send(fixture.request(), frame);
-        });
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
+        for verb in ["wait-launch", "launch-tab", "launch-window"] {
+            let fixture = Fixture::new();
+            let options = if verb == "wait-launch" {
+                vec!["--json", "--timeout", "2"]
+            } else {
+                vec![
+                    "--wait",
+                    "--json",
+                    "--timeout",
+                    "2",
+                    "--request-id",
+                    ID,
+                    "--",
+                    "/bin/true",
+                ]
+            };
+            let output = fixture.run(verb, &options, |fixture| {
+                if verb != "wait-launch" {
+                    let (stream, request) = fixture.read_request();
+                    assert_launch(&request, verb);
+                    send(stream, acknowledgement(verb, ID));
+                }
+                send(fixture.request(), frame.clone());
+            });
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
+            fixture.no_more_requests();
+        }
     }
     let fixture = Fixture::new();
     let output = fixture.run("wait-launch", &["--json"], |fixture| {

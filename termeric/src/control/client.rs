@@ -1583,7 +1583,7 @@ fn request(endpoint: &ControlPaths, request: Request) -> anyhow::Result<ServerFr
     protocol::read_frame(&mut stream)
 }
 
-fn generate_request_id() -> anyhow::Result<String> {
+pub(super) fn generate_request_id() -> anyhow::Result<String> {
     let mut random = [0u8; 16];
     std::fs::File::open("/dev/urandom")
         .context("open operating-system random source")?

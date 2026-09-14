@@ -21,8 +21,16 @@ checks running-to-exited progression, polling rate, exit codes 0/7/124/255/256,
 the unchanged one-shot query status, strict result identity/state/version,
 unknown records, disconnects, partial-response timeout, credential changes, and
 same-path socket replacement with unchanged credentials.
-Only status queries are accepted: no launch, cancellation, GUI, or provider
-workflow is executed. Unix socket access must be available to this test lane.
+Combined `launch-tab`/`launch-window --wait` fixtures additionally accept one
+fake launch request followed only by status queries. They check exact argv and
+environment forwarding, immediate/running completion, final-only JSON,
+generated/requested ID continuity, lost-ack recovery without retry, invalid
+options without endpoint contact, mismatched acknowledgements before polling,
+shared launch/status deadlines, endpoint changes between the two phases,
+malformed/unknown completion, and unchanged no-wait launch output.
+No requested program is executed by the fake endpoint; no cancellation, real
+GUI, or provider workflow is executed. Unix socket access must be available to
+this test lane.
 The regular workspace suite additionally covers read/write backpressure under
 absolute deadlines, nonblocking refusal of FIFO token substitution, and CLI
 option validation. Native launch/window acceptance remains deferred.

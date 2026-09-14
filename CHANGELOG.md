@@ -8,6 +8,13 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- `control launch-tab` and `launch-window` accept `--wait` with optional
+  `--timeout SECONDS`, returning one final child status and its portable exit
+  code. Launch and observation share a pinned authenticated endpoint and
+  absolute deadline; errors retain recovery IDs without automatic relaunch or
+  cancellation. Existing non-wait behavior is unchanged. This is client-side
+  composition, not transaction rollback or permanent completion retention.
+
 - GUI control protocol v17 adds repeatable `--unset-env NAME` and `--clear-env`
   for both direct tab and fresh-window launches. Child-local builder policies
   preserve terminal identity and literal overlays without modifying the GUI or

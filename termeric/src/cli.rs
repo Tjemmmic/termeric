@@ -640,7 +640,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             let process_id = parse_control_process_id(arguments.get(1))?;
             let source_window = parse_control_window_id(arguments.get(2))?;
             let launch = parse_control_launch(arguments, 3, "launch-window")?;
-            crate::control::protocol::Request::LaunchWindow {
+            let request = crate::control::protocol::Request::LaunchWindow {
                 request_id: launch.request_id.clone().unwrap_or_else(|| "0".repeat(32)),
                 source_window,
                 program: launch.program.clone(),
@@ -649,9 +649,19 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 title: launch.title.clone(),
                 environment: launch.environment.clone(),
                 environment_policy: launch.environment_policy.clone(),
+            };
+            request.validate().map_err(anyhow::Error::msg)?;
+            if launch.wait {
+                return Ok(ParseOutcome::Control(
+                    crate::control::ControlCommand::LaunchAndWait {
+                        process_id,
+                        request,
+                        request_id: launch.request_id,
+                        timeout_seconds: launch.timeout_seconds,
+                        json: launch.json,
+                    },
+                ));
             }
-            .validate()
-            .map_err(anyhow::Error::msg)?;
             Ok(ParseOutcome::Control(
                 crate::control::ControlCommand::LaunchWindow {
                     process_id,
@@ -684,7 +694,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             let process_id = parse_control_process_id(arguments.get(1))?;
             let window_id = parse_control_window_id(arguments.get(2))?;
             let launch = parse_control_launch(arguments, 3, "launch-tab")?;
-            crate::control::protocol::Request::LaunchTab {
+            let request = crate::control::protocol::Request::LaunchTab {
                 request_id: launch.request_id.clone().unwrap_or_else(|| "0".repeat(32)),
                 window_id,
                 program: launch.program.clone(),
@@ -693,9 +703,19 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
                 title: launch.title.clone(),
                 environment: launch.environment.clone(),
                 environment_policy: launch.environment_policy.clone(),
+            };
+            request.validate().map_err(anyhow::Error::msg)?;
+            if launch.wait {
+                return Ok(ParseOutcome::Control(
+                    crate::control::ControlCommand::LaunchAndWait {
+                        process_id,
+                        request,
+                        request_id: launch.request_id,
+                        timeout_seconds: launch.timeout_seconds,
+                        json: launch.json,
+                    },
+                ));
             }
-            .validate()
-            .map_err(anyhow::Error::msg)?;
             Ok(ParseOutcome::Control(
                 crate::control::ControlCommand::LaunchTab {
                     process_id,
@@ -1010,6 +1030,8 @@ struct ParsedControlLaunch {
     environment_policy: termeric_core::pty::EnvironmentPolicy,
     request_id: Option<String>,
     json: bool,
+    wait: bool,
+    timeout_seconds: Option<u32>,
 }
 
 fn parse_control_launch(
@@ -1022,6 +1044,8 @@ fn parse_control_launch(
     let mut request_id = None;
     let mut json = false;
     let mut environment = Vec::new();
+    let mut wait = false;
+    let mut timeout_seconds = None;
     let mut environment_policy = termeric_core::pty::EnvironmentPolicy::default();
     let command_index = loop {
         let option = domain_utf8(
@@ -1030,6 +1054,19 @@ fn parse_control_launch(
         )?;
         match option.as_str() {
             "--" => break index + 1,
+            "--wait" if !wait => wait = true,
+            "--timeout" if timeout_seconds.is_none() => {
+                index += 1;
+                timeout_seconds = Some(
+                    domain_utf8(arguments.get(index), "--timeout requires SECONDS")?
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|value| (1..=86400).contains(value))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("--timeout must be 1–86400 whole seconds")
+                        })?,
+                );
+            }
             "--cwd" if working_directory.is_none() => {
                 index += 1;
                 working_directory = Some(domain_utf8(
@@ -1081,6 +1118,9 @@ fn parse_control_launch(
         }
         index += 1;
     };
+    if timeout_seconds.is_some() && !wait {
+        anyhow::bail!("launch --timeout requires --wait");
+    }
     let program = domain_utf8(
         arguments.get(command_index),
         &format!("control {command} requires PROGRAM after `--`"),
@@ -1103,6 +1143,8 @@ fn parse_control_launch(
         environment_policy,
         request_id,
         json,
+        wait,
+        timeout_seconds,
     })
 }
 
@@ -1136,9 +1178,9 @@ Commands for already-running local GUI processes:\n  \
   get-text PROCESS WINDOW TAB PANE [--history-lines N] [--bytes N] [--json]\n      Read bounded presented UTF-8 text from one exact pane\n  \
   send-text PROCESS WINDOW TAB PANE TEXT [--paste] [--enter] [--request-id ID] [--json]\n      Send opt-in bounded UTF-8 text to one exact pane\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
-  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
+  launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
   new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
-  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
+  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
   split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
   focus-window PROCESS WINDOW [--request-id ID] [--json]\n      Request native focus for one exact stable window\n  \
   select-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Select one exact stable tab without focusing its native window\n  \
@@ -2000,6 +2042,68 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn combined_launch_wait_options_and_child_arguments() {
+        for target in ["launch-tab", "launch-window"] {
+            let result = parse(
+                [
+                    "control",
+                    target,
+                    "42",
+                    "7",
+                    "--wait",
+                    "--timeout",
+                    "1",
+                    "--json",
+                    "--",
+                    "/bin/true",
+                    "--wait",
+                    "--timeout",
+                    "0",
+                ]
+                .into_iter()
+                .map(OsString::from),
+            );
+            let ParseOutcome::Control(crate::control::ControlCommand::LaunchAndWait {
+                process_id: 42,
+                request,
+                request_id: None,
+                timeout_seconds: Some(1),
+                json: true,
+            }) = result.unwrap()
+            else {
+                panic!("expected combined wait")
+            };
+            let args = match request {
+                crate::control::protocol::Request::LaunchTab { args, .. }
+                | crate::control::protocol::Request::LaunchWindow { args, .. } => args,
+                _ => panic!("expected launch request"),
+            };
+            assert_eq!(args, ["--wait", "--timeout", "0"]);
+            for flags in [
+                vec!["--wait", "--wait"],
+                vec!["--timeout", "1"],
+                vec!["--wait", "--timeout", "0"],
+                vec!["--wait", "--timeout", "86401"],
+                vec!["--wait", "--timeout", "-1"],
+                vec!["--wait", "--timeout", "1.5"],
+                vec!["--wait", "--timeout"],
+                vec!["--wait", "--timeout", "1", "--timeout", "2"],
+            ] {
+                let mut arguments = vec!["control", target, "42", "7"];
+                arguments.extend(flags);
+                arguments.extend(["--", "/bin/true"]);
+                assert!(parse(arguments.into_iter().map(OsString::from)).is_err());
+            }
+            for flags in [vec!["--wait"], vec!["--timeout", "86400", "--wait"]] {
+                let mut arguments = vec!["control", target, "42", "7"];
+                arguments.extend(flags);
+                arguments.extend(["--", "/bin/true"]);
+                assert!(parse(arguments.into_iter().map(OsString::from)).is_ok());
+            }
+        }
+    }
+
     #[test]
     fn wait_launch_accepts_only_bounded_unique_options() {
         let id = "a".repeat(32);

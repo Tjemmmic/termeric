@@ -20,6 +20,15 @@ mod wait;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlCommand {
+    LaunchAndWait {
+        process_id: u32,
+        // The parser validates a placeholder ID; execution replaces it with
+        // this explicit ID or one freshly generated ID before any wire I/O.
+        request: protocol::Request,
+        request_id: Option<String>,
+        timeout_seconds: Option<u32>,
+        json: bool,
+    },
     WaitLaunch {
         process_id: u32,
         launch_request_id: String,
@@ -204,6 +213,17 @@ pub struct ControlOutput {
 
 pub fn execute(command: ControlCommand) -> anyhow::Result<ControlOutput> {
     #[cfg(unix)]
+    if let ControlCommand::LaunchAndWait {
+        process_id,
+        request,
+        request_id,
+        timeout_seconds,
+        json,
+    } = command
+    {
+        return wait::launch_and_wait(process_id, request, request_id, timeout_seconds, json);
+    }
+    #[cfg(unix)]
     if let ControlCommand::WaitLaunch {
         process_id,
         launch_request_id,
@@ -220,6 +240,7 @@ fn execute_once(command: ControlCommand) -> anyhow::Result<String> {
     #[cfg(unix)]
     {
         match command {
+            ControlCommand::LaunchAndWait { .. } => unreachable!("wait dispatched separately"),
             ControlCommand::WaitLaunch { .. } => unreachable!("wait dispatched separately"),
             ControlCommand::LaunchStatus {
                 process_id,

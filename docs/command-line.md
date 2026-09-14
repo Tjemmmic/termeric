@@ -70,9 +70,9 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `control launch-status PROCESS REQUEST_ID [--json]` | Query the initial child of a retained exact command launch, including its portable exit result after terminal cleanup. The CLI status reports query success; inspect JSON for the child result. |
 | `control wait-launch PROCESS REQUEST_ID [--timeout SECONDS] [--json]` | Wait for a retained initial child using short read-only queries. Return its portable code (0–255; larger codes map to 1). An optional 1–86400-second timeout stops only the waiter. Errors produce stderr and no result on stdout. |
 | `control new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]` | Create a native window from an exact running source window; an explicit request ID safely retries an ambiguous recent result. |
-| `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays as the initial tab of a new source-configured native window and return both stable IDs. |
+| `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays as the initial tab of a new source-configured native window and return both stable IDs. |
 | `control new-tab PROCESS WINDOW [--request-id ID] [--json]` | Create a local shell tab in an exact running window and return its stable ID. |
-| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays directly in a new ordinary local tab and return its stable ID. |
+| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays directly in a new ordinary local tab and return its stable ID. |
 | `control split-pane PROCESS WINDOW TAB PANE horizontal\|vertical [--request-id ID] [--json]` | Split an exact local pane and return the new stable pane ID. |
 | `control focus-window PROCESS WINDOW [--request-id ID] [--json]` | Request focus for an exact native window on supported backends; Wayland fails explicitly. |
 | `control select-tab PROCESS WINDOW TAB [--request-id ID] [--json]` | Select an exact stable tab without activating its native window. |
@@ -143,9 +143,19 @@ launch-window PROCESS SOURCE_WINDOW [options] -- PROGRAM [ARG ...]` applies the
 same exact-argv, cwd, title, environment, and replay contract to the sole initial
 tab of a new ordinary local window. The source supplies validated configuration
 and, unless `--cwd` is given, focused cwd; an inherited path unavailable locally
-fails explicitly. Success returns both the process-stable window ID and its
-initial window-local tab ID only after native, renderer, and PTY initialization.
-It does not route through a source live domain. `termeric control split-pane
+fails explicitly. By default, success returns both the process-stable window ID
+and its initial window-local tab ID only after native, renderer, and PTY
+initialization. It does not route through a source live domain.
+
+Both command launches accept `--wait [--timeout SECONDS]` before `--`. In that
+mode, stdout contains one final retained-child status instead of the immediate
+launch result, and the CLI returns the child's portable exit code. The optional
+1–86400-second timeout covers both launch and observation; it does not cancel
+or relaunch the child. Launch and queries share the same pinned endpoint.
+See [waiting and recovery](gui-control.md#launch-and-wait-in-one-invocation) for
+request IDs, interruption, output, and retention boundaries.
+
+`termeric control split-pane
 PROCESS WINDOW TAB PANE horizontal|vertical`
 targets the complete stable-ID path and likewise acknowledges an ordinary or
 live-domain split only after it can return the new tab-local pane ID.
