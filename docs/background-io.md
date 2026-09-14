@@ -75,6 +75,11 @@ there is no remaining UI in which to display it.
 
 ## Deterministic coverage
 
+Structured export now uses an ordered writer checkpoint plus a separately
+bounded streaming worker; it does not read, parse, or write transcript files
+inside the UI action. The exact snapshot, publication, memory, and cancellation
+contract is documented in [transcript export](transcript-export.md).
+
 Injected backends cover:
 
 - a blocked Git scan followed by cwd churn, proving calls return promptly and

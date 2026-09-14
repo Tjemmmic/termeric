@@ -2,126 +2,178 @@
 //!
 //! Supports Markdown and raw JSONL export.
 
+#[cfg(test)]
 use std::fs;
+use std::io::{self, BufRead, Seek, SeekFrom, Write};
+#[cfg(test)]
 use std::path::Path;
 
-use super::transcript::{EntryKind, TranscriptEntry};
+use super::transcript::{EntryKind, MAX_TRANSCRIPT_RECORD_BYTES, TranscriptEntry};
 
-/// Export a JSONL transcript file to Markdown format.
-///
-/// Reads the JSONL file, groups entries, and produces a formatted
-/// Markdown document with timestamps, code blocks, and diff sections.
+/// Compatibility helper for existing hermetic fixtures. Production exports
+/// stream into a private staged file instead of constructing a document String.
+#[cfg(test)]
 pub fn export_to_markdown(jsonl_path: &Path) -> Result<String, String> {
-    let contents =
-        fs::read_to_string(jsonl_path).map_err(|e| format!("Failed to read transcript: {}", e))?;
+    let mut reader = io::BufReader::new(fs::File::open(jsonl_path).map_err(|e| e.to_string())?);
+    let mut output = Vec::new();
+    render_markdown(&mut reader, &mut output, &|| Ok(())).map_err(|e| e.to_string())?;
+    String::from_utf8(output).map_err(|e| e.to_string())
+}
 
-    let entries: Result<Vec<TranscriptEntry>, String> = contents
-        .lines()
-        .enumerate()
-        .map(|(index, line)| {
-            serde_json::from_str(line)
-                .map_err(|error| format!("Malformed transcript at line {}: {error}", index + 1))
-        })
-        .collect();
-    let entries = entries?;
-
-    if entries.is_empty() {
-        return Err("Empty transcript".to_string());
-    }
-
-    let mut md = String::new();
-
-    // Header
-    md.push_str("# AI Session Transcript\n\n");
-
-    // Metadata from first entry
-    if let Some(meta) = entries.iter().find(|e| e.kind == EntryKind::Meta) {
-        if let Some(ref data) = meta.metadata {
-            md.push_str("| Field | Value |\n|---|---|\n");
-            if let Some(repo) = data.get("repo").and_then(|v| v.as_str()) {
-                md.push_str(&format!("| Repository | {} |\n", repo));
-            }
-            if let Some(branch) = data.get("branch").and_then(|v| v.as_str()) {
-                md.push_str(&format!("| Branch | {} |\n", branch));
-            }
-            if let Some(host) = data.get("host").and_then(|v| v.as_str()) {
-                md.push_str(&format!("| Host | {} |\n", host));
-            }
-            if let Some(profile) = data.get("profile").and_then(|v| v.as_str()) {
-                md.push_str(&format!("| Profile | {} |\n", profile));
-            }
-            md.push('\n');
+/// At most one encoded record and one decoded entry are retained. Two passes
+/// preserve the legacy first-metadata-anywhere header without collecting entries.
+pub(super) fn render_markdown(
+    reader: &mut (impl BufRead + Seek),
+    writer: &mut impl Write,
+    check: &impl Fn() -> io::Result<()>,
+) -> io::Result<usize> {
+    let mut line = Vec::new();
+    let mut peak_encoded_capacity = 0;
+    let mut count = 0;
+    let mut metadata = None;
+    while read_record(reader, &mut line, check)? {
+        peak_encoded_capacity = peak_encoded_capacity.max(line.capacity());
+        count += 1;
+        let entry = parse_entry(&line, count)?;
+        if entry.kind == EntryKind::Meta {
+            metadata = Some(entry);
+            break;
         }
-
-        // Timestamp
-        let ts = meta.timestamp / 1000;
-        md.push_str(&format!("**Started**: {}\n\n", format_unix_ts(ts)));
-        md.push_str("---\n\n");
     }
+    if count == 0 {
+        return Err(io::Error::other("Empty transcript"));
+    }
+    write_header(writer, metadata.as_ref())?;
+    drop(metadata);
+    reader.seek(SeekFrom::Start(0))?;
+    count = 0;
+    while read_record(reader, &mut line, check)? {
+        peak_encoded_capacity = peak_encoded_capacity.max(line.capacity());
+        count += 1;
+        write_entry(writer, &parse_entry(&line, count)?)?;
+    }
+    check()?;
+    Ok(peak_encoded_capacity)
+}
 
-    // Content entries
-    for entry in &entries {
-        match entry.kind {
-            EntryKind::Meta => continue,
-            EntryKind::Input => {
-                md.push_str(&format!(
-                    "### 📝 Input `{}`\n\n",
-                    format_unix_ts(entry.timestamp / 1000)
-                ));
-                md.push_str("```\n");
-                md.push_str(&entry.content);
-                if !entry.content.ends_with('\n') {
-                    md.push('\n');
+fn parse_entry(line: &[u8], number: usize) -> io::Result<TranscriptEntry> {
+    serde_json::from_slice(line).map_err(|error| {
+        io::Error::other(format!("Malformed transcript at line {number}: {error}"))
+    })
+}
+
+fn read_record(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    check: &impl Fn() -> io::Result<()>,
+) -> io::Result<bool> {
+    line.clear();
+    loop {
+        check()?;
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(!line.is_empty());
+        }
+        let count = available
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(available.len(), |index| index + 1);
+        if line.len().saturating_add(count) > MAX_TRANSCRIPT_RECORD_BYTES {
+            return Err(io::Error::other(
+                "Transcript record exceeds the 16 MiB encoded limit",
+            ));
+        }
+        let finished = available[count - 1] == b'\n';
+        line.extend_from_slice(&available[..count]);
+        reader.consume(count);
+        if finished {
+            return Ok(true);
+        }
+    }
+}
+
+fn write_header(writer: &mut impl Write, metadata: Option<&TranscriptEntry>) -> io::Result<()> {
+    writer.write_all(b"# AI Session Transcript\n\n")?;
+    if let Some(meta) = metadata {
+        if let Some(data) = &meta.metadata {
+            writer.write_all(b"| Field | Value |\n|---|---|\n")?;
+            for (key, label) in [
+                ("repo", "Repository"),
+                ("branch", "Branch"),
+                ("host", "Host"),
+                ("profile", "Profile"),
+            ] {
+                if let Some(value) = data.get(key).and_then(|value| value.as_str()) {
+                    writeln!(writer, "| {label} | {value} |")?;
                 }
-                md.push_str("```\n\n");
             }
-            EntryKind::Output => {
-                md.push_str(&format!(
-                    "### 💬 Output `{}`\n\n",
+            writeln!(writer)?;
+        }
+        write!(
+            writer,
+            "**Started**: {}\n\n---\n\n",
+            format_unix_ts(meta.timestamp / 1000)
+        )?;
+    }
+    Ok(())
+}
+
+fn write_entry(writer: &mut impl Write, entry: &TranscriptEntry) -> io::Result<()> {
+    match entry.kind {
+        EntryKind::Meta => {}
+        EntryKind::Input | EntryKind::Diff => {
+            if entry.kind == EntryKind::Input {
+                write!(
+                    writer,
+                    "### 📝 Input `{}`\n\n```\n",
                     format_unix_ts(entry.timestamp / 1000)
-                ));
-                md.push_str(&entry.content);
-                if !entry.content.ends_with('\n') {
-                    md.push('\n');
-                }
-                md.push('\n');
-            }
-            EntryKind::Diff => {
+                )?;
+            } else {
                 let filename = entry
                     .metadata
                     .as_ref()
                     .and_then(|m| m.get("filename"))
-                    .and_then(|v| v.as_str())
+                    .and_then(|value| value.as_str())
                     .unwrap_or("unknown");
-                md.push_str(&format!(
-                    "### 📝 Diff: `{}` `{}`\n\n",
-                    filename,
+                write!(
+                    writer,
+                    "### 📝 Diff: `{filename}` `{}`\n\n```diff\n",
                     format_unix_ts(entry.timestamp / 1000)
-                ));
-                md.push_str("```diff\n");
-                md.push_str(&entry.content);
-                if !entry.content.ends_with('\n') {
-                    md.push('\n');
-                }
-                md.push_str("```\n\n");
+                )?;
             }
-            EntryKind::Command => {
-                let exit_code = entry
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("exit_code"))
-                    .and_then(|v| v.as_i64());
-                let status = match exit_code {
-                    Some(0) => "✅",
-                    Some(_) => "❌",
-                    None => "⏳",
-                };
-                md.push_str(&format!("### {} Command: `{}`\n\n", status, entry.content));
+            writer.write_all(entry.content.as_bytes())?;
+            if !entry.content.ends_with('\n') {
+                writeln!(writer)?;
             }
+            writer.write_all(b"```\n\n")?;
+        }
+        EntryKind::Output => {
+            write!(
+                writer,
+                "### 💬 Output `{}`\n\n",
+                format_unix_ts(entry.timestamp / 1000)
+            )?;
+            writer.write_all(entry.content.as_bytes())?;
+            if !entry.content.ends_with('\n') {
+                writeln!(writer)?;
+            }
+            writeln!(writer)?;
+        }
+        EntryKind::Command => {
+            let exit_code = entry
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("exit_code"))
+                .and_then(|value| value.as_i64());
+            let status = match exit_code {
+                Some(0) => "✅",
+                Some(_) => "❌",
+                None => "⏳",
+            };
+            write!(writer, "### {status} Command: `{}`\n\n", entry.content)?;
         }
     }
-
-    Ok(md)
+    Ok(())
 }
 
 /// Simple Unix timestamp formatter (UTC, no timezone dependency)
@@ -132,7 +184,96 @@ fn format_unix_ts(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::io::Write;
+
+    #[test]
+    fn streaming_conversion_keeps_one_record_for_a_large_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        let entry = TranscriptEntry {
+            timestamp: 0,
+            kind: EntryKind::Output,
+            content: "x".repeat(512 * 1024),
+            metadata: None,
+        };
+        let line = serde_json::to_vec(&entry).unwrap();
+        for _ in 0..90 {
+            file.write_all(&line).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+        drop(file);
+        struct Count(u64, u64);
+        impl Write for Count {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0 += bytes.len() as u64;
+                self.1 += bytes.iter().filter(|byte| **byte == b'x').count() as u64;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut output = Count(0, 0);
+        let mut input = io::BufReader::new(fs::File::open(path).unwrap());
+        let peak = render_markdown(&mut input, &mut output, &|| Ok(())).unwrap();
+        assert!(peak <= 1024 * 1024, "encoded buffer grew to {peak}");
+        assert!(output.0 >= 45 * 1024 * 1024, "content was truncated");
+        assert_eq!(
+            output.1,
+            45 * 1024 * 1024,
+            "payload bytes were lost or duplicated"
+        );
+    }
+
+    #[test]
+    fn encoded_record_limit_accepts_maximum_escaped_recorder_content() {
+        // Queue accounting reserves 128 bytes; NUL expands sixfold in JSON.
+        let entry = TranscriptEntry {
+            timestamp: 0,
+            kind: EntryKind::Output,
+            content: "\0".repeat(2 * 1024 * 1024 - 128),
+            metadata: None,
+        };
+        let line = serde_json::to_vec(&entry).unwrap();
+        assert!(line.len() < MAX_TRANSCRIPT_RECORD_BYTES);
+        let peak =
+            render_markdown(&mut io::Cursor::new(line), &mut io::sink(), &|| Ok(())).unwrap();
+        assert!(peak <= MAX_TRANSCRIPT_RECORD_BYTES);
+        let mut oversized =
+            io::BufReader::new(io::repeat(b'x').take(MAX_TRANSCRIPT_RECORD_BYTES as u64 + 1));
+        assert!(
+            read_record(&mut oversized, &mut Vec::new(), &|| Ok(()))
+                .unwrap_err()
+                .to_string()
+                .contains("16 MiB")
+        );
+    }
+
+    #[test]
+    fn streaming_metadata_order_and_io_errors_remain_explicit() {
+        let input = b"{\"timestamp\":0,\"kind\":\"output\",\"content\":\"early\"}\n{\"timestamp\":0,\"kind\":\"meta\",\"content\":\"\",\"metadata\":{\"repo\":\"later metadata\"}}\n";
+        let mut output = Vec::new();
+        render_markdown(&mut io::Cursor::new(input), &mut output, &|| Ok(())).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.find("later metadata").unwrap() < text.find("early").unwrap());
+        struct Fail;
+        impl Write for Fail {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("injected full disk"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(
+            render_markdown(&mut io::Cursor::new(input), &mut Fail, &|| Ok(()))
+                .unwrap_err()
+                .to_string()
+                .contains("full disk")
+        );
+    }
 
     fn write_test_transcript(dir: &Path) -> std::path::PathBuf {
         let path = dir.join("test_transcript.jsonl");

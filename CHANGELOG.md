@@ -1126,6 +1126,13 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Session export now runs on a bounded background worker. An ordered recorder
+  checkpoint binds Markdown and JSONL to one verified byte prefix while
+  recording continues; streaming conversion avoids whole-session input,
+  decoded-entry, and Markdown copies. Private staging publishes a completion
+  marker only after both files succeed, and failures no longer silently fall
+  back to scrollback. Export completion remains with its original window.
+
 - Transcript redaction no longer panics when its former 40-byte cutoff falls
   inside Unicode or leaves long recognized-token suffixes on disk. A forward
   scan filters complete delimiter-bounded spans in content and metadata string

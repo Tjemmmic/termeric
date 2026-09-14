@@ -5929,8 +5929,15 @@ done
                 });
             assert!(recording, "{plugin_id} fake session was not live");
 
+            let export_guard = crate::session::export_job::EXPORT_TEST_LOCK.lock().unwrap();
             app.execute_plugin_command(&format!("{plugin_id}.export-session"));
+            let export_deadline = Instant::now() + Duration::from_secs(5);
+            while app.session_export.is_some() && Instant::now() < export_deadline {
+                app.poll_session_export();
+                std::thread::sleep(Duration::from_millis(5));
+            }
             assert!(latest_toast(&app).is_some_and(|message| message.contains("Exported")));
+            drop(export_guard);
 
             // The initial readiness marker is emitted before the fake CLI's
             // padding lines. Wait for its final error marker so this assertion

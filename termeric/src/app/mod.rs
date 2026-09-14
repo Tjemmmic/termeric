@@ -16,6 +16,7 @@ mod plugin_actions;
 mod redraw_scheduler;
 mod renderer_recovery;
 mod runtime_plugins;
+mod session_export;
 mod sessions;
 pub mod state;
 mod system_accessibility;
@@ -1213,6 +1214,8 @@ pub struct App {
     pending_file_upload: Option<PendingFileUpload>,
     /// At most one background file upload may be active per native window.
     active_file_upload: Option<ActiveFileUpload>,
+    /// One export owns its captured source and this window's completion route.
+    session_export: Option<crate::session::export_job::ExportJob>,
     /// Consent and transaction state for bounded Kitty OSC 5113 downloads.
     kitty_file_transfers: kitty_file_transfer::KittyFileTransferManager,
     /// Harvest mode (command visualization)
@@ -1433,6 +1436,7 @@ impl App {
             runtime_plugin_test_paths: None,
             pending_file_upload: None,
             active_file_upload: None,
+            session_export: None,
             kitty_file_transfers: kitty_file_transfer::KittyFileTransferManager::default(),
             harvest: None,
             url_detector: UrlDetector::new(),
@@ -3047,6 +3051,7 @@ impl App {
     }
 
     fn poll_idle_sources(&mut self, now: Instant) {
+        self.poll_session_export();
         if self.surface_lost
             && self.surface_lost_at.is_some_and(|lost_at| {
                 now.saturating_duration_since(lost_at) >= renderer_recovery::SURFACE_RECOVERY_DELAY

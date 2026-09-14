@@ -399,9 +399,12 @@ or a complete pane/workspace layout. In a split tab, a legacy session captures o
 focused pane's cwd, last command, and bounded text history; the UI labels that
 reduced scope when saving and browsing snapshots.
 
-AI transcript recording writes JSONL up to 50 MB and reports the first cap or
-write failure instead of silently discarding data. Export produces complete
-Markdown and preserves the source JSONL beside it. Automatic redaction covers
+AI transcript recording writes JSONL up to 50 MiB and reports the first cap or
+write failure instead of silently discarding data. Background export produces
+Markdown and JSONL from one verified recording snapshot, with bounded streaming
+conversion and explicit completion/failure feedback. The private export directory
+is complete only when its `complete.json` marker is present; see the
+[export contract](docs/transcript-export.md). Automatic redaction covers
 common credential prefixes, but it is best-effort and is not a complete secret
 scanner; review transcripts before sharing them.
 

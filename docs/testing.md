@@ -646,6 +646,14 @@ local recorder/export lifecycle after the former Unicode-panic input. These
 fixtures use only fabricated values; they neither read real credentials nor
 invoke providers. The filter's deliberate limitations are documented in
 [background I/O](background-io.md#redaction-boundary).
+The `session::export`, `session::export_job`, and `app::session_export` tests
+cover background checkpoint export, exact Markdown/JSONL prefix agreement,
+source and publication failures, cancellation, per-window/process admission,
+owner-only staging, and origin-window completion after source closure. A
+45-MiB fixture checks complete conversion with an encoded-buffer peak of at
+most 1 MiB; a nearly 2-MiB escaped entry validates the 16-MiB record ceiling.
+See [the export contract](transcript-export.md) for the distinction between
+buffer accounting, total RSS, and cooperative deadlines.
 The fixtures cover slow/failing repositories and writers, cwd churn, bounded
 backpressure, cap reach, disk full, and shutdown during work. See
 [`background-io.md`](background-io.md) for the concurrency and persistence

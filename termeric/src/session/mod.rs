@@ -9,6 +9,7 @@
 //! Each tab independently tracks its own session identity.
 
 pub mod export;
+pub(crate) mod export_job;
 pub mod panel;
 pub mod restore;
 pub mod save;

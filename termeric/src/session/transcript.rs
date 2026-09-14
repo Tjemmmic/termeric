@@ -5,6 +5,7 @@
 //! accounting, and the durable shutdown flush.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
+// A queued entry admits at most 2 MiB of content plus serialized metadata;
+// JSON escaping expands bytes by at most six. Leave room for record framing.
+pub(crate) const MAX_TRANSCRIPT_RECORD_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_MAX_QUEUE_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_QUEUE_ENTRIES: usize = 512;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(250);
@@ -117,6 +121,20 @@ enum WriterCommand {
         accounted_bytes: usize,
     },
     Shutdown(mpsc::Sender<std::io::Result<()>>),
+    Checkpoint(mpsc::Sender<std::io::Result<TranscriptCheckpoint>>),
+}
+
+/// Exact flushed prefix, confirmed in order by the recording worker.
+#[derive(Debug, Clone)]
+pub(crate) struct TranscriptCheckpoint {
+    pub bytes: u64,
+    pub sha256: [u8; 32],
+    pub recording_limit_reached: bool,
+}
+
+pub(crate) struct PendingTranscriptCheckpoint {
+    pub path: PathBuf,
+    pub reply: Receiver<std::io::Result<TranscriptCheckpoint>>,
 }
 
 enum WriterEvent {
@@ -280,6 +298,34 @@ impl TranscriptRecorder {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Never waits for the writer. A full queue rejects the request rather than
+    /// moving the snapshot boundary later while more entries are accepted.
+    pub(crate) fn checkpoint(&self) -> std::io::Result<PendingTranscriptCheckpoint> {
+        let (reply, receiver) = mpsc::channel();
+        let sender = self.command_tx.as_ref().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "transcript writer is stopped",
+            )
+        })?;
+        sender
+            .try_send(WriterCommand::Checkpoint(reply))
+            .map_err(|error| match error {
+                TrySendError::Full(_) => std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "transcript queue is busy; retry export",
+                ),
+                TrySendError::Disconnected(_) => std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "transcript writer is unavailable",
+                ),
+            })?;
+        Ok(PendingTranscriptCheckpoint {
+            path: self.path.clone(),
+            reply: receiver,
+        })
     }
 
     #[cfg(test)]
@@ -515,12 +561,19 @@ fn transcript_worker(
     };
     let mut writer = BufWriter::new(sink);
     let mut written_bytes = 0usize;
+    let mut digest = Sha256::new();
     let mut capped = false;
     let mut dirty = false;
     let mut last_flush = Instant::now();
 
     redact_entry(&mut metadata);
-    if let Err(error) = write_serialized(&mut writer, &metadata, &mut written_bytes) {
+    if let Err(error) = write_serialized(
+        &mut writer,
+        &metadata,
+        &mut written_bytes,
+        &mut digest,
+        max_file_bytes,
+    ) {
         publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
         return;
     }
@@ -557,6 +610,14 @@ fn transcript_worker(
                     publish_writer_event(&event_tx, &wake, WriterEvent::CapReached);
                     continue;
                 }
+                if line.len() + 1 > MAX_TRANSCRIPT_RECORD_BYTES {
+                    publish_writer_event(
+                        &event_tx,
+                        &wake,
+                        WriterEvent::Failed("transcript record exceeds 16 MiB".into()),
+                    );
+                    return;
+                }
                 if let Err(error) = writer
                     .write_all(&line)
                     .and_then(|()| writer.write_all(b"\n"))
@@ -565,7 +626,24 @@ fn transcript_worker(
                     return;
                 }
                 written_bytes += line.len() + 1;
+                digest.update(&line);
+                digest.update(b"\n");
                 dirty = true;
+            }
+            Ok(WriterCommand::Checkpoint(reply)) => {
+                if let Err(error) = writer.flush() {
+                    let message = error.to_string();
+                    let _ = reply.send(Err(error));
+                    publish_writer_event(&event_tx, &wake, WriterEvent::Failed(message));
+                    return;
+                }
+                dirty = false;
+                last_flush = Instant::now();
+                let _ = reply.send(Ok(TranscriptCheckpoint {
+                    bytes: written_bytes as u64,
+                    sha256: digest.clone().finalize().into(),
+                    recording_limit_reached: capped,
+                }));
             }
             Ok(WriterCommand::Shutdown(ack)) => {
                 let result = writer.flush().and_then(|()| writer.get_mut().sync_data());
@@ -596,12 +674,21 @@ fn write_serialized(
     writer: &mut BufWriter<Box<dyn TranscriptSink>>,
     entry: &TranscriptEntry,
     written_bytes: &mut usize,
+    digest: &mut Sha256,
+    max_file_bytes: usize,
 ) -> std::io::Result<()> {
     let line = serde_json::to_vec(entry)
         .map_err(|error| std::io::Error::other(format!("serialize transcript: {error}")))?;
+    if line.len() + 1 > MAX_TRANSCRIPT_RECORD_BYTES.min(max_file_bytes) {
+        return Err(std::io::Error::other(
+            "initial transcript record exceeds recording limits",
+        ));
+    }
     writer.write_all(&line)?;
     writer.write_all(b"\n")?;
     *written_bytes += line.len() + 1;
+    digest.update(&line);
+    digest.update(b"\n");
     Ok(())
 }
 
@@ -708,7 +795,110 @@ impl TranscriptRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::sync::Mutex;
+
+    #[test]
+    fn checkpoint_is_an_ordered_flushed_prefix_while_recording_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder =
+            TranscriptRecorder::new(dir.path(), None, None, "Local", "test").unwrap();
+        recorder.record_output("before checkpoint 界").unwrap();
+        let pending = recorder.checkpoint().unwrap();
+        recorder.record_output("after checkpoint").unwrap();
+        let checkpoint = pending
+            .reply
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        let mut prefix = Vec::new();
+        File::open(&pending.path)
+            .unwrap()
+            .take(checkpoint.bytes)
+            .read_to_end(&mut prefix)
+            .unwrap();
+        assert_eq!(<[u8; 32]>::from(Sha256::digest(&prefix)), checkpoint.sha256);
+        assert!(String::from_utf8_lossy(&prefix).contains("before checkpoint 界"));
+        assert!(!String::from_utf8_lossy(&prefix).contains("after checkpoint"));
+        assert!(finish_and_read(&mut recorder).contains("after checkpoint"));
+        assert!(recorder.checkpoint().is_err());
+    }
+
+    #[test]
+    fn full_checkpoint_queue_rejects_without_waiting_for_the_writer() {
+        let (release, blocked) = mpsc::channel();
+        let mut recorder = TranscriptRecorder::with_factory(
+            PathBuf::from("checkpoint-fixture"),
+            metadata_entry(None, None, "Local", "test"),
+            RecorderLimits {
+                queue_entries: 1,
+                ..RecorderLimits::default()
+            },
+            Box::new(move || {
+                blocked.recv_timeout(Duration::from_secs(2)).unwrap();
+                Ok(Box::new(SlowSink {
+                    delay: Duration::ZERO,
+                    bytes: Arc::new(Mutex::new(Vec::new())),
+                }))
+            }),
+            None,
+        )
+        .unwrap();
+        recorder.record_output("queued before start").unwrap();
+        let began = Instant::now();
+        let error = recorder
+            .checkpoint()
+            .err()
+            .expect("full queue must reject checkpoint");
+        assert!(began.elapsed() < Duration::from_millis(100));
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        release.send(()).unwrap();
+        recorder.finish(Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_flush_failure_is_reported_and_does_not_confirm_a_snapshot() {
+        struct FailingFlush {
+            flushes: usize,
+        }
+        impl Write for FailingFlush {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes += 1;
+                if self.flushes >= 2 {
+                    Err(std::io::Error::other("injected checkpoint disk failure"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        impl TranscriptSink for FailingFlush {}
+        let mut recorder = TranscriptRecorder::with_factory(
+            PathBuf::from("failed-checkpoint-fixture"),
+            metadata_entry(None, None, "Local", "test"),
+            RecorderLimits::default(),
+            Box::new(|| Ok(Box::new(FailingFlush { flushes: 0 }))),
+            None,
+        )
+        .unwrap();
+        let pending = recorder.checkpoint().unwrap();
+        assert!(
+            pending
+                .reply
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("disk failure")
+        );
+        recorder.worker.take().unwrap().join().unwrap();
+        assert!(matches!(
+            recorder.poll_notices().as_slice(),
+            [TranscriptNotice::Failed(_)]
+        ));
+    }
 
     fn finish_and_read(recorder: &mut TranscriptRecorder) -> String {
         recorder.finish(Duration::from_secs(2)).unwrap();
