@@ -53,23 +53,47 @@ const REDACTION_PATTERNS: &[&str] = &[
 ];
 
 pub fn redact_secrets(input: &str) -> String {
-    let mut result = input.to_string();
-    for pattern in REDACTION_PATTERNS {
-        let mut search_from = 0;
-        while let Some(pos) = result[search_from..].find(pattern) {
-            let abs_pos = search_from + pos;
-            let prefix_end = abs_pos + pattern.len();
-            let end = (prefix_end + 40).min(result.len());
-            let token_end = result[prefix_end..end]
-                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ';')
-                .map(|index| prefix_end + index)
-                .unwrap_or(end);
-            let redacted = format!("{}[REDACTED]", pattern);
-            result.replace_range(abs_pos..token_end, &redacted);
-            search_from = abs_pos + redacted.len();
+    // A forward-only scan avoids repeated suffix moves and arbitrary byte
+    // cutoffs. This is a known-prefix heuristic, not universal secret detection.
+    let mut result = String::with_capacity(input.len());
+    let mut scanned = 0;
+    let mut untouched = 0;
+    while scanned < input.len() {
+        if let Some(prefix) = REDACTION_PATTERNS
+            .iter()
+            .find(|prefix| input[scanned..].starts_with(**prefix))
+        {
+            let prefix_end = scanned + prefix.len();
+            let token_end = input[prefix_end..]
+                .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ',' | ';'))
+                .map_or(input.len(), |offset| prefix_end + offset);
+            result.push_str(&input[untouched..prefix_end]);
+            result.push_str("[REDACTED]");
+            scanned = token_end;
+            untouched = token_end;
+        } else {
+            // All slice boundaries come from ASCII prefixes or UTF-8 scalars.
+            scanned += input[scanned..].chars().next().unwrap().len_utf8();
         }
     }
+    result.push_str(&input[untouched..]);
     result
+}
+
+fn redact_entry(entry: &mut TranscriptEntry) {
+    entry.content = redact_secrets(&entry.content);
+    if let Some(metadata) = &mut entry.metadata {
+        redact_metadata_values(metadata);
+    }
+}
+
+fn redact_metadata_values(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = redact_secrets(text),
+        serde_json::Value::Array(values) => values.iter_mut().for_each(redact_metadata_values),
+        serde_json::Value::Object(values) => values.values_mut().for_each(redact_metadata_values),
+        _ => {}
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -475,7 +499,7 @@ fn unix_timestamp_ms() -> u64 {
 
 fn transcript_worker(
     factory: SinkFactory,
-    metadata: TranscriptEntry,
+    mut metadata: TranscriptEntry,
     max_file_bytes: usize,
     command_rx: Receiver<WriterCommand>,
     event_tx: mpsc::Sender<WriterEvent>,
@@ -495,6 +519,7 @@ fn transcript_worker(
     let mut dirty = false;
     let mut last_flush = Instant::now();
 
+    redact_entry(&mut metadata);
     if let Err(error) = write_serialized(&mut writer, &metadata, &mut written_bytes) {
         publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
         return;
@@ -515,7 +540,7 @@ fn transcript_worker(
                 if capped {
                     continue;
                 }
-                entry.content = redact_secrets(&entry.content);
+                redact_entry(&mut entry);
                 let line = match serde_json::to_vec(&entry) {
                     Ok(line) => line,
                     Err(error) => {
@@ -688,6 +713,117 @@ mod tests {
     fn finish_and_read(recorder: &mut TranscriptRecorder) -> String {
         recorder.finish(Duration::from_secs(2)).unwrap();
         fs::read_to_string(recorder.path()).unwrap()
+    }
+
+    #[test]
+    fn redaction_handles_unicode_at_the_old_byte_cutoff() {
+        let secret = format!("sk-{}界 tail", "x".repeat(39));
+        assert_eq!(redact_secrets(&secret), "sk-[REDACTED] tail");
+    }
+
+    #[test]
+    fn redaction_removes_the_entire_long_token() {
+        let secret = format!("ghp_{}SECRET_SUFFIX; safe", "a".repeat(200));
+        assert_eq!(redact_secrets(&secret), "ghp_[REDACTED]; safe");
+    }
+
+    #[test]
+    fn redaction_preserves_delimiters_and_unicode_for_every_prefix() {
+        for prefix in REDACTION_PATTERNS {
+            for delimiter in [" ", "\t", "\n", "\r", "\"", "'", ",", ";", "\u{2003}"] {
+                for count in [0, 1, 38, 39, 40, 41, 200] {
+                    let input = format!("界🙂 {prefix}{}🙂界{delimiter}safe Ω", "a".repeat(count));
+                    let expected = format!("界🙂 {prefix}[REDACTED]{delimiter}safe Ω");
+                    assert_eq!(redact_secrets(&input), expected);
+                    assert_eq!(redact_secrets(&expected), expected);
+                }
+            }
+            assert_eq!(redact_secrets(prefix), format!("{prefix}[REDACTED]"));
+        }
+        let safe = "plain 界🙂 text\nwith Unicode whitespace\u{2003}and punctuation;,'\"";
+        assert_eq!(redact_secrets(safe), safe);
+        assert_eq!(redact_secrets(""), "");
+    }
+
+    #[test]
+    fn redaction_handles_dense_and_nested_prefixes_without_suffix_leaks() {
+        let input = "sk-ghp_not_real,github_pat_sk-also_fake;eyJ.payload.signature ".repeat(16_384);
+        let expected = "sk-[REDACTED],github_pat_[REDACTED];eyJ[REDACTED] ".repeat(16_384);
+        assert_eq!(redact_secrets(&input), expected);
+        let large = format!("xoxb-{}", "Ω".repeat(512 * 1024));
+        assert_eq!(redact_secrets(&large), "xoxb-[REDACTED]");
+    }
+
+    #[test]
+    fn redaction_filters_nested_metadata_values_without_changing_schema() {
+        let mut entry = TranscriptEntry {
+            timestamp: 123,
+            kind: EntryKind::Diff,
+            content: "safe content".into(),
+            metadata: Some(serde_json::json!({
+                "filename": "sk-fabricated",
+                "nested": ["gho_fake", {"value": "xoxp-fake", "count": 42}, true, null],
+                "safe": "plain 界",
+            })),
+        };
+        redact_entry(&mut entry);
+        assert_eq!(entry.timestamp, 123);
+        assert_eq!(entry.kind, EntryKind::Diff);
+        assert_eq!(entry.content, "safe content");
+        assert_eq!(
+            entry.metadata.unwrap(),
+            serde_json::json!({
+                "filename": "sk-[REDACTED]",
+                "nested": ["gho_[REDACTED]", {"value": "xoxp-[REDACTED]", "count": 42}, true, null],
+                "safe": "plain 界",
+            })
+        );
+    }
+
+    #[test]
+    fn recorder_survives_unicode_and_exports_only_redacted_synthetic_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = TranscriptRecorder::new(
+            dir.path(),
+            Some("ghp_FAKE_REPO"),
+            Some("sk-FAKE_BRANCH"),
+            "xoxb-FAKE_HOST",
+            "github_pat_FAKE_PROFILE",
+        )
+        .unwrap();
+        let unicode = format!("sk-{}界 tail", "x".repeat(39));
+        recorder.record_input(&unicode).unwrap();
+        recorder
+            .record_output(&format!("eyJ{}FAKE_SUFFIX", "a".repeat(200)))
+            .unwrap();
+        recorder
+            .record_diff("gho_FAKE_FILENAME", "safe diff")
+            .unwrap();
+        recorder.record_output("safe subsequent output 界").unwrap();
+        let contents = finish_and_read(&mut recorder);
+        assert!(recorder.poll_notices().is_empty());
+        let entries: Vec<TranscriptEntry> = contents
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(entries.len(), 5);
+        assert_eq!(
+            entries[0].metadata.as_ref().unwrap()["repo"],
+            "ghp_[REDACTED]"
+        );
+        assert_eq!(entries[1].content, "sk-[REDACTED] tail");
+        assert_eq!(entries[2].content, "eyJ[REDACTED]");
+        assert_eq!(
+            entries[3].metadata.as_ref().unwrap()["filename"],
+            "gho_[REDACTED]"
+        );
+        assert_eq!(entries[4].content, "safe subsequent output 界");
+        assert!(!contents.contains("FAKE_"));
+        assert_eq!(recorder.queued_bytes.load(Ordering::Acquire), 0);
+        let markdown = crate::session::export::export_to_markdown(recorder.path()).unwrap();
+        assert!(markdown.contains("safe subsequent output 界"));
+        assert!(markdown.contains("ghp_[REDACTED]"));
+        assert!(!markdown.contains("FAKE_"));
     }
 
     #[test]

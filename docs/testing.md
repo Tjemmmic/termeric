@@ -639,6 +639,13 @@ programming-font acceptance row.
 
 For Git/transcript worker changes, run the deterministic injected-backend tests
 and keep `latency.transcript_enqueue_under_slow_disk` in the release artifact.
+`cargo test -p termeric session::transcript --locked` additionally checks
+UTF-8-safe complete-token redaction, every existing prefix/delimiter, dense and
+megabyte synthetic inputs, nested metadata schema preservation, and a real
+local recorder/export lifecycle after the former Unicode-panic input. These
+fixtures use only fabricated values; they neither read real credentials nor
+invoke providers. The filter's deliberate limitations are documented in
+[background I/O](background-io.md#redaction-boundary).
 The fixtures cover slow/failing repositories and writers, cwd churn, bounded
 backpressure, cap reach, disk full, and shutdown during work. See
 [`background-io.md`](background-io.md) for the concurrency and persistence

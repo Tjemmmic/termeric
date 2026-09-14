@@ -43,6 +43,28 @@ batches writes through `BufWriter`, tracks exact serialized bytes, and calls
 files. The size cap is tracked in memory after the metadata line, eliminating
 per-entry filesystem metadata calls.
 
+### Redaction boundary
+
+Before serialization, the worker filters entry content and all metadata string
+values, including the initial metadata record. The recognized prefixes are
+`sk-`, `ghp_`, `gho_`, `github_pat_`, `xoxb-`, `xoxp-`, `AKIA`, and `eyJ`.
+A recognized prefix is retained with `[REDACTED]` replacing everything after it
+up to whitespace (including Unicode whitespace), a single/double quote, comma,
+semicolon, or the end of that string. The forward-only scan follows UTF-8
+boundaries and has no arbitrary token-length cutoff. It no longer repeatedly
+moves the remaining string for each replacement. Metadata types and structural
+keys remain unchanged.
+
+This is best-effort filtering, not a secret-free export guarantee. Unknown
+credential formats, encoded secrets, matches split across entries or string
+values, sensitive metadata keys, and personal data without a known prefix are
+not covered. Conversely, ordinary text containing one of these prefixes can be
+redacted. Review transcripts before sharing them. Existing files and previously
+exported copies are not retroactively sanitized by this fix; the export path
+uses the persisted data. See [#104](https://github.com/Tjemmmic/termeric/issues/104).
+
+### Backpressure and failure reporting
+
 If either queue bound is reached, the entry is dropped rather than blocking
 input or PTY handling. The first drop produces one visible warning; subsequent
 drops remain bounded and silent. File-cap and writer failures wake the UI and
@@ -66,6 +88,12 @@ Injected backends cover:
 - worker-event wakeups and one-shot notices; and
 - clean shutdown proving the batched sink receives one durable `sync_data`, and
   shutdown while persistence is slow, including the bounded timeout.
+
+Redaction regressions cover all prefixes/delimiters, Unicode around the former
+40-byte cutoff, long and densely repeated synthetic tokens, nested metadata,
+and a real local recorder followed by Markdown export. The recorder test proves
+valid JSONL, a subsequent safe entry, a drained queue, successful durable flush,
+and no fabricated token suffixes in either output. No provider is invoked.
 
 The release suite adds
 `latency.transcript_enqueue_under_slow_disk`. It interleaves 1,000 input/output

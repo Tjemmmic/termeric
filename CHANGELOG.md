@@ -1126,6 +1126,13 @@ Versioning once public beta tags begin.
 
 ### Fixed
 
+- Transcript redaction no longer panics when its former 40-byte cutoff falls
+  inside Unicode or leaves long recognized-token suffixes on disk. A forward
+  scan filters complete delimiter-bounded spans in content and metadata string
+  values before worker serialization, including initial metadata. This remains
+  a best-effort known-prefix heuristic; existing files are not rewritten and
+  exports still require review before sharing.
+
 - Kitty local-media loading no longer waits for a FIFO writer before rejecting
   an invalid object. Unix ordinary/temporary-file opens and Linux shared-memory
   load/cleanup opens are nonblocking and refuse final-component symlink
