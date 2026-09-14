@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::collections::HashSet;
 use std::io::{Read, Write};
 
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 pub const JSON_SCHEMA_VERSION: u32 = 3;
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_WINDOWS: usize = 32;
@@ -82,6 +82,7 @@ pub enum Request {
         window_id: u64,
     },
     LaunchTab {
+        background: bool,
         request_id: String,
         window_id: u64,
         program: String,
@@ -650,6 +651,7 @@ impl Request {
                 Ok(())
             }
             Self::LaunchTab {
+                background: _,
                 request_id,
                 window_id,
                 program,
@@ -1562,8 +1564,46 @@ mod tests {
     }
 
     #[test]
+    fn background_launch_mode_is_a_required_strict_wire_boolean() {
+        let request = Request::LaunchTab {
+            background: true,
+            request_id: "a".repeat(32),
+            window_id: 7,
+            program: "/bin/true".into(),
+            args: Vec::new(),
+            working_directory: None,
+            title: None,
+            environment: Vec::new(),
+            environment_policy: Default::default(),
+        };
+        let value = serde_json::to_value(&request).unwrap();
+        for background in [true, false] {
+            let mut valid = value.clone();
+            valid["background"] = serde_json::json!(background);
+            let decoded: Request = serde_json::from_value(valid).unwrap();
+            assert!(
+                matches!(decoded, Request::LaunchTab { background: actual, .. } if actual == background)
+            );
+            decoded.validate().unwrap();
+        }
+        for invalid in [
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ] {
+            let mut invalid_request = value.clone();
+            invalid_request["background"] = invalid;
+            assert!(serde_json::from_value::<Request>(invalid_request).is_err());
+        }
+        let mut absent = value;
+        absent.as_object_mut().unwrap().remove("background");
+        assert!(serde_json::from_value::<Request>(absent).is_err());
+    }
+
+    #[test]
     fn launch_tab_requests_preserve_exact_argv_and_reject_unsafe_or_oversized_input() {
         let request = Request::LaunchTab {
+            background: false,
             request_id: "0123456789abcdef0123456789abcdef".into(),
             window_id: 7,
             program: "/bin/printf".into(),
@@ -1602,6 +1642,7 @@ mod tests {
                        args: Vec<String>,
                        working_directory: Option<String>,
                        title: Option<String>| Request::LaunchTab {
+            background: false,
             request_id: "0123456789abcdef0123456789abcdef".into(),
             window_id: 7,
             program,
@@ -1751,6 +1792,7 @@ mod tests {
     #[test]
     fn launch_environment_is_bounded_unique_portable_and_identity_safe() {
         let request = |environment: Vec<EnvironmentVariable>| Request::LaunchTab {
+            background: false,
             request_id: "0123456789abcdef0123456789abcdef".into(),
             window_id: 7,
             program: "/bin/true".into(),

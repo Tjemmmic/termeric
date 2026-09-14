@@ -2046,6 +2046,7 @@ impl Application {
                 window_id,
             } => self.create_control_tab(request_id, *window_id),
             Request::LaunchTab {
+                background,
                 request_id,
                 window_id,
                 program,
@@ -2055,6 +2056,7 @@ impl Application {
                 environment,
                 environment_policy,
             } => self.launch_control_tab(
+                *background,
                 request_id,
                 *window_id,
                 program,
@@ -2975,6 +2977,7 @@ impl Application {
     #[allow(clippy::too_many_arguments)]
     fn launch_control_tab(
         &mut self,
+        background: bool,
         request_id: &str,
         window_id: u64,
         program: &str,
@@ -3012,6 +3015,7 @@ impl Application {
             .get_mut(&native_id)
             .expect("validated control window disappeared")
             .launch_control_tab(
+                background,
                 program,
                 args,
                 working_directory,
@@ -4377,6 +4381,7 @@ mod tests {
                 } else {
                     application
                         .launch_control_tab(
+                            false,
                             &request_id,
                             7,
                             executable.to_str().unwrap(),
@@ -4529,6 +4534,7 @@ mod tests {
         assert_eq!(cache.replay(&tab_request), Some(tab_response));
 
         let launch_request = Request::LaunchTab {
+            background: false,
             request_id: "2".repeat(32),
             window_id: 7,
             program: "/usr/bin/printf".into(),
@@ -4548,9 +4554,23 @@ mod tests {
             tab_id: 4,
         });
         cache.record(launch_request.clone(), launch_response.clone());
-        assert_eq!(cache.replay(&launch_request), Some(launch_response));
+        assert_eq!(cache.replay(&launch_request), Some(launch_response.clone()));
+        let mut background_request = launch_request.clone();
+        if let Request::LaunchTab { background, .. } = &mut background_request {
+            *background = true;
+        }
+        assert!(
+            matches!(cache.replay(&background_request), Some(Err(error)) if error.contains("different action"))
+        );
+        let mut background_cache = ControlReplayCache::default();
+        background_cache.record(background_request.clone(), launch_response.clone());
+        assert_eq!(
+            background_cache.replay(&background_request),
+            Some(launch_response)
+        );
         assert!(matches!(
             cache.replay(&Request::LaunchTab {
+                background: false,
                 request_id: "2".repeat(32),
                 window_id: 7,
                 program: "/usr/bin/printf".into(),
@@ -4850,6 +4870,7 @@ mod tests {
 
         let missing = application
             .launch_control_tab(
+                false,
                 "33333333333333333333333333333333",
                 8,
                 "/bin/sh",
@@ -4872,6 +4893,7 @@ mod tests {
 
         let response = application
             .launch_control_tab(
+                true,
                 "44444444444444444444444444444444",
                 7,
                 "/bin/sh",
@@ -4909,73 +4931,112 @@ mod tests {
     #[test]
     fn launch_status_survives_fast_exit_window_cleanup_and_replay_expiry() {
         use crate::control::protocol::{LaunchState, Request};
-        let mut application =
-            Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
-        application.pending.clear();
-        let native_id = WindowId::dummy();
-        let mut window = App::new_headless(Config::default()).unwrap();
-        window.tabs = Some(crate::tabs::TabManager::new(
-            80,
-            24,
-            Config::default().shell,
-            100,
-            1024 * 1024,
-        ));
-        application.windows.insert(native_id, window);
-        application.window_order.push(native_id);
-        application.control_window_ids.insert(native_id, 7);
-        let id = "a".repeat(32);
-        application
-            .launch_control_tab(
-                &id,
-                7,
-                "/bin/sh",
-                &["-c".into(), "exit 23".into()],
-                None,
-                None,
-                &[],
-                &Default::default(),
-            )
-            .unwrap();
-        let deadline = Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            application
+        for background in [false, true] {
+            let mut application =
+                Application::from_config(Config::default(), None, LaunchPlan::default()).unwrap();
+            application.pending.clear();
+            let native_id = WindowId::dummy();
+            let mut window = App::new_headless(Config::default()).unwrap();
+            window.tabs = Some(crate::tabs::TabManager::new(
+                80,
+                24,
+                Config::default().shell,
+                100,
+                1024 * 1024,
+            ));
+            application.windows.insert(native_id, window);
+            application.window_order.push(native_id);
+            application.control_window_ids.insert(native_id, 7);
+            let id = "a".repeat(32);
+            let original = application
                 .windows
                 .get_mut(&native_id)
                 .unwrap()
-                .process_pty_events();
-            let (state, closed) = application.control_launches.query(&id).unwrap();
-            if closed && matches!(state, LaunchState::Exited { .. }) {
-                assert_eq!(
-                    state,
+                .tabs
+                .as_mut()
+                .unwrap()
+                .new_tab_with_command(
+                    "/bin/sh",
+                    &["-c".into(), "read unused".into()],
+                    None,
+                    Some("original"),
+                    None,
+                    Default::default(),
+                )
+                .unwrap();
+            application
+                .launch_control_tab(
+                    background,
+                    &id,
+                    7,
+                    "/bin/sh",
+                    &["-c".into(), "exit 23".into()],
+                    None,
+                    None,
+                    &[],
+                    &Default::default(),
+                )
+                .unwrap();
+            let selected = application.windows[&native_id]
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab_id();
+            if background {
+                assert_eq!(selected, Some(original));
+            } else {
+                assert_ne!(selected, Some(original));
+            }
+            let deadline = Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                application
+                    .windows
+                    .get_mut(&native_id)
+                    .unwrap()
+                    .process_pty_events();
+                let (state, closed) = application.control_launches.query(&id).unwrap();
+                if background {
+                    assert_eq!(
+                        application.windows[&native_id]
+                            .tabs
+                            .as_ref()
+                            .unwrap()
+                            .active_tab_id(),
+                        Some(original)
+                    );
+                }
+                if closed && matches!(state, LaunchState::Exited { .. }) {
+                    assert_eq!(
+                        state,
+                        LaunchState::Exited {
+                            exit_code: 23,
+                            success: false
+                        }
+                    );
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            application.windows.remove(&native_id);
+            assert_eq!(
+                application.control_launches.query(&id).unwrap(),
+                (
                     LaunchState::Exited {
                         exit_code: 23,
                         success: false
-                    }
-                );
-                break;
-            }
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(std::time::Duration::from_millis(5));
+                    },
+                    true
+                )
+            );
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let reused = Request::CreateTab {
+                request_id: id,
+                window_id: 7,
+            };
+            assert!(application.defer_live_domain_control(&reused, tx).is_none());
+            assert!(rx.recv().unwrap().unwrap_err().contains("replay expired"));
         }
-        application.windows.remove(&native_id);
-        assert_eq!(
-            application.control_launches.query(&id).unwrap(),
-            (
-                LaunchState::Exited {
-                    exit_code: 23,
-                    success: false
-                },
-                true
-            )
-        );
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let reused = Request::CreateTab {
-            request_id: id,
-            window_id: 7,
-        };
-        assert!(application.defer_live_domain_control(&reused, tx).is_none());
-        assert!(rx.recv().unwrap().unwrap_err().contains("replay expired"));
     }
 
     #[cfg(unix)]
@@ -5333,6 +5394,7 @@ mod tests {
         let domain_tab_count = window.tabs.as_ref().unwrap().count();
         let local_launch = window
             .launch_control_tab(
+                false,
                 "/bin/true",
                 &[],
                 None,

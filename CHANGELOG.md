@@ -8,6 +8,14 @@ Versioning once public beta tags begin.
 
 ### Added
 
+- GUI control protocol v18 adds `launch-tab --background`, inserting an
+  ordinary command tab without transiently selecting it or clearing the active
+  pane's search, selection, copy mode or IME state. Quiet creation redraws tab
+  chrome; background output and completion still progress, including `--wait`
+  and `--env-stdin` combinations. Foreground behavior remains the default;
+  first-tab selection is unavoidable. Hidden windows and detached jobs are not
+  implied, and old protocol clients/servers must be updated together.
+
 - Linux controlled tab/window launches accept `--env-stdin` for a bounded,
   EOF-terminated JSON environment object from a redirected pipe or regular file,
   including launch `--wait`. A five-second input deadline, 256-KiB encoded cap,

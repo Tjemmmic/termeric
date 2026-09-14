@@ -281,6 +281,31 @@ impl TabManager {
         env: HashMap<String, String>,
         policy: &termeric_core::pty::EnvironmentPolicy,
     ) -> anyhow::Result<usize> {
+        self.new_tab_with_command_placement(
+            program,
+            args,
+            working_dir,
+            title,
+            tab_type,
+            env,
+            policy,
+            false,
+        )
+    }
+
+    /// Background insertion never transiently changes the active owner. An
+    /// empty manager necessarily selects its first tab in either mode.
+    pub(crate) fn new_tab_with_command_placement(
+        &mut self,
+        program: &str,
+        args: &[String],
+        working_dir: Option<&str>,
+        title: Option<&str>,
+        tab_type: Option<TabType>,
+        env: HashMap<String, String>,
+        policy: &termeric_core::pty::EnvironmentPolicy,
+        background: bool,
+    ) -> anyhow::Result<usize> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -302,7 +327,9 @@ impl TabManager {
         tab.set_kitty_file_transmission(self.kitty_file_transmission);
         tab.set_xterm_keyboard_type(self.xterm_keyboard_type, true);
         self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
+        if !background || self.tabs.len() == 1 {
+            self.active = self.tabs.len() - 1;
+        }
 
         log::info!("Created command tab {}", id);
         Ok(id)

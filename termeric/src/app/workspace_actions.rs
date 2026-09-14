@@ -1,5 +1,6 @@
 //! Pane, Harvest, and focused-terminal workspace actions.
 
+use super::redraw_scheduler::RedrawReason;
 use super::*;
 
 const MAX_COMMAND_REGION_COMMAND_BYTES: usize = 4 * 1024;
@@ -2795,6 +2796,7 @@ impl App {
     /// control plane. The caller has already passed bounded wire validation.
     pub(super) fn launch_control_tab(
         &mut self,
+        background: bool,
         program: &str,
         args: &[String],
         working_directory: Option<&str>,
@@ -2827,7 +2829,7 @@ impl App {
             .as_mut()
             .ok_or_else(|| "Target window has no initialized tab manager".to_string())?;
         let id = tabs
-            .new_tab_with_command_environment_policy(
+            .new_tab_with_command_placement(
                 program,
                 args,
                 working_directory,
@@ -2838,10 +2840,20 @@ impl App {
                     .map(|entry| (entry.name.clone(), entry.value.clone()))
                     .collect(),
                 environment_policy,
+                background,
             )
             .map_err(|error| format!("Could not launch command tab: {error:#}"))?;
         self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated { tab_id: id });
-        self.refresh_focused_terminal_surfaces();
+        if !background || tab_count == 0 {
+            self.refresh_focused_terminal_surfaces();
+        } else {
+            // A quiet child may never emit a PTY wake. Update tab chrome without
+            // invalidating the current pane's IME/search/selection surfaces.
+            self.redraw_scheduler.request(RedrawReason::WindowEvent);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
         u64::try_from(id).map_err(|_| "Created tab ID does not fit the control protocol".into())
     }
 

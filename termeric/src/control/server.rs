@@ -995,6 +995,7 @@ mod tests {
 
         let request_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
         let launch = Request::LaunchTab {
+            background: false,
             request_id: request_id.clone(),
             window_id: 7,
             program: "/usr/bin/printf".into(),

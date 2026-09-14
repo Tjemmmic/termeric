@@ -603,6 +603,7 @@ pub fn new_tab(
 
 #[allow(clippy::too_many_arguments)]
 pub fn launch_tab(
+    background: bool,
     process_id: u32,
     window_id: u64,
     program: String,
@@ -623,6 +624,7 @@ pub fn launch_tab(
         None => generate_request_id()?,
     };
     let mut request_frame = Request::LaunchTab {
+        background,
         request_id: request_id.clone(),
         window_id,
         program,

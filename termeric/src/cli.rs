@@ -697,6 +697,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             let window_id = parse_control_window_id(arguments.get(2))?;
             let launch = parse_control_launch(arguments, 3, "launch-tab")?;
             let request = crate::control::protocol::Request::LaunchTab {
+                background: launch.background,
                 request_id: launch.request_id.clone().unwrap_or_else(|| "0".repeat(32)),
                 window_id,
                 program: launch.program.clone(),
@@ -721,6 +722,7 @@ fn parse_control(arguments: &[OsString]) -> anyhow::Result<ParseOutcome> {
             }
             Ok(ParseOutcome::Control(
                 crate::control::ControlCommand::LaunchTab {
+                    background: launch.background,
                     env_stdin: launch.env_stdin,
                     process_id,
                     window_id,
@@ -1026,6 +1028,7 @@ fn parse_control_process_id(value: Option<&OsString>) -> anyhow::Result<u32> {
 }
 
 struct ParsedControlLaunch {
+    background: bool,
     env_stdin: bool,
     program: String,
     args: Vec<String>,
@@ -1049,6 +1052,7 @@ fn parse_control_launch(
     let mut request_id = None;
     let mut json = false;
     let mut environment = Vec::new();
+    let mut background = false;
     let mut env_stdin = false;
     let mut wait = false;
     let mut timeout_seconds = None;
@@ -1060,6 +1064,7 @@ fn parse_control_launch(
         )?;
         match option.as_str() {
             "--" => break index + 1,
+            "--background" if command == "launch-tab" && !background => background = true,
             "--env-stdin" if !env_stdin => env_stdin = true,
             "--wait" if !wait => wait = true,
             "--timeout" if timeout_seconds.is_none() => {
@@ -1142,6 +1147,7 @@ fn parse_control_launch(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(ParsedControlLaunch {
+        background,
         env_stdin,
         program,
         args,
@@ -1188,7 +1194,7 @@ Commands for already-running local GUI processes:\n  \
   new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]\n      Create a window using the exact source window's configuration and cwd\n  \
   launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a new window\n  \
   new-tab PROCESS WINDOW [--request-id ID] [--json]\n      Create a local tab in one exact stable window\n  \
-  launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
+  launch-tab PROCESS WINDOW [--background] [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]\n      Launch exact argv and non-secret environment overrides in a local tab\n  \
   split-pane PROCESS WINDOW TAB PANE horizontal|vertical [--request-id ID] [--json]\n      Split one exact stable local pane and return the new pane ID\n  \
   focus-window PROCESS WINDOW [--request-id ID] [--json]\n      Request native focus for one exact stable window\n  \
   select-tab PROCESS WINDOW TAB [--request-id ID] [--json]\n      Select one exact stable tab without focusing its native window\n  \
@@ -2051,6 +2057,58 @@ mod tests {
         }
     }
     #[test]
+    fn background_command_tab_launch_flag_is_available() {
+        for wait in [false, true] {
+            let mut args = vec!["control", "launch-tab", "42", "7", "--background"];
+            if wait {
+                args.push("--wait");
+            }
+            args.extend(["--", "/bin/true", "--background"]);
+            match parse(args.into_iter().map(OsString::from)).unwrap() {
+                ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
+                    background: true,
+                    args,
+                    ..
+                }) => assert_eq!(args, ["--background"]),
+                ParseOutcome::Control(crate::control::ControlCommand::LaunchAndWait {
+                    request:
+                        crate::control::protocol::Request::LaunchTab {
+                            background: true,
+                            args,
+                            ..
+                        },
+                    ..
+                }) => assert_eq!(args, ["--background"]),
+                _ => panic!("background flag lost"),
+            }
+        }
+        for args in [
+            vec![
+                "control",
+                "launch-tab",
+                "42",
+                "7",
+                "--background",
+                "--background",
+                "--",
+                "/bin/true",
+            ],
+            vec![
+                "control",
+                "launch-window",
+                "42",
+                "7",
+                "--background",
+                "--",
+                "/bin/true",
+            ],
+            vec!["control", "new-tab", "42", "7", "--background"],
+        ] {
+            assert!(parse(args.into_iter().map(OsString::from)).is_err());
+        }
+    }
+
+    #[test]
     fn stdin_environment_launch_flag_is_available() {
         for target in ["launch-tab", "launch-window"] {
             for wait in [false, true] {
@@ -2594,6 +2652,7 @@ mod tests {
             )
             .unwrap(),
             ParseOutcome::Control(crate::control::ControlCommand::LaunchTab {
+                background: false,
                 env_stdin: false,
                 process_id: 42,
                 window_id: 7,

@@ -91,6 +91,7 @@ pub enum ControlCommand {
         json: bool,
     },
     LaunchTab {
+        background: bool,
         env_stdin: bool,
         process_id: u32,
         window_id: u64,
@@ -321,6 +322,7 @@ fn execute_once(command: ControlCommand) -> anyhow::Result<String> {
                 json,
             } => client::new_tab(process_id, window_id, request_id, json),
             ControlCommand::LaunchTab {
+                background,
                 env_stdin: _,
                 process_id,
                 window_id,
@@ -333,6 +335,7 @@ fn execute_once(command: ControlCommand) -> anyhow::Result<String> {
                 request_id,
                 json,
             } => client::launch_tab(
+                background,
                 process_id,
                 window_id,
                 program,

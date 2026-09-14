@@ -7030,6 +7030,173 @@ fn cli_launch_plan_creates_ordered_shell_and_arbitrary_command_tabs() {
 
 #[cfg(unix)]
 #[test]
+fn background_command_launch_preserves_focused_pane_and_interaction_surfaces() {
+    for copy_mode in [false, true] {
+        let shell = ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "read unused".into()],
+            env: Default::default(),
+        };
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let mut tabs = TabManager::new(80, 24, shell.clone(), 100, 1024 * 1024);
+        let original = tabs
+            .new_tab_with_command(
+                "/bin/sh",
+                &shell.args,
+                None,
+                Some("original"),
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let owner = tabs
+            .active_tab_mut()
+            .unwrap()
+            .take_terminal_owner()
+            .unwrap();
+        let mut panes =
+            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+        let focused = panes.split(SplitDirection::Vertical).unwrap();
+        panes.focus(focused);
+        panes
+            .focused_pane_mut()
+            .unwrap()
+            .terminal
+            .process(b"kept content");
+        tabs.active_tab_mut().unwrap().pane_manager = Some(panes);
+        app.tabs = Some(tabs);
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("kept", grid);
+        });
+        let selection = termeric_core::Selection::new(
+            termeric_core::Point::new(0, 0),
+            termeric_core::SelectionType::Simple,
+        );
+        app.mouse_state.selection = Some(selection.clone());
+        app.active_terminal_mut()
+            .unwrap()
+            .set_selection(Some(selection));
+        if copy_mode {
+            app.enter_copy_mode();
+            assert!(app.copy_mode_target.is_some());
+        } else {
+            app.handle_ime_event(winit::event::Ime::Preedit(
+                "composition".into(),
+                Some((0, 0)),
+            ));
+            assert!(app.ime.preedit().is_some());
+        }
+        let ime = app.ime.clone();
+        let query = app.search.query().to_string();
+        if !copy_mode {
+            assert_eq!(query, "kept");
+        }
+        let matches = app.search.match_count();
+        let copy_target = app.copy_mode_target;
+        let selection = app.active_terminal().unwrap().selection().cloned();
+        let mouse_selection = app.mouse_state.selection.clone();
+        app.redraw_scheduler.begin_frame();
+        assert!(!app.redraw_scheduler.has_pending());
+        let created = app
+            .launch_control_tab(
+                true,
+                "/bin/sh",
+                &["-c".into(), "printf background-ready; read unused".into()],
+                None,
+                Some("background"),
+                &[],
+                &Default::default(),
+            )
+            .unwrap();
+        assert_ne!(created, original as u64);
+        assert!(
+            app.redraw_scheduler.has_pending(),
+            "quiet creation must redraw tab chrome"
+        );
+        assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(original));
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .focused_pane()
+                .unwrap()
+                .id,
+            focused
+        );
+        assert_eq!(app.ime, ime);
+        assert_eq!(app.copy_mode_target, copy_target);
+        let selection_state = |selection: Option<&termeric_core::Selection>| {
+            selection.map(|selection| {
+                (
+                    selection.start,
+                    selection.end,
+                    selection.ty,
+                    selection.active,
+                )
+            })
+        };
+        assert_eq!(
+            selection_state(app.active_terminal().unwrap().selection()),
+            selection_state(selection.as_ref())
+        );
+        assert_eq!(
+            selection_state(app.mouse_state.selection.as_ref()),
+            selection_state(mouse_selection.as_ref())
+        );
+        assert_eq!(app.search.query(), query);
+        assert_eq!(app.search.match_count(), matches);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            app.process_pty_events();
+            let text = tabs_at(&app, created as usize)
+                .unwrap()
+                .focused_terminal()
+                .unwrap()
+                .grid()
+                .export_scrollback_text()
+                .join("\n");
+            if text.contains("background-ready") {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(original));
+        assert_eq!(app.ime, ime);
+        assert_eq!(app.copy_mode_target, copy_target);
+        assert_eq!(app.search.query(), query);
+        assert_eq!(app.search.match_count(), matches);
+        assert_eq!(
+            selection_state(app.active_terminal().unwrap().selection()),
+            selection_state(selection.as_ref())
+        );
+        let count = app.tabs.as_ref().unwrap().count();
+        assert!(
+            app.launch_control_tab(
+                true,
+                "/termeric-test/no-such-program",
+                &[],
+                None,
+                None,
+                &[],
+                &Default::default()
+            )
+            .is_err()
+        );
+        assert_eq!(app.tabs.as_ref().unwrap().count(), count);
+        assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(original));
+        assert_eq!(app.copy_mode_target, copy_target);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
@@ -7061,6 +7228,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
 
     let exact_id = app
         .launch_control_tab(
+            false,
             helper,
             &[
                 "".into(),
@@ -7148,6 +7316,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
     let count = app.tabs.as_ref().unwrap().count();
     let error = app
         .launch_control_tab(
+            false,
             "/definitely/missing/termeric-control-program",
             &[],
             Some(cwd),
@@ -7164,6 +7333,7 @@ fn running_gui_launch_tab_preserves_argv_cwd_title_and_failure_atomicity() {
     assert_eq!(app.tabs.as_ref().unwrap().count(), count);
     assert!(
         app.launch_control_tab(
+            false,
             helper,
             &[],
             Some("/definitely/missing/termeric-cwd"),

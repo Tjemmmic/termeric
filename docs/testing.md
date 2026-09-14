@@ -1,5 +1,22 @@
 # Testing Termeric
 
+## Background controlled command tabs
+
+The provider-free suite checks `launch-tab --background` at CLI, strict v18 wire,
+replay, manager/application and executable fake-endpoint layers. Background mode
+is a required boolean on the wire and part of replay identity. Duplicate flags,
+window/new-tab use and incorrect wire types fail; flags after `--` stay literal.
+Headless real-PTY fixtures keep a selected split-pane terminal alive, check
+search versus copy-mode baselines separately, and retain mouse/terminal
+selection, pane identity and IME composition. A cleared redraw scheduler proves
+quiet insertion requests chrome repaint, while synthetic output and child exit
+progress without selecting the new tab. Empty-manager first selection and
+failed-spawn topology/selection preservation are covered. Existing target,
+capacity, live-domain and lifecycle tests still use the common admission path.
+Private fake-endpoint tests combine background launch with wait and stdin
+environment input; the endpoint never executes the requested command. Real
+compositor focus/visual acceptance remains deferred; no provider is invoked.
+
 ## Stdin environment overlays
 
 The provider-free workspace suite exercises Linux `--env-stdin` through the

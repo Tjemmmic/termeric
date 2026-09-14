@@ -14,6 +14,9 @@ adds retained child completion queries for those launches.
 and script exit-code propagation using that same protocol.
 [#102](https://github.com/Tjemmmic/termeric/issues/102) adds explicit child-local
 environment clearing and variable removal in GUI protocol v17.
+[#112](https://github.com/Tjemmmic/termeric/issues/112) adds non-selecting
+command-tab launch in current protocol v18. Client and server must be rebuilt
+together; mismatched protocol versions fail rather than dropping the mode.
 
 ## Command line
 
@@ -99,7 +102,7 @@ window or stable success result.
 `new-tab` targets one exact stable window ID and returns its stable window-local
 tab ID only after the PTY-backed tab exists. An ordinary target creates the same
 local shell tab as the in-app New Tab action. If the active tab belongs to a live
-domain, protocol v17 keeps the socket worker off the GUI event loop while the
+domain, protocol v18 keeps the socket worker off the GUI event loop while the
 daemon creates the authoritative tab, reconciles the returned snapshot, and
 then returns the resulting GUI-local stable ID.
 
@@ -122,6 +125,38 @@ closing/uninitialized window, capacity failure, or active live-domain tab fails
 without inserting a tab. Use `termeric domain spawn DOMAIN -- PROGRAM [ARG ...]`
 for a daemon-owned command instead of implicitly crossing that authority
 boundary.
+
+### Background command tabs
+
+`launch-tab --background` starts the same ordinary local command tab but leaves
+the existing selected tab and its focused pane unchanged:
+
+```bash
+termeric control launch-tab PROCESS WINDOW --background --wait --timeout 300 --json -- /usr/bin/make
+```
+
+Selection is suppressed at insertion; the implementation does not activate the
+new tab and then switch back. Existing mouse/terminal selection, search, copy
+mode, IME composition and focused-terminal caches are not reset by creation.
+Tab chrome requests a redraw even when the child is silent. The new tab remains
+listed, has a real PTY, continues receiving output, and can be explicitly selected
+later. If the target has no tabs, the first tab necessarily becomes selected.
+
+The flag is unique, tab-launch-only and must appear before `--`. It composes
+with `--wait`, `--env-stdin`, literal environment and inheritance policies. The
+ordinary launch result/child-status JSON shapes do not change. Protocol v18
+requires an explicit boolean in a `launch_tab` request, and replay identity
+includes it: changing foreground/background with an existing request ID is a
+different action, while an exact cached retry neither creates nor selects a tab.
+
+Background mode does not request native activation, suspend output, detach a
+process from GUI lifetime, create a hidden window or overlay, or bypass the
+ordinary-target/live-domain/capacity policies. `--background` is rejected for
+`launch-window` and `new-tab`. The normal TabCreated lifecycle hook still runs;
+separately configured plugin actions remain independent actions, not an implicit
+focus change by this launch. Deferred real-compositor acceptance is still needed
+to verify visible behavior. Without the flag, launch-tab selects the new tab as
+before.
 
 ### Per-launch environment inheritance
 
@@ -214,7 +249,7 @@ termeric control launch-window PROCESS SOURCE_WINDOW --clear-env --cwd /absolute
 the current inventory rather than assuming zero. Success creates exactly one
 local shell pane, focuses it within its tab, preserves the window's active-tab
 choice, and returns the new tab-local pane ID. A live-domain target uses the
-same deferred protocol-v17 acknowledgement as `new-tab`: the response is sent
+same deferred protocol-v18 acknowledgement as `new-tab`: the response is sent
 only after the daemon snapshot has been reconciled and the new remote pane has
 an authoritative GUI-local stable ID.
 
@@ -250,7 +285,7 @@ claim that animation, persistence, or process teardown already finished.
 mutation, removes the exact pane synchronously, and returns both the remaining
 pane count and focused pane ID. If two panes collapse to one terminal owner, the
 survivor keeps its stable ID through inventory, workspace capture/restore, and
-the next split. For live-domain tabs and panes, protocol v17 defers the response
+the next split. For live-domain tabs and panes, protocol v18 defers the response
 until the authoritative daemon snapshot proves the exact remote object was
 removed and GUI reconciliation can report the surviving local pane state. The
 domain's last pane and last tab remain protected; terminating the domain is a
@@ -280,7 +315,7 @@ pane must move with its whole tab. Moving within the same tab is currently
 rejected because that requires an explicit layout-tree rearrangement contract,
 not an ownership transfer. Live-domain panes can move between different tabs in
 the same domain and native window. Domain protocol v10 carries the exact remote
-anchor and requested direction; protocol v17 responds only after the source
+anchor and requested direction; protocol v18 responds only after the source
 route disappears, the destination layout contains that exact split, and the
 moved relay has a destination-local stable ID. Cross-window, cross-domain, and
 mixed ordinary/live moves fail before mutation.
@@ -482,7 +517,7 @@ connected peer's operating-system user in addition to token authentication.
 Token files are opened without following symlinks and validated by owner, type,
 permissions, and exact size before their fixed-size contents are read.
 
-Protocol version 17 accepts exactly `inventory`, `launch_status`, ID-targeted `read_text`,
+Protocol version 18 accepts exactly `inventory`, `launch_status`, ID-targeted `read_text`,
 `send_text`, `create_window`, `launch_window`, `create_tab`, `launch_tab`,
 `split_pane`, `focus_window`, `select_tab`, `focus_pane`,
 `close_window`, `close_tab`, `close_pane`, `move_tab`, `move_pane`,

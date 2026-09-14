@@ -72,7 +72,7 @@ Wayland compositor caveat are defined in [quick-access.md](quick-access.md).
 | `control new-window PROCESS SOURCE_WINDOW [--request-id ID] [--json]` | Create a native window from an exact running source window; an explicit request ID safely retries an ambiguous recent result. |
 | `control launch-window PROCESS SOURCE_WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays as the initial tab of a new source-configured native window and return both stable IDs. |
 | `control new-tab PROCESS WINDOW [--request-id ID] [--json]` | Create a local shell tab in an exact running window and return its stable ID. |
-| `control launch-tab PROCESS WINDOW [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays directly in a new ordinary local tab and return its stable ID. |
+| `control launch-tab PROCESS WINDOW [--background] [--cwd ABSOLUTE_DIRECTORY] [--title TITLE] [--env NAME=VALUE ...] [--env-stdin] [--unset-env NAME ... | --clear-env] [--request-id ID] [--wait [--timeout SECONDS]] [--json] -- PROGRAM [ARG ...]` | Launch one exact argv vector plus bounded non-secret environment overlays directly in a new ordinary local tab and return its stable ID. |
 | `control split-pane PROCESS WINDOW TAB PANE horizontal\|vertical [--request-id ID] [--json]` | Split an exact local pane and return the new stable pane ID. |
 | `control focus-window PROCESS WINDOW [--request-id ID] [--json]` | Request focus for an exact native window on supported backends; Wayland fails explicitly. |
 | `control select-tab PROCESS WINDOW TAB [--request-id ID] [--json]` | Select an exact stable tab without activating its native window. |
@@ -132,7 +132,11 @@ snapshot and returns only after the new remote tab has a reconciled GUI-local
 ID. `termeric control launch-tab PROCESS WINDOW [options] -- PROGRAM [ARG ...]`
 instead creates an ordinary local tab, preserves exact UTF-8 argument
 boundaries without invoking a shell, optionally applies an existing absolute
-cwd and initial title, activates the tab, and returns its stable ID. It inherits
+cwd and initial title, selects the tab by default, and returns its stable ID.
+`--background` instead preserves the existing selected tab, focused pane and
+interaction surfaces while the new tab's PTY and completion continue. An empty
+manager selects its first tab either way. This is not a hidden window or detached
+job, and the flag is rejected for launch-window/new-tab. It inherits
 the GUI process environment by default; `--unset-env NAME` removes inherited
 variables, while `--clear-env` starts from Termeric's documented minimum instead.
 Each repeatable `--env NAME=VALUE` overlay is applied exactly afterward. Linux

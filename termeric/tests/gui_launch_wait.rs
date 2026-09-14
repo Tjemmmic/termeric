@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const VERSION: u32 = 17;
+const VERSION: u32 = 18;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -202,6 +202,9 @@ fn executable_stdin_environment_reaches_both_launch_targets_without_argv_or_outp
                     "--request-id",
                     ID,
                 ];
+                if verb == "launch-tab" {
+                    options.push("--background");
+                }
                 if wait {
                     options.extend(["--wait", "--timeout", "2"]);
                 }
@@ -210,6 +213,9 @@ fn executable_stdin_environment_reaches_both_launch_targets_without_argv_or_outp
                     let (stream, request) = fixture.read_request();
                     assert_launch(&request, verb);
                     assert_eq!(request["request"]["args"], json!(["--env-stdin"]));
+                    if verb == "launch-tab" {
+                        assert_eq!(request["request"]["background"], true);
+                    }
                     let entries = request["request"]["environment"].as_array().unwrap();
                     assert_eq!(entries.len(), 4);
                     assert!(entries.contains(&json!({"name": "PRIVATE_VALUE", "value": secret})));
@@ -344,6 +350,53 @@ fn assert_launch(request: &Value, verb: &str) {
     };
     assert_eq!(request["request"][target], 7);
     assert_eq!(request["request"]["program"], "/bin/true");
+    if verb == "launch-tab" {
+        assert!(request["request"]["background"].is_boolean());
+    }
+}
+
+#[test]
+fn executable_background_tab_launch_preserves_wire_mode_and_wait_behavior() {
+    for wait in [false, true] {
+        let fixture = Fixture::new();
+        let mut options = vec!["--background", "--json", "--request-id", ID];
+        if wait {
+            options.extend(["--wait", "--timeout", "2"]);
+        }
+        options.extend(["--", "/bin/true", "--background"]);
+        let output = fixture.run("launch-tab", &options, |fixture| {
+            let (stream, request) = fixture.read_request();
+            assert_launch(&request, "launch-tab");
+            assert_eq!(request["request"]["background"], true);
+            assert_eq!(request["request"]["args"], json!(["--background"]));
+            send(stream, acknowledgement("launch-tab", ID));
+            if wait {
+                send(
+                    fixture.request(),
+                    response(json!({"status": "exited", "exit_code": 7, "success": false})),
+                );
+            }
+        });
+        assert_eq!(output.status.code(), Some(if wait { 7 } else { 0 }));
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        if wait {
+            assert_eq!(result["state"]["exit_code"], 7);
+        } else {
+            assert_eq!(result["tab_id"], 3);
+        }
+        fixture.no_more_requests();
+    }
+    for (verb, flags) in [
+        ("launch-tab", vec!["--background", "--background"]),
+        ("launch-window", vec!["--background"]),
+    ] {
+        let fixture = Fixture::new();
+        let mut options = flags;
+        options.extend(["--", "/bin/true"]);
+        let output = fixture.run(verb, &options, |_| {});
+        assert!(!output.status.success());
+        fixture.no_more_requests();
+    }
 }
 
 #[test]

@@ -273,6 +273,16 @@ desktop session.
 
 #### Deferred real-window command launch and wait
 
+For the background mode added in protocol v18, rebuild both the GUI and CLI.
+Keep a tab with split panes selected and start a local `launch-tab --background`
+from another terminal. Confirm the original tab/pane remains selected, including
+an in-progress mouse selection, search, copy mode and IME composition (test these
+separately), while a new tab appears immediately even for a silent child. Select
+the new tab explicitly to inspect its output. Repeat with `--wait`, confirming
+the child's exit status returns without selecting the background tab. No hidden
+window or detached process is expected; closing the owning GUI still closes its
+PTYs. Use synthetic local commands only, not a provider program.
+
 This manual row is separate from automated fake-endpoint coverage. Run it later
 in a disposable ordinary Termeric window, with another window kept alive.
 `target/debug/termeric control list --json` supplies the actual `PROCESS` and
