@@ -15,8 +15,33 @@ __termeric_before_prompt() {
 }
 __termeric_after_prompt() {
     local __termeric_status=$?
-    local __termeric_cwd=${PWD//%/%25}
-    printf '\033]7;file://%s\007' "$__termeric_cwd"
+    # Encode bytes, independent of the user's locale. Raw controls in a file
+    # name must never terminate OSC 7 or begin another terminal command.
+    local LC_ALL=C
+    local __termeric_cwd=${PWD-}
+    # Match the receiver's 4096-byte URI ceiling, including "file://".
+    if [[ $__termeric_cwd == /* && ${#__termeric_cwd} -le 4089 ]]; then
+        if [[ $__termeric_cwd == *[!a-zA-Z0-9/._~-]* ]]; then
+            local __termeric_raw=$__termeric_cwd
+            local __termeric_char __termeric_hex __termeric_index
+            __termeric_cwd=
+            for ((__termeric_index=0; __termeric_index<${#__termeric_raw}; __termeric_index++)); do
+                __termeric_char=${__termeric_raw:__termeric_index:1}
+                case $__termeric_char in
+                    [a-zA-Z0-9/._~-]) __termeric_cwd+=$__termeric_char ;;
+                    *) printf -v __termeric_hex '%%%02X' "'$__termeric_char"
+                       __termeric_cwd+=$__termeric_hex ;;
+                esac
+                if [[ ${#__termeric_cwd} -gt 4089 ]]; then
+                    __termeric_cwd=
+                    break
+                fi
+            done
+        fi
+        if [[ -n $__termeric_cwd ]]; then
+            printf '\033]7;file://%s\007' "$__termeric_cwd"
+        fi
+    fi
     printf '\033]133;A\007\033]133;B\007'
     __termeric_seen_command=1
     return "$__termeric_status"
@@ -433,6 +458,9 @@ fn write_integration_file(
 
 #[cfg(test)]
 mod bash_prompt_tests;
+
+#[cfg(test)]
+mod bash_cwd_tests;
 
 #[cfg(test)]
 mod tests {

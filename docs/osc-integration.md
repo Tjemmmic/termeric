@@ -89,6 +89,29 @@ local Git inspection, plugins, pane/process spawn, session/workspace capture,
 or local-domain control. This prevents a remote shell from making a remote path
 look like a valid local cwd.
 
+The generated Bash emitter percent-encodes every pathname byte except ASCII
+letters/digits and `/._~-` before framing OSC 7. Ordinary ASCII paths use a fast
+path; encoding uses Bash builtins with function-local byte-oriented locale and
+does not spawn a helper or change the caller's locale. This prevents BEL, ESC,
+and raw C1 bytes in directory names from terminating the report or becoming
+other terminal commands. An isolated Bash reproduction previously turned a
+synthetic directory value into an independent title-change event.
+
+Both raw input and encoded output are bounded to 4,089 bytes, leaving seven
+bytes for `file://` within the receiver's 4-KiB URI ceiling. Empty, relative, or
+oversized reports are omitted as a whole, never truncated; prompt/command
+markers still proceed. Percent encoding does not make control-bearing or
+invalid-UTF-8 directories eligible for cwd inheritance: the receiver retains
+its existing rejection policy and last valid report. Long encoded Unicode paths
+can reach the URI ceiling earlier than ASCII paths.
+
+This producer fix and real-Bash byte/framing regressions cover **Bash only**.
+The generated Zsh, Fish, and Elvish emitters still escape only percent signs and
+need equivalent producer hardening and native tests; their control-bearing cwd
+output is not safe to treat as verified. Nushell uses its own native producer
+and remains acceptance-pending. This does not sanitize arbitrary user prompt
+code or output from other applications.
+
 Normal interactive Bash, Zsh, and Fish launches emit a hostless OSC 7 report at
 each prompt, with literal percent signs escaped before transmission. An
 unambiguous Nushell REPL launch enables Nushell's native OSC 7 and OSC 133

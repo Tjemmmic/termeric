@@ -29,6 +29,15 @@ per delivered rerun and no user-input record for protocol fences or refusals.
 
 ## Candidate-bound shell acceptance
 
+`terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
+with isolated configuration, captures its bytes, and feeds only an in-memory
+terminal. It reproduces/prevents directory-to-title injection, round-trips UTF-8
+and URI punctuation, checks every nonzero Unix pathname byte, verifies caller
+locale restoration, and exercises exact raw/encoded URI ceilings without losing
+prompt marks. No native window receives the synthetic protocol strings. Other
+shell emitters are not covered by those Bash results; see
+[cwd emission boundaries](osc-integration.md#working-directories).
+
 `terminal::shell_integration::bash_prompt_tests` compares isolated real Bash
 PTYs with and without Termeric's generated startup file. Scalar, indexed-array,
 and sparse-array fixtures assert native hook order and incoming status, one
