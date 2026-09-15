@@ -44,26 +44,19 @@ pub enum GuardrailAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GuardedWrite {
-    pub(crate) origin: crate::tabs::TerminalEventOrigin,
+    pub(crate) tab_id: usize,
+    pub(crate) pane_id: crate::panes::PaneId,
     pub(crate) data: Vec<u8>,
-    /// Opt-in stable identity for writes that may outlive an ownership mode.
-    stable_pane: Option<crate::panes::PaneId>,
 }
 
 impl GuardedWrite {
-    pub(crate) fn new(origin: crate::tabs::TerminalEventOrigin, data: Vec<u8>) -> Self {
-        Self {
-            origin,
-            data,
-            stable_pane: None,
-        }
-    }
-
+    /// Capture identity, never the current single/split ownership mode. A tab
+    /// route alone can alias a different survivor by the time consent arrives.
     pub(crate) fn for_pane(tab_id: usize, pane_id: crate::panes::PaneId, data: Vec<u8>) -> Self {
         Self {
-            origin: crate::tabs::TerminalEventOrigin::Pane { tab_id, pane_id },
+            tab_id,
+            pane_id,
             data,
-            stable_pane: Some(pane_id),
         }
     }
 
@@ -71,15 +64,7 @@ impl GuardedWrite {
         &self,
         tabs: &crate::tabs::TabManager,
     ) -> Option<crate::tabs::TerminalEventOrigin> {
-        if let Some(pane_id) = self.stable_pane {
-            let tab_id = match self.origin {
-                crate::tabs::TerminalEventOrigin::Tab { tab_id }
-                | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id,
-            };
-            tabs.origin_for_pane(tab_id, pane_id)
-        } else {
-            tabs.terminal_for_origin(self.origin).map(|_| self.origin)
-        }
+        tabs.origin_for_pane(self.tab_id, self.pane_id)
     }
 }
 
@@ -403,12 +388,8 @@ mod tests {
         }
     }
 
-    fn fixture_origin() -> crate::tabs::TerminalEventOrigin {
-        crate::tabs::TerminalEventOrigin::Tab { tab_id: 42 }
-    }
-
     fn fixture_write(data: &[u8]) -> GuardedWrite {
-        GuardedWrite::new(fixture_origin(), data.to_vec())
+        GuardedWrite::for_pane(42, crate::panes::PaneId(0), data.to_vec())
     }
 
     #[test]
@@ -512,20 +493,8 @@ mod tests {
     fn confirmation_preserves_an_exact_multi_destination_write_batch() {
         let mut overlay = GuardrailOverlay::new();
         let writes = vec![
-            GuardedWrite::new(
-                crate::tabs::TerminalEventOrigin::Pane {
-                    tab_id: 9,
-                    pane_id: crate::panes::PaneId(2),
-                },
-                b"first-encoding".to_vec(),
-            ),
-            GuardedWrite::new(
-                crate::tabs::TerminalEventOrigin::Pane {
-                    tab_id: 9,
-                    pane_id: crate::panes::PaneId(7),
-                },
-                b"second-encoding".to_vec(),
-            ),
+            GuardedWrite::for_pane(9, crate::panes::PaneId(2), b"first-encoding".to_vec()),
+            GuardedWrite::for_pane(9, crate::panes::PaneId(7), b"second-encoding".to_vec()),
         ];
         let request = overlay.show(fixture_match(), writes.clone());
         assert_eq!(overlay.confirm(request), Some(writes));

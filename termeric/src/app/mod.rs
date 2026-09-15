@@ -3970,12 +3970,13 @@ impl App {
         if !self.write_broadcast_paste(text) {
             let framed = crate::input::encode_paste(self.active_keyboard_mode(), text);
             let candidate = format!("{}{}", self.input_line_buffer, text);
-            let guarded_origin = self.active_guarded_origin();
-            let intercepted = guarded_origin.is_some_and(|origin| {
+            let guarded_pane = self.active_guarded_pane();
+            let intercepted = guarded_pane.is_some_and(|(tab_id, pane_id)| {
                 self.guard_plugin_writes(
                     &candidate,
-                    vec![crate::terminal::guardrails::GuardedWrite::new(
-                        origin,
+                    vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                        tab_id,
+                        pane_id,
                         framed.clone(),
                     )],
                 )
@@ -3983,7 +3984,7 @@ impl App {
             if !intercepted {
                 accepted = self.write_terminal_protocol_input(&framed);
             }
-            if guarded_origin.is_some() && !intercepted {
+            if guarded_pane.is_some() && !intercepted {
                 self.track_guarded_paste_suffix(text);
             } else {
                 self.input_line_buffer.clear();

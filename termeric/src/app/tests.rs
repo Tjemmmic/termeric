@@ -3796,8 +3796,9 @@ fn harvest_rerun_refuses_armed_read_only_stale_and_closing_sources_without_write
             "pending" => {
                 app.guardrail.show(
                     crate::terminal::guardrails::check_command("rm -rf /synthetic").unwrap(),
-                    vec![crate::terminal::guardrails::GuardedWrite::new(
-                        captures[1].0,
+                    vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                        entry.source.tab_id,
+                        PaneId(1),
                         b"pending\r".to_vec(),
                     )],
                 );
@@ -4019,13 +4020,282 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
 
 #[cfg(unix)]
 #[test]
+fn external_confirmation_never_targets_a_replacement_single_owner() {
+    use crate::terminal::guardrails::GuardrailAction;
+    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
+    app.config.security.allow_gui_control_input = true;
+    let result = app
+        .send_plugin_text(
+            entry.source.tab_id as u64,
+            0,
+            "rm -rf /synthetic-never-executed",
+            false,
+            true,
+        )
+        .unwrap();
+    let request_id = result.3.unwrap();
+    split_harvest_capture_owner(&mut app, directory.path());
+    app.close_control_pane(entry.source.tab_id as u64, 0)
+        .unwrap();
+    let captures = current_harvest_capture_routes(&mut app, directory.path());
+    app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+    assert!(
+        fenced_harvest_capture(&mut app, &captures)
+            .iter()
+            .all(Vec::is_empty),
+        "confirmation for removed pane 0 must not write to surviving pane 1"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn guarded_input_producers_follow_only_the_original_owner_through_topology_changes() {
+    use crate::terminal::guardrails::GuardrailAction;
+    const COMMAND: &str = "rm -rf /synthetic-never-executed";
+    for producer in ["typed", "paste", "control", "plugin", "process-plugin"] {
+        for transition in [
+            "split",
+            "collapse",
+            "nonzero-collapse",
+            "removed",
+            "read-only",
+            "cancel",
+        ] {
+            let (mut app, directory, _, initial_captures) =
+                harvest_rerun_capture_fixture_in(transition == "nonzero-collapse");
+            let source = app.active_harvest_source().unwrap();
+            app.config.security.allow_gui_control_input = true;
+            // Metadata only: the existing shell/cat capture process is unchanged.
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "synthetic-capture".into(),
+            };
+            app.active_terminal_mut().unwrap().process(b"\x1b[?2004h");
+            let expected_wire = match producer {
+                "typed" => {
+                    app.input_line_buffer = COMMAND.into();
+                    app.write_to_pty(b"\r");
+                    b"\r".to_vec()
+                }
+                "paste" => {
+                    app.write_paste_text(COMMAND);
+                    format!("\x1b[200~{COMMAND}\x1b[201~").into_bytes()
+                }
+                _ => {
+                    let result = match producer {
+                        "control" => app.send_control_text(
+                            source.tab_id as u64,
+                            source.pane_id,
+                            COMMAND,
+                            true,
+                            true,
+                        ),
+                        "plugin" => app.send_plugin_text(
+                            source.tab_id as u64,
+                            source.pane_id,
+                            COMMAND,
+                            true,
+                            true,
+                        ),
+                        "process-plugin" => app.send_process_plugin_text(
+                            7,
+                            source.tab_id as u64,
+                            source.pane_id,
+                            COMMAND,
+                            true,
+                            true,
+                        ),
+                        _ => unreachable!(),
+                    }
+                    .unwrap();
+                    assert_eq!(
+                        result.2,
+                        crate::control::protocol::InputDisposition::PendingConfirmation
+                    );
+                    format!("\x1b[200~{COMMAND}\x1b[201~\r").into_bytes()
+                }
+            };
+            let request_id = app.guardrail.request_id();
+            assert!(app.guardrail.is_awaiting(request_id));
+            assert!(
+                fenced_harvest_capture(&mut app, &initial_captures)
+                    .iter()
+                    .all(Vec::is_empty)
+            );
+            if transition == "nonzero-collapse" {
+                app.close_control_pane(source.tab_id as u64, 0).unwrap();
+                app.close_control_pane(source.tab_id as u64, 1).unwrap();
+            } else {
+                let sibling = split_harvest_capture_owner(&mut app, directory.path());
+                if transition == "collapse" {
+                    app.close_control_pane(source.tab_id as u64, sibling.0)
+                        .unwrap();
+                } else if transition == "removed" {
+                    app.close_control_pane(source.tab_id as u64, source.pane_id)
+                        .unwrap();
+                }
+            }
+            let captures = current_harvest_capture_routes(&mut app, directory.path());
+            if transition == "read-only" {
+                app.focus_control_pane(source.tab_id as u64, source.pane_id)
+                    .unwrap();
+                app.toggle_focused_pane_read_only();
+            }
+            // Mode changes after capture must not re-encode the approved bytes.
+            if let Some(origin) = app
+                .tabs
+                .as_ref()
+                .unwrap()
+                .origin_for_pane(source.tab_id, PaneId(source.pane_id))
+            {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .terminal_for_origin_mut(origin)
+                    .unwrap()
+                    .process(b"\x1b[?2004l");
+            }
+            let before = fenced_harvest_capture(&mut app, &captures);
+            assert!(before.iter().flatten().all(|byte| *byte == 0));
+            let focused = app.active_harvest_source();
+            app.input_line_buffer = "preserve sibling input".into();
+            if transition == "cancel" {
+                app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+            }
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            let deliver = matches!(transition, "split" | "collapse" | "nonzero-collapse");
+            let source_origin = app
+                .tabs
+                .as_ref()
+                .unwrap()
+                .origin_for_pane(source.tab_id, PaneId(source.pane_id));
+            let expected = captures
+                .iter()
+                .zip(before)
+                .map(|((origin, _), mut bytes)| {
+                    bytes.push(0);
+                    if deliver && Some(*origin) == source_origin {
+                        bytes.extend_from_slice(&expected_wire);
+                    }
+                    bytes
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                fenced_harvest_capture(&mut app, &captures),
+                expected,
+                "{producer}/{transition}"
+            );
+            assert_eq!(app.active_harvest_source(), focused);
+            assert_eq!(
+                app.input_line_buffer,
+                if deliver && focused == Some(source) {
+                    ""
+                } else {
+                    "preserve sibling input"
+                }
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn guarded_broadcast_preserves_framing_and_rejects_removed_batch_members() {
+    use crate::terminal::guardrails::GuardrailAction;
+    const COMMAND: &str = "rm -rf /synthetic-never-executed";
+    for paste in [false, true] {
+        for remove_source in [false, true] {
+            let (mut app, directory, entry, initial_captures) = harvest_rerun_capture_fixture();
+            let tab_id = entry.source.tab_id;
+            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+            tab.tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "synthetic-capture".into(),
+            };
+            tab.pane_manager
+                .as_mut()
+                .unwrap()
+                .get_pane_mut(PaneId(0))
+                .unwrap()
+                .terminal
+                .process(b"\x1b[?2004h");
+            app.toggle_broadcast();
+            app.toggle_broadcast();
+            if paste {
+                assert!(app.write_broadcast_paste(COMMAND));
+            } else {
+                app.input_line_buffer = COMMAND.into();
+                assert!(app.write_broadcast_bytes(b"\r"));
+            }
+            let request_id = app.guardrail.request_id();
+            assert!(app.guardrail.is_awaiting(request_id));
+            assert!(
+                fenced_harvest_capture(&mut app, &initial_captures)
+                    .iter()
+                    .all(Vec::is_empty)
+            );
+            if remove_source {
+                app.close_control_pane(tab_id as u64, 0).unwrap();
+                app.close_control_pane(tab_id as u64, 1).unwrap();
+            }
+            let captures = current_harvest_capture_routes(&mut app, directory.path());
+            let before = fenced_harvest_capture(&mut app, &captures);
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            let expected = captures
+                .iter()
+                .zip(before)
+                .map(|((origin, _), mut bytes)| {
+                    bytes.push(0);
+                    if !remove_source {
+                        if !paste {
+                            bytes.push(b'\r');
+                        } else if *origin
+                            == (crate::tabs::TerminalEventOrigin::Pane {
+                                tab_id,
+                                pane_id: PaneId(0),
+                            })
+                        {
+                            bytes.extend_from_slice(
+                                format!("\x1b[200~{COMMAND}\x1b[201~").as_bytes(),
+                            );
+                        } else {
+                            bytes.extend_from_slice(COMMAND.as_bytes());
+                        }
+                    }
+                    bytes
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                fenced_harvest_capture(&mut app, &captures),
+                expected,
+                "paste={paste}, removed={remove_source}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn closed_guarded_destination_rejects_the_whole_batch_before_any_user_write() {
     let (mut app, _directory, entry, captures) = harvest_rerun_capture_fixture();
     let request_id = app.guardrail.show(
         crate::terminal::guardrails::check_command("rm -rf /synthetic").unwrap(),
         vec![
-            crate::terminal::guardrails::GuardedWrite::new(captures[1].0, b"first".to_vec()),
-            crate::terminal::guardrails::GuardedWrite::new(captures[0].0, b"closed".to_vec()),
+            crate::terminal::guardrails::GuardedWrite::for_pane(
+                entry.source.tab_id,
+                PaneId(1),
+                b"first".to_vec(),
+            ),
+            crate::terminal::guardrails::GuardedWrite::for_pane(
+                entry.source.tab_id,
+                PaneId(0),
+                b"closed".to_vec(),
+            ),
         ],
     );
     app.tabs

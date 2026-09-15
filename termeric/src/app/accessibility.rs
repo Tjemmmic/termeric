@@ -8256,8 +8256,9 @@ mod tests {
                 target: "Missing fixture terminal".into(),
                 user: "tester".into(),
             },
-            vec![crate::terminal::guardrails::GuardedWrite::new(
-                crate::tabs::TerminalEventOrigin::Tab { tab_id: usize::MAX },
+            vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                usize::MAX,
+                crate::panes::PaneId(0),
                 b"fixture-enter".to_vec(),
             )],
         )

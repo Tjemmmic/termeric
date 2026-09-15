@@ -803,11 +803,9 @@ impl App {
             let writes = targets
                 .iter()
                 .map(|pane_id| {
-                    crate::terminal::guardrails::GuardedWrite::new(
-                        crate::tabs::TerminalEventOrigin::Pane {
-                            tab_id,
-                            pane_id: *pane_id,
-                        },
+                    crate::terminal::guardrails::GuardedWrite::for_pane(
+                        tab_id,
+                        *pane_id,
                         data.to_vec(),
                     )
                 })
@@ -889,11 +887,9 @@ impl App {
             let writes = encoded
                 .iter()
                 .map(|(pane_id, bytes)| {
-                    crate::terminal::guardrails::GuardedWrite::new(
-                        crate::tabs::TerminalEventOrigin::Pane {
-                            tab_id,
-                            pane_id: *pane_id,
-                        },
+                    crate::terminal::guardrails::GuardedWrite::for_pane(
+                        tab_id,
+                        *pane_id,
                         bytes.clone(),
                     )
                 })
@@ -963,13 +959,7 @@ impl App {
         let writes = framed
             .iter()
             .map(|(pane_id, bytes)| {
-                crate::terminal::guardrails::GuardedWrite::new(
-                    crate::tabs::TerminalEventOrigin::Pane {
-                        tab_id,
-                        pane_id: *pane_id,
-                    },
-                    bytes.clone(),
-                )
+                crate::terminal::guardrails::GuardedWrite::for_pane(tab_id, *pane_id, bytes.clone())
             })
             .collect();
         if self.guard_plugin_writes(&candidate, writes) {
@@ -3546,7 +3536,11 @@ impl App {
             );
             let confirmation_id = self.guardrail.show(
                 matched,
-                vec![crate::terminal::guardrails::GuardedWrite::new(origin, wire)],
+                vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                    tab_id,
+                    PaneId(pane_id),
+                    wire,
+                )],
             );
             if let Some(window) = &self.window {
                 window.request_redraw();

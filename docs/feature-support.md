@@ -140,6 +140,12 @@ cannot be replaced by the current sibling. Cross-tab/window history migration
 is not included, and native acceptance remains deferred
 ([#117](https://github.com/Tjemmmic/termeric/issues/117)).
 
+Guarded-input confirmations now require stable tab/pane identity for every
+producer, not just Harvest. Local raw-capture tests cover typed commits, paste,
+GUI/plugin/process input, and broadcast refusal/framing through split/collapse,
+source removal, read-only changes, cancellation, and replay. Native/provider
+acceptance remains separate ([#118](https://github.com/Tjemmmic/termeric/issues/118)).
+
 ## Performance and resource evidence
 
 | Area | Status | Current boundary | Tracking |

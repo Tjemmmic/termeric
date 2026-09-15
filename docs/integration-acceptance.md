@@ -213,6 +213,17 @@ action fixture cover this path without external services.
 
 ### Exact-source Harvest rerun
 
+[#118](https://github.com/Tjemmmic/termeric/issues/118) extends mandatory stable
+owner capture to all guarded-input producers: typed commits, paste, raw and
+encoded-key broadcast paths, and GUI/plugin/process text input. The former
+mode-specific constructor is removed. Confirmation first resolves the entire
+batch, then checks every destination's writability, before sending captured
+bytes unchanged. A removed source cannot alias a different single survivor;
+legitimate owners can survive split/collapse without losing confirmation.
+Raw-capture matrices cover producer/lifecycle combinations and broadcast framing
+and batch refusal. This does not broaden command detection or input permissions,
+and does not constitute native/provider acceptance.
+
 [#117](https://github.com/Tjemmmic/termeric/issues/117) gives every internal
 Harvest source a stable tab ID and mandatory tab-local pane ID, including a
 single-terminal tab. Recording, latest-entry lookup, live text, action

@@ -630,7 +630,7 @@ impl App {
         use crate::terminal::guardrails::GuardrailAction;
         match action {
             GuardrailAction::Confirm { request_id } => {
-                let Some(mut writes) = self.guardrail.confirm(request_id) else {
+                let Some(writes) = self.guardrail.confirm(request_id) else {
                     return;
                 };
                 let focused_origin = self.active_terminal_origin();
@@ -647,17 +647,21 @@ impl App {
                         // Validate the entire captured route before sending any
                         // member. A vanished pane must not produce a partial
                         // broadcast or fall back to the current focus.
-                        for write in &mut writes {
-                            write.origin = write.resolve_origin(tabs).ok_or_else(|| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::NotFound,
-                                    "one or more originating terminals no longer exist",
-                                )
-                            })?;
-                        }
+                        let writes = writes
+                            .into_iter()
+                            .map(|write| {
+                                let origin = write.resolve_origin(tabs).ok_or_else(|| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::NotFound,
+                                        "one or more originating terminals no longer exist",
+                                    )
+                                })?;
+                                Ok((origin, write.data))
+                            })
+                            .collect::<std::io::Result<Vec<_>>>()?;
                         if writes
                             .iter()
-                            .any(|write| tabs.origin_read_only(write.origin) != Some(false))
+                            .any(|(origin, _)| tabs.origin_read_only(*origin) != Some(false))
                         {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::PermissionDenied,
@@ -666,9 +670,9 @@ impl App {
                         }
                         let affects_focused_input = writes
                             .iter()
-                            .any(|write| Some(write.origin) == focused_origin);
-                        for write in writes {
-                            tabs.write_user_to_origin(write.origin, &write.data)?;
+                            .any(|(origin, _)| Some(*origin) == focused_origin);
+                        for (origin, data) in writes {
+                            tabs.write_user_to_origin(origin, &data)?;
                         }
                         Ok(affects_focused_input)
                     });
@@ -880,20 +884,18 @@ impl App {
         })
     }
 
-    pub(super) fn active_guarded_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
+    pub(super) fn active_guarded_pane(&self) -> Option<(usize, crate::panes::PaneId)> {
         let tab = self
             .tabs
             .as_ref()
             .and_then(TabManager::active_tab)
             .filter(|tab| matches!(tab.tab_type, crate::tabs::TabType::Plugin { .. }))?;
-        Some(if let Some(panes) = &tab.pane_manager {
-            crate::tabs::TerminalEventOrigin::Pane {
-                tab_id: tab.id,
-                pane_id: panes.focused_id(),
-            }
-        } else {
-            crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
-        })
+        Some((
+            tab.id,
+            tab.pane_manager
+                .as_ref()
+                .map_or(tab.single_pane_id(), |panes| panes.focused_id()),
+        ))
     }
 
     fn active_terminal_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
@@ -918,10 +920,7 @@ impl App {
         };
         if !matches!(active_tab.tab_type, crate::tabs::TabType::Plugin { .. })
             || writes.is_empty()
-            || writes.iter().any(|write| match write.origin {
-                crate::tabs::TerminalEventOrigin::Tab { tab_id }
-                | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id != active_tab.id,
-            })
+            || writes.iter().any(|write| write.tab_id != active_tab.id)
         {
             return false;
         }
@@ -1048,10 +1047,11 @@ impl App {
             }
 
             // Enter pressed — guardrail check for plugin tabs
-            if let Some(origin) = self.active_guarded_origin() {
+            if let Some((tab_id, pane_id)) = self.active_guarded_pane() {
                 let input = self.input_line_buffer.trim().to_string();
-                let writes = vec![crate::terminal::guardrails::GuardedWrite::new(
-                    origin,
+                let writes = vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                    tab_id,
+                    pane_id,
                     data.to_vec(),
                 )];
                 if self.guard_plugin_writes(&input, writes) {

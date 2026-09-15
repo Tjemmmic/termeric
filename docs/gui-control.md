@@ -370,6 +370,16 @@ pending, further control input fails instead of changing the command line
 behind the modal. Ordinary shell/profile/live-domain input is sent directly
 after complete path and policy validation.
 
+Every pending guarded write retains the stable tab-local pane identity, not a
+single-terminal placeholder. Confirmation resolves that same owner's current
+single/split route. Splitting or collapsing does not retarget consent to a new
+survivor; missing, closed/closing, or newly read-only destinations reject the
+write. Captured text and paste framing are not re-encoded if terminal modes
+change while the dialog is pending. Typed/pasted plugin input, broadcast batches,
+plugin/process input and Harvest use this same mandatory identity contract
+([#118](https://github.com/Tjemmmic/termeric/issues/118)). This does not migrate
+pending input across tab/window namespaces or change input authorization policy.
+
 Every mutation carries a 128-bit lowercase-hex request ID. The CLI generates
 one by default and reports it on success. `--request-id ID` lets an ambiguous
 timeout be retried as the same logical action. Each GUI caches the 256 most
