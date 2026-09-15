@@ -125,11 +125,23 @@ if string match -qr '^[0-3]\.' $version
     function __termeric_prompt --on-event fish_prompt; printf '\e]133;A\a\e]133;B\a'; end
 end"#;
 
-// Modern Nushell implements OSC 7 and OSC 133 itself. Enable those native
-// producers after the user's configuration has loaded instead of installing
-// duplicate hooks that can drift from Reedline's command lifecycle.
-const NUSHELL_INIT: &str =
-    "$env.config.shell_integration.osc7 = true; $env.config.shell_integration.osc133 = true";
+// Nushell snapshots its initial OSC 7 flag before --execute, but reads updated
+// settings for subsequent commands. Supply the missing initial report only
+// when that snapshot is disabled; leave native command/prompt lifecycle intact.
+// The native producer's separate literal-percent bug remains tracked below.
+const NUSHELL_INIT: &str = r#"def __termeric_report_initial_cwd [path: string] {
+    if not ($path | str starts-with '/') { return }
+    if ($path | encode utf-8 | bytes length) > 4089 { return }
+    let encoded = ($path | url encode --all | str replace --all '%2F' '/')
+    if ($encoded | encode utf-8 | bytes length) > 4089 { return }
+    print --no-newline $"(char --unicode '1b')]7;file://($encoded)(char --unicode '1b')\\"
+}
+if not $env.config.shell_integration.osc7 {
+    __termeric_report_initial_cwd $env.PWD
+}
+$env.config.shell_integration.osc7 = true
+$env.config.shell_integration.osc133 = true
+"#;
 
 // Elvish has no pre-REPL command-line hook that preserves an arbitrary rc.elv.
 // Make a normal Elvish module discoverable instead; the user opts in once with
@@ -528,6 +540,9 @@ mod fish_cwd_tests;
 
 #[cfg(test)]
 mod elvish_cwd_tests;
+
+#[cfg(all(test, unix))]
+mod nushell_cwd_tests;
 
 #[cfg(test)]
 mod tests {
@@ -950,9 +965,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known Nushell 0.115.1 first-prompt OSC 7 gap; see docs/osc-integration.md"]
+    #[cfg(unix)]
     fn nushell_native_cwd_is_available_at_first_prompt_after_user_disables_it() {
-        let program = executable_on_path("nu").expect("this regression requires nu");
+        let Some(program) = executable_on_path("nu") else {
+            assert_ne!(
+                std::env::var("TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE").as_deref(),
+                Ok("1")
+            );
+            eprintln!("skipping Nushell first-prompt cwd: nu unavailable");
+            return;
+        };
         run_shell_semantics_probe_in_home(
             &program,
             "nushell",

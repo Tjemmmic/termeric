@@ -35,8 +35,12 @@ to answer terminal queries. It also requires the exact working directory at
 the first input-ready prompt and at the end. This replaces a startup input
 burst that Nushell 0.115.1 consumed incompletely during terminal negotiation.
 The paced default-config probe passes for all five supported shell families;
-Nushell's two `nushell_native_cwd_` tests remain explicitly ignored known
-failures for literal-percent paths and user-disabled OSC 7 at the first prompt.
+Nushell's literal-percent `nushell_native_cwd_` test remains an explicitly ignored
+known failure. The user-disabled OSC 7 first-prompt regression now passes in
+the ordinary Unix suite with `nu` available (required under
+`TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1`). Four `nushell_cwd_tests` helper cases
+independently cover the supplemental initial encoder's control/Unicode/URI
+handling, raw/encoded bounds, conditional output, and no duplicate on reentry.
 See [the reproductions and remaining work](osc-integration.md#nushell-native-producer-confirmed-gaps).
 
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
@@ -1341,7 +1345,7 @@ respectively. They can be promoted to required real-PTY gates with
 `TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1`. The Elvish probe now passes locally with
 an isolated 0.21.0 binary; the ordinary-directory Nushell probe passes with an
 isolated 0.115.1 binary. Environments without these shells still explicitly
-self-skip unless required. Nushell's known cwd failures are documented above. The
+self-skip unless required. Nushell's remaining native percent-path failure is documented above. The
 fake-AI lane launches both built-ins through real
 PTYs and drives all twelve commands without credentials or network access. The
 native X11 workspace fixture adds exact OSC 52,

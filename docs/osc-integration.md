@@ -144,34 +144,46 @@ arbitrary user prompt code or output from other applications.
 
 An isolated Nushell 0.115.1 real-PTY probe passes ordinary-directory startup,
 custom rc preservation, multiline execution, terminal-query replies, and
-success/failure Harvest regions. Two stronger directory cases fail:
+success/failure Harvest regions. Stronger directory checks found two problems:
 
 - A literal `%2F` in a real directory name is transmitted without escaping its
   percent sign; strict URI decoding turns it into `/`, changing the path.
-- With `shell_integration.osc7 = false` in the user's config, Termeric's current
-  `--execute` prelude enables later reports but not the first prompt's report.
-  Checking only after commands run hides this startup gap.
+- **Fixed:** with `shell_integration.osc7 = false` in user config, the prelude
+  previously enabled later reports but not the first prompt's report.
+  Termeric now emits one bounded, correctly encoded hostless initial report
+  when the native initial-report snapshot is disabled, then enables native
+  reporting for subsequent commands. An already enabled native initial report
+  is not duplicated. No startup file or user hook is replaced.
 
 These observations match the [Nushell 0.115.1 REPL implementation](https://github.com/nushell/nushell/blob/0.115.1/crates/nu-cli/src/repl.rs):
 its OSC 7 encoder escapes controls but not literal percent signs, and startup
 OSC flags are captured before the pre-REPL command runs. The terminal's strict
 URI parser is not at fault and must not be relaxed to accept ambiguous paths.
 
-The two `nushell_native_cwd_` regressions are explicitly ignored **known
-failures**, not accepted behavior and not green release evidence. With `nu`
-available, reproduce them using:
+The literal-percent `nushell_native_cwd_` regression remains an explicitly
+ignored **known failure**, not accepted behavior or green release evidence.
+The first-prompt regression now passes and is part of the ordinary Unix suite
+(it explicitly self-skips without `nu`, or fails if Nushell acceptance is
+required). With `nu` available, reproduce the remaining native failure using:
 
 ```bash
 cargo test --workspace --locked nushell_native_cwd_ -- --ignored --nocapture
 ```
 
-The next implementation must establish correctly encoded cwd reporting before
-the first input-ready prompt, preserve custom rc definitions/hooks and launch
+The supplemental encoder accepts absolute Unix paths, enforces 4,089-byte raw
+and encoded limits, percent-encodes controls and URI punctuation, and restores
+only encoded path separators. It omits empty, relative, or oversized reports
+as a whole. Real Nushell helper tests verify Unicode/percent round trips,
+injection prevention, exact size limits, and conditional/non-duplicated output;
+the real PTY test checks the first actual prompt after disabled user config.
+
+This fixes the missing initial report, **not** Nushell's native percent encoder.
+The next implementation must preserve custom rc definitions/hooks and launch
 options, avoid duplicate or transiently incorrect native reports, and remove
-these ignores only when both tests pass. A validated upstream producer or
-Termeric-owned startup/reporting path are possible approaches; emitting a late
-correction alone does not satisfy first-prompt correctness. These gaps do not
-block unrelated implementation or deferred operator testing.
+the remaining ignore only when the percent test passes. A validated upstream
+producer or Termeric-owned startup/reporting path are possible approaches;
+emitting a late correction alone does not satisfy first-prompt correctness.
+The remaining gap does not block unrelated implementation or deferred testing.
 
 Normal interactive Bash, Zsh, and Fish launches emit a hostless OSC 7 report at
 each prompt, with literal percent signs escaped before transmission. An
