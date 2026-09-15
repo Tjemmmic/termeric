@@ -73,6 +73,13 @@ import in the user's effective rc file, including custom `-rc` paths; no
 automatic startup injection is claimed. See
 [Elvish launch handling](osc-integration.md#elvish-launch-and-opt-in-module-handling).
 
+Elvish's search-path handoff now restores only the exact temporary environment
+it installed, preserving profile/rc overrides, empty/unset distinctions, and
+native default roots. Three pure cases, ten native module executions, and three
+editor/PTY variants cover this behavior and child-marker cleanup after import.
+Unconsumed transports and unidentified legacy roots have explicit limits; see
+[module-search environment handoff](osc-integration.md#elvish-module-search-environment-handoff).
+
 Fish uses a shell-specific REPL option allowlist and installs integration after
 user startup commands as a separate argument, retaining their exact text/order
 and preceding scalar exit status. Two routing tests, six startup comparisons

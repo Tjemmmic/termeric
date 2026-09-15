@@ -170,6 +170,38 @@ selection, boolean overrides, flag-looking paths, first-prompt cwd, and complete
 multiline command regions. These do not establish arbitrary user-configuration
 or desktop acceptance.
 
+### Elvish module-search environment handoff
+
+Launch preparation records both the original `XDG_DATA_DIRS` presence/value
+and the exact temporary value it installs. A nested launch unwraps that value
+only while it still matches the recorded transport. A profile's different
+value takes precedence over stale markers. The user path order and repeated
+entries are retained; both unset and explicitly empty values retain Elvish's
+[default system module roots](https://elv.sh/ref/command.html#module-search-directories),
+while their distinct environment presence is saved for restoration.
+
+At module import, the original environment is restored only if the current
+value is still that same transport. Rc-directed replacement, emptying, or
+unsetting wins. Importing the generated module without transport markers no
+longer unsets an unrelated user path. All three private transport markers are
+cleared before later child commands. Elvish's already-initialized module search
+list remains available to the current interpreter: this is an environment
+handoff, not a rewrite of its module registry. Children launched **before** the
+explicit import can still inherit the unconsumed transport.
+
+Older two-marker launches are recovered during preparation only when their
+exact layout matches the known current integration root. An unidentified old
+root or a markerless import is left intact rather than guessed away; this can
+retain an old path until a fresh launch without that inherited transport.
+
+Three pure environment tests cover profile precedence, nested/legacy recovery,
+path order, and empty/unset defaults. Ten isolated real-Elvish module executions
+check exact restoration, rc mutations, markerless imports, hook installation,
+and child environment cleanup. Three actual editor/PTY variants additionally
+import the module after rc path replacement/emptying/unsetting, verify a child
+process, and require first-prompt cwd and complete multiline command regions.
+These tests use isolated configuration, not the user's desktop session.
+
 ### Fish launch and startup-command handling
 
 Fish integration is limited to recognized REPL launches. Grouped

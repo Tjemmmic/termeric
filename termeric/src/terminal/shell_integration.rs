@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 mod bash_launch;
+mod elvish_environment;
 mod elvish_launch;
 mod fish_launch;
 mod zsh_launch;
@@ -188,13 +189,23 @@ const ELVISH_MODULE: &str = r#"{
     use str
     use re
 
-    if (eq $E:TERMERIC_ELVISH_HAD_XDG_DATA_DIRS 1) {
-        set-env XDG_DATA_DIRS $E:TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS
-    } else {
-        unset-env XDG_DATA_DIRS
+    # Restore only the unchanged value that this launch actually installed.
+    # User rc overrides/unsets and imports without transport markers are kept.
+    if (and (has-env TERMERIC_ELVISH_INTEGRATION_XDG_DATA_DIRS) (has-env XDG_DATA_DIRS)) {
+        var termeric-transport = $E:TERMERIC_ELVISH_INTEGRATION_XDG_DATA_DIRS
+        if (and (not-eq $termeric-transport '') (eq $E:XDG_DATA_DIRS $termeric-transport)) {
+            if (eq $E:TERMERIC_ELVISH_HAD_XDG_DATA_DIRS 1) {
+                if (has-env TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS) {
+                    set-env XDG_DATA_DIRS $E:TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS
+                }
+            } elif (eq $E:TERMERIC_ELVISH_HAD_XDG_DATA_DIRS 0) {
+                unset-env XDG_DATA_DIRS
+            }
+        }
     }
     unset-env TERMERIC_ELVISH_HAD_XDG_DATA_DIRS
     unset-env TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS
+    unset-env TERMERIC_ELVISH_INTEGRATION_XDG_DATA_DIRS
 
     fn termeric-report-pwd {
         var termeric-raw = $pwd
@@ -388,7 +399,7 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
                 "termeric-integration.elv",
                 ELVISH_MODULE,
             )?;
-            expose_elvish_module(base, &mut launch.env)?;
+            elvish_environment::configure(base, &mut launch.env)?;
             launch.integration =
                 ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into());
         }
@@ -563,51 +574,6 @@ fn configure_zsh_startup(dir: &Path, env: &mut Vec<(String, String)>) -> Result<
     Ok(())
 }
 
-fn expose_elvish_module(base: &Path, env: &mut Vec<(String, String)>) -> Result<()> {
-    // If a parent Elvish never imported the module, its temporary search-path
-    // markers can reach a nested Termeric process. Recover the true original
-    // value instead of stacking our path or preserving it into grandchildren.
-    let inherited = match effective_env(env, "TERMERIC_ELVISH_HAD_XDG_DATA_DIRS").as_deref() {
-        Some("1") => effective_env(env, "TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS"),
-        Some("0") => None,
-        _ => effective_env(env, "XDG_DATA_DIRS"),
-    };
-    let module_root = base
-        .to_str()
-        .context("Elvish shell integration path is not valid UTF-8")?;
-
-    let mut paths = vec![PathBuf::from(module_root)];
-    if let Some(value) = inherited.as_deref() {
-        for path in std::env::split_paths(value) {
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
-        }
-    } else if cfg!(unix) {
-        paths.extend([
-            PathBuf::from("/usr/local/share"),
-            PathBuf::from("/usr/share"),
-        ]);
-    }
-    let joined = std::env::join_paths(paths)
-        .context("Elvish shell integration path cannot be represented in XDG_DATA_DIRS")?
-        .into_string()
-        .map_err(|_| anyhow::anyhow!("Elvish XDG_DATA_DIRS is not valid UTF-8"))?;
-
-    upsert_env(
-        env,
-        "TERMERIC_ELVISH_HAD_XDG_DATA_DIRS",
-        if inherited.is_some() { "1" } else { "0" }.into(),
-    );
-    upsert_env(
-        env,
-        "TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS",
-        inherited.unwrap_or_default(),
-    );
-    upsert_env(env, "XDG_DATA_DIRS", joined);
-    Ok(())
-}
-
 fn effective_env(env: &[(String, String)], key: &str) -> Option<String> {
     env.iter()
         .rev()
@@ -665,6 +631,9 @@ mod elvish_cwd_tests;
 
 #[cfg(test)]
 mod elvish_launch_tests;
+
+#[cfg(all(test, unix))]
+mod elvish_environment_tests;
 
 #[cfg(all(test, unix))]
 mod nushell_cwd_tests;
@@ -819,6 +788,10 @@ mod tests {
         nested.env.insert(
             "TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS".into(),
             "/original/data".into(),
+        );
+        nested.env.insert(
+            "TERMERIC_ELVISH_INTEGRATION_XDG_DATA_DIRS".into(),
+            "/old/termeric:/original/data".into(),
         );
         let nested_launch = prepare_shell_launch_in(&nested, temp.path()).unwrap();
         let nested_xdg = nested_launch
@@ -1113,6 +1086,41 @@ mod tests {
                     home_component: "home",
                     args: &args,
                 },
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn elvish_rc_environment_changes_survive_module_import_and_child_launch() {
+        let Some(program) = executable_on_path("elvish") else {
+            assert_ne!(
+                std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref(),
+                Ok("1")
+            );
+            eprintln!("skipping Elvish environment PTY acceptance: executable unavailable");
+            return;
+        };
+        for (mutation, expected) in [
+            ("set-env XDG_DATA_DIRS '/rc/custom:/rc/other'", "custom"),
+            ("set-env XDG_DATA_DIRS ''", "empty"),
+            ("unset-env XDG_DATA_DIRS", "unset"),
+        ] {
+            let check = match expected {
+                "custom" => "test \"$XDG_DATA_DIRS\" = /rc/custom:/rc/other",
+                "empty" => "test \"${XDG_DATA_DIRS+x}\" = x && test -z \"$XDG_DATA_DIRS\"",
+                _ => "test \"${XDG_DATA_DIRS+x}\" != x",
+            };
+            let rc = format!(
+                "{mutation}\nuse termeric-integration\nif (not-eq $ok ?(/bin/sh -c '{check} || exit 81; test \"${{TERMERIC_ELVISH_INTEGRATION_XDG_DATA_DIRS+x}}${{TERMERIC_ELVISH_HAD_XDG_DATA_DIRS+x}}${{TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS+x}}\" = \"\" || exit 82')) {{ exit 83 }}\necho CUSTOM_RC_ELVISH\n"
+            );
+            eprintln!("Elvish module environment PTY probe: {expected}");
+            run_shell_semantics_probe(
+                &program,
+                "elvish",
+                ".config/elvish/rc.elv",
+                &rc,
+                ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
             );
         }
     }

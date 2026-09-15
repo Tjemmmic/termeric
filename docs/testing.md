@@ -168,6 +168,19 @@ regions. Native cases self-skip without Elvish unless
 `TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1` is set. See
 [the launch/opt-in boundary](osc-integration.md#elvish-launch-and-opt-in-module-handling).
 
+`elvish_environment_tests` adds three pure transport/precedence cases and one
+ten-variant native module test. Only the script-mode `edit:` registry is stubbed;
+the complete generated module, environment builtins, and a real `/bin/sh` child
+run unchanged. Exact unset/empty/custom values, rc overrides, markerless imports,
+hook installation, and private-marker cleanup are checked.
+`elvish_rc_environment_changes_survive_module_import_and_child_launch` exercises
+three real editor/PTY variants with a native module import after rc-directed
+replacement, emptying, or removal of `XDG_DATA_DIRS`. Child environment failure
+explicitly exits the shell; first-prompt cwd, command regions, and unchanged rc
+bytes remain required. Native cases self-skip without Elvish unless
+`TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1` is set. See
+[the environment handoff and legacy boundary](osc-integration.md#elvish-module-search-environment-handoff).
+
 ```bash
 TERMERIC_REQUIRE_ELVISH_CWD_TESTS=1 TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1 \
   cargo test --workspace --locked terminal::shell_integration
