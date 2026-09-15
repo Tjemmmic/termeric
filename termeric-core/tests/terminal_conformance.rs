@@ -309,7 +309,7 @@ fn product_support_matrix_matches_cross_layer_protocol_contracts() {
     assert_product_contract(
         &manifest,
         "Shell-reported working directory",
-        "Supported (Linux)",
+        "Partial",
         &[("osc-current-directory", "supported")],
     );
     assert_product_contract(
