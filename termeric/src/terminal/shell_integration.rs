@@ -136,6 +136,7 @@ const NUSHELL_INIT: &str =
 // `use termeric-integration`, matching Elvish's documented module model.
 const ELVISH_MODULE: &str = r#"{
     use str
+    use re
 
     if (eq $E:TERMERIC_ELVISH_HAD_XDG_DATA_DIRS 1) {
         set-env XDG_DATA_DIRS $E:TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS
@@ -146,7 +147,30 @@ const ELVISH_MODULE: &str = r#"{
     unset-env TERMERIC_ELVISH_ORIGINAL_XDG_DATA_DIRS
 
     fn termeric-report-pwd {
-        var termeric-cwd = (str:replace '%' '%25' $pwd)
+        var termeric-raw = $pwd
+        # count measures bytes in Elvish strings. Reserve seven bytes for
+        # file:// within the receiver's 4096-byte URI ceiling.
+        if (or (not (str:has-prefix $termeric-raw /)) (> (count $termeric-raw) 4089)) {
+            return
+        }
+        # Ordinary ASCII paths need no per-byte conversion.
+        if (re:match '^[a-zA-Z0-9/._~-]+$' $termeric-raw) {
+            printf "\e]7;file://%s\a" $termeric-raw
+            return
+        }
+        var termeric-cwd = ''
+        for termeric-byte [(str:to-utf8-bytes $termeric-raw)] {
+            # Decode only known-safe ASCII. A single UTF-8 continuation or
+            # leading byte is not a valid argument to str:from-utf8-bytes.
+            var termeric-alnum = (or (<= 48 $termeric-byte 57) (<= 65 $termeric-byte 90) (<= 97 $termeric-byte 122))
+            if (or $termeric-alnum (<= 45 $termeric-byte 47) (== $termeric-byte 95) (== $termeric-byte 126)) {
+                set termeric-cwd = $termeric-cwd(str:from-utf8-bytes $termeric-byte)
+            } else {
+                set termeric-cwd = $termeric-cwd(printf '%%%02X' $termeric-byte)
+            }
+            # Do not emit a partial report when encoding exceeds the cap.
+            if (> (count $termeric-cwd) 4089) { return }
+        }
         printf "\e]7;file://%s\a" $termeric-cwd
     }
     fn termeric-before-readline {
@@ -501,6 +525,9 @@ mod zsh_cwd_tests;
 
 #[cfg(all(test, unix))]
 mod fish_cwd_tests;
+
+#[cfg(test)]
+mod elvish_cwd_tests;
 
 #[cfg(test)]
 mod tests {

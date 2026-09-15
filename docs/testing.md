@@ -51,7 +51,7 @@ TERMERIC_REQUIRE_ZSH_CWD_TESTS=1 cargo test --workspace --locked zsh_cwd_
 ```
 
 These checks exercise the emitter, not a native desktop or the user's real Zsh
-configuration. Elvish producer hardening remains separate work.
+configuration.
 
 `terminal::shell_integration::fish_cwd_tests` adds five Unix real-shell
 regressions. Fish's read-only `$PWD` is exercised through real temporary
@@ -68,6 +68,22 @@ acceptance. Missing Fish self-skips unless explicitly required:
 
 ```bash
 TERMERIC_REQUIRE_FISH_CWD_TESTS=1 cargo test --workspace --locked fish_cwd_
+```
+
+`terminal::shell_integration::elvish_cwd_tests` adds four real-interpreter
+regressions for both directory-change and before-readline hooks. It loads the
+unchanged generated module with a stub `edit:` hook registry (unavailable in
+scripting mode) and a lexically shadowed cwd variable. It verifies injection
+prevention, UTF-8/URI round trips, every nonzero Unix byte, raw/encoded size
+boundaries, retained user hooks, and unchanged prompt markers when cwd output
+is omitted. The separate existing real-PTY probe verifies the actual editor
+startup, opt-in module import, preserved rc file, and success/failure Harvest
+regions. Both lanes pass with an isolated Elvish 0.21.0 Arch binary; neither
+claims acceptance of the user's configuration or native desktop presentation.
+
+```bash
+TERMERIC_REQUIRE_ELVISH_CWD_TESTS=1 TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1 \
+  cargo test --workspace --locked terminal::shell_integration
 ```
 
 `terminal::shell_integration::bash_prompt_tests` compares isolated real Bash
@@ -1312,8 +1328,9 @@ queries, and produce complete OSC 133 regions. Separate Nushell and Elvish
 fixtures cover native-producer launch routing and a standard opt-in module,
 respectively. They can be promoted to required real-PTY gates with
 `TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1` and
-`TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1`; both currently self-skip because their
-executables are absent from the runner, so those claims remain pending. The
+`TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1`. The Elvish probe now passes locally with
+an isolated 0.21.0 binary; environments without it still explicitly self-skip
+unless required. Nushell remains untested because its executable is absent. The
 fake-AI lane launches both built-ins through real
 PTYs and drives all twelve commands without credentials or network access. The
 native X11 workspace fixture adds exact OSC 52,

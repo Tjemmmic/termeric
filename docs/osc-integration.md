@@ -123,12 +123,22 @@ other prompt handlers continue when a real directory's encoded report is too
 long. Fish 3's OSC 133 prompt marks remain intact; Fish 4's native OSC 133
 producer is outside these non-interactive event tests.
 
-These producer fixes and real-shell byte/framing regressions cover **Bash,
-Zsh, and Fish**. The generated Elvish emitter still escapes only percent signs and
-needs equivalent producer hardening and native tests; its control-bearing cwd
-output is not safe to treat as verified. Nushell uses its own native producer
-and remains acceptance-pending. This does not sanitize arbitrary user prompt
-code or output from other applications.
+Elvish's opt-in module now applies the same 4,089-byte raw/encoded ceiling in
+both its directory-change and before-readline hooks. It keeps an ASCII fast
+path and percent-encodes other bytes using builtin string/numeric operations;
+individual non-ASCII bytes are never incorrectly decoded as standalone UTF-8.
+See the upstream [byte conversion reference](https://elv.sh/ref/str.html#strto-utf8-bytes)
+and [byte-count semantics](https://elv.sh/ref/builtin.html#count).
+Real-shell encoder tests load the unchanged module with a stub editor-hook
+registry and synthetic cwd values, covering both hooks, existing user hooks,
+all nonzero Unix bytes, URI/Unicode round trips, and exact size boundaries.
+A separate isolated Elvish 0.21.0 real-PTY test verifies the actual opt-in
+startup/editor wiring and complete command regions; this is not desktop or
+user-configuration acceptance.
+
+These producer fixes cover **Bash, Zsh, Fish, and opt-in Elvish**. Nushell uses
+its own native producer and remains acceptance-pending. This does not sanitize
+arbitrary user prompt code or output from other applications.
 
 Normal interactive Bash, Zsh, and Fish launches emit a hostless OSC 7 report at
 each prompt, with literal percent signs escaped before transmission. An
