@@ -89,6 +89,20 @@ Real-Bash tests self-skip when unavailable unless
 `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. See
 [the launch boundary](osc-integration.md#bash-launch-and-custom-rc-handling).
 
+`fish_launch_tests` checks unchanged command/script, no-config/no-execute,
+utility, and unrecognized launches, plus exact option-value boundaries and
+insertion after user startup commands. Six native startup comparisons cover
+separate/attached commands, a final `--`, comments/punctuation, rc order,
+statuses 0/1/23, retained user hooks, and temporary-helper cleanup. These pass
+with isolated Fish 3.7.1 and 4.9.3 configurations.
+`fish_init_commands_and_launch_options_preserve_prompt_regions` adds four
+Fish 4.9.3 PTY variants for grouped/long flags, attached commands/end markers,
+and flag-looking diagnostic filenames. User prompt hooks must observe the
+expected startup order and installed integration; first-prompt cwd and complete
+multiline success/failure regions are required. These native tests self-skip
+without Fish unless `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. See
+[Fish's launch boundary](osc-integration.md#fish-launch-and-startup-command-handling).
+
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
 with isolated configuration, captures its bytes, and feeds only an in-memory
 terminal. It reproduces/prevents directory-to-title injection, round-trips UTF-8

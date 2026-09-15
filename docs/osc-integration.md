@@ -140,6 +140,32 @@ These producer fixes cover **Bash, Zsh, Fish, and opt-in Elvish**. Nushell uses
 its own native producer and has the confirmed gaps below. This does not sanitize
 arbitrary user prompt code or output from other applications.
 
+### Fish launch and startup-command handling
+
+Fish integration is limited to recognized REPL launches. Grouped
+interactive/login/private flags, diagnostic/profiling options, and separate or
+attached startup-command values follow [Fish's invocation syntax](https://fishshell.com/docs/current/cmds/fish.html).
+Option values are opaque: a filename or command named `--no-config` is not a
+second option. A final `--` is preserved; any script operand, including `-` or
+`login`, bypasses integration. Command, no-config/no-execute, utility,
+feature-grammar, abbreviated, malformed, and unknown options run unchanged
+without injected arguments or environment changes. This is an eligibility
+allowlist, not a complete CLI validator or a ban on those shell options.
+
+Termeric appends its own separate `--init-command` after all user startup
+commands, before a final end marker. It neither concatenates user source nor
+rewrites configuration. Native rc loading and the order and exact text of user
+commands remain intact. Setup preserves the preceding scalar `$status` and
+removes its temporary status helper/local variable; this does not promise
+preservation of the full `$pipestatus` vector or arbitrary custom shell state.
+User code that exits or replaces Fish before setup still prevents integration.
+
+Two routing regressions, six native startup comparisons per tested version
+(Fish 3.7.1 and 4.9.3), and four Fish 4.9.3 real-PTY variants cover this boundary.
+They check startup order, punctuation/comments, scalar statuses 0/1/23, user
+hooks, first-prompt cwd, and multiline success/failure regions. They do not
+replace real user-configuration or desktop acceptance.
+
 ### Bash launch and custom-rc handling
 
 Termeric integrates recognized interactive **non-login** Bash launches.
@@ -198,8 +224,8 @@ option-looking words after an operand/end marker are not parsed again.
 Recognized options cover interactive/login, RCS/global-RCS, stdin input,
 tracing/verbosity, unset-variable handling, and ZLE. This is not a complete
 Zsh CLI validator: other options still run unchanged, without injected
-integration, pending explicit support. It does not correct the separate
-Fish generic argument classifier; Bash has its own handling described above.
+integration, pending explicit support. Bash and Fish have their own handling
+described above.
 
 Pure routing cases verify exact pass-through, no generated files on rejection,
 option ordering, and operand boundaries. Four isolated real-PTY variants verify
