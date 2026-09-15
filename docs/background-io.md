@@ -44,6 +44,13 @@ protocol replies and sibling traffic are excluded. Pending UI notices are
 bounded to 16 per owner and drained with pane attribution. A failed or capped
 worker clears only its owner's recording flag.
 
+[Passive diff capture](diff-capture.md) is separately bounded per terminal:
+16 KiB line framing, 256 KiB raw patches, and 64 retained reviews within a 4 MiB
+owned-storage budget. Complete validated patches enqueue one transcript diff
+entry at a file boundary or actual output EOF, even when several files complete
+in one PTY read. Empty polls do not complete pending patches. Rejected capture
+does not suppress terminal output, and eviction never reuses review identities.
+
 The worker creates the file, redacts common token prefixes, serializes JSONL,
 batches writes through `BufWriter`, tracks exact serialized bytes, and calls
 `sync_data` during a clean shutdown. It does not create temporary plaintext

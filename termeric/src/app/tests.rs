@@ -7757,6 +7757,7 @@ done
         {
             app.execute_plugin_command(&format!("{plugin_id}.open"));
             wait_for_plugin_fixture(&mut app, plugin_id, "FAKE_AI_RESPONSE_26");
+            wait_for_plugin_fixture(&mut app, plugin_id, "END_DIFF_26");
 
             app.execute_plugin_command(&format!("{plugin_id}.copy-last"));
             assert_eq!(latest_toast(&app), Some("Clipboard not available"));

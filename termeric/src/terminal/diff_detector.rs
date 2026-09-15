@@ -1,265 +1,368 @@
-//! Diff detector — watches terminal output for unified diff patterns
-//!
-//! Scans lines of terminal output for unified diff format (`--- a/`, `+++ b/`,
-//! `@@ ... @@`), collects complete diffs, and stores them for review.
-//!
-//! The scanner operates as a simple state machine that can handle both
-//! standard `diff -u` output and `git diff` output with color escape sequences.
+//! Bounded passive unified-diff capture. See docs/diff-capture.md.
+//! Output is framed across PTY reads; only validated, complete file patches
+//! reach review/history or the exactly-once completion callback.
 
-/// A single line in a diff hunk
+mod framing;
+#[cfg(test)]
+mod streaming_tests;
+
+use framing::{Framer, MAX_LINE_BYTES};
+use std::collections::VecDeque;
+
+const MAX_PATCH_BYTES: usize = 256 * 1024;
+const MAX_PATCH_LINES: usize = 4096;
+const MAX_HUNKS: usize = 128;
+const MAX_OWNED_PATCH_BYTES: usize = 1024 * 1024;
+const MAX_HISTORY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_HISTORY_COUNT: usize = 64;
+const REJECTED: u8 = 1;
+const EVICTED: u8 = 2;
+const EXHAUSTED: u8 = 4;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiffLine {
-    /// Unchanged context line
     Context(String),
-    /// Added line (+)
     Added(String),
-    /// Removed line (-)
     Removed(String),
 }
 
-/// A single hunk within a diff
 #[derive(Debug, Clone)]
 pub struct DiffHunk {
-    /// The @@ header line (e.g., "@@ -1,3 +1,4 @@")
     pub header: String,
-    /// Lines within this hunk
     pub lines: Vec<DiffLine>,
 }
 
-/// A complete detected diff for one file
+/// A validated, complete detected diff for one file.
 #[derive(Debug, Clone)]
 pub struct DetectedDiff {
-    /// Detector-local stable identity used by review actions.
+    /// Detector-local, monotonically allocated identity, never reused.
     pub id: u64,
-    /// The filename being diffed (from the +++ line)
     pub filename: String,
-    /// All hunks in this diff
     pub hunks: Vec<DiffHunk>,
-    /// Complete raw diff text (for copy/apply)
+    /// SGR/OSC-stripped unified diff, normalized to LF with a final newline.
     pub raw: String,
-    /// Whether the user has reviewed this diff
     pub reviewed: bool,
 }
 
-/// Internal scanner state
-#[derive(Debug)]
-enum ScanState {
-    /// Waiting for a `---` line
-    Idle,
-    /// Saw `--- a/file` line, expecting `+++ b/file`
-    SeenMinus { minus_line: String },
-    /// Inside a diff, collecting hunks
-    InDiff {
-        minus_line: String,
-        plus_line: String,
-        hunks: Vec<DiffHunk>,
-        current_hunk: Option<DiffHunk>,
-        raw_lines: Vec<String>,
-    },
+impl DetectedDiff {
+    /// All owned storage, including duplicated strings and spare capacity.
+    fn owned_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.filename.capacity()
+            + self.raw.capacity()
+            + self.hunks.capacity() * std::mem::size_of::<DiffHunk>()
+            + self
+                .hunks
+                .iter()
+                .map(|hunk| {
+                    hunk.header.capacity()
+                        + hunk.lines.capacity() * std::mem::size_of::<DiffLine>()
+                        + hunk
+                            .lines
+                            .iter()
+                            .map(|line| match line {
+                                DiffLine::Context(s)
+                                | DiffLine::Added(s)
+                                | DiffLine::Removed(s) => s.capacity(),
+                            })
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+    }
 }
 
-/// Watches terminal output lines and detects unified diffs
+/// Pending captures store raw text only. Parsed copies are built once, after
+/// validation, and bounded by the same byte/line/hunk limits.
+#[derive(Debug, Default)]
+struct Capture {
+    raw: String,
+    lines: usize,
+    hunks: usize,
+    remaining: Option<(usize, usize)>,
+    range_ends: Option<(usize, usize)>,
+    last_was_data: bool,
+}
+
+impl Capture {
+    fn append(&mut self, line: &str) -> bool {
+        let required = self.raw.len() + line.len() + 1;
+        if required > MAX_PATCH_BYTES || self.lines == MAX_PATCH_LINES {
+            return false;
+        }
+        if required > self.raw.capacity() {
+            let target = required
+                .max(self.raw.capacity().saturating_mul(2))
+                .min(MAX_PATCH_BYTES);
+            self.raw.reserve_exact(target - self.raw.len());
+        }
+        self.raw.push_str(line);
+        self.raw.push('\n');
+        self.lines += 1;
+        true
+    }
+
+    fn complete(&self) -> bool {
+        self.hunks > 0 && self.remaining == Some((0, 0))
+    }
+
+    fn start_hunk(&mut self, line: &str) -> bool {
+        if self.hunks == MAX_HUNKS {
+            return false;
+        }
+        let Some(((old_start, old_count), (new_start, new_count))) = hunk_ranges(line) else {
+            return false;
+        };
+        if self
+            .range_ends
+            .is_some_and(|(old_end, new_end)| old_start < old_end || new_start < new_end)
+        {
+            return false;
+        }
+        if !self.append(line) {
+            return false;
+        }
+        self.range_ends = Some((old_start + old_count, new_start + new_count));
+        self.remaining = Some((old_count, new_count));
+        self.hunks += 1;
+        self.last_was_data = false;
+        true
+    }
+
+    fn data_line(&mut self, line: &str) -> bool {
+        let Some((old, new)) = self.remaining else {
+            return false;
+        };
+        let remaining = match line.as_bytes().first() {
+            Some(b'-') if old > 0 => (old - 1, new),
+            Some(b'+') if new > 0 => (old, new - 1),
+            Some(b' ') if old > 0 && new > 0 => (old - 1, new - 1),
+            _ => return false,
+        };
+        if !self.append(line) {
+            return false;
+        }
+        self.remaining = Some(remaining);
+        self.last_was_data = true;
+        true
+    }
+}
+
+#[derive(Debug, Default)]
+enum ScanState {
+    #[default]
+    Idle,
+    SeenMinus(String),
+    InDiff(Capture),
+}
+
 #[derive(Debug)]
 pub struct DiffDetector {
     state: ScanState,
-    next_id: u64,
-    /// Completed diffs ready for review
-    pub detected: Vec<DetectedDiff>,
+    framer: Framer,
+    next_id: Option<u64>,
+    detected: VecDeque<DetectedDiff>,
+    history_bytes: usize,
+    notices: u8,
 }
 
 impl DiffDetector {
     pub fn new() -> Self {
+        let detected = VecDeque::with_capacity(MAX_HISTORY_COUNT);
+        // Charge every allocated slot, including spare capacity. owned_bytes()
+        // also charges live inline values, a small conservative overcount.
+        let history_bytes = detected.capacity() * std::mem::size_of::<DetectedDiff>();
         Self {
             state: ScanState::Idle,
-            next_id: 1,
-            detected: Vec::new(),
+            framer: Framer::default(),
+            next_id: Some(1),
+            detected,
+            history_bytes,
+            notices: 0,
         }
     }
 
-    /// Feed a line of terminal output to the detector.
-    ///
-    /// The line should have ANSI escape sequences stripped before calling.
+    /// Completion callbacks run immediately, before eviction can hide an
+    /// earlier completion in the same chunk. They must be bounded/nonblocking.
+    pub fn feed_bytes(&mut self, data: &[u8], mut completed: impl FnMut(&DetectedDiff)) {
+        let mut framer = std::mem::take(&mut self.framer);
+        framer.feed(data, |line| self.accept_line(line, &mut completed));
+        self.framer = framer;
+    }
+
+    /// Real output EOF only, never the end of one poll or an idle timeout.
+    /// Repeated EOF is harmless; incomplete captures are rejected.
+    pub fn finish_stream(&mut self, mut completed: impl FnMut(&DetectedDiff)) {
+        let mut framer = std::mem::take(&mut self.framer);
+        framer.finish(|line| self.accept_line(line, &mut completed));
+        self.framer = framer;
+        match std::mem::take(&mut self.state) {
+            ScanState::InDiff(capture) if capture.complete() => {
+                self.finalize(capture, &mut completed)
+            }
+            ScanState::Idle => {}
+            _ => self.reject(),
+        }
+    }
+
+    #[cfg(test)]
     pub fn feed_line(&mut self, line: &str) {
-        let trimmed = line.trim_end();
-
-        match std::mem::replace(&mut self.state, ScanState::Idle) {
-            ScanState::Idle => {
-                if is_minus_line(trimmed) {
-                    self.state = ScanState::SeenMinus {
-                        minus_line: trimmed.to_string(),
-                    };
-                }
-                // else stay Idle
-            }
-
-            ScanState::SeenMinus { minus_line } => {
-                if is_plus_line(trimmed) {
-                    // Valid --- / +++ pair, enter diff mode
-                    self.state = ScanState::InDiff {
-                        minus_line: minus_line.clone(),
-                        plus_line: trimmed.to_string(),
-                        hunks: Vec::new(),
-                        current_hunk: None,
-                        raw_lines: vec![minus_line, trimmed.to_string()],
-                    };
-                } else if is_minus_line(trimmed) {
-                    // Another --- line, restart
-                    self.state = ScanState::SeenMinus {
-                        minus_line: trimmed.to_string(),
-                    };
-                } else {
-                    // Not a valid pair, reset
-                    self.state = ScanState::Idle;
-                }
-            }
-
-            ScanState::InDiff {
-                minus_line,
-                plus_line,
-                mut hunks,
-                mut current_hunk,
-                mut raw_lines,
-            } => {
-                raw_lines.push(trimmed.to_string());
-
-                if is_hunk_header(trimmed) {
-                    // Finish previous hunk if any
-                    if let Some(hunk) = current_hunk.take() {
-                        if !hunk.lines.is_empty() {
-                            hunks.push(hunk);
-                        }
-                    }
-                    // Start new hunk
-                    current_hunk = Some(DiffHunk {
-                        header: trimmed.to_string(),
-                        lines: Vec::new(),
-                    });
-                    self.state = ScanState::InDiff {
-                        minus_line,
-                        plus_line,
-                        hunks,
-                        current_hunk,
-                        raw_lines,
-                    };
-                } else if let Some(ref mut hunk) = current_hunk {
-                    // Inside a hunk — classify the line
-                    // IMPORTANT: check is_minus_line BEFORE strip_prefix('-')
-                    // so that '--- a/file.rs' triggers a new diff instead of
-                    // being misclassified as a removed line.
-                    if is_minus_line(trimmed) {
-                        // New diff starts — finalize current one
-                        if let Some(hunk) = current_hunk.take() {
-                            if !hunk.lines.is_empty() {
-                                hunks.push(hunk);
-                            }
-                        }
-                        if !hunks.is_empty() {
-                            raw_lines.pop(); // Don't include the new --- line in old diff
-                            self.finalize_diff(&plus_line, hunks, &raw_lines);
-                        }
-                        self.state = ScanState::SeenMinus {
-                            minus_line: trimmed.to_string(),
-                        };
-                    } else if is_hunk_header(trimmed) {
-                        // New hunk within same diff — finish previous hunk
-                        if let Some(h) = current_hunk.take() {
-                            if !h.lines.is_empty() {
-                                hunks.push(h);
-                            }
-                        }
-                        current_hunk = Some(DiffHunk {
-                            header: trimmed.to_string(),
-                            lines: Vec::new(),
-                        });
-                        self.state = ScanState::InDiff {
-                            minus_line,
-                            plus_line,
-                            hunks,
-                            current_hunk,
-                            raw_lines,
-                        };
-                    } else if let Some(content) = trimmed.strip_prefix('+') {
-                        hunk.lines.push(DiffLine::Added(content.to_string()));
-                        self.state = ScanState::InDiff {
-                            minus_line,
-                            plus_line,
-                            hunks,
-                            current_hunk,
-                            raw_lines,
-                        };
-                    } else if let Some(content) = trimmed.strip_prefix('-') {
-                        hunk.lines.push(DiffLine::Removed(content.to_string()));
-                        self.state = ScanState::InDiff {
-                            minus_line,
-                            plus_line,
-                            hunks,
-                            current_hunk,
-                            raw_lines,
-                        };
-                    } else if trimmed.starts_with(' ') || trimmed.is_empty() {
-                        // Context line
-                        let ctx = trimmed.strip_prefix(' ').unwrap_or(trimmed);
-                        hunk.lines.push(DiffLine::Context(ctx.to_string()));
-                        self.state = ScanState::InDiff {
-                            minus_line,
-                            plus_line,
-                            hunks,
-                            current_hunk,
-                            raw_lines,
-                        };
-                    } else {
-                        // Non-diff line — finalize current diff
-                        if let Some(hunk) = current_hunk.take() {
-                            if !hunk.lines.is_empty() {
-                                hunks.push(hunk);
-                            }
-                        }
-                        if !hunks.is_empty() {
-                            self.finalize_diff(&plus_line, hunks, &raw_lines);
-                        }
-                        // state is already Idle
-                    }
-                } else {
-                    // No current hunk yet, expecting @@ header
-                    if is_minus_line(trimmed) {
-                        // New diff starts, old one had no hunks
-                        self.state = ScanState::SeenMinus {
-                            minus_line: trimmed.to_string(),
-                        };
-                    }
-                    // else stay Idle (no valid hunk header after +++ line)
-                }
-            }
-        }
+        self.accept_line(Ok(line), &mut |_| {});
     }
 
-    /// Flush any in-progress diff (e.g., when output stops)
+    #[cfg(test)]
     pub fn flush(&mut self) {
-        if let ScanState::InDiff {
-            plus_line,
-            mut hunks,
-            current_hunk,
-            raw_lines,
-            ..
-        } = std::mem::replace(&mut self.state, ScanState::Idle)
-        {
-            if let Some(hunk) = current_hunk {
-                if !hunk.lines.is_empty() {
-                    hunks.push(hunk);
+        self.finish_stream(|_| {});
+    }
+
+    fn reject(&mut self) {
+        self.state = ScanState::Idle;
+        self.notices |= REJECTED;
+    }
+
+    fn accept_line(&mut self, line: Result<&str, ()>, completed: &mut impl FnMut(&DetectedDiff)) {
+        let Ok(line) = line else {
+            self.reject();
+            return;
+        };
+        if line.len() > MAX_LINE_BYTES {
+            self.reject();
+            return;
+        }
+        match std::mem::take(&mut self.state) {
+            ScanState::Idle => self.start_file(line),
+            ScanState::SeenMinus(minus) => {
+                if file_header(line, "+++ ").is_some() {
+                    let mut capture = Capture::default();
+                    if capture.append(&minus) && capture.append(line) {
+                        self.state = ScanState::InDiff(capture);
+                    } else {
+                        self.reject();
+                    }
+                } else {
+                    self.reject();
+                    self.start_file(line);
                 }
             }
-            if !hunks.is_empty() {
-                self.finalize_diff(&plus_line, hunks, &raw_lines);
+            ScanState::InDiff(mut capture) => {
+                if line == "\\ No newline at end of file" && capture.last_was_data {
+                    if capture.append(line) {
+                        capture.last_was_data = false;
+                        self.state = ScanState::InDiff(capture);
+                    } else {
+                        self.reject();
+                    }
+                } else if capture
+                    .remaining
+                    .is_some_and(|remaining| remaining != (0, 0))
+                {
+                    // Counts disambiguate removed "--- " text from file headers.
+                    if capture.data_line(line) {
+                        self.state = ScanState::InDiff(capture);
+                    } else {
+                        self.reject();
+                    }
+                } else if line.starts_with("@@") {
+                    if capture.start_hunk(line) {
+                        self.state = ScanState::InDiff(capture);
+                    } else {
+                        self.reject();
+                    }
+                } else if file_header(line, "--- ").is_some() {
+                    if capture.complete() {
+                        self.finalize(capture, completed);
+                    } else {
+                        self.reject();
+                    }
+                    self.start_file(line);
+                } else if capture.complete() && !line.starts_with(['+', '-', ' ', '\\']) {
+                    self.finalize(capture, completed);
+                } else {
+                    // Never silently truncate extra patch-looking data.
+                    self.reject();
+                }
             }
         }
     }
 
-    /// Get count of unreviewed diffs
+    fn start_file(&mut self, line: &str) {
+        if file_header(line, "--- ").is_some() {
+            if self.next_id.is_some() {
+                self.state = ScanState::SeenMinus(line.to_owned());
+            } else {
+                self.notices |= EXHAUSTED;
+            }
+        }
+    }
+
+    fn finalize(&mut self, capture: Capture, completed: &mut impl FnMut(&DetectedDiff)) {
+        let Some(id) = self.next_id else {
+            self.notices |= EXHAUSTED;
+            return;
+        };
+        let mut lines = capture.raw.lines();
+        let minus = file_header(lines.next().unwrap(), "--- ").unwrap();
+        let plus = file_header(lines.next().unwrap(), "+++ ").unwrap();
+        let path = if plus == "/dev/null" { minus } else { plus };
+        let filename = path
+            .strip_prefix("b/")
+            .or_else(|| path.strip_prefix("a/"))
+            .unwrap_or(path)
+            .to_owned();
+        let mut hunks: Vec<DiffHunk> = Vec::with_capacity(capture.hunks);
+        for line in lines {
+            if line.starts_with("@@ ") {
+                hunks.push(DiffHunk {
+                    header: line.to_owned(),
+                    lines: Vec::new(),
+                });
+            } else {
+                let parsed = match line.as_bytes().first() {
+                    Some(b' ') => DiffLine::Context(line[1..].to_owned()),
+                    Some(b'+') => DiffLine::Added(line[1..].to_owned()),
+                    Some(b'-') => DiffLine::Removed(line[1..].to_owned()),
+                    _ => continue, // Validated "No newline" marker, retained raw.
+                };
+                hunks.last_mut().unwrap().lines.push(parsed);
+            }
+        }
+        let diff = DetectedDiff {
+            id,
+            filename,
+            hunks,
+            raw: capture.raw,
+            reviewed: false,
+        };
+        let bytes = diff.owned_bytes();
+        if bytes > MAX_OWNED_PATCH_BYTES {
+            self.reject();
+            return;
+        }
+        self.next_id = id.checked_add(1);
+        while self.detected.len() == MAX_HISTORY_COUNT
+            || self.history_bytes + bytes > MAX_HISTORY_BYTES
+        {
+            let removed = self.detected.pop_front().unwrap();
+            self.history_bytes -= removed.owned_bytes();
+            self.notices |= EVICTED;
+        }
+        completed(&diff);
+        self.history_bytes += bytes;
+        self.detected.push_back(diff);
+    }
+
+    /// At most three coalesced messages, regardless of hostile stream size.
+    pub fn take_notices(&mut self) -> impl Iterator<Item = &'static str> + use<> {
+        let flags = std::mem::take(&mut self.notices);
+        [
+            (REJECTED, "Diff capture skipped an incomplete, malformed, edited, or oversized patch/line; terminal output is unchanged"),
+            (EVICTED, "Old diff reviews were evicted to keep terminal memory bounded"),
+            (EXHAUSTED, "Diff capture stopped because its stable review identities are exhausted"),
+        ].into_iter().filter_map(move |(flag, message)| (flags & flag != 0).then_some(message))
+    }
+
     pub fn unreviewed_count(&self) -> usize {
         self.detected.iter().filter(|d| !d.reviewed).count()
     }
-
-    /// Mark one exact detected diff as reviewed.
     pub fn mark_reviewed(&mut self, id: u64) -> bool {
         let Some(diff) = self.detected.iter_mut().find(|diff| diff.id == id) else {
             return false;
@@ -267,57 +370,53 @@ impl DiffDetector {
         diff.reviewed = true;
         true
     }
-
-    /// Get the most recent unreviewed diff
     pub fn latest_unreviewed(&self) -> Option<&DetectedDiff> {
         self.detected.iter().rev().find(|d| !d.reviewed)
     }
-
-    /// Resolve one detector-local stable identity.
     pub fn detected_by_id(&self, id: u64) -> Option<&DetectedDiff> {
         self.detected.iter().find(|diff| diff.id == id)
     }
+}
 
-    fn finalize_diff(&mut self, plus_line: &str, hunks: Vec<DiffHunk>, raw_lines: &[String]) {
-        let filename = extract_filename(plus_line);
-        let raw = raw_lines.join("\n");
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(1);
-        self.detected.push(DetectedDiff {
-            id,
-            filename,
-            hunks,
-            raw,
-            reviewed: false,
-        });
+fn file_header<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    let path = line.strip_prefix(prefix)?.split('\t').next()?;
+    (!path.is_empty()).then_some(path)
+}
+
+type Range = (usize, usize);
+
+fn hunk_ranges(line: &str) -> Option<(Range, Range)> {
+    let rest = line.strip_prefix("@@ ")?;
+    let (ranges, suffix) = rest.split_once(" @@")?;
+    if !suffix.is_empty() && !suffix.starts_with(' ') {
+        return None;
     }
-}
-
-/// Check if a line looks like `--- a/file` or `--- file`
-fn is_minus_line(line: &str) -> bool {
-    line.starts_with("--- a/")
-        || line.starts_with("--- b/")
-        || (line.starts_with("--- ") && !line.starts_with("--- /dev/null") && line.len() > 5)
-}
-
-/// Check if a line looks like `+++ b/file` or `+++ file`
-fn is_plus_line(line: &str) -> bool {
-    line.starts_with("+++ a/")
-        || line.starts_with("+++ b/")
-        || (line.starts_with("+++ ") && line.len() > 5)
-}
-
-/// Check if a line is a hunk header: `@@ -start,count +start,count @@`
-fn is_hunk_header(line: &str) -> bool {
-    line.starts_with("@@ ") && line.contains(" @@")
-}
-
-/// Extract filename from a +++ line
-fn extract_filename(plus_line: &str) -> String {
-    let path = plus_line.trim_start_matches("+++ ");
-    let path = path.strip_prefix("b/").unwrap_or(path);
-    // Strip any trailing tab + timestamp (from standard diff)
-    path.split('\t').next().unwrap_or(path).to_string()
+    let (old, new) = ranges.split_once(' ')?;
+    let parse = |text: &str, prefix| -> Option<Range> {
+        let text = text.strip_prefix(prefix)?;
+        let (start, count) = text.split_once(',').unwrap_or((text, "1"));
+        if start.is_empty()
+            || count.is_empty()
+            || !start.bytes().all(|b| b.is_ascii_digit())
+            || !count.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let start: usize = start.parse().ok()?;
+        let count: usize = count.parse().ok()?;
+        // Empty ranges name the line BEFORE the insertion/deletion point.
+        // Normalize to a half-open position before comparing adjacent hunks.
+        let start = if count == 0 {
+            start.checked_add(1)?
+        } else {
+            start
+        };
+        start.checked_add(count)?;
+        (count <= MAX_PATCH_LINES && (count == 0 || start > 0)).then_some((start, count))
+    };
+    let old = parse(old, '-')?;
+    let new = parse(new, '+')?;
+    (old.1 != 0 || new.1 != 0).then_some((old, new))
 }
 
 /// Strip ANSI escape sequences from a string
@@ -346,6 +445,22 @@ pub fn strip_ansi(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncated_hunk_is_not_a_complete_patch() {
+        let mut detector = DiffDetector::new();
+        for line in [
+            "--- a/file",
+            "+++ b/file",
+            "@@ -1,2 +1,2 @@",
+            "-old",
+            "+new",
+        ] {
+            detector.feed_line(line);
+        }
+        detector.flush();
+        assert_eq!(detector.unreviewed_count(), 0);
+    }
 
     #[test]
     fn test_simple_diff() {
@@ -395,10 +510,10 @@ mod tests {
         let lines = [
             "--- a/file.txt",
             "+++ b/file.txt",
-            "@@ -1,2 +1,2 @@",
+            "@@ -1,1 +1,1 @@",
             "-old line",
             "+new line",
-            "@@ -10,2 +10,2 @@",
+            "@@ -10,1 +10,1 @@",
             "-old line 10",
             "+new line 10",
         ];

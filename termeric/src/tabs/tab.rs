@@ -359,6 +359,7 @@ impl Tab {
         let was_closed = self.closed;
         let mut app_events = Vec::new();
         let mut reader_disconnected = false;
+        let mut output_ended = false;
 
         loop {
             let event = match self.pty_rx.as_ref().map(Receiver::try_recv) {
@@ -387,10 +388,12 @@ impl Tab {
                 PtyEvent::Closed => {
                     log::info!("Tab {} shell exited", self.id);
                     self.closed = true;
+                    output_ended = true;
                 }
                 PtyEvent::Error(e) => {
                     log::error!("Tab {} PTY error: {}", self.id, e);
                     self.closed = true;
+                    output_ended = true;
                 }
             }
         }
@@ -398,7 +401,9 @@ impl Tab {
         // Update title when there's output (directory may have changed)
         if had_output {
             self.update_title();
-            self.integration.finish_output();
+        }
+        if output_ended || reader_disconnected {
+            self.integration.finish_stream();
         }
 
         // Only use process state after the reader disconnects. A child may
@@ -1089,6 +1094,13 @@ impl Tab {
                 self.tab_type = TabType::Plugin { plugin_id };
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_single_test_output(&mut self, receiver: Receiver<PtyEvent>) {
+        assert!(self.has_single_terminal_owner());
+        assert!(self.pane_manager.is_none());
+        self.pty_rx = Some(receiver);
     }
 
     #[cfg(test)]

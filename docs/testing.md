@@ -881,6 +881,12 @@ bytes, disconnect, close, and reopen behavior.
 
 ## Pane event-routing lane
 
+The [bounded streaming diff lane](diff-capture.md) adds every-byte Unicode/ANSI
+framing, validated hunk completion, byte/line/hunk/history caps with owned
+capacity accounting, exactly-once transcript entries, real single/split EOF
+versus empty polls, and stale review actions after eviction. Its fake/raw PTY
+tests never launch a provider or apply a patch.
+
 `cargo test -p termeric terminal_session_tests` covers terminal-local recorder
 ownership across split/collapse/close, same-owner input/output with sibling and
 protocol exclusion, independent plugin controls, exact transcript/scrollback

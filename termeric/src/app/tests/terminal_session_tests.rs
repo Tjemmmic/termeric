@@ -2,6 +2,139 @@
 use super::*;
 
 #[test]
+fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
+    use termeric_core::pty::PtyEvent;
+    for split in [false, true] {
+        for ending in 0..3 {
+            let (mut app, _directory, entry, _) = harvest_rerun_capture_fixture_in(split);
+            let owner = PaneId(entry.source.pane_id);
+            mark_capture_plugin_owner(&mut app, owner, "codex");
+            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            if let Some(panes) = &mut tab.pane_manager {
+                panes.get_pane_mut(owner).unwrap().pty_rx = receiver;
+            } else {
+                tab.replace_single_test_output(receiver);
+            }
+            let poll = |tab: &mut crate::tabs::Tab| {
+                if let Some(panes) = &mut tab.pane_manager {
+                    panes.get_pane_mut(owner).unwrap().poll_events(|_, _| {});
+                } else {
+                    tab.poll_events();
+                }
+            };
+            let first = "--- a/根\n+++ b/根\n@@ -1 +1 @@\n-old\n+🌱\n";
+            for byte in first.as_bytes().chunks(1) {
+                sender.send(PtyEvent::Output(byte.to_vec())).unwrap();
+                poll(tab);
+                assert_eq!(
+                    tab.pane_session(owner)
+                        .unwrap()
+                        .diff_detector
+                        .unreviewed_count(),
+                    0
+                );
+            }
+            for _ in 0..10 {
+                poll(tab);
+            }
+            let second = "@@ -5 +5 @@\n-old\n+new";
+            sender
+                .send(PtyEvent::Output(second.as_bytes().to_vec()))
+                .unwrap();
+            poll(tab);
+            assert_eq!(
+                tab.pane_session(owner)
+                    .unwrap()
+                    .diff_detector
+                    .unreviewed_count(),
+                0
+            );
+            match ending {
+                0 => sender.send(PtyEvent::Closed).unwrap(),
+                1 => sender
+                    .send(PtyEvent::Error("synthetic EOF error".into()))
+                    .unwrap(),
+                _ => {}
+            }
+            drop(sender);
+            poll(tab);
+            poll(tab);
+            let detector = &tab.pane_session(owner).unwrap().diff_detector;
+            assert_eq!(detector.unreviewed_count(), 1);
+            let diff = detector.latest_unreviewed().unwrap();
+            assert_eq!(diff.hunks.len(), 2);
+            assert_eq!(diff.raw, format!("{first}{second}\n"));
+            // Capture sees the same bytes as the terminal, but does not own or
+            // rewrite the terminal display path.
+            let terminal = if let Some(panes) = &tab.pane_manager {
+                &panes.get_pane(owner).unwrap().terminal
+            } else {
+                tab.focused_terminal().unwrap()
+            };
+            assert!(
+                terminal
+                    .grid()
+                    .export_scrollback_text()
+                    .join("\n")
+                    .contains("🌱")
+            );
+        }
+    }
+}
+
+#[test]
+fn evicted_diff_review_cannot_copy_or_dismiss_a_newer_patch() {
+    use crate::ui::diff_review::DiffReviewAction;
+    let (mut app, _directory, entry, _) = harvest_rerun_capture_fixture();
+    let owner = PaneId(entry.source.pane_id);
+    mark_capture_plugin_owner(&mut app, owner, "codex");
+    let patch = b"--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\nfinished\n";
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_session_mut(owner)
+        .unwrap()
+        .observe_output(patch, true);
+    app.execute_plugin_command("codex.review-diff");
+    let request_id = app.diff_review.request_id();
+    let target = app.diff_review.target(request_id).unwrap();
+    {
+        let state = app
+            .tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .pane_session_mut(owner)
+            .unwrap();
+        for _ in 0..80 {
+            state.observe_output(patch, true);
+        }
+        assert!(state.diff_detector.detected_by_id(target.diff_id).is_none());
+    }
+    app.apply_diff_review_action(DiffReviewAction::Copy { request_id });
+    assert_eq!(
+        latest_toast(&app),
+        Some("The reviewed diff is no longer available")
+    );
+    app.apply_diff_review_action(DiffReviewAction::Dismiss { request_id });
+    let detector = &app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .pane_session(owner)
+        .unwrap()
+        .diff_detector;
+    assert_eq!(detector.unreviewed_count(), 64);
+    assert_eq!(detector.latest_unreviewed().unwrap().id, 81);
+}
+
+#[test]
 fn plugin_export_uses_its_own_transcript_or_scrollback_not_focused_sibling() {
     let _lock = crate::session::export_job::EXPORT_TEST_LOCK.lock().unwrap();
     for recording in [false, true] {
@@ -327,7 +460,7 @@ fn diff_observation_and_delayed_review_are_terminal_local() {
         b"--- a/replacement\n+++ b/replacement\n@@ -1 +1 @@\n-old\n+new\nfinished\n",
         true,
     );
-    tab.pane_session_mut(replacement).unwrap().finish_output();
+    tab.pane_session_mut(replacement).unwrap().finish_stream();
     app.apply_diff_review_action(crate::ui::diff_review::DiffReviewAction::Dismiss { request_id });
     assert_eq!(
         app.tabs

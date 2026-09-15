@@ -233,6 +233,7 @@ impl Pane {
         let was_closed = self.closed;
         let mut app_events = Vec::new();
         let mut reader_disconnected = false;
+        let mut output_ended = false;
 
         loop {
             let event = match self.pty_rx.try_recv() {
@@ -260,17 +261,21 @@ impl Pane {
                 PtyEvent::Closed => {
                     log::info!("Pane {:?} shell exited", self.id);
                     self.closed = true;
+                    output_ended = true;
                 }
                 PtyEvent::Error(e) => {
                     log::error!("Pane {:?} PTY error: {}", self.id, e);
                     self.closed = true;
+                    output_ended = true;
                 }
             }
         }
 
         // Catch events explicitly queued outside the parser and replies left by
         // the final output chunk.
-        self.integration.finish_output();
+        if output_ended || reader_disconnected {
+            self.integration.finish_stream();
+        }
         changed |= self.drain_terminal_events(&mut app_events);
 
         if changed

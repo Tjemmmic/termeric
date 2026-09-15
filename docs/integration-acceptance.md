@@ -98,10 +98,14 @@ restriction on non-primary plugin workspace launches or plugin-primary pane
 transfer. Synthetic metadata tests of mixed plugin owners do not establish
 provider, native visual, or complete workspace support.
 
-Diff capture still needs bounded retained/in-progress storage and incremental
-text framing across PTY reads. Those existing limitations are tracked in
-[#127](https://github.com/Tjemmmic/termeric/issues/127) before broader plugin-pane
-enablement; terminal-local ownership alone does not provide those guarantees.
+Diff capture now frames arbitrary PTY chunks with bounded line/capture/history
+storage, validates complete hunk counts, and rejects oversized or malformed
+captures without altering terminal display. Stable identities survive eviction;
+stale Copy/Dismiss actions cannot target replacement patches. Exactly-once
+transcript enqueue attempts use real file-boundary/EOF completion, not poll
+boundaries. See [capture limits and regressions](diff-capture.md) and
+[#127](https://github.com/Tjemmmic/termeric/issues/127). This does not promote real
+provider, native visual, or broader plugin-pane support.
 
 Run it with:
 
