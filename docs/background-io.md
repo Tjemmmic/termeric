@@ -105,6 +105,15 @@ whether the durable flush completed and identifies the partial path when it did
 not. Application teardown logs the same incomplete-persistence condition when
 there is no remaining UI in which to display it.
 
+Each queued entry owns its byte reservation. Dequeue releases that charge before
+the worker serializes the entry; rejected sends and unread entries destroyed
+after worker failure or panic release it through the same ownership rule.
+Receiver cleanup never resets a shared counter wholesale, so it cannot erase a
+still-live producer reservation. The ledger therefore measures admitted queued
+content/metadata accounting, not heap/RSS or the worker's current entry. A failed
+writer cannot leave freed entries charged as a full queue and mask a subsequent
+disconnection as backpressure.
+
 Shutdown finalizes the recorder's text decoders once and disconnects its sole
 command sender. Already accepted entries and checkpoints drain in order; no
 spare queue slot or extra shutdown command is needed. The worker publishes one
@@ -144,6 +153,12 @@ Injected backends cover:
   timed out until actual completion without an unbounded thread join;
 - full-queue drain, late-write refusal, final UTF-8 loss across retries, cached
   startup/sync failures after notice consumption, and worker-panic refusal.
+
+Queue-ledger regressions cover unread entries at startup failure and panic,
+entry-slot and byte-budget rejection, writes after shutdown, receiver destruction
+with a live producer reservation, and concurrent bounded reservation churn.
+They assert zero outstanding charges after cleanup without treating an
+accounting correction as a measured reduction in resident memory.
 
 Test-only receive observation verifies that a clean recorder makes one blocking
 receive attempt across two flush intervals, rather than timer-polling. Synthetic

@@ -7,6 +7,8 @@
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
+mod queue_tests;
+#[cfg(test)]
 mod shutdown_tests;
 #[cfg(test)]
 mod streaming_tests;
@@ -127,9 +129,31 @@ pub enum TranscriptNotice {
 enum WriterCommand {
     Entry {
         entry: TranscriptEntry,
-        accounted_bytes: usize,
+        reservation: QueueReservation,
     },
     Checkpoint(mpsc::Sender<std::io::Result<TranscriptCheckpoint>>),
+}
+
+/// One queue-byte charge follows its command through send, receive, rejection
+/// and receiver destruction. Never reset a live shared ledger wholesale.
+struct QueueReservation {
+    counter: Arc<AtomicUsize>,
+    bytes: usize,
+}
+
+impl QueueReservation {
+    fn reserve(counter: &Arc<AtomicUsize>, bytes: usize, maximum: usize) -> Option<Self> {
+        reserve_queue_bytes(counter, bytes, maximum).then(|| Self {
+            counter: Arc::clone(counter),
+            bytes,
+        })
+    }
+}
+
+impl Drop for QueueReservation {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
 }
 
 /// Exact flushed prefix, confirmed in order by the recording worker.
@@ -266,7 +290,6 @@ impl TranscriptRecorder {
         let (event_tx, event_rx) = mpsc::channel();
         let (completion_tx, completion_rx) = mpsc::channel();
         let queued_bytes = Arc::new(AtomicUsize::new(0));
-        let worker_queued_bytes = Arc::clone(&queued_bytes);
         let worker = std::thread::Builder::new()
             .name("termeric-transcript".into())
             .spawn(move || {
@@ -276,7 +299,6 @@ impl TranscriptRecorder {
                     limits.max_file_bytes,
                     command_rx,
                     event_tx,
-                    worker_queued_bytes,
                     wake,
                 );
                 // Publish only after the worker's writer, sink and queued
@@ -476,13 +498,13 @@ impl TranscriptRecorder {
             .len()
             .saturating_add(metadata.as_ref().map_or(0, |value| value.to_string().len()))
             .saturating_add(128);
-        if !reserve_queue_bytes(
+        let Some(reservation) = QueueReservation::reserve(
             &self.queued_bytes,
             accounted_bytes,
             self.limits.max_queue_bytes,
-        ) {
+        ) else {
             return Ok(self.backpressure());
-        }
+        };
 
         let command = WriterCommand::Entry {
             entry: TranscriptEntry {
@@ -491,11 +513,9 @@ impl TranscriptRecorder {
                 content: content.to_string(),
                 metadata,
             },
-            accounted_bytes,
+            reservation,
         };
         let Some(command_tx) = &self.command_tx else {
-            self.queued_bytes
-                .fetch_sub(accounted_bytes, Ordering::AcqRel);
             self.failed = true;
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -507,25 +527,18 @@ impl TranscriptRecorder {
                 self.entry_count += 1;
                 Ok(TranscriptWrite::Written)
             }
-            Err(TrySendError::Full(WriterCommand::Entry {
-                accounted_bytes, ..
-            })) => {
-                self.queued_bytes
-                    .fetch_sub(accounted_bytes, Ordering::AcqRel);
+            Err(TrySendError::Full(command)) => {
+                drop(command);
                 Ok(self.backpressure())
             }
-            Err(TrySendError::Disconnected(WriterCommand::Entry {
-                accounted_bytes, ..
-            })) => {
-                self.queued_bytes
-                    .fetch_sub(accounted_bytes, Ordering::AcqRel);
+            Err(TrySendError::Disconnected(command)) => {
+                drop(command);
                 self.failed = true;
                 Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     "transcript writer stopped unexpectedly",
                 ))
             }
-            Err(_) => unreachable!("only entry commands are enqueued here"),
         }
     }
 
@@ -672,7 +685,6 @@ fn transcript_worker(
     max_file_bytes: usize,
     command_rx: Receiver<WriterCommand>,
     event_tx: mpsc::Sender<WriterEvent>,
-    queued_bytes: Arc<AtomicUsize>,
     wake: Option<WakeCallback>,
 ) -> std::io::Result<()> {
     let sink = match factory() {
@@ -727,9 +739,11 @@ fn transcript_worker(
         match command {
             Ok(WriterCommand::Entry {
                 mut entry,
-                accounted_bytes,
+                reservation,
             }) => {
-                queued_bytes.fetch_sub(accounted_bytes, Ordering::AcqRel);
+                // The ledger covers queued entries, not the one bounded
+                // entry currently being serialized/written by this worker.
+                drop(reservation);
                 if capped {
                     continue;
                 }

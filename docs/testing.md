@@ -767,6 +767,13 @@ accepted or cap-rejected traffic flowing while requiring pending data to flush. 
 counts prove absence of polling; they do not claim native application CPU or
 power measurements. All storage is synthetic and no provider is invoked.
 
+`session::transcript::queue_tests` verifies that every queue reservation is
+released exactly once on dequeue, rejected send, writer failure, or panic.
+Gated factories reproduce unread-queue cleanup; a separate receiver/producer
+lifetime test rejects shared-counter resets, and concurrent reservation churn
+checks the byte ceiling and final zero balance. These are accounting and
+backpressure tests, not a heap/RSS benchmark.
+
 ## Resource soak lane
 
 Linux pushes and pull requests run a 30-second process soak; the weekly schedule
