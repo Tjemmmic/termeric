@@ -155,6 +155,19 @@ startup, opt-in module import, preserved rc file, and success/failure Harvest
 regions. Both lanes pass with an isolated Elvish 0.21.0 Arch binary; neither
 claims acceptance of the user's configuration or native desktop presentation.
 
+`elvish_launch_tests` adds two routing regressions for Go-style flags, final
+boolean values, string/operand boundaries, and rejection without environment
+or filesystem changes. Its native parser comparison covers 50 boolean/integer
+cases, including radix prefixes, separators, and host-width limits, using only
+Elvish's local version utility. `elvish_custom_rc_and_boolean_options_preserve_prompt_regions`
+adds five Elvish 0.21.0 PTY variants: custom rc with re-enabled startup,
+script-only modifiers without operands, flag-looking rc/log paths, repeated
+rc/mode flags, and empty-rc default selection. Each must preserve rc bytes,
+report the first prompt's cwd, and produce complete multiline success/failure
+regions. Native cases self-skip without Elvish unless
+`TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1` is set. See
+[the launch/opt-in boundary](osc-integration.md#elvish-launch-and-opt-in-module-handling).
+
 ```bash
 TERMERIC_REQUIRE_ELVISH_CWD_TESTS=1 TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1 \
   cargo test --workspace --locked terminal::shell_integration

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 mod bash_launch;
+mod elvish_launch;
 mod fish_launch;
 mod zsh_launch;
 
@@ -247,7 +248,7 @@ const ELVISH_MODULE: &str = r#"{
 }
 "#;
 
-const ELVISH_MANUAL_INSTRUCTIONS: &str = "Elvish integration is available; add `use termeric-integration` to ~/.config/elvish/rc.elv and open a new tab";
+const ELVISH_MANUAL_INSTRUCTIONS: &str = "Elvish integration is available; add `use termeric-integration` to your configured rc file (normally ~/.config/elvish/rc.elv) and open a new tab";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellLaunch {
@@ -341,6 +342,8 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
                 "Bash integration is disabled for command/script, non-rc startup, or unrecognized arguments"
             } else if shell_name == "fish" {
                 "Fish integration is disabled for command/script, startup-disabled, utility, or unrecognized arguments"
+            } else if shell_name == "elvish" {
+                "Elvish integration is disabled for command/script, startup-disabled, utility, or unrecognized arguments"
             } else {
                 "Shell integration is disabled for command/script shell arguments"
             }
@@ -401,46 +404,9 @@ fn is_interactive_shell_launch(shell_name: &str, args: &[String]) -> bool {
         "zsh" => zsh_launch::is_interactive(args),
         "fish" => fish_launch::integration_index(args).is_some(),
         "nu" => is_interactive_nushell_launch(args),
-        "elvish" => is_interactive_elvish_launch(args),
+        "elvish" => elvish_launch::is_interactive(args),
         _ => is_interactive_launch(args),
     }
-}
-
-fn is_interactive_elvish_launch(args: &[String]) -> bool {
-    let mut expects_value = false;
-    for arg in args {
-        if expects_value {
-            expects_value = false;
-            continue;
-        }
-        if matches!(
-            arg.as_str(),
-            "-c" | "-lsp" | "-daemon" | "-version" | "-buildinfo" | "-help" | "-norc"
-        ) || arg.starts_with("-c=")
-            || arg.starts_with("-lsp=")
-            || arg.starts_with("-daemon=")
-            || arg.starts_with("-version=")
-            || arg.starts_with("-buildinfo=")
-            || arg.starts_with("-help=")
-            || arg.starts_with("-norc=")
-        {
-            return false;
-        }
-        if matches!(
-            arg.as_str(),
-            "-rc" | "-deprecation-level" | "-log" | "-db" | "-sock"
-        ) {
-            expects_value = true;
-            continue;
-        }
-        if arg == "--" {
-            continue;
-        }
-        if !arg.starts_with('-') {
-            return false;
-        }
-    }
-    !expects_value
 }
 
 fn is_interactive_nushell_launch(args: &[String]) -> bool {
@@ -697,6 +663,9 @@ mod fish_launch_tests;
 #[cfg(test)]
 mod elvish_cwd_tests;
 
+#[cfg(test)]
+mod elvish_launch_tests;
+
 #[cfg(all(test, unix))]
 mod nushell_cwd_tests;
 
@@ -880,7 +849,7 @@ mod tests {
             assert_eq!(
                 launch.integration,
                 ShellIntegrationSupport::Unavailable(
-                    "Shell integration is disabled for command/script shell arguments".into()
+                    "Elvish integration is disabled for command/script, startup-disabled, utility, or unrecognized arguments".into()
                 )
             );
         }
@@ -1079,6 +1048,73 @@ mod tests {
             "echo CUSTOM_RC_ELVISH\nuse termeric-integration\n",
             ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn elvish_custom_rc_and_boolean_options_preserve_prompt_regions() {
+        let Some(program) = executable_on_path("elvish") else {
+            assert_ne!(
+                std::env::var("TERMERIC_REQUIRE_ELVISH_ACCEPTANCE").as_deref(),
+                Ok("1")
+            );
+            eprintln!("skipping Elvish launch-option PTY acceptance: executable unavailable");
+            return;
+        };
+        for (args, path) in [
+            (
+                vec!["-rc", "custom rc", "-norc", "--norc=false", "-i", "--l"],
+                "custom rc",
+            ),
+            (
+                vec!["--rc=custom rc", "--c=true", "--compileonly", "--json"],
+                "custom rc",
+            ),
+            (
+                vec![
+                    "--rc",
+                    "--version",
+                    "--log",
+                    "--norc",
+                    "--deprecation-level=0x_15",
+                    "--",
+                ],
+                "--version",
+            ),
+            (
+                vec![
+                    "-rc",
+                    "ignored",
+                    "--rc",
+                    "custom rc",
+                    "-lsp",
+                    "-lsp=false",
+                    "-daemon",
+                    "-daemon=0",
+                    "-buildinfo",
+                    "-buildinfo=F",
+                    "-version",
+                    "-version=false",
+                    "-help",
+                    "-help=False",
+                ],
+                "custom rc",
+            ),
+            (vec!["--rc="], ".config/elvish/rc.elv"),
+        ] {
+            eprintln!("Elvish launch-option PTY probe: {args:?}");
+            run_shell_semantics_probe_with_options(
+                &program,
+                "elvish",
+                path,
+                "echo CUSTOM_RC_ELVISH\nuse termeric-integration\n",
+                ShellIntegrationSupport::Unavailable(ELVISH_MANUAL_INSTRUCTIONS.into()),
+                ShellProbeOptions {
+                    home_component: "home",
+                    args: &args,
+                },
+            );
+        }
     }
 
     pub(super) fn executable_on_path(name: &str) -> Option<String> {

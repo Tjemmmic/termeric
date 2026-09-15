@@ -140,6 +140,36 @@ These producer fixes cover **Bash, Zsh, Fish, and opt-in Elvish**. Nushell uses
 its own native producer and has the confirmed gaps below. This does not sanitize
 arbitrary user prompt code or output from other applications.
 
+### Elvish launch and opt-in module handling
+
+Termeric exposes its module only to recognized rc-loading Elvish REPLs.
+The check follows [Elvish's invocation modes](https://elv.sh/ref/command.html)
+and [Go flag syntax](https://go.dev/src/flag/flag.go): one or two leading dashes,
+separate/`=` string values, typed booleans/integers, last boolean value wins,
+and a final `--`. Values that look like flags remain values. An operand after
+`--` is still a script filename; `-i` does not turn a script into a REPL.
+
+Active help/version/buildinfo, language-server/daemon, and no-rc modes run with
+unchanged argv/environment and no generated integration files. Unknown,
+grouped, abbreviated, or malformed options also bypass integration instead of
+guessing their meaning. Later `=false` values can restore eligibility.
+With no operands, native Elvish still runs its REPL with `-c`, `-compileonly`,
+or `-json`; these flags do not by themselves disable module exposure.
+
+The opt-in contract is unchanged: add `use termeric-integration` to the rc file
+Elvish actually loads, including a custom `-rc` file. Termeric does not rewrite
+that file or its arguments and does not claim automatic integration. An empty
+rc option uses Elvish's native default; multiple rc options use the last value.
+Module lookup/handoff policy is separate from argument classification.
+
+Two routing tests verify exact pass-through and absence of generated files
+for rejected launches. Fifty typed-option cases are compared with Elvish
+0.21.0's native parser, including numeric bases, separators, range limits, and
+boolean spellings. Five additional isolated real-PTY variants verify custom rc
+selection, boolean overrides, flag-looking paths, first-prompt cwd, and complete
+multiline command regions. These do not establish arbitrary user-configuration
+or desktop acceptance.
+
 ### Fish launch and startup-command handling
 
 Fish integration is limited to recognized REPL launches. Grouped
@@ -362,8 +392,9 @@ generated Elvish module emits the same hostless OSC 7 and OSC 133 lifecycle
 after the user adds `use termeric-integration` to `~/.config/elvish/rc.elv`.
 Termeric only exposes that module to rc-loading interactive Elvish launches;
 scripts, command strings, daemon/language-server modes, and `-norc` launches
-remain untouched. Its real-PTY result is acceptance-pending because Elvish is
-not installed on the current runner. The
+remain untouched when their final flag values select those modes. Isolated
+Elvish 0.21.0 editor/PTY probes pass; user-configuration and native desktop
+acceptance remain separate. See [Elvish launch handling](#elvish-launch-and-opt-in-module-handling). The
 reported local directory takes precedence over Linux `/proc` discovery;
 process inspection remains a fallback for direct commands, unsupported shells,
 and shells whose integration is disabled. User and OSC 0/2 titles continue to
