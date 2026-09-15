@@ -277,9 +277,18 @@ command deadlines, bounded command output, 10,000-character source limits, a
 64,000-character aggregate limit, and at most 16 workspace-contained regular
 files. Escape cancels selection, file editing, or an in-flight request as
 appropriate. Late worker results are generation-checked, and successful
-insertion writes only to the exact stable tab or pane captured when the picker
-opened; a closed or replaced destination fails visibly without focus or
-plugin-name fallback.
+insertion writes only to the exact stable tab-and-pane identity captured when
+the picker opened. The requested plugin is resolved from live per-pane launch
+identity: a focused shell sibling is not a plugin destination. A matching focused
+plugin pane is preferred, otherwise the first matching live pane in visual order
+within the first matching tab is selected, without changing focus. Gathering
+prefers that owner's reported/process working directory; the existing fallback
+applies only when it is unavailable. Completion rechecks the same owner's plugin
+identity and writability after split/collapse; closed, replaced, changed-plugin
+and read-only destinations fail visibly without focus or plugin-name fallback.
+Cross-tab/window pending-target migration is not implied. Raw-capture regression
+evidence does not replace native/provider acceptance
+([#119](https://github.com/Tjemmmic/termeric/issues/119)).
 
 Terminal search is a non-modal AccessKit toolbar above the focused terminal.
 Its 4 KiB UTF-8 query is editable only while search owns keyboard input; result

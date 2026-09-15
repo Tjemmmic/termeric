@@ -146,6 +146,13 @@ GUI/plugin/process input, and broadcast refusal/framing through split/collapse,
 source removal, read-only changes, cancellation, and replay. Native/provider
 acceptance remains separate ([#118](https://github.com/Tjemmmic/termeric/issues/118)).
 
+Unicode/context picker targets now retain stable tab-and-pane identity across
+split/collapse; replacement owners cannot inherit pending selections or context.
+Context routing additionally verifies the actual pane's plugin launch identity
+and prefers its working directory, not a focused shell sibling's. Local fixtures
+cover exact bytes, refusal, cancellation and replay; native/provider acceptance
+remains deferred ([#119](https://github.com/Tjemmmic/termeric/issues/119)).
+
 ## Performance and resource evidence
 
 | Area | Status | Current boundary | Tracking |

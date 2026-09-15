@@ -4515,6 +4515,342 @@ fn clear_scrollback_action_retires_shell_metadata_with_the_erased_history() {
 
 #[cfg(unix)]
 #[test]
+fn unicode_picker_never_inserts_into_a_replacement_single_owner() {
+    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
+    app.open_unicode_picker();
+    split_harvest_capture_owner(&mut app, directory.path());
+    app.close_control_pane(entry.source.tab_id as u64, 0)
+        .unwrap();
+    let captures = current_harvest_capture_routes(&mut app, directory.path());
+    assert!(
+        !app.apply_unicode_picker_selection(crate::ui::unicode_picker::UnicodePickerSelection {
+            id: "fixture.lambda".into(),
+            text: "λ".into(),
+        }),
+        "removed Unicode source must not alias the remaining pane"
+    );
+    assert!(
+        fenced_harvest_capture(&mut app, &captures)
+            .iter()
+            .all(Vec::is_empty)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
+    let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
+    let plugin_directory = tempfile::tempdir().unwrap();
+    let sibling_directory = tempfile::tempdir().unwrap();
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+    // Launch identity only; existing raw shell/cat processes remain unchanged.
+    tab.tab_type = crate::tabs::TabType::Plugin {
+        plugin_id: "synthetic-capture".into(),
+    };
+    tab.pane_manager
+        .as_mut()
+        .unwrap()
+        .get_pane_mut(PaneId(0))
+        .unwrap()
+        .launch = crate::workspace::WorkspaceLaunch::Plugin {
+        plugin_id: "synthetic-capture".into(),
+        profile: None,
+    };
+    for (pane_id, directory) in [
+        (PaneId(0), plugin_directory.path()),
+        (PaneId(2), sibling_directory.path()),
+    ] {
+        tab.pane_manager
+            .as_mut()
+            .unwrap()
+            .get_pane_mut(pane_id)
+            .unwrap()
+            .terminal
+            .process(format!("\x1b]7;file://localhost{}\x07", directory.display()).as_bytes());
+    }
+    app.open_context_picker_for("synthetic-capture");
+    let request_id = app.context_picker.request_id();
+    for source in app
+        .context_picker
+        .snapshot()
+        .sources
+        .into_iter()
+        .filter(|source| source.selected)
+    {
+        app.context_picker
+            .apply(crate::ui::context_picker::ContextPickerAction::Toggle {
+                request_id,
+                source: source.id,
+            });
+    }
+    app.context_picker
+        .apply(crate::ui::context_picker::ContextPickerAction::Toggle {
+            request_id,
+            source: crate::ui::context_picker::ContextSourceId::TerminalOutput,
+        });
+    let request = app
+        .context_picker
+        .begin_gather(request_id, Some("fixture context".into()))
+        .unwrap();
+    assert_eq!(request.cwd.as_deref(), Some(plugin_directory.path()));
+    app.handle_context_gathered(request_id, Ok("fixture context".into()));
+    assert_eq!(
+        fenced_harvest_capture(&mut app, &captures),
+        vec![
+            b"\n--- Context ---\nfixture context\n--- End Context ---\n".to_vec(),
+            vec![],
+            vec![],
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unicode_picker_tracks_only_the_same_focused_owner_through_topology_changes() {
+    for transition in [
+        "split",
+        "unfocused",
+        "collapse",
+        "nonzero-collapse",
+        "removed",
+        "read-only",
+        "closed",
+        "closing",
+        "cancel",
+        "broadcast",
+    ] {
+        let (mut app, directory, _, _) =
+            harvest_rerun_capture_fixture_in(transition == "nonzero-collapse");
+        let source = app.active_harvest_source().unwrap();
+        app.open_unicode_picker();
+        if transition == "nonzero-collapse" {
+            app.close_control_pane(source.tab_id as u64, 0).unwrap();
+            app.close_control_pane(source.tab_id as u64, 1).unwrap();
+        } else {
+            let sibling = split_harvest_capture_owner(&mut app, directory.path());
+            match transition {
+                "removed" => {
+                    app.close_control_pane(source.tab_id as u64, source.pane_id)
+                        .unwrap();
+                }
+                "collapse" => {
+                    app.close_control_pane(source.tab_id as u64, sibling.0)
+                        .unwrap();
+                }
+                "unfocused" => {}
+                _ => {
+                    app.focus_control_pane(source.tab_id as u64, source.pane_id)
+                        .unwrap();
+                }
+            }
+        }
+        let captures = current_harvest_capture_routes(&mut app, directory.path());
+        match transition {
+            "read-only" => app.toggle_focused_pane_read_only(),
+            "closed" => app.tabs.as_mut().unwrap().active_tab_mut().unwrap().closed = true,
+            "closing" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .closing_at = Some(Instant::now())
+            }
+            "cancel" => app.close_unicode_picker(),
+            "broadcast" => app.toggle_broadcast(),
+            _ => {}
+        }
+        let focused = app.active_harvest_source();
+        app.input_line_buffer = "prefix".into();
+        let selection = || crate::ui::unicode_picker::UnicodePickerSelection {
+            id: "fixture.lambda".into(),
+            text: "λ".into(),
+        };
+        let accepted = app.apply_unicode_picker_selection(selection());
+        let allowed = matches!(transition, "split" | "collapse" | "nonzero-collapse");
+        assert_eq!(accepted, allowed, "{transition}");
+        assert!(!app.apply_unicode_picker_selection(selection()));
+        let source_origin = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .origin_for_pane(source.tab_id, PaneId(source.pane_id));
+        let expected = captures
+            .iter()
+            .map(|(origin, _)| {
+                if allowed && Some(*origin) == source_origin {
+                    "λ".as_bytes().to_vec()
+                } else {
+                    vec![]
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fenced_harvest_capture(&mut app, &captures),
+            expected,
+            "{transition}"
+        );
+        assert_eq!(app.active_harvest_source(), focused);
+        if allowed {
+            assert_eq!(app.input_line_buffer, "prefixλ");
+        } else if matches!(transition, "unfocused" | "removed") {
+            assert_eq!(app.input_line_buffer, "prefix");
+        }
+    }
+}
+
+#[cfg(unix)]
+fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+    let launch = crate::workspace::WorkspaceLaunch::Plugin {
+        plugin_id: plugin_id.into(),
+        profile: None,
+    };
+    if let Some(panes) = &mut tab.pane_manager {
+        panes.get_pane_mut(pane_id).unwrap().launch = launch;
+    } else {
+        let mut owner = tab.take_terminal_owner().unwrap();
+        assert_eq!(owner.pane_id, pane_id);
+        owner.launch = launch;
+        let mut panes = PaneManager::from_existing(
+            owner,
+            ShellConfig::default(),
+            100,
+            1024 * 1024,
+            800.0,
+            480.0,
+            10.0,
+            20.0,
+        );
+        tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn context_picker_completion_preserves_plugin_owner_across_topology_changes() {
+    use crate::ui::context_picker::{ContextPickerAction, ContextSourceId};
+    for transition in [
+        "split",
+        "collapse",
+        "nonzero-collapse",
+        "removed",
+        "replacement-plugin",
+        "read-only",
+        "changed-plugin",
+        "closed",
+        "closing",
+        "cancel",
+    ] {
+        let (mut app, directory, _, _) =
+            harvest_rerun_capture_fixture_in(transition == "nonzero-collapse");
+        let source = app.active_harvest_source().unwrap();
+        mark_capture_plugin_owner(&mut app, PaneId(source.pane_id), "synthetic-capture");
+        app.open_context_picker_for("synthetic-capture");
+        let request_id = app.context_picker.request_id();
+        for item in app
+            .context_picker
+            .snapshot()
+            .sources
+            .into_iter()
+            .filter(|item| item.selected)
+        {
+            app.context_picker.apply(ContextPickerAction::Toggle {
+                request_id,
+                source: item.id,
+            });
+        }
+        app.context_picker.apply(ContextPickerAction::Toggle {
+            request_id,
+            source: ContextSourceId::TerminalOutput,
+        });
+        assert!(
+            app.context_picker
+                .begin_gather(request_id, Some("local fixture".into()))
+                .is_some()
+        );
+        if transition == "nonzero-collapse" {
+            app.close_control_pane(source.tab_id as u64, 0).unwrap();
+            app.close_control_pane(source.tab_id as u64, 1).unwrap();
+        } else {
+            let sibling = split_harvest_capture_owner(&mut app, directory.path());
+            match transition {
+                "collapse" => {
+                    app.close_control_pane(source.tab_id as u64, sibling.0)
+                        .unwrap();
+                }
+                "removed" | "replacement-plugin" => {
+                    app.close_control_pane(source.tab_id as u64, source.pane_id)
+                        .unwrap();
+                }
+                _ => {}
+            }
+            if transition == "replacement-plugin" {
+                mark_capture_plugin_owner(&mut app, sibling, "synthetic-capture");
+            }
+        }
+        let captures = current_harvest_capture_routes(&mut app, directory.path());
+        assert!(
+            fenced_harvest_capture(&mut app, &captures)
+                .iter()
+                .all(Vec::is_empty)
+        );
+        match transition {
+            "read-only" => {
+                app.focus_control_pane(source.tab_id as u64, source.pane_id)
+                    .unwrap();
+                app.toggle_focused_pane_read_only();
+            }
+            "changed-plugin" => {
+                mark_capture_plugin_owner(&mut app, PaneId(source.pane_id), "different-capture")
+            }
+            "closed" => app.tabs.as_mut().unwrap().active_tab_mut().unwrap().closed = true,
+            "closing" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .closing_at = Some(Instant::now())
+            }
+            "cancel" => {
+                app.context_picker
+                    .apply(ContextPickerAction::Cancel { request_id });
+            }
+            _ => {}
+        }
+        let focused = app.active_harvest_source();
+        app.handle_context_gathered(request_id, Ok("local fixture".into()));
+        app.handle_context_gathered(request_id, Ok("must not replay".into()));
+        let allowed = matches!(transition, "split" | "collapse" | "nonzero-collapse");
+        let source_origin = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .origin_for_pane(source.tab_id, PaneId(source.pane_id));
+        let expected = captures
+            .iter()
+            .map(|(origin, _)| {
+                let mut bytes = vec![0];
+                if allowed && Some(*origin) == source_origin {
+                    bytes.extend_from_slice(
+                        b"\n--- Context ---\nlocal fixture\n--- End Context ---\n",
+                    );
+                }
+                bytes
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fenced_harvest_capture(&mut app, &captures),
+            expected,
+            "{transition}"
+        );
+        assert_eq!(app.active_harvest_source(), focused);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
@@ -4540,8 +4876,9 @@ fn completed_context_never_falls_back_to_a_replacement_plugin_tab() {
         None,
         crate::ui::context_picker::ContextTarget {
             plugin_id: "fixture-plugin".into(),
-            origin: TerminalEventOrigin::Tab {
+            terminal: crate::tabs::TerminalIdentity {
                 tab_id: original_id,
+                pane_id: PaneId(0),
             },
         },
     );
@@ -4583,6 +4920,17 @@ fn fullscreen_is_window_local_transient_state_for_shortcut_and_palette_routes() 
 
 #[test]
 fn app_input_modules_use_the_focused_terminal_route() {
+    let direct_owner_access = regex::Regex::new(r"\b(?:tab|t)\s*\.\s*terminal\b").unwrap();
+    for forbidden in ["tab.terminal", "t.terminal", "tab \n . terminal.take()"] {
+        assert!(direct_owner_access.is_match(forbidden));
+    }
+    for permitted in [
+        "target.terminal",
+        "tab.focused_terminal()",
+        "tabs.terminal_for_origin(origin)",
+    ] {
+        assert!(!direct_owner_access.is_match(permitted));
+    }
     for (name, source) in [
         ("mod.rs", include_str!("mod.rs")),
         ("mouse.rs", include_str!("mouse.rs")),
@@ -4591,7 +4939,7 @@ fn app_input_modules_use_the_focused_terminal_route() {
         ("sessions.rs", include_str!("sessions.rs")),
     ] {
         assert!(
-            !source.contains("tab.terminal") && !source.contains("t.terminal"),
+            !direct_owner_access.is_match(source),
             "{name} bypasses Tab::focused_terminal and can target detached pane state"
         );
     }

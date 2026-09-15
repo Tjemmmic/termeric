@@ -1567,23 +1567,14 @@ impl App {
     /// Open the context picker modal targeting a specific plugin tab
     pub(super) fn open_context_picker_for(&mut self, plugin_id: &str) {
         let Some((cwd, target)) = self.tabs.as_ref().and_then(|tabs| {
-            let (_, tab) = tabs.iter().find(|(_, tab)| {
-                !tab.closed
-                    && !tab.is_closing()
-                    && matches!(
-                        &tab.tab_type,
-                        crate::tabs::TabType::Plugin { plugin_id: id } if id == plugin_id
-                    )
-            })?;
-            let origin = if let Some(panes) = &tab.pane_manager {
-                crate::tabs::TerminalEventOrigin::Pane {
-                    tab_id: tab.id,
-                    pane_id: panes.focused_id(),
-                }
-            } else {
-                crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
+            let (tab, pane_id) = tabs
+                .iter()
+                .find_map(|(_, tab)| tab.plugin_pane_id(plugin_id).map(|pane_id| (tab, pane_id)))?;
+            let terminal = crate::tabs::TerminalIdentity {
+                tab_id: tab.id,
+                pane_id,
             };
-            let cwd = tab.working_directory().or_else(|| {
+            let cwd = tab.pane_working_directory(pane_id).or_else(|| {
                 tabs.iter()
                     .find(|(_, candidate)| !candidate.closed)
                     .and_then(|(_, candidate)| candidate.working_directory())
@@ -1592,7 +1583,7 @@ impl App {
                 cwd,
                 crate::ui::context_picker::ContextTarget {
                     plugin_id: plugin_id.to_string(),
-                    origin,
+                    terminal,
                 },
             ))
         }) else {
@@ -1701,28 +1692,20 @@ impl App {
         target: &crate::ui::context_picker::ContextTarget,
         text: &str,
     ) -> bool {
-        let destination_matches = self.tabs.as_ref().is_some_and(|tabs| {
-            let tab_id = match target.origin {
-                crate::tabs::TerminalEventOrigin::Tab { tab_id }
-                | crate::tabs::TerminalEventOrigin::Pane { tab_id, .. } => tab_id,
-            };
-            tabs.iter().any(|(_, tab)| {
-                tab.id == tab_id
-                    && !tab.closed
-                    && !tab.is_closing()
-                    && matches!(
-                        &tab.tab_type,
-                        crate::tabs::TabType::Plugin { plugin_id }
-                            if plugin_id == &target.plugin_id
-                    )
-            })
+        let origin = self.tabs.as_ref().and_then(|tabs| {
+            let tab = tabs.tab_by_id(target.terminal.tab_id)?;
+            if tab.pane_plugin_id(target.terminal.pane_id) != Some(target.plugin_id.as_str()) {
+                return None;
+            }
+            tabs.origin_for_pane(target.terminal.tab_id, target.terminal.pane_id)
         });
         let injected = format!("\n--- Context ---\n{text}\n--- End Context ---\n");
-        let written = destination_matches
-            && self.tabs.as_mut().is_some_and(|tabs| {
-                tabs.write_user_to_origin(target.origin, injected.as_bytes())
+        let written = origin.is_some_and(|origin| {
+            self.tabs.as_mut().is_some_and(|tabs| {
+                tabs.write_user_to_origin(origin, injected.as_bytes())
                     .is_ok()
-            });
+            })
+        });
         if written {
             self.toasts
                 .success(format!("Context sent to {}", target.plugin_id));

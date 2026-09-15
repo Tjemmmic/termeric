@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use super::animation::OverlayAnimation;
 use super::constants::CONTENT_CHAR_SCALE;
-use crate::tabs::TerminalEventOrigin;
+use crate::tabs::TerminalIdentity;
 
 pub const MAX_CONTEXT_SOURCES: usize = 6;
 pub const MAX_CONTEXT_FILES: usize = 16;
@@ -52,7 +52,7 @@ pub struct ContextSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextTarget {
     pub plugin_id: String,
-    pub origin: TerminalEventOrigin,
+    pub terminal: TerminalIdentity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -994,7 +994,10 @@ mod tests {
     fn target(tab_id: usize) -> ContextTarget {
         ContextTarget {
             plugin_id: "fixture-plugin".into(),
-            origin: TerminalEventOrigin::Tab { tab_id },
+            terminal: TerminalIdentity {
+                tab_id,
+                pane_id: crate::panes::PaneId(0),
+            },
         }
     }
 

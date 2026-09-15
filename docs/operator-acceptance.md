@@ -546,6 +546,21 @@ survivor. Closing the actual source must disable its live actions instead of
 redirecting them to a replacement. These visual checks can be done later;
 ownership and deferred-confirmation byte routing have local regression coverage.
 
+## Deferred picker destination checks (no provider)
+
+In disposable ordinary shell panes, open **Insert Unicode Character...** and
+select a harmless character such as `λ`. If the original owner is still focused
+after a split/collapse, it should receive the character once. If its sibling is
+focused or the original pane was closed, completion must insert nothing into the
+sibling. Read-only, broadcast and cancelled states must also refuse insertion.
+Check keyboard/mouse selection, the refusal notice and unchanged sibling input
+when convenient; automated byte-capture checks are not native visual acceptance.
+
+Context routing has separate local-fixture coverage for plugin-owner selection,
+working directory, asynchronous completion and split/collapse refusal. Testing
+context insertion with a real AI CLI remains part of the explicitly authorized
+provider section below, not this provider-free manual check.
+
 ## Authenticated Codex, Claude Code, and Harvest Explain
 
 This section is deliberately last. It is a manual test plan, not authorization

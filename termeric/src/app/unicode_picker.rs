@@ -10,22 +10,21 @@ impl App {
                 .warning("Unicode picker is unavailable while broadcast input is active");
             return;
         }
-        let Some(origin) = self.active_unicode_picker_origin() else {
+        let Some(terminal) = self.active_unicode_picker_target() else {
             self.toasts.warning("No writable terminal is active");
             return;
         };
-        if self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.origin_read_only(origin))
-            != Some(false)
+        if self.tabs.as_ref().and_then(|tabs| {
+            tabs.origin_for_pane(terminal.tab_id, terminal.pane_id)
+                .and_then(|origin| tabs.origin_read_only(origin))
+        }) != Some(false)
         {
             self.toasts.warning("The active pane is read-only");
             return;
         }
         self.domain_picker.close();
         self.command_palette.close();
-        self.pending_unicode_picker = Some(PendingUnicodePicker { origin });
+        self.pending_unicode_picker = Some(PendingUnicodePicker { terminal });
         self.unicode_picker.open();
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -51,16 +50,15 @@ impl App {
                 .warning("Unicode character was not inserted because broadcast input changed");
             return false;
         }
-        if self.active_unicode_picker_origin() != Some(pending.origin) {
+        if self.active_unicode_picker_target() != Some(pending.terminal) {
             self.toasts
                 .warning("The original Unicode picker destination is no longer focused");
             return false;
         }
-        if self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.origin_read_only(pending.origin))
-            != Some(false)
+        if self.tabs.as_ref().and_then(|tabs| {
+            tabs.origin_for_pane(pending.terminal.tab_id, pending.terminal.pane_id)
+                .and_then(|origin| tabs.origin_read_only(origin))
+        }) != Some(false)
         {
             self.clear_terminal_input_tracking();
             self.toasts
@@ -75,25 +73,22 @@ impl App {
         log::debug!(
             "Unicode picker inserted {} into {:?}",
             selection.id,
-            pending.origin
+            pending.terminal
         );
         self.write_to_pty(selection.text.as_bytes());
         true
     }
 
-    pub(super) fn active_unicode_picker_origin(&self) -> Option<crate::tabs::TerminalEventOrigin> {
+    pub(super) fn active_unicode_picker_target(&self) -> Option<crate::tabs::TerminalIdentity> {
         let tab = self.tabs.as_ref().and_then(TabManager::active_tab)?;
         if tab.closed || tab.is_closing() || tab.focused_terminal().is_none() {
             return None;
         }
-        Some(if let Some(panes) = &tab.pane_manager {
-            crate::tabs::TerminalEventOrigin::Pane {
-                tab_id: tab.id,
-                pane_id: panes.focused_id(),
-            }
-        } else {
-            crate::tabs::TerminalEventOrigin::Tab { tab_id: tab.id }
-        })
+        let target = tab.focused_terminal_identity();
+        self.tabs
+            .as_ref()?
+            .origin_for_pane(target.tab_id, target.pane_id)?;
+        Some(target)
     }
 }
 
@@ -206,9 +201,9 @@ mod tests {
         }
         let mut app = shell_app("sleep 2");
         app.open_unicode_picker();
-        let captured = app.pending_unicode_picker.unwrap().origin;
+        let captured = app.pending_unicode_picker.unwrap().terminal;
         app.tabs.as_mut().unwrap().new_tab().unwrap();
-        assert_ne!(app.active_unicode_picker_origin(), Some(captured));
+        assert_ne!(app.active_unicode_picker_target(), Some(captured));
 
         assert!(!app.apply_unicode_picker_selection(selection("λ")));
         assert!(app.input_line_buffer.is_empty());

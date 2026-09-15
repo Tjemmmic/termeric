@@ -581,6 +581,47 @@ impl Tab {
         self.single_pane_id
     }
 
+    pub(crate) fn focused_terminal_identity(&self) -> super::TerminalIdentity {
+        super::TerminalIdentity {
+            tab_id: self.id,
+            pane_id: self
+                .pane_manager
+                .as_ref()
+                .map_or(self.single_pane_id, |panes| panes.focused_id()),
+        }
+    }
+
+    /// Plugin identity belongs to the live owner, not its tab's presentation.
+    pub(crate) fn pane_plugin_id(&self, pane_id: crate::panes::PaneId) -> Option<&str> {
+        if self.closed || self.is_closing() {
+            return None;
+        }
+        let launch = if let Some(panes) = &self.pane_manager {
+            &panes.get_pane(pane_id).filter(|pane| !pane.closed)?.launch
+        } else {
+            if pane_id != self.single_pane_id || self.terminal.is_none() {
+                return None;
+            }
+            &self.terminal_launch
+        };
+        match launch {
+            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, .. } => Some(plugin_id),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn plugin_pane_id(&self, plugin_id: &str) -> Option<crate::panes::PaneId> {
+        let focused = self.focused_terminal_identity().pane_id;
+        if self.pane_plugin_id(focused) == Some(plugin_id) {
+            return Some(focused);
+        }
+        self.pane_manager
+            .as_ref()?
+            .pane_ids()
+            .into_iter()
+            .find(|pane_id| self.pane_plugin_id(*pane_id) == Some(plugin_id))
+    }
+
     pub(crate) fn set_single_pane_id(&mut self, id: crate::panes::PaneId) {
         debug_assert!(self.pane_manager.is_none());
         self.single_pane_id = id;
@@ -914,6 +955,25 @@ impl Tab {
 
     pub(crate) fn split_shell_config(&self) -> ShellConfig {
         self.split_shell.clone()
+    }
+
+    pub(crate) fn pane_working_directory(&self, pane_id: crate::panes::PaneId) -> Option<String> {
+        if self.closed || self.is_closing() || matches!(self.tab_type, TabType::Serial { .. }) {
+            return None;
+        }
+        let (terminal, child_id) = if let Some(panes) = &self.pane_manager {
+            let pane = panes.get_pane(pane_id).filter(|pane| !pane.closed)?;
+            (&pane.terminal, pane.pty.child_id())
+        } else {
+            if self.single_pane_id != pane_id {
+                return None;
+            }
+            (
+                self.terminal.as_ref()?,
+                self.pty.as_ref().and_then(PtyHandle::child_id),
+            )
+        };
+        terminal_working_directory(terminal).or_else(|| child_id.and_then(get_process_cwd))
     }
 
     pub(crate) fn set_split_shell_config(&mut self, shell: ShellConfig) {

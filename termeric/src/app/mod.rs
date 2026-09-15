@@ -718,7 +718,7 @@ struct PendingProfileSelection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingUnicodePicker {
-    origin: crate::tabs::TerminalEventOrigin,
+    terminal: crate::tabs::TerminalIdentity,
 }
 
 #[derive(Debug, Clone)]

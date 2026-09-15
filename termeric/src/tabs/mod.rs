@@ -31,6 +31,14 @@ pub enum TerminalEventOrigin {
     Pane { tab_id: usize, pane_id: PaneId },
 }
 
+/// Long-lived terminal identity for UI work that can outlast a split/collapse.
+/// Resolve it to an event/write route only at the point of use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TerminalIdentity {
+    pub tab_id: usize,
+    pub pane_id: PaneId,
+}
+
 #[derive(Debug, Clone)]
 pub struct RoutedTerminalEvent {
     pub origin: TerminalEventOrigin,

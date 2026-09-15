@@ -8036,7 +8036,10 @@ mod tests {
             cwd,
             crate::ui::context_picker::ContextTarget {
                 plugin_id: "fixture-plugin".into(),
-                origin: crate::tabs::TerminalEventOrigin::Tab { tab_id },
+                terminal: crate::tabs::TerminalIdentity {
+                    tab_id,
+                    pane_id: crate::panes::PaneId(0),
+                },
             },
         )
     }

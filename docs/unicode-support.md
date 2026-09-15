@@ -80,6 +80,13 @@ terminal-input path. It captures the opening tab/pane and refuses insertion if
 focus, writability, or broadcast state changes. Controls, surrogates, malformed
 hexadecimal, and values beyond `U+10FFFF` produce no executable result.
 
+The captured destination is a stable tab ID plus pane ID, even in single-terminal
+mode. Splitting/collapsing can preserve insertion when that same owner is still
+focused and writable; closing it cannot redirect a pending selection into a
+different single survivor. Cancellation and repeated completion insert nothing.
+Local byte-capture tests cover these ownership transitions; native picker and
+font acceptance remains separate ([#119](https://github.com/Tjemmmic/termeric/issues/119)).
+
 Canonical names are English Unicode identifiers, while the separately versioned
 CLDR annotations are also English-only and do not imply application
 localization. Unassigned/private-use scalars and other values without canonical
