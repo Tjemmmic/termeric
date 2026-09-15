@@ -29,6 +29,14 @@ per delivered rerun and no user-input record for protocol fences or refusals.
 
 ## Candidate-bound shell acceptance
 
+`terminal::shell_integration::bash_prompt_tests` compares isolated real Bash
+PTYs with and without Termeric's generated startup file. Scalar, indexed-array,
+and sparse-array fixtures assert native hook order and incoming status, one
+invocation per prompt, unchanged rc contents, deferred user `PS0` expansion,
+and correct success/failure Harvest regions despite nonzero hook returns.
+These tests skip explicitly if Bash 5.1+ is unavailable; they do not promote missing
+shells or the required three-shell acceptance record to passed.
+
 `scripts/run_shell_acceptance.py` runs only the required Bash/Zsh/Fish real-PTY
 fixture and writes a sealed partial integration record. Its pure and private
 process tests cover zero/ignored/wrong-test refusal, exact observation shape,

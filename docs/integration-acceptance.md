@@ -163,6 +163,25 @@ uses only the fake executable above.
 
 ## Shell and Harvest contract
 
+Bash prompt integration composes with the user's existing `PROMPT_COMMAND`
+instead of evaluating its first value inside a wrapper. Scalar command strings
+remain scalar; Bash 5.1+ indexed arrays retain their command values and execution
+order (sparse indices are normalized when the integration hooks are inserted).
+A leading hook reports the completed command before user prompt output; a
+trailing hook reports cwd and the next prompt. Both return their incoming status,
+so user hooks see the same `$?` as native Bash. Existing `PS0` text and deferred
+expansions remain intact before the appended command-start marker. No user rc
+file is rewritten. Hooks which replace these variables after startup can still
+remove the integration; this is not universal prompt-framework compatibility.
+
+Isolated Bash 5.3.15 PTY regressions compare scalar, indexed-array and sparse-array
+hooks directly with unmodified Bash, including nonzero hook returns, comments,
+command success/failure, and deferred `PS0` expansion. The resulting terminal
+and Harvest regions must still report the real command exits, not hook exits.
+This narrow Bash evidence does not satisfy the required three-shell artifact
+or establish older-Bash/native Zsh/Fish/Nushell/Elvish acceptance. See the
+[GNU prompt-variable contract](https://www.gnu.org/software/bash/manual/html_node/Bash-Variables.html).
+
 The candidate-bound required-shell runner from
 [#113](https://github.com/Tjemmmic/termeric/issues/113) replaces console-only CI
 evidence. On Linux with Bash, Zsh and Fish installed, from a clean checkout:
