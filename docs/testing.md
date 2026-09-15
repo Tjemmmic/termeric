@@ -76,6 +76,19 @@ real-PTY variants, requiring exact positional values for the `-s` case as well
 as rc loading, first-prompt cwd, and multiline success/failure regions. It
 self-skips without Zsh or fails under `TERMERIC_REQUIRE_ZSH_CWD_TESTS=1`.
 
+`bash_launch_tests` checks exact pass-through and no generated files for
+non-rc/unknown modes (including POSIX environment), rc option order, stdin
+operands, and safe re-preparation. Seven real-Bash startup comparisons cover
+default, relative/absolute, dash-prefixed, shell-punctuation, empty, and missing
+rc paths with a PATH decoy and a nested child shell. Bash's non-PTY job-control
+warnings must match the native baseline; arbitrary stderr is not suppressed.
+`bash_custom_rc_and_stdin_arguments_preserve_prompt_regions` adds four isolated
+real-PTY variants for custom rc, multiple rc options/nounset, noediting, and
+exact stdin parameters, checking first-prompt cwd and complete command regions.
+Real-Bash tests self-skip when unavailable unless
+`TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. See
+[the launch boundary](osc-integration.md#bash-launch-and-custom-rc-handling).
+
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
 with isolated configuration, captures its bytes, and feeds only an in-memory
 terminal. It reproduces/prevents directory-to-title injection, round-trips UTF-8

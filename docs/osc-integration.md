@@ -140,6 +140,44 @@ These producer fixes cover **Bash, Zsh, Fish, and opt-in Elvish**. Nushell uses
 its own native producer and has the confirmed gaps below. This does not sanitize
 arbitrary user prompt code or output from other applications.
 
+### Bash launch and custom-rc handling
+
+Termeric integrates recognized interactive **non-login** Bash launches.
+Commands/scripts, login/POSIX/no-rc modes, debugger/restricted/privileged modes,
+and unknown argument forms keep their exact program, argv, and environment
+without generating an rc file. Presence of `POSIXLY_CORRECT` (even empty), or
+`posix` in effective `SHELLOPTS`, also leaves the launch untouched: these modes
+do not use normal `.bashrc` startup. They report integration unavailable,
+not a successful hook installation. Login-shell integration remains missing;
+login shells themselves continue to run with native startup behavior.
+
+The classifier preserves Bash's long-options-before-short-options rule,
+recognized grouped flags, separate `-o`/`-O` values, interactive/stdin mode,
+and `-`/`--` boundaries. With `-s`, positional parameters are not reinterpreted
+as options or scripts. Common editing, history, globbing, tracing, and
+unset-variable options are recognized; this is not a complete Bash CLI
+validator. Unrecognized forms still run unchanged, without integration.
+
+For an explicit `--rcfile FILE` or `--init-file FILE`, only the **last** rc value
+is replaced with the generated wrapper; all other argv words retain their
+positions and contents. The requested path is carried as data, not interpolated
+into shell code. The wrapper clears its private exported markers before
+loading user configuration at file scope. Relative paths are pinned to the
+startup working directory so `source` cannot select a different file from
+`PATH`. Empty/missing custom paths do not fall back to HOME. Re-preparing an
+unconsumed launch recovers its original custom/default selection instead of
+recursively sourcing a generated wrapper.
+
+These rules were checked against the installed Bash 5.3.15 documentation and
+binary; see also the upstream [startup-file contract](https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html).
+Pure routing/reentry cases, seven isolated startup comparisons against plain
+Bash, and four real-PTY variants cover native file selection, shell-punctuation
+filenames, a PATH decoy, child-environment cleanup, unchanged rc bytes, exact
+stdin parameters, first-prompt cwd, and multiline success/failure regions.
+Arbitrary startup-environment/option combinations and older Bash runtime
+versions are not established by these new tests. The separate existing Bash
+prompt-array/version fallback tests remain in place.
+
 ### Zsh configuration-directory handoff
 
 Before generating startup files, Termeric checks recognized Zsh invocation
@@ -161,7 +199,7 @@ Recognized options cover interactive/login, RCS/global-RCS, stdin input,
 tracing/verbosity, unset-variable handling, and ZLE. This is not a complete
 Zsh CLI validator: other options still run unchanged, without injected
 integration, pending explicit support. It does not correct the separate
-Bash/Fish generic argument classifier.
+Fish generic argument classifier; Bash has its own handling described above.
 
 Pure routing cases verify exact pass-through, no generated files on rejection,
 option ordering, and operand boundaries. Four isolated real-PTY variants verify

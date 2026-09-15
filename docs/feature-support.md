@@ -64,6 +64,13 @@ cross-platform daily-driver terminal.
 | Shell-reported working directory | **Partial** | Bounded OSC 7 `file://host/path` reports are terminal- and pane-local, fragmented/C1-safe, strict percent-decoded UTF-8, and preferred over Linux process inspection for titles, Git/plugin context, pane cwd inheritance, sessions, workspaces, and local-domain controls. Remote authorities remain display-only and never become local filesystem paths. The generated Bash, Zsh, Fish, and opt-in Elvish emitters use bounded URI encoding, preventing directory text from injecting terminal commands; oversized reports are omitted whole while prompt hooks continue. Elvish byte tests cover both registered hooks, and its isolated native editor/PTY startup probe passes. Modern Nushell 0.115.1 passes the ordinary-directory native probe, and a bounded conditional supplemental report fixes user-disabled OSC 7 at the first prompt. Native literal `%2F` paths are still misdecoded, tracked by one ignored known-failure regression; real desktop/user-configuration acceptance is separate. Other platforms retain portable parsing/policy code but lack native acceptance. | [OSC policy and remaining emitter work](osc-integration.md#working-directories), [focused routing](focused-pane-routing.md), [#26](https://github.com/Tjemmmic/termeric/issues/26) |
 | Terminfo and capability negotiation | **Supported (Linux)** | The versioned `xterm-termeric` entry advertises verified color, cursor/editing, `ech`, `rep`, `cbt`, `tbc`, tmux-compatible `Enmg`/`Dsmg`/`Clmg`/`Cmg` horizontal margins and `Rect` rectangle fill, plus non-destructive DECSTR initialization/reset behavior. It is compiled into Linux packages and selected only when discoverable; the child pins `TERMINFO` to that exact root so inherited databases cannot contradict the selected identity. `xterm-256color` remains an explicit compatibility fallback; remote hosts need the entry installed before SSH forwards the custom name. | [terminfo contract](terminfo.md), [identity boundary](device-attributes-and-charsets.md), [#25](https://github.com/Tjemmmic/termeric/issues/25) |
 
+Bash now supports explicit custom `--rcfile`/`--init-file` paths with native
+last-option file selection and no PATH-search fallback. Routing, reentry,
+seven native startup comparisons, and four PTY variants cover this behavior.
+Login/POSIX/no-rc and unrecognized modes run untouched without integration;
+login-shell integration remains missing. See
+[Bash launch handling](osc-integration.md#bash-launch-and-custom-rc-handling).
+
 Zsh forwards user `.zshenv`, login `.zprofile`, and `.zshrc` at file scope,
 restoring each effective `ZDOTDIR` before user code and preserving subsequent
 directory/export changes. Recovery tests, four directory-handoff comparisons,
@@ -75,7 +82,7 @@ incomplete. See
 Zsh launch routing also preserves command/script, startup-disabled, and unknown
 forms without changing their environment. Recognized option order/inversions,
 end markers, and stdin positional arguments have pure routing coverage and
-four real-PTY acceptance variants; Bash/Fish argument routing remains separate.
+four real-PTY acceptance variants; Fish argument routing remains separate.
 
 Nushell integration now recognizes scalar REPL options such as `--config-home`
 and grouped short flags while preserving command, service, custom-prelude, and
