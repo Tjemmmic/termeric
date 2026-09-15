@@ -44,6 +44,14 @@ protocol replies and sibling traffic are excluded. Pending UI notices are
 bounded to 16 per owner and drained with pane attribution. A failed or capped
 worker clears only its owner's recording flag.
 
+[Raw transcript text](transcript-text.md) has independent input/output UTF-8
+decoders in each recorder. They retain at most three incomplete bytes per
+direction, borrow valid chunks, and cap repair allocation at the queue-byte
+limit. Invalid bytes and unfinished final sequences become annotated replacement
+characters with bounded warnings; those warnings do not stop a healthy
+recorder. Stop/replacement/EOF finalize the old epoch without carrying text into
+a new recording. Protocol, sibling, and refused user writes stay excluded.
+
 [Passive diff capture](diff-capture.md) is separately bounded per terminal:
 16 KiB line framing, 256 KiB raw patches, and 64 retained reviews within a 4 MiB
 owned-storage budget. Complete validated patches enqueue one transcript diff

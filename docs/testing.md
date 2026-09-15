@@ -881,6 +881,12 @@ bytes, disconnect, close, and reopen behavior.
 
 ## Pane event-routing lane
 
+The [streaming transcript text lane](transcript-text.md) verifies valid and
+malformed UTF-8 across every split, recording epochs, EOF/stop/Drop, bounded
+repair and blocked-writer behavior, redaction/export compatibility, and pending
+characters moving with a real local PTY through split/collapse. Protocol and
+refused writes cannot complete a recorded user-input character.
+
 The [bounded streaming diff lane](diff-capture.md) adds every-byte Unicode/ANSI
 framing, validated hunk completion, byte/line/hunk/history caps with owned
 capacity accounting, exactly-once transcript entries, real single/split EOF

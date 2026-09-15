@@ -86,11 +86,11 @@ Rejected candidates never create diff entries. Existing transcript queue/file
 caps, backpressure, redaction, and failure notices still apply: an enqueue
 attempt is not a durability guarantee. See [background I/O](background-io.md).
 
-This fixes byte framing for **diff capture and its completed diff entries**.
-The separate raw-output transcript path still accepts only individually valid
-UTF-8 chunks; it is not a byte-exact PTY archive. That limitation is not hidden
-by successful diff capture and is tracked separately in
-[#128](https://github.com/Tjemmmic/termeric/issues/128).
+The separate [raw transcript text path](transcript-text.md) also decodes UTF-8
+incrementally, with bounded repair and explicit invalid-byte replacement. It
+remains a text recording, not a byte-exact PTY archive. Diff entries use the
+recording epoch active at completion, even when capture began before recording;
+raw recording stop/start does not prematurely finalize a diff.
 
 Rejection, history eviction, and identity exhaustion produce bounded notices
 attributed to the owning terminal. They do not stop or alter terminal display.

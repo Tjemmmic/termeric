@@ -2,6 +2,112 @@
 use super::*;
 
 #[test]
+fn transcript_utf8_carry_follows_owner_through_split_collapse_and_sibling_close() {
+    use crate::session::transcript::{EntryKind, TranscriptEntry, TranscriptRecorder};
+    use termeric_core::pty::PtyEvent;
+    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
+    let owner = PaneId(entry.source.pane_id);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    {
+        let tabs = app.tabs.as_mut().unwrap();
+        let tab = tabs.active_tab_mut().unwrap();
+        tab.replace_single_test_output(receiver);
+        tab.start_transcript(
+            TranscriptRecorder::new(directory.path(), None, None, "Local", "owner").unwrap(),
+        );
+        sender
+            .send(PtyEvent::Output(b"before \xf0\x9f".to_vec()))
+            .unwrap();
+        tabs.poll_events();
+        let origin = tabs.origin_for_pane(entry.source.tab_id, owner).unwrap();
+        tabs.write_user_to_origin(origin, b"input \xf0\x9f")
+            .unwrap();
+    }
+    let sibling = split_harvest_capture_owner(&mut app, directory.path());
+    let sibling_path;
+    let _sibling_sender;
+    {
+        let tabs = app.tabs.as_mut().unwrap();
+        let tab = tabs.active_tab_mut().unwrap();
+        let pane = tab
+            .pane_manager
+            .as_mut()
+            .unwrap()
+            .get_pane_mut(sibling)
+            .unwrap();
+        let (sibling_sender, receiver) = std::sync::mpsc::channel();
+        _sibling_sender = sibling_sender;
+        pane.pty_rx = receiver;
+        let recorder =
+            TranscriptRecorder::new(directory.path(), None, None, "Local", "sibling").unwrap();
+        sibling_path = recorder.path().to_owned();
+        pane.integration.start_transcript(recorder);
+        pane.integration.observe_output(b"sibling \xe2", false);
+        pane.integration.record_input(b"sibling input \xc2");
+        sender
+            .send(PtyEvent::Output(b"\x8c\xb1 split \xe2".to_vec()))
+            .unwrap();
+        tabs.poll_events();
+        let origin = tabs.origin_for_pane(entry.source.tab_id, owner).unwrap();
+        // These protocol bytes must not complete or corrupt the input carry.
+        tabs.write_to_origin(origin, b"\x8c\xb1PROTOCOL_ONLY")
+            .unwrap();
+        tabs.write_user_to_origin(origin, b"\x8c\xb1 split \xc2")
+            .unwrap();
+        let pane = tabs
+            .active_tab_mut()
+            .unwrap()
+            .pane_manager
+            .as_mut()
+            .unwrap()
+            .get_pane_mut(owner)
+            .unwrap();
+        pane.read_only = true;
+        assert!(tabs.write_user_to_origin(origin, b"\xa2DENIED").is_err());
+        tabs.active_tab_mut()
+            .unwrap()
+            .pane_manager
+            .as_mut()
+            .unwrap()
+            .get_pane_mut(owner)
+            .unwrap()
+            .read_only = false;
+    }
+    app.close_control_pane(entry.source.tab_id as u64, sibling.0)
+        .unwrap();
+    let read = |path: &std::path::Path, kind: EntryKind| -> String {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<TranscriptEntry>(line).unwrap())
+            .filter(|entry| entry.kind == kind)
+            .map(|entry| entry.content)
+            .collect()
+    };
+    assert_eq!(read(&sibling_path, EntryKind::Output), "sibling �");
+    assert_eq!(read(&sibling_path, EntryKind::Input), "sibling input �");
+    let tabs = app.tabs.as_mut().unwrap();
+    assert!(tabs.active_tab().unwrap().pane_manager.is_none());
+    sender
+        .send(PtyEvent::Output(b"\x82\xac collapsed".to_vec()))
+        .unwrap();
+    tabs.poll_events();
+    let origin = tabs.origin_for_pane(entry.source.tab_id, owner).unwrap();
+    tabs.write_user_to_origin(origin, b"\xa2 collapsed")
+        .unwrap();
+    let mut recorder = tabs.active_tab_mut().unwrap().stop_transcript().unwrap();
+    recorder.finish(Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        read(recorder.path(), EntryKind::Output),
+        "before 🌱 split € collapsed"
+    );
+    assert_eq!(
+        read(recorder.path(), EntryKind::Input),
+        "input 🌱 split ¢ collapsed"
+    );
+}
+
+#[test]
 fn single_and_split_diff_capture_waits_for_real_eof_not_poll_boundaries() {
     use termeric_core::pty::PtyEvent;
     for split in [false, true] {

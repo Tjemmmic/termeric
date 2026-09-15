@@ -92,6 +92,13 @@ Failure/backpressure notices are owner-local and capped at 16 pending messages.
 Session chrome now reads the focused owner's metadata, so focusing a shell
 sibling cannot overwrite another terminal's Git/profile/recording state.
 
+[Raw transcript text](transcript-text.md) now incrementally decodes input and
+output across PTY/write fragments. Fixed-size carries remain with each recorder
+through split/collapse; recording stop/replacement and EOF finalize their own
+epoch. Malformed text uses annotated replacement characters and bounded
+warnings, not silent whole-chunk loss. Protocol/sibling/refused writes are
+excluded. These local regressions do not establish real-provider acceptance.
+
 This is the ownership dependency of
 [#126](https://github.com/Tjemmmic/termeric/issues/126). It does not lift the
 restriction on non-primary plugin workspace launches or plugin-primary pane

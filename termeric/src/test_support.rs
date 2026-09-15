@@ -413,7 +413,7 @@ fn scheduled_resource_soak_scenario() {
         let mut dropped_entries = 0usize;
         for entry in 0..64 {
             let output_result = transcript
-                .record_output(&format!("iteration={iteration} output={entry} 界\n"))
+                .record_output(format!("iteration={iteration} output={entry} 界\n"))
                 .unwrap();
             if output_result == TranscriptWrite::Written {
                 accepted_entries += 1;

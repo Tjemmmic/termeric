@@ -4,6 +4,10 @@
 //! redaction, serialization, file creation, writes, periodic flushes, cap
 //! accounting, and the durable shutdown flush.
 
+#[cfg(test)]
+mod streaming_tests;
+mod utf8;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -113,6 +117,7 @@ pub enum TranscriptWrite {
 pub enum TranscriptNotice {
     CapReached { max_bytes: usize },
     Failed(String),
+    TextReplaced { input: bool },
 }
 
 enum WriterCommand {
@@ -196,6 +201,10 @@ pub struct TranscriptRecorder {
     cap_reached: bool,
     failed: bool,
     backpressure_reported: bool,
+    input_decoder: utf8::Decoder,
+    output_decoder: utf8::Decoder,
+    replacement_seen: u8,
+    replacement_pending: u8,
 }
 
 impl std::fmt::Debug for TranscriptRecorder {
@@ -273,15 +282,90 @@ impl TranscriptRecorder {
             cap_reached: false,
             failed: false,
             backpressure_reported: false,
+            input_decoder: utf8::Decoder::default(),
+            output_decoder: utf8::Decoder::default(),
+            replacement_seen: 0,
+            replacement_pending: 0,
         })
     }
 
-    pub fn record_input(&mut self, data: &str) -> std::io::Result<TranscriptWrite> {
-        self.enqueue(EntryKind::Input, data, None)
+    pub fn record_input(&mut self, data: impl AsRef<[u8]>) -> std::io::Result<TranscriptWrite> {
+        self.record_text(true, data.as_ref())
     }
 
-    pub fn record_output(&mut self, data: &str) -> std::io::Result<TranscriptWrite> {
-        self.enqueue(EntryKind::Output, data, None)
+    pub fn record_output(&mut self, data: impl AsRef<[u8]>) -> std::io::Result<TranscriptWrite> {
+        self.record_text(false, data.as_ref())
+    }
+
+    fn decoder(&mut self, input: bool) -> &mut utf8::Decoder {
+        if input {
+            &mut self.input_decoder
+        } else {
+            &mut self.output_decoder
+        }
+    }
+
+    fn record_text(&mut self, input: bool, data: &[u8]) -> std::io::Result<TranscriptWrite> {
+        let kind = if input {
+            EntryKind::Input
+        } else {
+            EntryKind::Output
+        };
+        if self.cap_reached || self.failed || self.command_tx.is_none() {
+            self.decoder(input).clear();
+            return self.enqueue(kind, "", None);
+        }
+        // Borrow valid chunks. Repair produces at most one bounded temporary
+        // string and one queue entry, not a queue of tiny replacement fragments.
+        let limit = self.limits.max_queue_bytes;
+        let Some(decoded) = self.decoder(input).decode(data, limit) else {
+            return Ok(self.backpressure());
+        };
+        if decoded.text.is_empty() {
+            return Ok(TranscriptWrite::Written);
+        }
+        if decoded.replaced {
+            self.replacement_notice(input);
+        }
+        let metadata = decoded
+            .replaced
+            .then(|| serde_json::json!({ "utf8_replaced": true }));
+        let result = self.enqueue(kind, &decoded.text, metadata);
+        if !matches!(result, Ok(TranscriptWrite::Written)) {
+            self.decoder(input).clear();
+        }
+        result
+    }
+
+    fn replacement_notice(&mut self, input: bool) {
+        let flag = if input { 1 } else { 2 };
+        if self.replacement_seen & flag == 0 {
+            self.replacement_seen |= flag;
+            self.replacement_pending |= flag;
+        }
+    }
+
+    /// Finalize only raw text, without completing pending diff captures or
+    /// stopping the worker. EOF, recording stop/replacement and Drop use this
+    /// same idempotent path; checkpoint deliberately does not finalize text.
+    pub(crate) fn finish_text_streams(&mut self) -> std::io::Result<TranscriptWrite> {
+        let mut result = Ok(TranscriptWrite::Written);
+        for input in [true, false] {
+            if self.decoder(input).finish() {
+                self.replacement_notice(input);
+                let written = self.enqueue(
+                    if input {
+                        EntryKind::Input
+                    } else {
+                        EntryKind::Output
+                    },
+                    "\u{fffd}",
+                    Some(serde_json::json!({ "utf8_replaced": true })),
+                );
+                result = combine_writes(result, written);
+            }
+        }
+        result
     }
 
     pub fn record_diff(
@@ -335,6 +419,12 @@ impl TranscriptRecorder {
 
     pub fn poll_notices(&mut self) -> Vec<TranscriptNotice> {
         let mut notices = Vec::new();
+        let pending = std::mem::take(&mut self.replacement_pending);
+        for (flag, input) in [(1, true), (2, false)] {
+            if pending & flag != 0 {
+                notices.push(TranscriptNotice::TextReplaced { input });
+            }
+        }
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
                 WriterEvent::CapReached if !self.cap_reached => {
@@ -433,10 +523,11 @@ impl TranscriptRecorder {
     }
 
     pub fn finish(&mut self, timeout: Duration) -> std::io::Result<()> {
+        let deadline = Instant::now() + timeout;
+        let text_result = self.finish_text_streams();
         let Some(command_tx) = self.command_tx.take() else {
             return Ok(());
         };
-        let deadline = Instant::now() + timeout;
         let (ack_tx, ack_rx) = mpsc::channel();
         let mut command = WriterCommand::Shutdown(ack_tx);
         loop {
@@ -460,7 +551,8 @@ impl TranscriptRecorder {
                             TranscriptNotice::Failed(error) => {
                                 Some(Err(std::io::Error::other(error)))
                             }
-                            TranscriptNotice::CapReached { .. } => None,
+                            TranscriptNotice::CapReached { .. }
+                            | TranscriptNotice::TextReplaced { .. } => None,
                         })
                         .unwrap_or_else(|| {
                             Err(std::io::Error::new(
@@ -482,7 +574,35 @@ impl TranscriptRecorder {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        result
+        result?;
+        match text_result? {
+            TranscriptWrite::Written => Ok(()),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "transcript final UTF-8 replacement was not recorded before shutdown",
+            )),
+        }
+    }
+}
+
+fn combine_writes(
+    first: std::io::Result<TranscriptWrite>,
+    second: std::io::Result<TranscriptWrite>,
+) -> std::io::Result<TranscriptWrite> {
+    let priority = |value| match value {
+        TranscriptWrite::Written => 0,
+        TranscriptWrite::DroppedAtBackpressure => 1,
+        TranscriptWrite::DroppedAtCap => 2,
+        TranscriptWrite::DroppedAfterFailure => 3,
+        TranscriptWrite::Backpressure => 4,
+    };
+    match (first, second) {
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(first), Ok(second)) => Ok(if priority(first) >= priority(second) {
+            first
+        } else {
+            second
+        }),
     }
 }
 
@@ -984,7 +1104,7 @@ mod tests {
         let unicode = format!("sk-{}界 tail", "x".repeat(39));
         recorder.record_input(&unicode).unwrap();
         recorder
-            .record_output(&format!("eyJ{}FAKE_SUFFIX", "a".repeat(200)))
+            .record_output(format!("eyJ{}FAKE_SUFFIX", "a".repeat(200)))
             .unwrap();
         recorder
             .record_diff("gho_FAKE_FILENAME", "safe diff")
