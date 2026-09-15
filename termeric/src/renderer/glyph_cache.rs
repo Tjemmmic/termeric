@@ -1957,7 +1957,9 @@ fn glyph_pixels(content: SwashContent, data: &[u8], pixel_count: usize) -> Optio
             .then(|| RasterPixels::Color(data[..pixel_count * 4].to_vec())),
         SwashContent::SubpixelMask => (data.len() >= pixel_count.saturating_mul(4)).then(|| {
             RasterPixels::Mask(
-                data.chunks_exact(4)
+                data.as_chunks::<4>()
+                    .0
+                    .iter()
                     .take(pixel_count)
                     .map(|rgba| *rgba.iter().max().unwrap_or(&0))
                     .collect(),

@@ -566,11 +566,10 @@ impl App {
         active.total_bytes = Some(total_bytes);
         active.bytes_sent = bytes_sent;
         if !active.cancel_requested {
-            let percent = if total_bytes == 0 {
-                100
-            } else {
-                bytes_sent.saturating_mul(100) / total_bytes
-            };
+            let percent = bytes_sent
+                .saturating_mul(100)
+                .checked_div(total_bytes)
+                .unwrap_or(100);
             self.toasts.update_persistent(
                 active.progress_toast_id,
                 format!(

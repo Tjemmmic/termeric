@@ -583,7 +583,7 @@ impl CommandPalette {
                     }
                 })
                 .collect();
-            scored.sort_by(|a, b| b.score.cmp(&a.score));
+            scored.sort_by_key(|entry| std::cmp::Reverse(entry.score));
             self.entries = scored;
         } else {
             let query = self.input.text();
@@ -651,7 +651,7 @@ impl CommandPalette {
                 })
                 .collect();
 
-            scored.sort_by(|a, b| b.score.cmp(&a.score));
+            scored.sort_by_key(|entry| std::cmp::Reverse(entry.score));
             self.entries = scored;
         }
     }
@@ -1255,6 +1255,49 @@ mod tests {
         palette.open();
         assert!(palette.is_active());
         assert_eq!(palette.entry_count(), palette.registry.len());
+    }
+
+    #[test]
+    fn equal_scores_preserve_registration_order_before_and_after_recency_ranking() {
+        let mut palette = CommandPalette::new();
+        palette.register_commands(
+            ["third", "first", "second"]
+                .into_iter()
+                .map(|id| RegisteredCommand {
+                    id: id.into(),
+                    title: "Same Command".into(),
+                    category: "Test".into(),
+                    shortcut: None,
+                    icon: None,
+                    source: CommandSource::Core,
+                    destructive: false,
+                })
+                .collect(),
+        );
+        palette.open();
+        for query in ["", "Same"] {
+            assert!(palette.accessibility_set_input(query));
+            let info = palette.build_info();
+            assert_eq!(
+                info.entries
+                    .iter()
+                    .map(|entry| entry.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["third", "first", "second"]
+            );
+        }
+        palette.recently_used.push("second".into());
+        for query in ["", "Same"] {
+            assert!(palette.accessibility_set_input(query));
+            let info = palette.build_info();
+            assert_eq!(
+                info.entries
+                    .iter()
+                    .map(|entry| entry.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["second", "third", "first"]
+            );
+        }
     }
 
     #[test]

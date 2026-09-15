@@ -89,7 +89,7 @@ impl<'a> SixelCommand<'a> {
             palette[0]
         };
         let mut pixels = vec![0; bytes];
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&background);
         }
         let mut canvas = Canvas {
@@ -514,8 +514,10 @@ mod tests {
             decoded
                 .image
                 .data
-                .chunks_exact(4)
-                .all(|pixel| pixel == [255, 0, 0, 255])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [255, 0, 0, 255])
         );
     }
 

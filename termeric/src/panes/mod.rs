@@ -1698,10 +1698,7 @@ impl PaneManager {
     /// authoritative live-domain handoff even when another attached window
     /// currently has a different local focus.
     pub(crate) fn detach(&mut self, detached: PaneId) -> Option<Pane> {
-        let detached_is_open = match self.panes.get(&detached) {
-            Some(pane) => !pane.closed,
-            None => return None,
-        };
+        let detached_is_open = !self.panes.get(&detached)?.closed;
         if self.panes.len() <= 1 || (detached_is_open && self.open_pane_count() <= 1) {
             return None;
         }

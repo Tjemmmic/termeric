@@ -122,8 +122,9 @@ mod tests {
         let path = dir.path().join("snapshot");
         fs::write(&path, "initial").unwrap();
         let finished = Arc::new(AtomicUsize::new(0));
-        let workers: Vec<_> = [b'a', b'b', b'c']
-            .into_iter()
+        let workers: Vec<_> = b"abc"
+            .iter()
+            .copied()
             .map(|byte| {
                 let path = path.clone();
                 let finished = finished.clone();
@@ -145,7 +146,7 @@ mod tests {
             let text = read_text(&path, 16384).unwrap();
             invalid |= text != "initial"
                 && !(text.len() == 16384
-                    && [b'a', b'b', b'c']
+                    && b"abc"
                         .iter()
                         .any(|byte| text.bytes().all(|candidate| candidate == *byte)));
             if finished.load(Ordering::Acquire) == 3 {

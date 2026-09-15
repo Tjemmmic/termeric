@@ -2646,7 +2646,7 @@ fn verify_headless_image_state(
 #[cfg(test)]
 fn expected_headless_image_state(source_row_offset: u32, visible_rows: u32) -> Vec<u8> {
     let mut pixels = vec![0; (HEADLESS_IMAGE_WIDTH * HEADLESS_IMAGE_HEIGHT * 4) as usize];
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[3] = 255;
     }
     let visible_height = visible_rows * HEADLESS_IMAGE_CELL_HEIGHT;

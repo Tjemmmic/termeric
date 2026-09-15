@@ -397,7 +397,9 @@ fn decode_hex(bytes: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = (pair[0] as char).to_digit(16)? as u8;
             let low = (pair[1] as char).to_digit(16)? as u8;
@@ -617,7 +619,7 @@ impl Perform for Handler<'_> {
             // other-key (4), reserved string-key (5), modifier-key (6), and special-key (7) format
             // resources. Resources 1-7 use bounded 0/1 formats; xterm stores
             // resource 0 opaquely and does not consult it while encoding.
-            'f' if !ignore && intermediates == [b'>'] && scalar_params => match params {
+            'f' if !ignore && intermediates == b">" && scalar_params => match params {
                 [0] => self.terminal.reset_xterm_keyboard_format(),
                 [0, format] => self.terminal.set_xterm_keyboard_format(*format),
                 [1] => self.terminal.reset_xterm_cursor_key_format(),
@@ -704,7 +706,7 @@ impl Perform for Handler<'_> {
             }
 
             // Erasing
-            'J' if intermediates == [b'?'] && scalar_params && params.len() <= 1 => {
+            'J' if intermediates == b"?" && scalar_params && params.len() <= 1 => {
                 // DECSED - Selective Erase in Display.
                 self.terminal.selective_erase_in_display(param!(0, 0));
             }
@@ -713,7 +715,7 @@ impl Perform for Handler<'_> {
                 let mode = param!(0, 0);
                 self.terminal.erase_in_display(mode);
             }
-            'K' if intermediates == [b'?'] && scalar_params && params.len() <= 1 => {
+            'K' if intermediates == b"?" && scalar_params && params.len() <= 1 => {
                 // DECSEL - Selective Erase in Line.
                 self.terminal.selective_erase_in_line(param!(0, 0));
             }
@@ -726,7 +728,7 @@ impl Perform for Handler<'_> {
                 // ECH - Erase Character.
                 self.terminal.erase_chars(param!(0, 1) as usize);
             }
-            'v' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 8 => {
+            'v' if !ignore && intermediates == b"$" && scalar_params && params.len() <= 8 => {
                 // DECCRA - Copy Rectangular Area.
                 self.terminal.copy_rectangular_area(
                     param!(0, 1) as usize,
@@ -739,7 +741,7 @@ impl Perform for Handler<'_> {
                     param!(7, 1) as usize,
                 );
             }
-            'x' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 5 => {
+            'x' if !ignore && intermediates == b"$" && scalar_params && params.len() <= 5 => {
                 // DECFRA - Fill Rectangular Area.
                 self.terminal.fill_rectangular_area(
                     params.first().copied().unwrap_or(0),
@@ -749,7 +751,7 @@ impl Perform for Handler<'_> {
                     param!(4, 0) as usize,
                 );
             }
-            'z' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 4 => {
+            'z' if !ignore && intermediates == b"$" && scalar_params && params.len() <= 4 => {
                 // DECERA - Erase Rectangular Area.
                 self.terminal.erase_rectangular_area(
                     param!(0, 1) as usize,
@@ -758,7 +760,7 @@ impl Perform for Handler<'_> {
                     param!(3, 0) as usize,
                 );
             }
-            '{' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 4 => {
+            '{' if !ignore && intermediates == b"$" && scalar_params && params.len() <= 4 => {
                 // DECSERA - Selective Erase Rectangular Area.
                 self.terminal.selective_erase_rectangular_area(
                     param!(0, 1) as usize,
@@ -767,12 +769,12 @@ impl Perform for Handler<'_> {
                     param!(3, 0) as usize,
                 );
             }
-            'x' if !ignore && intermediates == [b'*'] && scalar_params && params.len() <= 1 => {
+            'x' if !ignore && intermediates == b"*" && scalar_params && params.len() <= 1 => {
                 // DECSACE - Select Attribute Change Extent.
                 self.terminal
                     .select_attribute_change_extent(params.first().copied().unwrap_or(0));
             }
-            'r' if !ignore && intermediates == [b'$'] && scalar_params => {
+            'r' if !ignore && intermediates == b"$" && scalar_params => {
                 // DECCARA - Change Attributes in Rectangular Area.
                 self.terminal.change_attributes_area(
                     param!(0, 1) as usize,
@@ -782,7 +784,7 @@ impl Perform for Handler<'_> {
                     params.get(4..).unwrap_or_default(),
                 );
             }
-            't' if !ignore && intermediates == [b'$'] && scalar_params => {
+            't' if !ignore && intermediates == b"$" && scalar_params => {
                 // DECRARA - Reverse Attributes in Rectangular Area.
                 self.terminal.reverse_attributes_area(
                     param!(0, 1) as usize,
@@ -819,7 +821,7 @@ impl Perform for Handler<'_> {
                     _ => {}
                 }
             }
-            'y' if !ignore && intermediates == [b'*'] && scalar_params && params.len() <= 6 => {
+            'y' if !ignore && intermediates == b"*" && scalar_params && params.len() <= 6 => {
                 // DECRQCRA - Request Checksum of Rectangular Area.
                 self.terminal.request_checksum_rectangular_area(
                     params.first().copied().unwrap_or(0),
@@ -830,7 +832,7 @@ impl Perform for Handler<'_> {
                     param!(5, 0) as usize,
                 );
             }
-            'w' if !ignore && intermediates == [b'$'] && scalar_params && params.len() <= 1 => {
+            'w' if !ignore && intermediates == b"$" && scalar_params && params.len() <= 1 => {
                 // DECRQPSR - Request Presentation State Report.
                 self.terminal
                     .request_presentation_state(params.first().copied().unwrap_or(0));
@@ -838,7 +840,7 @@ impl Perform for Handler<'_> {
 
             // Xterm title-stack position report. Keep this ahead of SU.
             'S' if !ignore
-                && intermediates == [b'#']
+                && intermediates == b"#"
                 && scalar_params
                 && matches!(params, [] | [0]) =>
             {
@@ -866,7 +868,7 @@ impl Perform for Handler<'_> {
             // modifier/special-key resources. Keep this ahead of TBC because the private
             // introducer selects a keyboard query rather than tab clearing.
             'g' if !ignore
-                && intermediates == [b'?']
+                && intermediates == b"?"
                 && scalar_params
                 && matches!(params, [0] | [1] | [2] | [3] | [4] | [5] | [6] | [7]) =>
             {
@@ -892,7 +894,7 @@ impl Perform for Handler<'_> {
             }
 
             // DECST8C - Restore default stops at columns 9, 17, ...
-            'W' if intermediates == [b'?']
+            'W' if intermediates == b"?"
                 && scalar_params
                 && params.len() == 1
                 && params[0] == 5 =>
@@ -915,7 +917,7 @@ impl Perform for Handler<'_> {
             // (7) resources.
             // Keep this ahead of SGR: the private introducers are protocol
             // selectors, not rendition parameters.
-            'm' if !ignore && intermediates == [b'>'] => {
+            'm' if !ignore && intermediates == b">" => {
                 let parameters: Vec<_> = raw_params.iter().collect();
                 match parameters.as_slice() {
                     [[0]] => self.terminal.reset_xterm_keyboard_modify(),
@@ -954,7 +956,7 @@ impl Perform for Handler<'_> {
                 }
             }
             'm' if !ignore
-                && intermediates == [b'?']
+                && intermediates == b"?"
                 && scalar_params
                 && matches!(params, [0] | [1] | [2] | [3] | [4] | [5] | [6] | [7]) =>
             {
@@ -989,7 +991,7 @@ impl Perform for Handler<'_> {
             // Xterm DEC private-mode save. Keyboard types 1060/1061 share one
             // saved value because they are mutually exclusive views of the
             // same global terminal state.
-            's' if intermediates == [b'?'] && scalar_params => {
+            's' if intermediates == b"?" && scalar_params => {
                 if params.iter().any(|mode| matches!(*mode, 1060 | 1061)) {
                     self.terminal.save_xterm_keyboard_type();
                 }
@@ -1013,7 +1015,7 @@ impl Perform for Handler<'_> {
                 }
             }
             'u' => {
-                if intermediates == [b'?']
+                if intermediates == b"?"
                     && scalar_params
                     && params.len() <= 1
                     && params.first().copied().unwrap_or(0) == 0
@@ -1022,7 +1024,7 @@ impl Perform for Handler<'_> {
                     self.terminal.push_event(TerminalEvent::PtyWrite(
                         format!("\x1b[?{flags}u").into_bytes(),
                     ));
-                } else if intermediates == [b'='] && scalar_params && params.len() <= 2 {
+                } else if intermediates == b"=" && scalar_params && params.len() <= 2 {
                     let flags = params.first().copied().unwrap_or(0);
                     let mode = params
                         .get(1)
@@ -1030,10 +1032,10 @@ impl Perform for Handler<'_> {
                         .filter(|value| *value != 0)
                         .unwrap_or(1);
                     self.terminal.set_kitty_keyboard_flags(flags, mode);
-                } else if intermediates == [b'>'] && scalar_params && params.len() <= 1 {
+                } else if intermediates == b">" && scalar_params && params.len() <= 1 {
                     self.terminal
                         .push_kitty_keyboard_flags(params.first().copied().unwrap_or(0));
-                } else if intermediates == [b'<'] && scalar_params && params.len() <= 1 {
+                } else if intermediates == b"<" && scalar_params && params.len() <= 1 {
                     self.terminal.pop_kitty_keyboard_flags(
                         params
                             .first()
@@ -1049,7 +1051,7 @@ impl Perform for Handler<'_> {
 
             // XTVERSION. The static value is a terminal protocol revision, not
             // the package semantic version or an xterm identity claim.
-            'q' if !ignore && intermediates == [b'>', b' '] => {
+            'q' if !ignore && intermediates == b"> " => {
                 // Kitty multiple cursors. Preserve colon-delimited parameter
                 // groups; flattening would lose coordinate/color structure.
                 let parameters = raw_params
@@ -1058,7 +1060,7 @@ impl Perform for Handler<'_> {
                     .collect::<Vec<_>>();
                 self.terminal.handle_multiple_cursor_csi(&parameters);
             }
-            'q' if intermediates == [b'>']
+            'q' if intermediates == b">"
                 && params.len() <= 1
                 && params.first().copied().unwrap_or(0) == 0 =>
             {
@@ -1066,12 +1068,12 @@ impl Perform for Handler<'_> {
                     .push_event(TerminalEvent::PtyWrite(XTVERSION.to_vec()));
             }
             // DECSCUSR - application-selected cursor shape and blink policy.
-            'q' if intermediates == [b' '] && scalar_params && params.len() <= 1 => {
+            'q' if intermediates == b" " && scalar_params && params.len() <= 1 => {
                 self.terminal
                     .set_cursor_style(params.first().copied().unwrap_or(0));
             }
             // DECSCA - Select Character Protection Attribute.
-            'q' if intermediates == [b'"'] && scalar_params && params.len() <= 1 => {
+            'q' if intermediates == b"\"" && scalar_params && params.len() <= 1 => {
                 self.terminal
                     .set_character_protection(params.first().copied().unwrap_or(0));
             }
@@ -1082,7 +1084,7 @@ impl Perform for Handler<'_> {
                 && params.len() <= 1
                 && matches!(intermediates, [b'$'] | [b'?', b'$']) =>
             {
-                let private = intermediates == [b'?', b'$'];
+                let private = intermediates == b"?$";
                 let number = params.first().copied().unwrap_or(0);
                 let status = self.terminal.mode_status(private, number);
                 let prefix = if private { "?" } else { "" };
@@ -1093,7 +1095,7 @@ impl Perform for Handler<'_> {
             // DECSTR - Soft Terminal Reset. The sequence is parameterless;
             // reject plural, nonzero, and subparameter forms rather than
             // interpreting a malformed mode query as a reset.
-            'p' if intermediates == [b'!']
+            'p' if intermediates == b"!"
                 && scalar_params
                 && params.len() <= 1
                 && params.first().copied().unwrap_or(0) == 0 =>
@@ -1103,7 +1105,7 @@ impl Perform for Handler<'_> {
             // DECSCL - Select Conformance Level. The first parameter selects
             // DEC levels 1-5 as 61-65. The optional second parameter selects
             // 8-bit (0/2/default) or 7-bit (1) reply controls.
-            'p' if intermediates == [b'"'] && scalar_params && (1..=2).contains(&params.len()) => {
+            'p' if intermediates == b"\"" && scalar_params && (1..=2).contains(&params.len()) => {
                 self.terminal
                     .select_conformance_level(params[0], params.get(1).copied());
             }
@@ -1111,7 +1113,7 @@ impl Perform for Handler<'_> {
             // Xterm's disable form for keyboard, cursor, function, keypad, other-key,
             // reserved string-key, modifier-key, and special-key resources.
             'n' if !ignore
-                && intermediates == [b'>']
+                && intermediates == b">"
                 && scalar_params
                 && matches!(params, [0] | [1] | [2] | [3] | [4] | [5] | [6] | [7]) =>
             {
@@ -1200,7 +1202,7 @@ impl Perform for Handler<'_> {
             }
 
             // Xterm DEC private-mode restore for the shared keyboard-type slot.
-            'r' if intermediates == [b'?'] && scalar_params => {
+            'r' if intermediates == b"?" && scalar_params => {
                 for mode in params {
                     if matches!(*mode, 1060 | 1061) {
                         self.terminal.restore_xterm_keyboard_type();
@@ -1364,7 +1366,7 @@ impl Perform for Handler<'_> {
 
             // Set color palette
             4 => {
-                for pair in params[1..].chunks_exact(2) {
+                for pair in params[1..].as_chunks::<2>().0 {
                     let Some(index) = parse_palette_index(pair[0]) else {
                         continue;
                     };

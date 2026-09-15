@@ -1,6 +1,22 @@
 use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
+#[test]
+fn clipboard_base64_preserves_full_groups_and_every_padding_case() {
+    for (input, expected) in [
+        ("", ""),
+        ("f", "Zg=="),
+        ("fo", "Zm8="),
+        ("foo", "Zm9v"),
+        ("foob", "Zm9vYg=="),
+        ("fooba", "Zm9vYmE="),
+        ("foobar", "Zm9vYmFy"),
+    ] {
+        assert_eq!(base64_encode_standard(input.as_bytes()), expected);
+    }
+    assert_eq!(base64_encode_standard(&[0xfb, 0xff, 0xff]), "+///");
+}
+
 #[derive(Debug)]
 struct CountingTabClosedPlugin(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
@@ -692,6 +708,24 @@ fn directory_upload_progress_becomes_determinate_after_local_preparation() {
     assert_eq!(app.active_file_upload.as_ref().unwrap().bytes_sent, 0);
     app.handle_file_upload_progress(18, 100, 200);
     assert!(latest_toast(&app).is_some_and(|message| message.contains("50%")));
+}
+
+#[test]
+fn empty_upload_progress_is_complete_without_dividing_by_zero() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let progress_toast_id = app.toasts.persistent_info("uploading");
+    app.active_file_upload = Some(ActiveFileUpload {
+        request_id: 19,
+        name: "empty.txt".into(),
+        bytes_sent: 0,
+        total_bytes: Some(0),
+        cancellation: Arc::new(AtomicBool::new(false)),
+        cancel_requested: false,
+        progress_toast_id,
+    });
+    app.handle_file_upload_progress(19, 0, 0);
+    assert!(latest_toast(&app).is_some_and(|message| message.contains("100% (0/0 bytes)")));
+    assert_eq!(app.active_file_upload.as_ref().unwrap().bytes_sent, 0);
 }
 
 #[test]

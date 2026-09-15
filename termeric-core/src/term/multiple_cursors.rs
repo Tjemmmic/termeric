@@ -432,7 +432,7 @@ impl Terminal {
                             self.extra_cursors.set_cell(cursor.row, cursor.col, shape);
                         }
                         2 => {
-                            for point in coordinates.chunks_exact(2) {
+                            for point in coordinates.as_chunks::<2>().0 {
                                 let row = usize::from(point[0]);
                                 let col = usize::from(point[1]);
                                 if row != 0 && col != 0 {
@@ -444,7 +444,7 @@ impl Terminal {
                             .extra_cursors
                             .set_rectangle(1, 1, self.rows, self.cols, shape),
                         4 => {
-                            for rectangle in coordinates.chunks_exact(4) {
+                            for rectangle in coordinates.as_chunks::<4>().0 {
                                 self.extra_cursors.set_rectangle(
                                     usize::from(rectangle[0]),
                                     usize::from(rectangle[1]),

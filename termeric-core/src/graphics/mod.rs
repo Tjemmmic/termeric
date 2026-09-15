@@ -1213,7 +1213,7 @@ impl GraphicsManager {
             } else {
                 let color = frame_command.background_color.unwrap_or(0).to_be_bytes();
                 let mut canvas = vec![0; checked_pixel_bytes(image_width, image_height, 4)?];
-                for pixel in canvas.chunks_exact_mut(4) {
+                for pixel in canvas.as_chunks_mut::<4>().0 {
                     pixel.copy_from_slice(&color);
                 }
                 canvas
@@ -4082,7 +4082,7 @@ fn decode_raw(
         data
     } else {
         let mut rgba = Vec::with_capacity(checked_pixel_bytes(width, height, 4)?);
-        for pixel in data.chunks_exact(3) {
+        for pixel in data.as_chunks::<3>().0 {
             rgba.extend_from_slice(pixel);
             rgba.push(255);
         }
@@ -4123,7 +4123,7 @@ pub(crate) fn decode_png(data: Vec<u8>) -> Result<DecodedImage, ProtocolError> {
     match info.color_type {
         png::ColorType::Rgba => rgba = pixels,
         png::ColorType::Rgb => {
-            for pixel in pixels.chunks_exact(3) {
+            for pixel in pixels.as_chunks::<3>().0 {
                 rgba.extend_from_slice(pixel);
                 rgba.push(255);
             }
@@ -4134,7 +4134,7 @@ pub(crate) fn decode_png(data: Vec<u8>) -> Result<DecodedImage, ProtocolError> {
             }
         }
         png::ColorType::GrayscaleAlpha => {
-            for pixel in pixels.chunks_exact(2) {
+            for pixel in pixels.as_chunks::<2>().0 {
                 rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
             }
         }
