@@ -5,6 +5,8 @@
 //! accounting, and the durable shutdown flush.
 
 #[cfg(test)]
+mod idle_tests;
+#[cfg(test)]
 mod shutdown_tests;
 #[cfg(test)]
 mod streaming_tests;
@@ -149,6 +151,9 @@ enum WriterEvent {
 }
 
 trait TranscriptSink: Write + Send {
+    #[cfg(test)]
+    fn before_receive(&mut self, _timeout: Option<Duration>) {}
+
     fn sync_data(&mut self) -> std::io::Result<()> {
         Ok(())
     }
@@ -681,8 +686,7 @@ fn transcript_worker(
     let mut written_bytes = 0usize;
     let mut digest = Sha256::new();
     let mut capped = false;
-    let mut dirty = false;
-    let mut last_flush = Instant::now();
+    let mut flush_started: Option<Instant> = None;
 
     redact_entry(&mut metadata);
     if let Err(error) = write_serialized(
@@ -701,8 +705,26 @@ fn transcript_worker(
     }
 
     loop {
-        let wait = FLUSH_INTERVAL.saturating_sub(last_flush.elapsed());
-        match command_rx.recv_timeout(wait) {
+        // Service an outstanding batch before receiving more commands, even
+        // when cap-rejected entries keep the queue nonempty. A clean writer
+        // has no timer and sleeps until a command or sender disconnection.
+        if flush_started.is_some_and(|started| started.elapsed() >= FLUSH_INTERVAL) {
+            if let Err(error) = writer.flush() {
+                publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
+                return Err(error);
+            }
+            flush_started = None;
+        }
+        let wait = flush_started.map(|started| FLUSH_INTERVAL.saturating_sub(started.elapsed()));
+        #[cfg(test)]
+        writer.get_mut().before_receive(wait);
+        let command = match wait {
+            Some(wait) => command_rx.recv_timeout(wait),
+            None => command_rx
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+        match command {
             Ok(WriterCommand::Entry {
                 mut entry,
                 accounted_bytes,
@@ -733,6 +755,9 @@ fn transcript_worker(
                     publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
                     return Err(error);
                 }
+                // The first accepted entry starts the batch deadline. Later
+                // entries cannot postpone it, and idle time cannot expire it.
+                flush_started.get_or_insert_with(Instant::now);
                 if let Err(error) = writer
                     .write_all(&line)
                     .and_then(|()| writer.write_all(b"\n"))
@@ -743,7 +768,6 @@ fn transcript_worker(
                 written_bytes += line.len() + 1;
                 digest.update(&line);
                 digest.update(b"\n");
-                dirty = true;
             }
             Ok(WriterCommand::Checkpoint(reply)) => {
                 if let Err(error) = writer.flush() {
@@ -753,8 +777,7 @@ fn transcript_worker(
                     publish_writer_event(&event_tx, &wake, WriterEvent::Failed(message.clone()));
                     return Err(std::io::Error::new(kind, message));
                 }
-                dirty = false;
-                last_flush = Instant::now();
+                flush_started = None;
                 let _ = reply.send(Ok(TranscriptCheckpoint {
                     bytes: written_bytes as u64,
                     sha256: digest.clone().finalize().into(),
@@ -769,15 +792,6 @@ fn transcript_worker(
                 }
                 return Ok(());
             }
-        }
-
-        if dirty && last_flush.elapsed() >= FLUSH_INTERVAL {
-            if let Err(error) = writer.flush() {
-                publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
-                return Err(error);
-            }
-            dirty = false;
-            last_flush = Instant::now();
         }
     }
 }

@@ -760,6 +760,13 @@ retained final-UTF-8-loss errors, already-consumed failure notices, and worker
 panics exercise both retryable waits and cached terminal results. These tests
 do not invoke a provider or depend on a real slow filesystem.
 
+`session::transcript::idle_tests` observes actual worker receive attempts with
+test-only sink hooks. It rejects the former zero-timeout idle spin, verifies
+periodic-flush return to sleep and checkpoint/output/shutdown wakeups, and keeps
+accepted or cap-rejected traffic flowing while requiring pending data to flush. Receive
+counts prove absence of polling; they do not claim native application CPU or
+power measurements. All storage is synthetic and no provider is invoked.
+
 ## Resource soak lane
 
 Linux pushes and pull requests run a 30-second process soak; the weekly schedule

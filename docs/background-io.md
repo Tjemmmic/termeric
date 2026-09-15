@@ -34,7 +34,7 @@ copies an accepted entry into memory and returns immediately. The defaults are:
 - 512 queued entries;
 - 2 MiB of queued content/metadata accounting;
 - a 50 MiB persisted-file cap;
-- a 250 ms periodic buffered flush; and
+- a 250 ms buffered-flush deadline while a batch is pending; and
 - a 500 ms bounded durable flush during stop or normal teardown.
 
 The recorder and its error/cap state belong to one terminal owner, not to an
@@ -64,6 +64,16 @@ batches writes through `BufWriter`, tracks exact serialized bytes, and calls
 `sync_data` during a clean shutdown. It does not create temporary plaintext
 files. The size cap is tracked in memory after the metadata line, eliminating
 per-entry filesystem metadata calls.
+
+A clean writer blocks on its command channel without a periodic timer. The
+first accepted entry after a flush starts one 250 ms batch deadline; later
+entries do not move it. An expired pending batch is flushed before another
+command is received, including when cap-rejected traffic keeps arriving.
+Periodic and checkpoint flushes clear the deadline, returning the worker to
+untimed sleep. Input, a checkpoint, or sender disconnection wakes it normally.
+This avoids the former idle loop that repeatedly polled with zero timeout
+after an old flush timestamp expired. The deadline is cooperative: it does
+not interrupt a blocked sink or guarantee a filesystem latency bound.
 
 ### Redaction boundary
 
@@ -134,6 +144,13 @@ Injected backends cover:
   timed out until actual completion without an unbounded thread join;
 - full-queue drain, late-write refusal, final UTF-8 loss across retries, cached
   startup/sync failures after notice consumption, and worker-panic refusal.
+
+Test-only receive observation verifies that a clean recorder makes one blocking
+receive attempt across two flush intervals, rather than timer-polling. Synthetic
+sinks also prove that periodic flushing returns to sleep, later checkpoints and
+output wake it, shutdown syncs once, and ongoing accepted or cap-rejected traffic
+cannot starve already accepted data. This observes the worker's actual receive loop;
+it is not an estimate of whole-application idle CPU or native power usage.
 
 Redaction regressions cover all prefixes/delimiters, Unicode around the former
 40-byte cutoff, long and densely repeated synthetic tokens, nested metadata,
