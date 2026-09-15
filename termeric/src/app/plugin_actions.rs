@@ -1394,8 +1394,11 @@ impl App {
                     .pending_profile_selection
                     .as_ref()
                     .filter(|pending| pending.request_id == request_id)
-                    .filter(|pending| pending.profiles.iter().any(|name| name == &choice_id))
-                    .map(|pending| (pending.terminal, pending.plugin_id.clone(), choice_id));
+                    .and_then(|pending| {
+                        pending.profiles.get(&choice_id).map(|profile| {
+                            (pending.terminal, pending.plugin_id.clone(), profile.clone())
+                        })
+                    });
                 let Some((terminal, plugin_id, profile_name)) = selection else {
                     return;
                 };
@@ -1823,11 +1826,10 @@ impl App {
                             env,
                         ) {
                             Ok(id) => {
-                                if let Some(profile) = profile
-                                    && let Some(plugin_id) = plugin_id
-                                    && let Some(tab) = tabs.active_tab_mut()
+                                if let Some(plugin_id) = plugin_id
+                                    && let Some(tab) = tabs.tab_mut_by_id(id)
                                 {
-                                    tab.set_plugin_profile(
+                                    tab.set_plugin_profile_reference(
                                         tab.single_pane_id(),
                                         &plugin_id,
                                         profile,
@@ -1914,81 +1916,7 @@ impl App {
                 }
                 PluginAction::ToggleTranscript => self.toggle_transcript(),
                 PluginAction::ListProfiles { plugin_id } => {
-                    // Gather profile names from config
-                    let profiles: Vec<String> = match plugin_id.as_str() {
-                        "claude-code" => self
-                            .config
-                            .plugins
-                            .claude_code
-                            .profiles
-                            .keys()
-                            .cloned()
-                            .collect(),
-                        "codex" => self.config.plugins.codex.profiles.keys().cloned().collect(),
-                        _ => Vec::new(),
-                    };
-
-                    if profiles.is_empty() {
-                        self.info_overlay.show(
-                            "No Profiles Configured".to_string(),
-                            vec![
-                                format!("No profiles found for '{}'.", plugin_id),
-                                String::new(),
-                                "Add profiles in config.toml under:".into(),
-                                format!(
-                                    "  [plugins.{}.profiles.<name>]",
-                                    plugin_id.replace('-', "_")
-                                ),
-                            ],
-                        );
-                    } else {
-                        let Some(terminal) = self
-                            .tabs
-                            .as_ref()
-                            .and_then(|tabs| tabs.plugin_terminal_identity(&plugin_id))
-                        else {
-                            self.toasts
-                                .warning(format!("No active {plugin_id} terminal found"));
-                            continue;
-                        };
-                        let mut lines = vec!["Press a number key to select:".into(), String::new()];
-                        let mut choices = Vec::new();
-                        for (i, name) in profiles.iter().enumerate() {
-                            if i < 9 {
-                                let source_line = lines.len();
-                                lines.push(format!("  {}  {}", i + 1, name));
-                                choices.push(crate::ui::info_overlay::InfoOverlayChoice::new(
-                                    name,
-                                    name,
-                                    source_line,
-                                    char::from_digit((i + 1) as u32, 10),
-                                ));
-                            }
-                        }
-                        let profile = self
-                            .tabs
-                            .as_ref()
-                            .and_then(|tabs| tabs.tab_by_id(terminal.tab_id))
-                            .and_then(|tab| tab.pane_plugin_launch(terminal.pane_id))
-                            .and_then(|(_, profile)| profile)
-                            .unwrap_or("default");
-                        lines.push(String::new());
-                        lines.push(format!("Next restart: {profile}"));
-                        let request_id = self.info_overlay.show_choices(
-                            format!("Select Profile — {}", plugin_id),
-                            lines,
-                            choices,
-                        );
-                        self.pending_profile_selection = Some(PendingProfileSelection {
-                            request_id,
-                            terminal,
-                            plugin_id,
-                            profiles,
-                        });
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                    self.show_plugin_profiles(plugin_id);
                 }
                 PluginAction::ApplyProfile {
                     plugin_id,
@@ -1999,7 +1927,7 @@ impl App {
                         .as_ref()
                         .and_then(|tabs| tabs.plugin_terminal_identity(&plugin_id))
                     {
-                        self.apply_plugin_profile(terminal, &plugin_id, profile_name);
+                        self.apply_plugin_profile(terminal, &plugin_id, Some(profile_name));
                     } else {
                         self.toasts
                             .warning(format!("No active {plugin_id} terminal found"));

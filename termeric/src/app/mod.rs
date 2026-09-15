@@ -719,7 +719,8 @@ struct PendingProfileSelection {
     request_id: u64,
     terminal: crate::tabs::TerminalIdentity,
     plugin_id: String,
-    profiles: Vec<String>,
+    // Opaque choice IDs map to exact references; no profile name is a sentinel.
+    profiles: std::collections::BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

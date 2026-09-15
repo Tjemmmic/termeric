@@ -34,6 +34,171 @@ fn fixture(primary: bool) -> (App, tempfile::TempDir, usize, usize, PaneId) {
 }
 
 #[test]
+fn moved_plugin_restart_and_archive_keep_explicit_default_separate_from_automatic() {
+    use crate::ui::info_overlay::InfoOverlayAction;
+    for automatic in [false, true] {
+        let (mut app, dir, source, destination, owner) = fixture(true);
+        app.config.plugins.codex.default_profile = Some("red".into());
+        app.sync_plugins_from_config();
+        let observer = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .tab_by_id(source)
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .get_pane(owner)
+            .unwrap()
+            .pty
+            .child_observer();
+        // Keep a delayed choice addressed to the old owner, then move it.
+        app.show_plugin_profiles("codex".into());
+        let stale = app.info_overlay.request_id();
+        let moved = app
+            .tabs
+            .as_mut()
+            .unwrap()
+            .move_focused_pane_to_next_tab(app.config.panes.cwd)
+            .unwrap();
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id: stale,
+            choice_id: "profile-choice:2".into(),
+        });
+        assert!(
+            latest_toast(&app)
+                .unwrap()
+                .contains("Original plugin terminal")
+        );
+        app.show_plugin_profiles("codex".into());
+        let request_id = app.info_overlay.request_id();
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id,
+            choice_id: if automatic {
+                "profile-choice:0"
+            } else {
+                "profile-choice:2"
+            }
+            .into(),
+        });
+        let requested = (!automatic).then_some("default");
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .tab_by_id(destination)
+                .unwrap()
+                .pane_plugin_launch(moved),
+            Some(("codex", requested))
+        );
+        // A spawn failure after movement must keep the same live owner/profile.
+        if !automatic {
+            let profile = app.config.plugins.codex.profiles.remove("default").unwrap();
+            app.sync_plugins_from_config();
+            app.restart_plugin("codex");
+            assert!(!observer.poll().unwrap().terminal_closed);
+            assert_eq!(app.tabs.as_ref().unwrap().count(), 2);
+            assert_eq!(
+                app.tabs
+                    .as_ref()
+                    .unwrap()
+                    .tab_by_id(destination)
+                    .unwrap()
+                    .pane_plugin_launch(moved),
+                Some(("codex", Some("default")))
+            );
+            app.config
+                .plugins
+                .codex
+                .profiles
+                .insert("default".into(), profile);
+        }
+        let binary = app.config.plugins.codex.binary.clone();
+        app.config.plugins.codex.binary = dir.path().join("not-installed").display().to_string();
+        app.sync_plugins_from_config();
+        app.restart_plugin("codex");
+        assert!(!observer.poll().unwrap().terminal_closed);
+        assert_eq!(app.tabs.as_ref().unwrap().count(), 2);
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .tab_by_id(destination)
+                .unwrap()
+                .pane_plugin_launch(moved),
+            Some(("codex", requested))
+        );
+        app.config.plugins.codex.binary = binary;
+        app.sync_plugins_from_config();
+        // A distinct capture directory proves this invocation, not the initial
+        // fixture's marker. Profiles contain conflicting PWD deliberately.
+        let captures = dir.path().join("restart-captures");
+        std::fs::create_dir(&captures).unwrap();
+        for profile in app.config.plugins.codex.profiles.values_mut() {
+            profile
+                .env
+                .insert("CAPTURE_DIR".into(), captures.display().to_string());
+        }
+        app.sync_plugins_from_config();
+        app.restart_plugin("codex");
+        let resolved = if automatic { "red" } else { "default" };
+        let captured = captures.join(resolved);
+        wait_for_file_text(&captured, &format!("--fixture={resolved}"));
+        assert_eq!(
+            std::fs::read_to_string(captured)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+            dir.path().join("cwd-7").display().to_string()
+        );
+        let tabs = app.tabs.as_ref().unwrap();
+        let replacement = tabs.active_tab().unwrap();
+        assert_ne!(replacement.id, destination);
+        assert!(tabs.origin_for_pane(destination, moved).is_none());
+        assert!(observer.poll().unwrap().terminal_closed);
+        assert_eq!(
+            replacement.pane_plugin_launch(replacement.single_pane_id()),
+            Some(("codex", Some(resolved)))
+        );
+        assert!(
+            tabs.tab_by_id(source)
+                .unwrap()
+                .pane_plugin_launch(PaneId(9))
+                .is_some()
+        );
+        let mut saved = tabs
+            .capture_workspace("restart-roundtrip".into(), false, Default::default())
+            .unwrap();
+        let archive = dir.path().join("restart-archive");
+        crate::workspace::save_workspace_to_dir(&mut saved, &archive).unwrap();
+        let loaded = crate::workspace::load_workspace_from_dir(&archive)
+            .unwrap()
+            .workspace;
+        assert_eq!(
+            loaded.tabs.last().unwrap().launch,
+            WorkspaceLaunch::Plugin {
+                plugin_id: "codex".into(),
+                profile: Some(resolved.into())
+            }
+        );
+        // A later automatic default change must not reinterpret the saved name.
+        app.config.plugins.codex.default_profile = Some("blue".into());
+        app.sync_plugins_from_config();
+        let mut restored = super::workspace_plugin_tests::manager(&app);
+        for tab in &loaded.tabs {
+            app.restore_workspace_tab(&mut restored, tab).unwrap();
+        }
+        let tab = restored.active_tab().unwrap();
+        assert_eq!(
+            tab.pane_plugin_launch(tab.single_pane_id()),
+            Some(("codex", Some(resolved)))
+        );
+    }
+}
+
+#[test]
 fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_pty() {
     for route in ["exact", "next-tab", "window"] {
         let (mut app, dir, source, destination, owner) = fixture(true);
@@ -160,7 +325,7 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
                 pane_id: owner,
             },
             "codex",
-            "blue".into(),
+            Some("blue".into()),
         );
         let tabs = other_window
             .as_mut()

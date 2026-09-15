@@ -7872,15 +7872,17 @@ done
             app.execute_plugin_command(&format!("{plugin_id}.select-profile"));
             assert!(app.info_overlay.is_active());
             let request_id = app.info_overlay.request_id();
-            assert!(
-                app.pending_profile_selection
-                    .as_ref()
-                    .is_some_and(|pending| pending.plugin_id == plugin_id
-                        && pending.profiles == ["acceptance".to_string()])
-            );
+            assert!(app.pending_profile_selection.as_ref().is_some_and(
+                |pending| pending.plugin_id == plugin_id
+                    && pending.profiles
+                        == std::collections::BTreeMap::from([
+                            ("profile-choice:0".into(), None),
+                            ("profile-choice:1".into(), Some("acceptance".into())),
+                        ])
+            ));
             app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
                 request_id,
-                choice_id: "acceptance".into(),
+                choice_id: "profile-choice:1".into(),
             });
             let selected_profile = app
                 .tabs

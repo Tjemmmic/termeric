@@ -80,6 +80,15 @@ metadata after close/collapse. Workspace restoration preserves each pane's
 plugin profile alongside sibling shell/process-profile launches. See
 [#125](https://github.com/Tjemmmic/termeric/issues/125).
 
+Automatic selection now has its own typed reference and picker choice; an
+explicit profile named `default` stays explicit through selection, OpenTab,
+restart, movement, and workspace save/restore. Commands prefer the active tab's
+matching owner before searching other tabs. Fake-only regressions cover moved
+owners, failed replacement launches, authoritative cwd despite profile `PWD`,
+and restoration after the configured automatic default changes. The bounded
+picker shows Automatic plus the first 31 sorted names and reports truncation;
+see [plugin profile behavior](plugin-panes.md).
+
 AI metadata, transcript recorders, and diff detectors now live beside each
 terminal owner rather than on the tab. Raw-PTY fixtures prove that output and
 successful user input are recorded only for that owner; protocol replies and

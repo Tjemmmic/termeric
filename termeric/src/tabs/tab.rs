@@ -991,22 +991,8 @@ impl Tab {
         !matches!(self.tab_type, TabType::Serial { .. })
     }
 
-    /// Change one owner's next-launch profile, never sibling launch metadata.
-    pub(crate) fn set_plugin_profile(
-        &mut self,
-        pane_id: crate::panes::PaneId,
-        plugin_id: &str,
-        profile: String,
-    ) -> bool {
-        self.set_plugin_profile_reference(
-            pane_id,
-            plugin_id,
-            (profile != "default").then_some(profile),
-        )
-    }
-
-    /// Restore an exact profile reference, including None or a configured
-    /// profile literally named "default", without applying picker sentinels.
+    /// Change one owner's next-launch reference, never sibling launch metadata.
+    /// None means automatic; every Some name (including "default") is explicit.
     pub(crate) fn set_plugin_profile_reference(
         &mut self,
         pane_id: crate::panes::PaneId,

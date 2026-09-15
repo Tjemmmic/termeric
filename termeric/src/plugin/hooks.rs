@@ -162,7 +162,9 @@ pub enum PluginAction {
     InjectContext { plugin_id: String, text: String },
     /// List available profiles for a plugin (shows selection overlay)
     ListProfiles { plugin_id: String },
-    /// Apply a named profile to a specific plugin session.
+    /// Save an explicit named profile for one plugin owner's next restart.
+    /// Every name, including "default", is literal; automatic selection is a
+    /// separate host picker choice and never a string sentinel.
     ApplyProfile {
         plugin_id: String,
         profile_name: String,

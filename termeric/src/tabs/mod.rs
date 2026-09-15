@@ -2303,16 +2303,23 @@ impl TabManager {
         })
     }
 
-    /// First live matching tab, then its focused matching owner or first
-    /// matching pane in visual order. Tab presentation is not launch identity.
+    /// Prefer the active tab, then other live tabs in order. Within each tab,
+    /// prefer its focused matching owner, then its first matching pane in
+    /// visual order. Tab presentation is not launch identity.
     pub(crate) fn plugin_terminal_identity(&self, plugin_id: &str) -> Option<TerminalIdentity> {
-        self.tabs.iter().find_map(|tab| {
-            tab.plugin_pane_id(plugin_id)
-                .map(|pane_id| TerminalIdentity {
-                    tab_id: tab.id,
-                    pane_id,
-                })
-        })
+        // Prefer the active tab's matching owner before searching other tabs.
+        // Otherwise moving a focused plugin beside an earlier same-plugin tab
+        // would make subsequent profile/restart commands target that sibling.
+        self.active_tab()
+            .into_iter()
+            .chain(self.tabs.iter())
+            .find_map(|tab| {
+                tab.plugin_pane_id(plugin_id)
+                    .map(|pane_id| TerminalIdentity {
+                        tab_id: tab.id,
+                        pane_id,
+                    })
+            })
     }
 
     /// Checked user input to the selected plugin owner, without focus/broadcast

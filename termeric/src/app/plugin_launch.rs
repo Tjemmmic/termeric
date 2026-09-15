@@ -4,7 +4,7 @@ use crate::plugin::PluginAction;
 use crate::workspace::WorkspaceLaunch;
 
 impl App {
-    fn validate_plugin_launch_profile(
+    pub(super) fn validate_plugin_launch_profile(
         &self,
         plugin_id: &str,
         profile: Option<&str>,

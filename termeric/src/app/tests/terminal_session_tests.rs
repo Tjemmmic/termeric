@@ -396,8 +396,8 @@ fn transcript_controls_and_close_keep_independent_owner_state() {
     mark_capture_plugin_owner(&mut app, PaneId(2), "claude-code");
     {
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        tab.set_plugin_profile(PaneId(0), "codex", "first".into());
-        tab.set_plugin_profile(PaneId(2), "claude-code", "second".into());
+        tab.set_plugin_profile_reference(PaneId(0), "codex", Some("first".into()));
+        tab.set_plugin_profile_reference(PaneId(2), "claude-code", Some("second".into()));
         tab.pane_session_mut(PaneId(0))
             .unwrap()
             .ai_session

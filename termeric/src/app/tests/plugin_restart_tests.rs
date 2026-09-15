@@ -46,6 +46,8 @@ impl Plugin for RestartFixture {
             ],
             cwd: if self.mode == "bad-cwd" {
                 Some(self.directory.join("missing-cwd").display().to_string())
+            } else if self.mode == "wrong-existing-cwd" {
+                Some("/".into())
             } else {
                 ctx.cwd.clone()
             },
@@ -67,6 +69,13 @@ impl Plugin for RestartFixture {
         };
         match self.mode {
             "duplicate" => HookResponse::Actions(vec![launch.clone(), launch]),
+            "fallback-notice" => HookResponse::Actions(vec![
+                launch,
+                PluginAction::ShowNotice {
+                    title: "Fallback".into(),
+                    lines: vec!["Requested profile unavailable".into()],
+                },
+            ]),
             "side-effect" => HookResponse::Actions(vec![
                 launch,
                 PluginAction::WriteToPty {
@@ -103,6 +112,8 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
         "configuration",
         "missing-binary",
         "bad-cwd",
+        "wrong-existing-cwd",
+        "fallback-notice",
         "wrong-owner",
         "wrong-profile",
         "duplicate",
@@ -114,7 +125,11 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
         mark_capture_plugin_owner(&mut app, PaneId(0), "synthetic-capture");
         let seen = register_restart_fixture(&mut app, directory.path(), mode);
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        tab.set_plugin_profile(PaneId(0), "synthetic-capture", "saved-profile".into());
+        tab.set_plugin_profile_reference(
+            PaneId(0),
+            "synthetic-capture",
+            Some("saved-profile".into()),
+        );
         if mode == "read-only" {
             tab.pane_manager
                 .as_mut()
@@ -181,7 +196,11 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
                 format!("\x1b]7;file://localhost{}\x07", source_cwd.path().display()).as_bytes(),
             );
             let tab = tabs.active_tab_mut().unwrap();
-            tab.set_plugin_profile(source, "synthetic-capture", "saved-profile".into());
+            tab.set_plugin_profile_reference(
+                source,
+                "synthetic-capture",
+                Some("saved-profile".into()),
+            );
             if mode == "mixed-plugin-tab" {
                 tab.tab_type = crate::tabs::TabType::Plugin {
                     plugin_id: "synthetic-capture".into(),

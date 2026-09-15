@@ -908,6 +908,12 @@ split/collapse/focus, refusal of stale/read-only/closed/replaced owners and
 removed profiles, legacy primary-profile presentation, and preservation of
 supported primary-plugin plus shell/process-profile workspace launches.
 `cargo test -p termeric plugin_profile_tests` runs this lane without a provider.
+It also distinguishes Automatic from literal `default`, tests direct OpenTab
+and profile actions for both built-ins, collision-free request-local choice IDs,
+long names, bounded choices, and resetting after all profiles are removed.
+Moved-owner regressions additionally restart with a conflicting profile `PWD`,
+check spawn-failure preservation and exact owner retirement, then save/load/restore
+under a changed automatic default. All launched programs remain local fixtures.
 
 `cargo test -p termeric workspace_plugin_tests` exercises schema-3 mixed
 shell/process-profile/plugin restoration with local fake executables only.

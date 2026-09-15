@@ -31,6 +31,13 @@ impl App {
                 .find_map(|(index, tab)| (tab.id == identity.tab_id).then_some(index))
                 .expect("resolved plugin tab index");
         }
+        if let Err(error) = self.validate_plugin_launch_profile(plugin_id, saved_profile.as_deref())
+        {
+            self.toasts.warning(format!(
+                "Cannot restart {plugin_id}; existing terminals were kept: {error}"
+            ));
+            return;
+        }
         let actions = if target.is_some() {
             self.plugin_manager.dispatch_to(
                 plugin_id,
@@ -60,7 +67,12 @@ impl App {
                     env,
                 } => {
                     if launch.is_some()
+                        || program.is_empty()
                         || owner.as_deref() != Some(plugin_id)
+                        || (target.is_some() && cwd != ctx.cwd)
+                        || self
+                            .validate_plugin_launch_profile(plugin_id, profile.as_deref())
+                            .is_err()
                         || saved_profile
                             .as_ref()
                             .is_some_and(|saved| profile.as_ref() != Some(saved))
@@ -69,7 +81,10 @@ impl App {
                     }
                     launch = Some((program, args, cwd, title, profile, env));
                 }
-                notice @ PluginAction::ShowNotice { .. } => notices.push(notice),
+                notice @ PluginAction::ShowNotice { .. } => {
+                    invalid |= target.is_some();
+                    notices.push(notice);
+                }
                 _ => invalid = true,
             }
         }
@@ -99,7 +114,8 @@ impl App {
                 Some(TabType::Plugin {
                     plugin_id: plugin_id.into(),
                 }),
-                env,
+                // The validated owner cwd must also win over profile PWD.
+                env.into_iter().filter(|(key, _)| key != "PWD").collect(),
             );
         let replacement = match result {
             Ok(id) => id,
@@ -110,14 +126,14 @@ impl App {
                 return;
             }
         };
-        if let Some(profile) = profile {
+        {
             let tab = self
                 .tabs
                 .as_mut()
                 .unwrap()
                 .tab_mut_by_id(replacement)
                 .unwrap();
-            tab.set_plugin_profile(tab.single_pane_id(), plugin_id, profile);
+            tab.set_plugin_profile_reference(tab.single_pane_id(), plugin_id, profile);
         }
         if let Some(identity) = target
             && let Err(error) = self.retire_restarted_plugin_owner(identity, plugin_id)

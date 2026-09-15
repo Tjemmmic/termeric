@@ -4,6 +4,184 @@ use crate::plugin::PluginAction;
 use crate::tabs::TabType;
 
 #[test]
+fn automatic_and_literal_default_profile_choices_are_distinct_and_revalidated() {
+    use crate::ui::info_overlay::InfoOverlayAction;
+    for plugin_id in ["codex", "claude-code"] {
+        let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
+        mark_capture_plugin_owner(&mut app, PaneId(0), plugin_id);
+        for name in ["default", "automatic-profile", "profile:default"] {
+            match plugin_id {
+                "codex" => {
+                    app.config
+                        .plugins
+                        .codex
+                        .profiles
+                        .insert(name.into(), Default::default());
+                }
+                _ => {
+                    app.config
+                        .plugins
+                        .claude_code
+                        .profiles
+                        .insert(name.into(), Default::default());
+                }
+            }
+        }
+        for (id, expected) in [
+            ("profile-choice:2", Some("default")),
+            ("profile-choice:0", None),
+            ("profile-choice:1", Some("automatic-profile")),
+            ("profile-choice:3", Some("profile:default")),
+        ] {
+            app.show_plugin_profiles(plugin_id.into());
+            assert!(
+                app.info_overlay
+                    .choices()
+                    .iter()
+                    .any(|choice| choice.label == "Automatic profile")
+            );
+            assert!(
+                app.info_overlay
+                    .choices()
+                    .iter()
+                    .any(|choice| choice.label == "Profile: default")
+            );
+            let request_id = app.info_overlay.request_id();
+            app.apply_info_overlay_action(InfoOverlayAction::Choose {
+                request_id,
+                choice_id: id.into(),
+            });
+            let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+            assert_eq!(
+                tab.pane_plugin_launch(tab.single_pane_id()),
+                Some((plugin_id, expected))
+            );
+        }
+        // Unlike the old sentinel, a removed literal default must be refused.
+        app.show_plugin_profiles(plugin_id.into());
+        let request_id = app.info_overlay.request_id();
+        match plugin_id {
+            "codex" => app.config.plugins.codex.profiles.clear(),
+            _ => app.config.plugins.claude_code.profiles.clear(),
+        }
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id,
+            choice_id: "profile-choice:2".into(),
+        });
+        assert!(latest_toast(&app).unwrap().contains("no longer configured"));
+        let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+        assert_eq!(
+            tab.pane_plugin_launch(tab.single_pane_id()),
+            Some((plugin_id, Some("profile:default")))
+        );
+        // Clearing the reference must remain possible when no profiles exist.
+        app.show_plugin_profiles(plugin_id.into());
+        let request_id = app.info_overlay.request_id();
+        assert_eq!(app.info_overlay.choices().len(), 1);
+        app.apply_info_overlay_action(InfoOverlayAction::Choose {
+            request_id,
+            choice_id: "profile-choice:0".into(),
+        });
+        let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+        assert_eq!(
+            tab.pane_plugin_launch(tab.single_pane_id()),
+            Some((plugin_id, None))
+        );
+        app.execute_plugin_actions(vec![PluginAction::ApplyProfile {
+            plugin_id: plugin_id.into(),
+            profile_name: "default".into(),
+        }]);
+        assert!(latest_toast(&app).unwrap().contains("no longer configured"));
+    }
+}
+
+#[test]
+fn profile_picker_bounds_choices_and_keeps_long_names_out_of_choice_ids() {
+    let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
+    mark_capture_plugin_owner(&mut app, PaneId(0), "codex");
+    let long = "a".repeat(512);
+    app.config
+        .plugins
+        .codex
+        .profiles
+        .insert(long.clone(), Default::default());
+    for i in 0..40 {
+        app.config
+            .plugins
+            .codex
+            .profiles
+            .insert(format!("profile-{i:02}"), Default::default());
+    }
+    app.show_plugin_profiles("codex".into());
+    assert_eq!(
+        app.info_overlay.choices().len(),
+        crate::ui::info_overlay::MAX_INFO_CHOICES
+    );
+    assert_eq!(
+        app.pending_profile_selection
+            .as_ref()
+            .unwrap()
+            .profiles
+            .len(),
+        crate::ui::info_overlay::MAX_INFO_CHOICES
+    );
+    assert!(
+        app.info_overlay
+            .lines()
+            .iter()
+            .any(|line| line.contains("Only the first 31"))
+    );
+    let request_id = app.info_overlay.request_id();
+    app.apply_info_overlay_action(crate::ui::info_overlay::InfoOverlayAction::Choose {
+        request_id,
+        choice_id: "profile-choice:1".into(),
+    });
+    let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+    assert_eq!(
+        tab.pane_plugin_launch(tab.single_pane_id()),
+        Some(("codex", Some(long.as_str())))
+    );
+}
+
+#[test]
+fn open_tab_and_direct_profile_actions_preserve_literal_default() {
+    for plugin_id in ["codex", "claude-code"] {
+        let (mut app, dir, _) = super::workspace_plugin_tests::fixture();
+        app.config
+            .plugins
+            .claude_code
+            .profiles
+            .insert("default".into(), Default::default());
+        app.tabs = Some(super::workspace_plugin_tests::manager(&app));
+        for profile in [Some("default"), None] {
+            app.execute_plugin_actions(vec![PluginAction::OpenTab {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "exec cat >/dev/null".into()],
+                cwd: Some(dir.path().display().to_string()),
+                title: None,
+                plugin_id: Some(plugin_id.into()),
+                profile: profile.map(str::to_owned),
+                env: Default::default(),
+            }]);
+            let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+            assert_eq!(
+                tab.pane_plugin_launch(tab.single_pane_id()),
+                Some((plugin_id, profile))
+            );
+            app.execute_plugin_actions(vec![PluginAction::ApplyProfile {
+                plugin_id: plugin_id.into(),
+                profile_name: "default".into(),
+            }]);
+            let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+            assert_eq!(
+                tab.pane_plugin_launch(tab.single_pane_id()),
+                Some((plugin_id, Some("default")))
+            );
+        }
+    }
+}
+
+#[test]
 fn profile_application_changes_only_the_exact_plugin_owner() {
     for plugin_presentation in [true, false] {
         let (mut app, _directory, entry, _) = harvest_rerun_capture_fixture();
@@ -51,7 +229,7 @@ fn profile_application_changes_only_the_exact_plugin_owner() {
             profile_name: "chosen".into(),
         }]);
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        assert!(tab.set_plugin_profile(PaneId(0), "codex", "default".into()));
+        assert!(tab.set_plugin_profile_reference(PaneId(0), "codex", None));
         assert_eq!(tab.pane_plugin_launch(PaneId(0)), Some(("codex", None)));
         assert_eq!(
             tab.pane_plugin_launch(PaneId(1)),
@@ -130,7 +308,7 @@ fn profile_picker_never_falls_back_to_a_replacement_tab() {
     assert!(tabs.close_tab_by_id(source.source.tab_id));
     app.apply_info_overlay_action(InfoOverlayAction::Choose {
         request_id,
-        choice_id: "chosen".into(),
+        choice_id: "profile-choice:1".into(),
     });
     let tab = app.tabs.as_ref().unwrap().tab_by_id(replacement).unwrap();
     assert_eq!(
@@ -200,7 +378,7 @@ fn profile_picker_keeps_its_owner_across_focus_and_topology_changes() {
             app.info_overlay
                 .lines()
                 .iter()
-                .any(|line| line == "Next restart: default")
+                .any(|line| line == "Next restart: Automatic profile")
         );
         assert_eq!(
             app.pending_profile_selection
@@ -286,7 +464,7 @@ fn profile_picker_keeps_its_owner_across_focus_and_topology_changes() {
         let focused = app.active_harvest_source();
         let choose = || InfoOverlayAction::Choose {
             request_id,
-            choice_id: "chosen".into(),
+            choice_id: "profile-choice:1".into(),
         };
         app.apply_info_overlay_action(choose());
         app.apply_info_overlay_action(choose()); // An old choice must not replay.
@@ -338,7 +516,11 @@ fn workspace_restore_preserves_primary_plugin_profile_and_sibling_launches() {
         mark_capture_plugin_owner(&mut app, PaneId(0), "codex");
         let tabs = app.tabs.as_mut().unwrap();
         let tab = tabs.active_tab_mut().unwrap();
-        assert!(tab.set_plugin_profile(PaneId(0), "codex", "primary-profile".into()));
+        assert!(tab.set_plugin_profile_reference(
+            PaneId(0),
+            "codex",
+            Some("primary-profile".into())
+        ));
         if named_profile {
             tab.pane_manager
                 .as_mut()

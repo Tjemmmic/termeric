@@ -153,6 +153,13 @@ and prefers its working directory, not a focused shell sibling's. Local fixtures
 cover exact bytes, refusal, cancellation and replay; native/provider acceptance
 remains deferred ([#119](https://github.com/Tjemmmic/termeric/issues/119)).
 
+Built-in plugin profile selection distinguishes **Automatic profile** from every
+explicit name, including `default`. Selection/restart prefer a matching owner in
+the active tab; delayed choices retain the original identity. Exact references
+survive OpenTab, pane movement, restart, and workspace round-trips. These paths
+have local fake-executable coverage only, not authenticated-provider acceptance;
+see [profile behavior and limits](plugin-panes.md).
+
 ## Performance and resource evidence
 
 | Area | Status | Current boundary | Tracking |

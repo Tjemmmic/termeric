@@ -7774,7 +7774,10 @@ mod tests {
                 pane_id: PaneId(0),
             },
             plugin_id: "fake-ai".into(),
-            profiles: vec!["safe-choice".into()],
+            profiles: std::collections::BTreeMap::from([(
+                "safe-choice".into(),
+                Some("safe-choice".into()),
+            )]),
         });
         app.accessibility_snapshot();
         let stale_choice = *app

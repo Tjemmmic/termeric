@@ -30,7 +30,7 @@ fn unavailable_plugin_restart_preserves_the_original_mixed_tab() {
 }
 
 #[test]
-fn plugin_terminal_selection_keeps_tab_order_without_a_writable_fallback() {
+fn plugin_terminal_selection_prefers_active_tab_without_a_writable_fallback() {
     let (mut app, directory, entry, mut captures) = harvest_rerun_capture_fixture_in(false);
     mark_capture_plugin_owner(&mut app, PaneId(0), "synthetic-capture");
     app.toggle_focused_pane_read_only();
@@ -42,8 +42,10 @@ fn plugin_terminal_selection_keeps_tab_order_without_a_writable_fallback() {
         tabs.plugin_terminal_identity("synthetic-capture")
             .unwrap()
             .tab_id,
-        entry.source.tab_id
+        second_tab
     );
+    app.select_control_tab(entry.source.tab_id as u64).unwrap();
+    let tabs = app.tabs.as_mut().unwrap();
     assert!(!tabs.write_to_plugin_terminal("synthetic-capture", b"must-not-arrive"));
     assert!(
         fenced_harvest_capture(&mut app, &captures)
@@ -53,17 +55,35 @@ fn plugin_terminal_selection_keeps_tab_order_without_a_writable_fallback() {
     app.select_control_tab(entry.source.tab_id as u64).unwrap();
     app.toggle_focused_pane_read_only();
     app.select_control_tab(second_tab as u64).unwrap();
+    app.toggle_focused_pane_read_only();
+    assert!(
+        !app.tabs
+            .as_mut()
+            .unwrap()
+            .write_to_plugin_terminal("synthetic-capture", b"no-writable-fallback")
+    );
+    app.toggle_focused_pane_read_only();
     assert!(
         app.tabs
             .as_mut()
             .unwrap()
-            .write_to_plugin_terminal("synthetic-capture", b"first-owner")
+            .write_to_plugin_terminal("synthetic-capture", b"active-owner")
     );
     assert_eq!(
         fenced_harvest_capture(&mut app, &captures),
-        vec![b"\0first-owner".to_vec(), vec![0]]
+        vec![vec![0], b"\0active-owner".to_vec()]
     );
     assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(second_tab));
+    app.tabs.as_mut().unwrap().new_tab().unwrap();
+    assert_eq!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .plugin_terminal_identity("synthetic-capture")
+            .unwrap()
+            .tab_id,
+        entry.source.tab_id
+    );
 }
 
 #[test]

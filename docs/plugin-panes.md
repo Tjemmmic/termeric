@@ -14,6 +14,31 @@ in [schema-3 workspaces](workspaces.md). Configuration changes refresh the
 commands; stale selections fail rather than silently launching another profile.
 Event-only plugins do not advertise pane commands.
 
+## Selecting and restarting an existing owner
+
+Built-in **Select Profile** commands offer **Automatic profile** separately from
+**Profile: NAME**. No name is reserved: `default` is an ordinary explicit profile.
+Automatic clears the saved reference and uses repository/configured defaults at
+the next restart; the resolved launch reference is then saved on the replacement.
+The picker sorts names and shows at most 31 named profiles plus Automatic, with
+a notice if more exist. The first nine choices have number shortcuts; remaining
+visible choices use the overlay's pointer/accessibility controls. Automatic stays
+available when all named profiles have been removed.
+
+Plugin commands prefer a matching owner in the active tab, then search other
+live tabs in order. Within a tab, the focused matching owner wins, followed by
+the first matching pane in visual order. A picker captures that exact identity;
+later focus changes do not redirect it, and movement makes its old address stale.
+Selection changes only future-launch metadata, not the running process.
+
+Restart revalidates the configured reference and requires one matching launch
+with the owner's cwd. Profile-provided `PWD` cannot override that cwd; fallback
+notices, missing configuration, mismatched responses, and spawn failures keep
+the existing processes. Only after successful PTY creation is the original
+owner retired. Read-only/live-domain owners refuse local restart. Explicit names
+survive OpenTab, restart, movement, and archive round-trips even if the configured
+automatic default changes. This does not prove provider readiness.
+
 ## Placement and safety
 
 The focused terminal when the command is executed is the split target. The

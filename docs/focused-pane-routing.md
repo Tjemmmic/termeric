@@ -11,8 +11,9 @@ has lost its focused pane.
 - Explicit plugin Context, Clear, Copy, and Jump to Error commands resolve the
   live plugin launch owner, not the focused pane of a plugin-tagged tab. They
   also work when a plugin pane lives in a shell-tagged mixed tab. Selection is
-  deterministic: first matching tab in tab order, then its focused matching
-  plugin pane or first matching pane in visual order. Context/Clear/Copy do not
+  deterministic: active tab first, then other matching tabs in tab order. Within
+  each tab, its focused matching plugin pane wins, then its first matching pane
+  in visual order. Context/Clear/Copy do not
   change focus; checked writes refuse a read-only selected owner without trying
   a different pane. Jump to Error focuses the selected owner, refreshes focused
   surfaces, and searches only its output. Profile/transcript operations retain
