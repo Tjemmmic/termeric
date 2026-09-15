@@ -51,7 +51,24 @@ TERMERIC_REQUIRE_ZSH_CWD_TESTS=1 cargo test --workspace --locked zsh_cwd_
 ```
 
 These checks exercise the emitter, not a native desktop or the user's real Zsh
-configuration. Fish/Elvish producer hardening remains separate work.
+configuration. Elvish producer hardening remains separate work.
+
+`terminal::shell_integration::fish_cwd_tests` adds five Unix real-shell
+regressions. Fish's read-only `$PWD` is exercised through real temporary
+directories and the actual `fish_prompt` event: title-command injection,
+UTF-8/percent/URI round trips, every nonzero pathname byte, and an oversized
+encoded directory report that must not stop other prompt handlers. A separate
+helper-input corpus covers empty/relative values and exact ASCII, percent, and
+Unicode encoded-size boundaries without relying on filesystem path limits.
+The fixture checks unchanged locale and preserves/verifies Fish 3's OSC 133
+prompt suffix; Fish 4's native OSC 133 producer is outside this non-interactive
+test. Both Fish 3.7.1 and 4.9.3 have passed these regressions using isolated,
+signature-verified Arch binaries; this is not user-configuration or desktop
+acceptance. Missing Fish self-skips unless explicitly required:
+
+```bash
+TERMERIC_REQUIRE_FISH_CWD_TESTS=1 cargo test --workspace --locked fish_cwd_
+```
 
 `terminal::shell_integration::bash_prompt_tests` compares isolated real Bash
 PTYs with and without Termeric's generated startup file. Scalar, indexed-array,

@@ -104,7 +104,7 @@ This also replaces the old Zsh percent-substitution expression, which appended
 end of the value. See the upstream [Zsh expansion reference](https://zsh.sourceforge.io/Doc/Release/Expansion.html)
 and [local option semantics](https://zsh.sourceforge.io/Doc/Release/Options.html).
 
-Both raw input and encoded output are bounded to 4,089 bytes, leaving seven
+Bash/Zsh raw input and encoded output are bounded to 4,089 bytes, leaving seven
 bytes for `file://` within the receiver's 4-KiB URI ceiling. Empty, relative, or
 oversized reports are omitted as a whole, never truncated; prompt/command
 markers still proceed. Percent encoding does not make control-bearing or
@@ -112,9 +112,20 @@ invalid-UTF-8 directories eligible for cwd inheritance: the receiver retains
 its existing rejection policy and last valid report. Long encoded Unicode paths
 can reach the URI ceiling earlier than ASCII paths.
 
-These producer fixes and real-shell byte/framing regressions cover **Bash and
-Zsh only**. The generated Fish and Elvish emitters still escape only percent signs and
-need equivalent producer hardening and native tests; their control-bearing cwd
+Fish uses its builtin [`string escape --style=url`](https://fishshell.com/docs/current/cmds/string-escape.html)
+before emitting the report. A 4,089-character input precheck bounds encoding
+work; Fish's string length is character-based, so the authoritative 4,089-byte
+check is performed on the ASCII encoded result. There is no truncated or
+partially emitted URI. The helper does not change the caller's locale. Real
+Fish 3 and Fish 4 tests use temporary directories containing controls, URI
+punctuation, UTF-8, and every nonzero Unix pathname byte; they also verify that
+other prompt handlers continue when a real directory's encoded report is too
+long. Fish 3's OSC 133 prompt marks remain intact; Fish 4's native OSC 133
+producer is outside these non-interactive event tests.
+
+These producer fixes and real-shell byte/framing regressions cover **Bash,
+Zsh, and Fish**. The generated Elvish emitter still escapes only percent signs and
+needs equivalent producer hardening and native tests; its control-bearing cwd
 output is not safe to treat as verified. Nushell uses its own native producer
 and remains acceptance-pending. This does not sanitize arbitrary user prompt
 code or output from other applications.

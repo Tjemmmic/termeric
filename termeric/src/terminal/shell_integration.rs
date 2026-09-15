@@ -105,9 +105,19 @@ preexec_functions+=(__termeric_preexec)
 precmd_functions+=(__termeric_precmd)
 "#;
 
-const FISH_INIT: &str = r#"function __termeric_cwd --on-event fish_prompt
-    set -l __termeric_path (string replace -a '%' '%25' -- $PWD)
-    printf '\e]7;file://%s\a' $__termeric_path
+const FISH_INIT: &str = r#"function __termeric_report_cwd --argument-names __termeric_path
+    string match --quiet '/*' -- "$__termeric_path"; or return 0
+    # Fish counts characters here, not bytes. This bounds encoding work;
+    # the ASCII URL below supplies the authoritative byte-length check.
+    test (string length -- "$__termeric_path") -le 4089; or return 0
+    set -l __termeric_encoded (string escape --style=url -- "$__termeric_path")
+    test (count $__termeric_encoded) -eq 1; or return 0
+    # Reserve seven bytes for "file://" within the receiver's 4-KiB URI cap.
+    test (string length -- "$__termeric_encoded") -le 4089; or return 0
+    printf '\e]7;file://%s\a' "$__termeric_encoded"
+end
+function __termeric_cwd --on-event fish_prompt
+    __termeric_report_cwd "$PWD"
 end
 if string match -qr '^[0-3]\.' $version
     function __termeric_preexec --on-event fish_preexec; printf '\e]133;C\a'; end
@@ -488,6 +498,9 @@ mod bash_cwd_tests;
 
 #[cfg(test)]
 mod zsh_cwd_tests;
+
+#[cfg(all(test, unix))]
+mod fish_cwd_tests;
 
 #[cfg(test)]
 mod tests {
