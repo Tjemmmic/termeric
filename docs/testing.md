@@ -53,6 +53,14 @@ success/failure regions. It self-skips without `nu`, or fails when
 `TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1` is set. See
 [launch eligibility](osc-integration.md#nushell-launch-eligibility).
 
+`zsh_startup_tests` covers effective profile `ZDOTDIR`, unique environment
+values, nested unconsumed transport recovery, and legacy recursion prevention.
+Its real-Zsh subprocess test compares four isolated startup scenarios against
+plain Zsh, including child-shell directory inheritance and unchanged rc bytes.
+It self-skips without Zsh unless `TERMERIC_REQUIRE_ZSH_CWD_TESTS=1` is set.
+These are `.zshrc` handoff tests, not full login/startup-order acceptance; see
+[the remaining startup-chain boundary](osc-integration.md#zsh-configuration-directory-handoff).
+
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
 with isolated configuration, captures its bytes, and feeds only an in-memory
 terminal. It reproduces/prevents directory-to-title injection, round-trips UTF-8

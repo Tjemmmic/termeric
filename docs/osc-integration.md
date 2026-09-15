@@ -140,6 +140,40 @@ These producer fixes cover **Bash, Zsh, Fish, and opt-in Elvish**. Nushell uses
 its own native producer and has the confirmed gaps below. This does not sanitize
 arbitrary user prompt code or output from other applications.
 
+### Zsh configuration-directory handoff
+
+Launch preparation captures `ZDOTDIR` from the effective profile environment,
+falling back to the inherited environment only when the profile does not set
+it. It then uses a generated directory temporarily to reach Termeric's `.zshrc`.
+That wrapper restores the original value (or unsets it) and removes the private
+transport markers **before** sourcing user configuration. User code and child
+shells therefore see the user's path, and changes made by the user's `.zshrc`
+remain in effect. A custom directory with no readable `.zshrc` does not fall
+back to `$HOME/.zshrc`; [Zsh uses HOME only when ZDOTDIR is unset](https://zsh.sourceforge.io/Doc/Release/Files.html).
+
+Explicitly empty and unset values remain distinct. If a nested Termeric launch
+inherits an unconsumed generated directory, it recovers the recorded original
+instead of stacking transports. A different profile path overrides stale
+markers. Older single-marker launches are recovered when their original path
+is available; if an older launch already overwrote it with the generated path,
+the original cannot be recovered and HOME is used rather than recursively
+sourcing Termeric's wrapper.
+
+Pure regressions cover profile precedence, unique environment entries,
+unset/empty/custom recovery, and legacy recursion prevention. Real Zsh startup
+subprocess comparisons against plain Zsh cover custom and missing rc files,
+unset `ZDOTDIR`, rc-directed path changes, and nested child startup. These
+fixtures use isolated configuration and append `-c` after launch preparation
+to inspect actual interactive startup; they do not prove command-argument
+eligibility or visual/PTY acceptance. The existing real-PTY shell probe checks
+ordinary prompt and command-region behavior separately.
+
+This fixes the `.zshrc` directory handoff, not the entire Zsh startup chain:
+user `.zshenv` and login `.zprofile` are still not forwarded by the generated
+directory. Global startup files can also redirect `ZDOTDIR` or disable startup
+reading before the wrapper is reached. Full startup-order/configuration
+acceptance remains incomplete and must preserve those files' native semantics.
+
 ### Nushell launch eligibility
 
 Termeric injects its pre-REPL setup only for recognized interactive Nushell
