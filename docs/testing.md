@@ -57,9 +57,15 @@ success/failure regions. It self-skips without `nu`, or fails when
 values, nested unconsumed transport recovery, and legacy recursion prevention.
 Its real-Zsh subprocess test compares four isolated startup scenarios against
 plain Zsh, including child-shell directory inheritance and unchanged rc bytes.
-It self-skips without Zsh unless `TERMERIC_REQUIRE_ZSH_CWD_TESTS=1` is set.
-These are `.zshrc` handoff tests, not full login/startup-order acceptance; see
-[the remaining startup-chain boundary](osc-integration.md#zsh-configuration-directory-handoff).
+Nine further startup-chain scenarios compare `.zshenv`/`.zprofile`/`.zshrc`
+and native login/logout order, declaration scope, redirected/unset/non-exported
+paths, disabled `RCS`, readonly paths, and `nounset`. The separate
+`zsh_login_profile_emits_prompt_regions_with_nounset_when_available` real-PTY
+test checks the first prompt's cwd and multiline success/failure command
+regions after a user login profile enables `nounset`. Both self-skip without
+Zsh unless `TERMERIC_REQUIRE_ZSH_CWD_TESTS=1` is set. Optional global startup
+files are disabled in these fixtures, so their interaction is not accepted;
+see [the remaining startup-chain boundary](osc-integration.md#zsh-configuration-directory-handoff).
 
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
 with isolated configuration, captures its bytes, and feeds only an in-memory

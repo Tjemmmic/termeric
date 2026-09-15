@@ -1,6 +1,137 @@
 use super::*;
 use std::process::Command;
 
+#[cfg(unix)]
+#[test]
+fn zsh_user_startup_chain_matches_native_order_scope_and_directory_changes() {
+    let Some(program) = super::tests::executable_on_path("zsh") else {
+        assert_ne!(
+            std::env::var("TERMERIC_REQUIRE_ZSH_CWD_TESTS").as_deref(),
+            Ok("1")
+        );
+        eprintln!("skipping Zsh startup-chain comparison: zsh unavailable");
+        return;
+    };
+    for case in [
+        "interactive",
+        "login",
+        "redirect",
+        "env-stop",
+        "profile-stop",
+        "nounset",
+        "unset-nounset",
+        "unexported",
+        "readonly",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let initial = temp.path().join("initial config");
+        let profile = temp.path().join("profile config");
+        let rc = temp.path().join("rc config");
+        for dir in [&home, &initial, &profile, &rc] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let mut files = Vec::new();
+        for (name, phase) in [
+            (".zshenv", "env"),
+            (".zprofile", "profile"),
+            (".zshrc", "rc"),
+            (".zlogin", "login"),
+            (".zlogout", "logout"),
+        ] {
+            let mut contents =
+                format!("print -r -- \"{phase}:${{ZDOTDIR-UNSET}}\"\ntypeset USER_STAGE={phase}\n");
+            match (case, phase) {
+                ("redirect", "env") => contents.push_str("export ZDOTDIR=$TEST_PROFILE\n"),
+                ("redirect", "profile") => contents.push_str("export ZDOTDIR=$TEST_RC\n"),
+                ("env-stop", "env") | ("profile-stop", "profile") => {
+                    contents.push_str("unsetopt rcs\n")
+                }
+                ("nounset", "env") => contents.push_str("setopt nounset\n"),
+                ("unset-nounset", "env") => contents.push_str("unset ZDOTDIR\nsetopt nounset\n"),
+                ("unexported", "env") => contents.push_str("typeset -g +x ZDOTDIR=$TEST_PROFILE\n"),
+                ("readonly", "env") => contents.push_str("readonly ZDOTDIR=$TEST_RC\n"),
+                _ => {}
+            }
+            let dir = match (case, phase) {
+                ("unset-nounset", "profile" | "rc" | "login" | "logout") => &home,
+                ("unexported", "profile" | "rc" | "login" | "logout") => &profile,
+                ("redirect", "profile") => &profile,
+                ("redirect", "rc" | "login" | "logout")
+                | ("readonly", "profile" | "rc" | "login" | "logout") => &rc,
+                _ => &initial,
+            };
+            let path = dir.join(name);
+            std::fs::write(&path, &contents).unwrap();
+            files.push((path, contents));
+        }
+        let mut config = super::tests::shell(
+            &program,
+            if case == "interactive" {
+                &["-d", "-i"]
+            } else {
+                &["-d", "-i", "-l"]
+            },
+        );
+        for (key, value) in [
+            ("HOME", &home),
+            ("ZDOTDIR", &initial),
+            ("TEST_PROFILE", &profile),
+            ("TEST_RC", &rc),
+        ] {
+            config
+                .env
+                .insert(key.into(), value.to_str().unwrap().into());
+        }
+        let launch = prepare_shell_launch_in(&config, &temp.path().join("generated")).unwrap();
+        let run = |env: &[(String, String)], integrated: bool| {
+            let script = r#"print -r -- "body:${USER_STAGE-missing}:${ZDOTDIR-UNSET}:${(t)ZDOTDIR-}"
+print -r -- "markers:${+TERMERIC_ORIGINAL_ZDOTDIR}:${+TERMERIC_ZSH_HAD_ZDOTDIR}:${+TERMERIC_ZSH_INTEGRATION_DIR}:${+TERMERIC_ZSH_ZDOTDIR_EXPORTED}"
+if whence -w __termeric_precmd >/dev/null; then __termeric_precmd >/dev/null; fi
+if [[ $TEST_EXPECT_HOOK == yes ]]; then
+    whence -w __termeric_precmd >/dev/null || exit 42
+elif whence -w __termeric_precmd >/dev/null; then
+    exit 43
+fi
+"#;
+            let output = Command::new(&program)
+                .args(&launch.args)
+                .args(["-c", script])
+                .env_clear()
+                .envs(env.iter().cloned())
+                .env(
+                    "TEST_EXPECT_HOOK",
+                    if integrated && !matches!(case, "env-stop" | "profile-stop" | "readonly") {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                )
+                .current_dir(&home)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{case} integrated={integrated}: {:?}",
+                output.stderr
+            );
+            assert!(
+                output.stderr.is_empty(),
+                "{case} integrated={integrated}: {:?}",
+                output.stderr
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let expected = run(&config.env.into_iter().collect::<Vec<_>>(), false);
+        let actual = run(&launch.env, true);
+        assert_eq!(actual, expected, "{case}");
+        assert!(actual.contains("markers:0:0:0:0"), "{case}: {actual}");
+        for (path, contents) in files {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+        }
+    }
+}
+
 fn value<'a>(launch: &'a ShellLaunch, key: &str) -> &'a str {
     let values: Vec<_> = launch.env.iter().filter(|(name, _)| name == key).collect();
     assert_eq!(values.len(), 1, "{key} must have one authoritative value");

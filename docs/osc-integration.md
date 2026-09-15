@@ -144,11 +144,12 @@ arbitrary user prompt code or output from other applications.
 
 Launch preparation captures `ZDOTDIR` from the effective profile environment,
 falling back to the inherited environment only when the profile does not set
-it. It then uses a generated directory temporarily to reach Termeric's `.zshrc`.
-That wrapper restores the original value (or unsets it) and removes the private
-transport markers **before** sourcing user configuration. User code and child
-shells therefore see the user's path, and changes made by the user's `.zshrc`
-remain in effect. A custom directory with no readable `.zshrc` does not fall
+it. It then uses a generated directory temporarily to forward `.zshenv`, login
+`.zprofile`, and `.zshrc`. Each wrapper restores the user's value (or unsets it)
+and removes the exported transport markers **before** sourcing user configuration
+at file scope. Ordinary `typeset` declarations therefore remain global, and
+child shells launched by that user code do not inherit the transport. A custom
+directory with no readable `.zshrc` does not fall
 back to `$HOME/.zshrc`; [Zsh uses HOME only when ZDOTDIR is unset](https://zsh.sourceforge.io/Doc/Release/Files.html).
 
 Explicitly empty and unset values remain distinct. If a nested Termeric launch
@@ -157,7 +158,11 @@ instead of stacking transports. A different profile path overrides stale
 markers. Older single-marker launches are recovered when their original path
 is available; if an older launch already overwrote it with the generated path,
 the original cannot be recovered and HOME is used rather than recursively
-sourcing Termeric's wrapper.
+sourcing Termeric's wrapper. Early stages also retain whether the user's
+`ZDOTDIR` is exported. Changes to its value/export state are carried into the
+next stage; after `.zshrc`, normal Zsh processing loads `.zlogin`/`.zlogout`
+from the resulting user directory. The wrappers do not manually source global
+startup files or reorder login/logout execution.
 
 Pure regressions cover profile precedence, unique environment entries,
 unset/empty/custom recovery, and legacy recursion prevention. Real Zsh startup
@@ -166,13 +171,23 @@ unset `ZDOTDIR`, rc-directed path changes, and nested child startup. These
 fixtures use isolated configuration and append `-c` after launch preparation
 to inspect actual interactive startup; they do not prove command-argument
 eligibility or visual/PTY acceptance. The existing real-PTY shell probe checks
-ordinary prompt and command-region behavior separately.
+ordinary prompt and command-region behavior separately. Nine additional
+startup-chain comparisons cover interactive/login order, directory redirects
+from `.zshenv` and `.zprofile`, global declaration scope, login/logout files,
+disabled `RCS`, readonly/unset/non-exported `ZDOTDIR`, and `nounset`. An isolated
+real-PTY login probe loads a user `.zprofile` that enables `nounset`, verifies
+the exact cwd at the first input-ready prompt, and completes multiline
+success/failure commands with the expected regions. The first prompt no longer
+reads an unset internal seen-command variable under `nounset`.
 
-This fixes the `.zshrc` directory handoff, not the entire Zsh startup chain:
-user `.zshenv` and login `.zprofile` are still not forwarded by the generated
-directory. Global startup files can also redirect `ZDOTDIR` or disable startup
-reading before the wrapper is reached. Full startup-order/configuration
-acceptance remains incomplete and must preserve those files' native semantics.
+If a user stage disables `RCS` or makes `ZDOTDIR` readonly, forwarding stops and
+leaves native startup at the user's directory; semantic hooks may consequently
+be absent. A remaining boundary is **global startup code**: between forwarded
+stages it can still observe the temporary directory, redirect it, or disable
+reading before the next wrapper is reached. These tests disable optional global
+startup files with `-d`; arbitrary system startup scripts and all command-line
+option combinations are not accepted by this evidence. Full configuration
+acceptance remains incomplete.
 
 ### Nushell launch eligibility
 
