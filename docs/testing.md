@@ -798,8 +798,8 @@ real window. See [`workspaces.md`](workspaces.md).
 Mixed-launch workspace tests move a live named-profile pane into a shell tab,
 round-trip its explicit pane identity, and execute distinct hermetic shell and
 profile markers after restore. They also cover profile adoption after pane-mode
-collapse, inherited future splits, schema-1 launch migration, atomic rejection
-of tab-owned plugin-pane detachment, and permitted movement of ordinary splits
+collapse, inherited future splits, schema-1 launch migration, primary plugin
+detachment with surviving-owner reconciliation, and movement of ordinary splits
 beside a fake plugin process. No provider CLI or network service participates.
 
 Tab-bar layout unit tests force more minimum-width tabs than the available
@@ -920,8 +920,10 @@ cover schema-0/1/2 migration without inventing plugin launches. The separate
 `cargo test -p termeric plugin_pane_creation_tests` lane checks explicit palette
 creation with fake PTYs, exact profile/cwd/kernel geometry, preservation of the
 original owner, rollback of focus/zoom/layout, refused destinations, and
-close/collapse/resplit. See [plugin panes](plugin-panes.md). Plugin-pane movement
-and real-provider/native acceptance are not claimed by these lanes; see
+close/collapse/resplit. `cargo test -p termeric plugin_pane_transfer_tests` checks
+ordinary plugin moves, mid-UTF-8/mid-diff recorder continuity, read-only and stale
+operation isolation, archive round-trips, and collapsed destination ID exhaustion.
+See [plugin panes](plugin-panes.md). Real-provider/native acceptance is not claimed; see
 [integration acceptance](integration-acceptance.md).
 
 PTY shutdown has a deterministic destructor-order regression for both unsplit

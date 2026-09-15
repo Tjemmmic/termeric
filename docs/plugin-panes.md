@@ -43,8 +43,27 @@ Each created plugin terminal owns fresh session metadata, transcript state, and
 diff tracking. Closing a sibling and collapsing/resplitting preserve that owner
 and its exact profile. Ordinary split commands still launch ordinary shells or
 the tab's process profile; they never implicitly clone the focused plugin.
-Plugin-pane movement remains guarded under
-[#126](https://github.com/Tjemmmic/termeric/issues/126).
+Plugin panes can move between ordinary local tabs and process-owned windows
+through the existing pane-move commands, exact GUI control, and granted plugin
+pane-move operations. The same live PTY, reader, terminal, launch configuration,
+profile, transcript worker, UTF-8 carry, partial diff, and notices move together;
+no plugin launch hook or provider restart runs. The destination assigns a fresh
+local pane ID. Pending actions addressed to the old source stay stale rather
+than retargeting another owner. Read-only state travels with the pane.
+
+All move paths validate source/anchor liveness, the last-source-pane rule,
+destination capacity, and pane/divider allocation history before detaching.
+This includes allocation history retained after collapse. Failure preserves
+both layouts and processes. Successful app-mediated moves select the destination,
+clear broadcast/copy-mode/mouse interaction state, and update source-primary
+presentation. Existing same-tab layout actions remain separate; moving the last
+pane, local-to-live-domain placement, and serial placement stay unsupported.
+Use a whole-tab move for a single-terminal source.
+
+Workspace capture retains each moved owner's launch reference. Moving between
+windows does not copy configuration or secrets into the destination: a future
+restore still requires the referenced plugin/profile there. Removal of that
+configuration does not terminate the already-running moved process.
 
 ## Evidence and deferred checks
 
@@ -55,6 +74,14 @@ geometry, original-owner preservation, workspace round-trips, cwd policies,
 failure rollback, refusal boundaries, and close/collapse/resplit identity.
 Shared launch tests reject mismatched or ambiguous synthetic hook responses;
 declarative hook tests check active/inherit cwd semantics without running tools.
+
+`cargo test -p termeric plugin_pane_transfer_tests` additionally checks primary
+and sibling plugin transfers, same-plugin profile isolation, continued PTY and
+recorder identity, split UTF-8 and partial-diff completion across transfer,
+read-only/protocol/stale-write exclusions, stale profile choices, archive
+save/load/restore, and exhausted collapsed destination IDs. Existing app,
+control, and plugin tests cover exact destination routing, native-window
+controller handoffs, interaction cleanup, and refused topology boundaries.
 
 No authenticated Codex, Claude Code, or other provider workflow was run. Native
 visual acceptance and real-provider behavior remain deferred to the user;

@@ -112,14 +112,16 @@ Window-local moves transfer the live `Terminal`, PTY handle, reader, shell
 metadata, and Harvest state. The source focuses the detached pane's sibling;
 the destination focuses the moved pane under a new destination-local pane ID.
 
-Any ordinary shell or terminal-profile pane in a split tab can move, including
-a shell/profile split beside a plugin process. Its live owner carries both the
-persisted launch identity and frozen process configuration. When the former
+Any ordinary shell, terminal-profile, or plugin pane in a split tab can move.
+Its live owner carries both the persisted launch identity and frozen process
+configuration. When the former
 launch-primary pane moves, the source keeps every surviving pane ID and records
 a new explicit primary ID for deterministic relaunch; the destination assigns
 the moved PTY a new destination-local ID. If a moved pane later becomes the sole
-owner, its launch type and split configuration become the tab defaults. The
-tab-owned plugin process itself cannot detach; move the complete tab instead.
+owner, its launch type becomes the tab presentation. Shell/profile owners also
+become the ordinary split default; plugin owners retain the tab's ordinary
+split policy rather than implicitly cloning a plugin. The plugin terminal's
+session, recorder, and diff state stay with its existing PTY.
 For live-domain tabs, the daemon keeps the global pane ID and moves the complete
 runtime between stable tabs; each attached GUI transfers its existing relay
 owner to a new tab-local ID. Moving the last pane or moving into a
@@ -133,12 +135,11 @@ one owner and are resized to the destination geometry. Source and destination
 broadcast state is cancelled before further input. Shell and named-profile
 panes may cross unlike tab types because workspace persistence records each
 launch independently. A source with one pane, a missing second window, a
-closing destination tab, a live-domain endpoint, or a focused plugin
-process fails without detaching anything. An ordinary split inside a plugin tab
-is not plugin-owned and may move. Live-domain topology remains daemon-owned.
-Plugin session state is now terminal-owned and mixed-plugin archive restoration
-is supported, but explicit plugin-pane movement remains guarded until its
-separate lifecycle work is complete.
+closing destination tab, a live-domain endpoint, an unavailable anchor, or
+exhausted destination pane/divider IDs fails without detaching anything. Focused
+shortcuts and exact-ID moves share those checks, including allocation history
+after collapse. Live-domain topology remains daemon-owned. Plugin sessions and
+mixed-plugin archives follow the [terminal-owner contract](plugin-panes.md).
 
 ## Broadcast safety and routing
 

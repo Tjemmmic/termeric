@@ -2154,11 +2154,9 @@ fn plugin_pane_movement_refuses_unsupported_targets_before_detaching() {
         plugin_id: "fake".into(),
         profile: None,
     };
-    assert_refused(
-        &move_result(&mut plugin, source as u64, 0, destination as u64, 0),
-        "move the whole tab",
-    );
-    assert_source_intact(&plugin, source);
+    let moved = move_result(&mut plugin, source as u64, 0, destination as u64, 0);
+    assert_eq!(moved["event"]["ok"], true);
+    assert_eq!(moved["event"]["source_remaining_panes"], 1);
 
     let (mut last, source, destination, _) = fixture();
     assert_refused(
@@ -4639,6 +4637,9 @@ mod workspace_plugin_tests;
 
 #[cfg(unix)]
 mod plugin_pane_creation_tests;
+
+#[cfg(unix)]
+mod plugin_pane_transfer_tests;
 
 #[cfg(unix)]
 #[test]

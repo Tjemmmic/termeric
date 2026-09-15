@@ -310,8 +310,9 @@ different-domain slot remain unrepresentable and fail before mutation.
 exact destination anchor pane and a typed split direction. It transfers the
 existing PTY and terminal state between different ordinary tabs in the same or
 different process-owned windows, focuses the fresh destination-local pane, and
-returns its new ID. The last source pane cannot move, and a tab-owned plugin
-pane must move with its whole tab. Moving within the same tab is currently
+returns its new ID. Plugin-owned panes carry their existing session/transcript
+state and saved profile with the live PTY. The last source pane cannot move.
+Moving within the same tab is currently
 rejected because that requires an explicit layout-tree rearrangement contract,
 not an ownership transfer. Live-domain panes can move between different tabs in
 the same domain and native window. Domain protocol v10 carries the exact remote

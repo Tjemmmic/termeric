@@ -31,8 +31,8 @@ mixed shell/profile/plugin layouts, including distinct profiles of the same
 plugin and different plugins. Migration never invents sibling plugin launches.
 The explicit launch primary is preserved even when its ID is not zero.
 [Explicit plugin-pane creation](plugin-panes.md) is available from the command
-palette. Plugin-pane movement remains guarded pending the remaining work in
-[#126](https://github.com/Tjemmmic/termeric/issues/126).
+palette. Ordinary plugin-pane movement also preserves those per-owner references;
+see [plugin pane lifecycle and movement](plugin-panes.md).
 
 Each archive represents one native window. Process-level application state
 stores the ordered set of window workspace IDs so automatic startup can

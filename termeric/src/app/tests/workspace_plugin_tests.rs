@@ -159,11 +159,10 @@ fn mixed_plugin_workspaces_restore_exact_profiles_cwds_and_terminal_owners() {
             assert_eq!(state.ai_session.as_ref().unwrap().profile, tag);
             assert!(state.transcript.is_none());
             assert_eq!(state.diff_detector.unreviewed_count(), 0);
-            // Until creation/movement is implemented, restored plugin owners
-            // remain behind the explicit transfer guard.
+            // Restored plugin owners are valid ordinary transfer sources.
             assert!(
                 tabs.validate_pane_transfer_source_by_id(tab.id, PaneId(id))
-                    .is_err()
+                    .is_ok()
             );
         }
         let tab = tabs.active_tab().unwrap();

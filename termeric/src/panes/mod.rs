@@ -1025,24 +1025,6 @@ impl PaneManager {
         self.panes.get(&id)
     }
 
-    pub(crate) fn focused_pane_is_plugin_owned(&self) -> bool {
-        self.focused_pane().is_some_and(|pane| {
-            matches!(
-                pane.launch,
-                crate::workspace::WorkspaceLaunch::Plugin { .. }
-            )
-        })
-    }
-
-    pub(crate) fn pane_is_plugin_owned(&self, id: PaneId) -> bool {
-        self.get_pane(id).is_some_and(|pane| {
-            matches!(
-                pane.launch,
-                crate::workspace::WorkspaceLaunch::Plugin { .. }
-            )
-        })
-    }
-
     /// Get a pane by ID mutably
     pub fn get_pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
         self.panes.get_mut(&id)

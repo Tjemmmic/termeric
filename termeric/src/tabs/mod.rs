@@ -1126,7 +1126,7 @@ impl TabManager {
         Ok(id)
     }
 
-    /// Move the active pane to the next tab without recreating its PTY.
+    /// Move the active pane through the same prevalidated path as exact-ID moves.
     pub(crate) fn move_focused_pane_to_next_tab(
         &mut self,
         cwd_mode: crate::config::PaneCwdMode,
@@ -1134,83 +1134,36 @@ impl TabManager {
         if self.tabs.len() < 2 {
             anyhow::bail!("A second tab is required");
         }
-        let source = self.active;
+        let source = self
+            .active_tab()
+            .context("No source tab is active")?
+            .focused_terminal_identity();
         let destination = (1..self.tabs.len())
-            .map(|offset| (source + offset) % self.tabs.len())
-            .find(|index| !self.tabs[*index].is_closing() && self.tabs[*index].allows_pane_splits())
+            .map(|offset| (self.active + offset) % self.tabs.len())
+            .find(|index| {
+                !self.tabs[*index].is_closing()
+                    && !self.tabs[*index].closed
+                    && self.tabs[*index].allows_pane_splits()
+            })
             .context("No destination tab is available")?;
-        if self.tabs[source].live_domain.is_some() || self.tabs[destination].live_domain.is_some() {
-            anyhow::bail!("Live-domain panes cannot be moved by the local workspace controller");
-        }
-        let source_manager = self.tabs[source]
-            .pane_manager
-            .as_ref()
-            .context("Split the source tab before moving a pane")?;
-        if source_manager.open_pane_count() <= 1 {
-            anyhow::bail!("The last pane in a tab cannot be moved");
-        }
-        if source_manager.focused_pane_is_plugin_owned() {
-            anyhow::bail!(
-                "Plugin processes are tab-owned; move the whole tab instead of its plugin pane"
-            );
-        }
-        let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-        let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-        if self.tabs[destination].pane_manager.is_none() {
-            let split_shell = self.tabs[destination].split_shell_config();
-            let owner = self.tabs[destination]
-                .take_terminal_owner()
-                .context("Destination tab does not own a terminal")?;
-            let mut manager = crate::panes::PaneManager::from_existing(
-                owner,
-                split_shell,
-                self.scrollback_lines,
-                self.scrollback_bytes,
-                f32::from(self.geometry.pixel_width),
-                f32::from(self.geometry.pixel_height),
-                cell_width,
-                cell_height,
-            );
-            manager.set_cwd_mode(cwd_mode);
-            self.tabs[destination].pane_manager = Some(manager);
-        }
-        let pane = self.tabs[source]
-            .pane_manager
-            .as_mut()
-            .context("Split the source tab before moving a pane")?
-            .detach_focused()
-            .context("The last pane in a tab cannot be moved")?;
-        self.tabs[source].reconcile_primary_pane_launch();
-        let id = self.tabs[destination]
-            .pane_manager
-            .as_mut()
-            .expect("destination pane manager was installed")
-            .attach(pane, crate::panes::SplitDirection::Vertical);
-        self.active = destination;
-        Ok(id)
+        let target = self.tabs[destination].focused_terminal_identity();
+        self.transfer_pane_by_id(
+            source.tab_id,
+            source.pane_id,
+            target.tab_id,
+            target.pane_id,
+            crate::panes::SplitDirection::Vertical,
+            cwd_mode,
+        )
     }
 
     /// Validate the source half of a process-local cross-window pane move.
     pub(crate) fn validate_window_pane_transfer_source(&self) -> anyhow::Result<()> {
-        let source = self.active_tab().context("No source tab is active")?;
-        if source.live_domain.is_some() {
-            anyhow::bail!(
-                "Live-domain panes are daemon-owned and cannot be moved between local windows"
-            );
-        }
-        let manager = source
-            .pane_manager
-            .as_ref()
-            .context("Split the source tab before moving a pane")?;
-        if manager.open_pane_count() <= 1 {
-            anyhow::bail!("The last pane in a tab cannot be moved");
-        }
-        if manager.focused_pane_is_plugin_owned() {
-            anyhow::bail!(
-                "Plugin processes are tab-owned; move the whole tab instead of its plugin pane"
-            );
-        }
-        Ok(())
+        let source = self
+            .active_tab()
+            .context("No source tab is active")?
+            .focused_terminal_identity();
+        self.validate_pane_transfer_source_by_id(source.tab_id, source.pane_id)
     }
 
     pub(crate) fn validate_pane_transfer_source_by_id(
@@ -1227,7 +1180,9 @@ impl TabManager {
             anyhow::bail!("GUI tab {tab_id} is closing");
         }
         if tab.live_domain.is_some() {
-            anyhow::bail!("Live-domain panes require an acknowledged daemon topology change");
+            anyhow::bail!(
+                "Live-domain panes are daemon-owned and require an acknowledged topology change"
+            );
         }
         let manager = tab
             .pane_manager
@@ -1241,11 +1196,6 @@ impl TabManager {
         }
         if manager.open_pane_count() <= 1 {
             anyhow::bail!("The last pane in a tab cannot be moved");
-        }
-        if manager.pane_is_plugin_owned(pane_id) {
-            anyhow::bail!(
-                "Plugin processes are tab-owned; move the whole tab instead of its plugin pane"
-            );
         }
         Ok(())
     }
@@ -1279,10 +1229,8 @@ impl TabManager {
                 target.0,
                 tab.single_pane_id().0
             )
-        } else if target.0 == u32::MAX {
-            anyhow::bail!("Destination tab exhausted its stable pane ID space")
         } else {
-            Ok(())
+            tab.validate_single_pane_attachment()
         }
     }
 
@@ -1384,47 +1332,16 @@ impl TabManager {
             .context("prevalidated destination pane remains attachable")
     }
 
-    /// Validate and normalize the destination active tab into pane mode.
-    /// This performs no process creation and is safe to call before detaching
-    /// the source owner.
+    /// Normalize only after validating the same limits used by exact-ID moves.
     pub(crate) fn prepare_window_pane_transfer_destination(
         &mut self,
         cwd_mode: crate::config::PaneCwdMode,
     ) -> anyhow::Result<()> {
-        let destination = self
-            .tabs
-            .get(self.active)
-            .context("No destination tab is active")?;
-        if destination.is_closing() {
-            anyhow::bail!("The destination tab is closing");
-        }
-        if destination.live_domain.is_some() {
-            anyhow::bail!("A local pane cannot be attached to a live-domain tab");
-        }
-        if !destination.allows_pane_splits() {
-            anyhow::bail!("A pane cannot be attached to a serial terminal tab");
-        }
-        if self.tabs[self.active].pane_manager.is_none() {
-            let cell_width = f32::from(self.geometry.pixel_width) / self.geometry.cols as f32;
-            let cell_height = f32::from(self.geometry.pixel_height) / self.geometry.rows as f32;
-            let split_shell = self.tabs[self.active].split_shell_config();
-            let owner = self.tabs[self.active]
-                .take_terminal_owner()
-                .context("Destination tab does not own a terminal")?;
-            let mut manager = crate::panes::PaneManager::from_existing(
-                owner,
-                split_shell,
-                self.scrollback_lines,
-                self.scrollback_bytes,
-                f32::from(self.geometry.pixel_width),
-                f32::from(self.geometry.pixel_height),
-                cell_width,
-                cell_height,
-            );
-            manager.set_cwd_mode(cwd_mode);
-            self.tabs[self.active].pane_manager = Some(manager);
-        }
-        Ok(())
+        let target = self
+            .active_tab()
+            .context("No destination tab is active")?
+            .focused_terminal_identity();
+        self.prepare_pane_transfer_destination_by_id(target.tab_id, target.pane_id, cwd_mode)
     }
 
     /// Detach the validated focused pane while retaining its PTY, reader,
@@ -1446,11 +1363,17 @@ impl TabManager {
 
     /// Attach a detached owner to the already prepared active destination.
     pub(crate) fn attach_window_transferred_pane(&mut self, pane: crate::panes::Pane) -> PaneId {
-        self.tabs[self.active]
+        let manager = self.tabs[self.active]
             .pane_manager
             .as_mut()
-            .expect("window transfer destination must be prepared")
-            .attach(pane, crate::panes::SplitDirection::Vertical)
+            .expect("window transfer destination must be prepared");
+        manager
+            .attach_target(
+                pane,
+                manager.focused_id(),
+                crate::panes::SplitDirection::Vertical,
+            )
+            .expect("prevalidated destination remains attachable")
     }
 
     /// Get mutable access to all tabs (for resize propagation)
@@ -3529,7 +3452,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn plugin_primary_pane_cannot_detach_but_ordinary_plugin_split_can() {
+    fn plugin_primary_and_ordinary_sibling_can_move_without_relaunching() {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
         }
@@ -3572,11 +3495,13 @@ mod tests {
         manager.new_tab().unwrap();
         manager.switch_to(0);
 
-        let error = manager
+        let moved_plugin = manager
             .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("move the whole tab"), "{error}");
+            .unwrap();
+        assert_eq!(manager.tabs[1].pane_plugin_id(moved_plugin), Some("fake"));
+        manager
+            .move_focused_pane_to_next_tab(crate::config::PaneCwdMode::Focused)
+            .unwrap();
         assert_eq!(
             manager.tabs[0].pane_manager.as_ref().unwrap().pane_count(),
             2

@@ -1341,9 +1341,14 @@ not synthesize tab lifecycle hooks. A later independent external event may
 begin another bounded request.
 
 API v16 does not grant same-tab layout-tree rearrangement, cross-window
-movement, live-domain mutation, movement of a tab-owned plugin process, window
-or final-tab closure, terminal input, arbitrary launch selection, or access to
+movement, live-domain mutation, window or final-tab closure, terminal input,
+arbitrary launch selection, or access to
 another window's inventory.
+
+Ordinary plugin-owned panes are valid move sources: their complete live terminal,
+profile, recorder, and diff state transfer without relaunching. The last-source
+pane rule and destination capacity/ID checks still apply. This does not grant
+terminal input or launch authority; see [plugin panes](plugin-panes.md).
 
 ## Manifest API v17 terminal input
 

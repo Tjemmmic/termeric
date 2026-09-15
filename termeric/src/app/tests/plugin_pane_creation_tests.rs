@@ -96,7 +96,7 @@ fn explicit_plugin_panes_spawn_one_owner_with_exact_profile_cwd_and_geometry() {
                 .as_ref()
                 .unwrap()
                 .validate_pane_transfer_source_by_id(target.tab_id, id)
-                .is_err()
+                .is_ok()
         );
     }
     let snapshot = app

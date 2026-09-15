@@ -144,6 +144,25 @@ pub struct Tab {
 }
 
 impl Tab {
+    pub(crate) fn validate_single_pane_attachment(&self) -> anyhow::Result<()> {
+        if self.terminal.is_none() || self.pty.is_none() || self.pty_rx.is_none() {
+            anyhow::bail!("Destination tab does not own a terminal");
+        }
+        if self
+            .pane_allocation
+            .next_pane
+            .max(self.single_pane_id.0.saturating_add(1))
+            .checked_add(1)
+            .is_none()
+        {
+            anyhow::bail!("Destination tab exhausted its stable pane ID space");
+        }
+        if self.pane_allocation.next_divider.checked_add(1).is_none() {
+            anyhow::bail!("Destination tab exhausted its stable divider ID space");
+        }
+        Ok(())
+    }
+
     pub(crate) fn child_observer(&self) -> Option<termeric_core::pty::ChildObserver> {
         self.pty.as_ref().map(PtyHandle::child_observer)
     }

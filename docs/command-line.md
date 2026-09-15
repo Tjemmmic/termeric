@@ -223,8 +223,8 @@ destination-local pane ID and focuses that pane. A live-domain pane can likewise
 move between different tabs of the same domain in one window; domain protocol
 v10 preserves the exact destination anchor and direction, and GUI control waits
 for authoritative reconciliation before returning its destination-local ID.
-Last-source-pane, tab-owned plugin-pane, same-tab layout-rearrangement,
-cross-window/domain, and mixed ordinary/live moves fail before detachment. A
+Last-source-pane, same-tab layout-rearrangement,
+cross-window/domain live moves, and mixed ordinary/live moves fail before detachment. A
 live-domain tab can reorder within its current window only
 to another visual slot owned by the same domain; it waits for authoritative
 reconciliation and retains its GUI-local ID. Cross-window or cross-domain live

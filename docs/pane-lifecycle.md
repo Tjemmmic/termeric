@@ -35,8 +35,9 @@ that owner's recorder, using the existing bounded durable flush. Polling and
 successful user writes record beside the exact PTY; sibling output/input and
 protocol replies cannot contaminate the transcript. Background failures and
 caps update only the affected owner's recording state. This ownership model is
-the first dependency of [#126](https://github.com/Tjemmmic/termeric/issues/126),
-not permission to bypass current plugin-primary transfer/archive restrictions.
+also supports [plugin-pane creation, movement, and archive restoration](plugin-panes.md).
+Transfers keep the original PTY/recorder/diff state and assign destination-local
+IDs, with pre-detach validation of topology and retained allocation history.
 
 Both the unsplit `Pty` and reader-split `PtyHandle` declare their child owner
 before their writer/master fields. This is a required destruction-order

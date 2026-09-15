@@ -7838,10 +7838,18 @@ mod tests {
             plugin_id: "fake".into(),
             profile: None,
         };
-        let error = Application::transfer_focused_pane(&mut plugin_source, &mut plugin_destination)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("move the whole tab"), "{error}");
+        let moved = Application::transfer_focused_pane(&mut plugin_source, &mut plugin_destination)
+            .unwrap();
+        assert_eq!(
+            plugin_destination
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .pane_plugin_id(moved),
+            Some("fake")
+        );
         assert_eq!(
             plugin_source
                 .tabs
@@ -7853,7 +7861,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .pane_count(),
-            2
+            1
         );
         assert!(
             plugin_destination
@@ -7863,7 +7871,7 @@ mod tests {
                 .active_tab()
                 .unwrap()
                 .pane_manager
-                .is_none()
+                .is_some()
         );
     }
 

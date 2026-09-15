@@ -402,6 +402,8 @@ impl App {
         match result {
             Ok(_) => {
                 self.broadcast = BroadcastState::Inactive;
+                self.leave_copy_mode(false);
+                self.terminal_mouse_button = None;
                 self.refresh_focused_terminal_surfaces();
                 self.toasts.success("Pane moved to the next tab");
             }
