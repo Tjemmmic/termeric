@@ -225,6 +225,17 @@ OSC 99 activation reply to the originating terminal, with an empty payload for
 the default action or the one-based button number for a button. Focus policy
 atomically validates and selects that same tab/pane before requesting native
 window activation; stale origins never fall back to active content.
+
+Notification keys retain the stable tab-local pane identity, not the event's
+current tab-versus-pane route. Showing/replacing, explicit close, alive queries,
+pending close reports, and delayed action/lifecycle callbacks all retain that
+same owner through split/collapse, including a nonzero surviving pane. Removing
+the owner never transfers its notification authority, focus request, or reply
+bytes to the replacement survivor. Closed/closing owners are rejected before
+native activation or protocol writes, and focus selection is revalidated before
+requesting native activation. Report-only actions leave focus unchanged; replies
+remain protocol-only, including in read-only panes or while broadcast is armed.
+
 `a=-focus` leaves tab, pane, and native focus unchanged while preserving an
 independent requested report. Unknown, stale, oversized, and duplicate actions
 are ignored. Activation does not consume close-report state, so a following
@@ -292,6 +303,13 @@ tokens, close signals, alive snapshots, timeouts, shutdown, exact inactive
 tab/pane selection, stale-origin rejection, and exact delayed-reply routing
 without a session bus. Real-compositor permission, presentation, focus grants,
 and daemon action/signal behavior remain manual acceptance.
+
+Raw-PTY layout-transition regressions cover lifecycle replies, report-only,
+focus-only, and combined actions in S7/S8 mode. A test-only receiver captures the
+real notification frontend's Show/Close/Alive commands across layout changes
+without starting a worker or contacting a desktop service. Stable keys continue
+through the existing in-memory worker generation, expiry, close, and action
+tests. See [#121](https://github.com/Tjemmmic/termeric/issues/121).
 
 [kitty-notifications]: https://sw.kovidgoyal.net/kitty/desktop-notifications/
 

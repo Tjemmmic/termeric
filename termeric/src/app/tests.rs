@@ -8206,6 +8206,44 @@ fn app_mediated_clipboard_reply_returns_to_requesting_pane_not_focus() {
 
 #[cfg(unix)]
 #[test]
+fn delayed_notification_completion_does_not_alias_a_replacement_single_owner() {
+    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
+    let origin = TerminalEventOrigin::Tab {
+        tab_id: entry.source.tab_id,
+    };
+    let origin = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .identity_for_origin(origin)
+        .unwrap();
+    let completion = crate::notifications::NotificationCompletion::Activation {
+        origin,
+        focus: true,
+        protocol_reply: Some(b"\x1b]99;i=fixture;1\x1b\\".to_vec()),
+        activation_token: Some("synthetic-not-for-forwarding".into()),
+    };
+    split_harvest_capture_owner(&mut app, directory.path());
+    app.close_control_pane(entry.source.tab_id as u64, 0)
+        .unwrap();
+    let captures = current_harvest_capture_routes(&mut app, directory.path());
+    assert!(
+        !app.handle_notification_completion(completion),
+        "a notification must not activate the replacement owner"
+    );
+    assert!(
+        fenced_harvest_capture(&mut app, &captures)
+            .iter()
+            .all(Vec::is_empty),
+        "a notification reply must not reach the replacement owner"
+    );
+}
+
+#[cfg(unix)]
+mod notification_owner_tests;
+
+#[cfg(unix)]
+#[test]
 fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallback() {
     if !std::path::Path::new("/bin/sh").exists() {
         return;
@@ -8252,7 +8290,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
 
     assert!(!app.handle_notification_completion(
         crate::notifications::NotificationCompletion::Activation {
-            origin: TerminalEventOrigin::Pane {
+            origin: crate::tabs::TerminalIdentity {
                 tab_id,
                 pane_id: requesting_pane,
             },
@@ -8324,7 +8362,7 @@ fn delayed_notification_reply_returns_to_requesting_pane_without_a_focus_fallbac
     let latest_toast_before = latest_toast(&app).map(str::to_owned);
     assert!(!app.handle_notification_completion(
         crate::notifications::NotificationCompletion::ProtocolReply {
-            origin: TerminalEventOrigin::Pane {
+            origin: crate::tabs::TerminalIdentity {
                 tab_id,
                 pane_id: PaneId(u32::MAX),
             },
@@ -8382,7 +8420,7 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
         let pane_id = panes.split(SplitDirection::Vertical).unwrap();
         panes.focus(PaneId(0));
         tab.pane_manager = Some(panes);
-        TerminalEventOrigin::Pane {
+        crate::tabs::TerminalIdentity {
             tab_id: origin_tab,
             pane_id,
         }
@@ -8408,14 +8446,11 @@ fn notification_activation_selects_the_exact_origin_and_stale_origins_fail_close
             .as_ref()
             .unwrap()
             .focused_id(),
-        match origin {
-            TerminalEventOrigin::Pane { pane_id, .. } => pane_id,
-            TerminalEventOrigin::Tab { .. } => unreachable!(),
-        }
+        origin.pane_id
     );
 
     assert_eq!(app.select_control_tab(active_tab as u64), Ok(true));
-    let stale = TerminalEventOrigin::Pane {
+    let stale = crate::tabs::TerminalIdentity {
         tab_id: origin_tab,
         pane_id: PaneId(u32::MAX),
     };

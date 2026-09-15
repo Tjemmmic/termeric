@@ -505,6 +505,14 @@ The record itself names every required X11 and Wayland check for:
   F6 chrome navigation, modal isolation, actions, and exclusion of hidden
   content.
 
+For deferred OSC 99 notification checks, show an identified notification before
+splitting/collapsing its owner. Replacement, close, alive queries, button reports,
+and focus actions must still address that same surviving pane, including a
+nonzero survivor. Remove the notifying pane and verify that delayed activation
+or closure cannot focus or write to its replacement. Report-only actions must
+leave focus alone. These checks have hermetic ownership coverage but still need
+real notification-daemon and compositor acceptance when native testing resumes.
+
 Run the candidate under real X11 and Wayland sessions, fill every check with
 `pass`, `fail`, `unavailable`, or `accepted_limitation`, and attach evidence for
 pass/fail results. Validate while working:

@@ -91,17 +91,16 @@ impl App {
     /// back to whichever terminal happens to be focused now.
     pub(super) fn activate_notification_origin(
         &mut self,
-        origin: crate::tabs::TerminalEventOrigin,
+        identity: crate::tabs::TerminalIdentity,
     ) -> bool {
-        if self
+        let Some(origin) = self
             .tabs
             .as_ref()
-            .and_then(|tabs| tabs.terminal_for_origin(origin))
-            .is_none()
-        {
-            log::debug!("Ignored notification activation for stale origin {origin:?}");
+            .and_then(|tabs| tabs.origin_for_pane(identity.tab_id, identity.pane_id))
+        else {
+            log::debug!("Ignored notification activation for stale owner {identity:?}");
             return false;
-        }
+        };
 
         let selected = match origin {
             crate::tabs::TerminalEventOrigin::Tab { tab_id } => self
@@ -113,6 +112,16 @@ impl App {
         };
         if let Err(error) = selected {
             log::debug!("Ignored notification activation for stale origin {origin:?}: {error}");
+            return false;
+        }
+
+        // Selection may run app callbacks. Revalidate before native activation.
+        if self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.origin_for_pane(identity.tab_id, identity.pane_id))
+            .is_none()
+        {
             return false;
         }
 
@@ -709,11 +718,25 @@ impl App {
                     );
                     return;
                 }
+                let Some(origin) = self
+                    .tabs
+                    .as_ref()
+                    .and_then(|tabs| tabs.identity_for_origin(origin))
+                else {
+                    return;
+                };
                 if let Some(error) = self.notifications.notify_terminal(origin, req) {
                     self.toasts.warning(error);
                 }
             }
             TerminalEvent::NotificationClose { identifier } => {
+                let Some(origin) = self
+                    .tabs
+                    .as_ref()
+                    .and_then(|tabs| tabs.identity_for_origin(origin))
+                else {
+                    return;
+                };
                 if let Some(error) = self.notifications.close_terminal(origin, identifier) {
                     self.toasts.warning(error);
                 }
@@ -722,6 +745,13 @@ impl App {
                 identifier,
                 reply_uses_8bit_controls,
             } => {
+                let Some(origin) = self
+                    .tabs
+                    .as_ref()
+                    .and_then(|tabs| tabs.identity_for_origin(origin))
+                else {
+                    return;
+                };
                 if let Some(error) =
                     self.notifications
                         .query_alive(origin, identifier, reply_uses_8bit_controls)

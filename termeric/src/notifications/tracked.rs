@@ -1,6 +1,6 @@
 //! Bounded, origin-scoped Linux notification handles for Kitty OSC 99.
 
-use crate::tabs::TerminalEventOrigin;
+use crate::tabs::TerminalIdentity;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,7 +29,7 @@ enum InternalIdentifier {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct TrackedKey {
-    origin: TerminalEventOrigin,
+    origin: TerminalIdentity,
     identifier: InternalIdentifier,
 }
 
@@ -49,7 +49,7 @@ struct TrackedEntry {
 
 #[derive(Clone, Debug)]
 struct ClosingEntry {
-    origin: TerminalEventOrigin,
+    origin: TerminalIdentity,
     identifier: String,
     reply_uses_8bit_controls: bool,
     deadline: Instant,
@@ -57,13 +57,13 @@ struct ClosingEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ProtocolReply {
-    pub(super) origin: TerminalEventOrigin,
+    pub(super) origin: TerminalIdentity,
     pub(super) data: Vec<u8>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ActivationCompletion {
-    pub(super) origin: TerminalEventOrigin,
+    pub(super) origin: TerminalIdentity,
     pub(super) focus: bool,
     pub(super) protocol_reply: Option<Vec<u8>>,
     pub(super) activation_token: Option<String>,
@@ -90,7 +90,7 @@ enum TrackedCommand {
         key: TrackedKey,
     },
     Alive {
-        origin: TerminalEventOrigin,
+        origin: TerminalIdentity,
         identifier: String,
         reply_uses_8bit_controls: bool,
     },
@@ -364,7 +364,7 @@ impl<B: TrackedNotificationBackend> TrackedState<B> {
 
     fn alive_reply(
         &self,
-        origin: TerminalEventOrigin,
+        origin: TerminalIdentity,
         identifier: &str,
         reply_uses_8bit_controls: bool,
     ) -> ProtocolReply {
@@ -608,6 +608,43 @@ pub(super) struct TrackedNotifications {
 }
 
 impl TrackedNotifications {
+    /// Use the real frontend/queue with no worker or native notification backend.
+    #[cfg(test)]
+    pub(super) fn capture_commands_for_test()
+    -> (Self, impl Fn() -> Vec<super::CapturedNotificationCommand>) {
+        let (commands, receiver) = mpsc::sync_channel(TRACKED_COMMAND_CAPACITY);
+        let (_completion_sender, completions) = mpsc::sync_channel(TRACKED_COMMAND_CAPACITY);
+        let tracked = Self {
+            commands,
+            completions,
+            next_anonymous: 1,
+            shutdown: Arc::new(AtomicBool::new(false)),
+        };
+        let capture = move || {
+            receiver
+                .try_iter()
+                .map(|command| match command {
+                    TrackedCommand::Show { ref key, .. } | TrackedCommand::Close { ref key } => {
+                        let kind = if matches!(command, TrackedCommand::Show { .. }) {
+                            "show"
+                        } else {
+                            "close"
+                        };
+                        let InternalIdentifier::Named(identifier) = &key.identifier else {
+                            panic!("expected named fixture request")
+                        };
+                        (kind, key.origin, identifier.clone())
+                    }
+                    TrackedCommand::Alive {
+                        origin, identifier, ..
+                    } => ("alive", origin, identifier),
+                    _ => panic!("unexpected fixture command"),
+                })
+                .collect()
+        };
+        (tracked, capture)
+    }
+
     pub(super) fn new() -> Result<Self, String> {
         Self::new_with_backend(FreedesktopBackend::default())
     }
@@ -640,7 +677,7 @@ impl TrackedNotifications {
 
     pub(super) fn show(
         &mut self,
-        origin: TerminalEventOrigin,
+        origin: TerminalIdentity,
         request: NotificationRequest,
     ) -> Result<(), String> {
         let identifier = request.identifier.as_ref().map_or_else(
@@ -657,11 +694,7 @@ impl TrackedNotifications {
         })
     }
 
-    pub(super) fn close(
-        &self,
-        origin: TerminalEventOrigin,
-        identifier: String,
-    ) -> Result<(), String> {
+    pub(super) fn close(&self, origin: TerminalIdentity, identifier: String) -> Result<(), String> {
         self.send(TrackedCommand::Close {
             key: TrackedKey {
                 origin,
@@ -672,7 +705,7 @@ impl TrackedNotifications {
 
     pub(super) fn alive(
         &self,
-        origin: TerminalEventOrigin,
+        origin: TerminalIdentity,
         identifier: String,
         reply_uses_8bit_controls: bool,
     ) -> Result<(), String> {
@@ -1241,8 +1274,8 @@ mod tests {
         }
     }
 
-    fn origin(tab_id: usize, pane_id: u32) -> TerminalEventOrigin {
-        TerminalEventOrigin::Pane {
+    fn origin(tab_id: usize, pane_id: u32) -> TerminalIdentity {
+        TerminalIdentity {
             tab_id,
             pane_id: crate::panes::PaneId(pane_id),
         }
@@ -1278,7 +1311,7 @@ mod tests {
         }
     }
 
-    fn key(origin: TerminalEventOrigin, identifier: &str) -> TrackedKey {
+    fn key(origin: TerminalIdentity, identifier: &str) -> TrackedKey {
         TrackedKey {
             origin,
             identifier: InternalIdentifier::Named(identifier.into()),
@@ -1286,7 +1319,7 @@ mod tests {
     }
 
     fn reported_activation(
-        origin: TerminalEventOrigin,
+        origin: TerminalIdentity,
         data: impl Into<Vec<u8>>,
     ) -> ActivationCompletion {
         ActivationCompletion {

@@ -25,11 +25,11 @@ const MAX_DELIVERY_ERROR_CHARS: usize = 512;
 pub(crate) enum NotificationCompletion {
     Warning(String),
     ProtocolReply {
-        origin: crate::tabs::TerminalEventOrigin,
+        origin: crate::tabs::TerminalIdentity,
         data: Vec<u8>,
     },
     Activation {
-        origin: crate::tabs::TerminalEventOrigin,
+        origin: crate::tabs::TerminalIdentity,
         focus: bool,
         protocol_reply: Option<Vec<u8>>,
         /// Opaque daemon authority retained only for this notification
@@ -39,6 +39,9 @@ pub(crate) enum NotificationCompletion {
         activation_token: Option<String>,
     },
 }
+
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) type CapturedNotificationCommand = (&'static str, crate::tabs::TerminalIdentity, String);
 
 struct DesktopCommandRequest {
     program: String,
@@ -422,7 +425,7 @@ impl Notifications {
     /// policy requires bounded worker state.
     pub fn notify_terminal(
         &mut self,
-        origin: crate::tabs::TerminalEventOrigin,
+        origin: crate::tabs::TerminalIdentity,
         request: NotificationRequest,
     ) -> Option<String> {
         if !self.enabled {
@@ -457,7 +460,7 @@ impl Notifications {
     /// Query the exact origin's currently live named OSC 99 notifications.
     pub fn query_alive(
         &mut self,
-        origin: crate::tabs::TerminalEventOrigin,
+        origin: crate::tabs::TerminalIdentity,
         identifier: String,
         reply_uses_8bit_controls: bool,
     ) -> Option<String> {
@@ -498,7 +501,7 @@ impl Notifications {
     /// Close one exact origin-owned tracked notification.
     pub fn close_terminal(
         &mut self,
-        origin: crate::tabs::TerminalEventOrigin,
+        origin: crate::tabs::TerminalIdentity,
         identifier: String,
     ) -> Option<String> {
         #[cfg(target_os = "linux")]
@@ -561,6 +564,15 @@ impl Notifications {
     pub(crate) fn set_command_for_test(&mut self, program: impl Into<String>) {
         self.command = Some(program.into());
         self.rate_limit = Duration::ZERO;
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn capture_tracked_commands_for_test(
+        &mut self,
+    ) -> impl Fn() -> Vec<CapturedNotificationCommand> + use<> {
+        let (tracked, capture) = tracked::TrackedNotifications::capture_commands_for_test();
+        self.tracked = Some(tracked);
+        capture
     }
 
     #[cfg(test)]
