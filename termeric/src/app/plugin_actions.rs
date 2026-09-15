@@ -1873,21 +1873,7 @@ impl App {
                     }
                 }
                 PluginAction::RestartPlugin { plugin_id } => {
-                    // Close existing plugin tab
-                    if let Some(tabs) = &mut self.tabs {
-                        if let Some(idx) = tabs.find_plugin_tab_index(&plugin_id) {
-                            tabs.close_tab(idx);
-                        }
-                    }
-                    // Re-open via plugin command
-                    let open_cmd = format!("{}.open", plugin_id);
-                    let ctx = self.build_plugin_context();
-                    let actions = self.plugin_manager.execute_command(&open_cmd, &ctx);
-                    if !actions.is_empty() {
-                        self.execute_plugin_actions(actions);
-                    } else {
-                        self.toasts.warning(format!("{plugin_id} is not enabled"));
-                    }
+                    self.restart_plugin(&plugin_id);
                 }
                 PluginAction::ApplyDiff { diff_content, cwd } => {
                     self.run_git_apply("apply", &[], &diff_content, cwd.as_deref());

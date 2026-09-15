@@ -4616,6 +4616,9 @@ fn plugin_context_command_never_targets_a_focused_shell_sibling() {
 mod plugin_terminal_tests;
 
 #[cfg(unix)]
+mod plugin_restart_tests;
+
+#[cfg(unix)]
 #[test]
 fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();

@@ -128,7 +128,7 @@ pub enum PluginAction {
     ShowNotice { title: String, lines: Vec<String> },
     /// Clear a plugin-owned tab (send Ctrl+C + clear)
     ClearPluginTab { plugin_id: String },
-    /// Close all tabs of a plugin and reopen fresh
+    /// Launch a fresh replacement, then retire only the selected plugin owner.
     RestartPlugin { plugin_id: String },
     /// Copy N lines from a plugin tab to clipboard
     CopyFromPluginTab { plugin_id: String, lines: usize },

@@ -15,8 +15,16 @@ has lost its focused pane.
   plugin pane or first matching pane in visual order. Context/Clear/Copy do not
   change focus; checked writes refuse a read-only selected owner without trying
   a different pane. Jump to Error focuses the selected owner, refreshes focused
-  surfaces, and searches only its output. Tab-wide restart/profile/transcript
-  operations retain their separate lifecycle semantics.
+  surfaces, and searches only its output. Profile/transcript operations retain
+  their separate tab-wide lifecycle semantics.
+- Plugin Restart resolves that same exact owner and prepares a single matching
+  launch using its cwd and saved profile. It validates cwd and creates a fresh
+  replacement tab before retiring the source pane (or its sole-owner tab), so
+  unrelated panes survive. Missing/invalid launch responses, configuration or
+  spawn failures, and unavailable cwd leave the old processes/layout intact.
+  Read-only and live-domain targets refuse a local restart. When no owner exists,
+  Restart retains the ordinary open-new-tab behavior. A successful PTY spawn is not proof
+  of provider readiness; a later application exit still needs operator judgment.
 - Harvest Re-run is an exact-source action, not keyboard input. It may focus
   its producing terminal for visibility, but writes only to that captured
   owner, bypassing broadcast/alias/completion routing. Destructive confirmation
@@ -66,6 +74,13 @@ siblings, mixed tab presentation, split/collapse/nonzero survivors, checked
 write refusal, exact copied output, matching-focus preference, and error
 navigation without changing sibling scroll state. See
 [#122](https://github.com/Tjemmmic/termeric/issues/122).
+
+Restart fixtures add configuration/spawn/cwd/response validation failures,
+readonly/domain refusal, same-provider sibling isolation, single and nonzero
+owners, exact source cwd/profile, and original sibling PID preservation. Only
+synthetic plugin hooks and raw local shells are used; real provider/native
+acceptance remains deferred. See
+[#123](https://github.com/Tjemmmic/termeric/issues/123).
 
 Pane lifecycle/dividers and event/reply ownership are documented in
 [pane-lifecycle.md](pane-lifecycle.md) and

@@ -643,9 +643,14 @@ Code and Codex, recording expected and actual behavior separately:
    recent response lines from the correct provider tab.
 4. **Clear Session**: start a long response, clear it, and verify cancellation
    is immediate, output is cleared, and input is not delivered to another pane.
-5. **Restart**: restart from a split-pane layout. Confirm the old PTY exits and
-   the replacement keeps the same provider, profile, and cwd without targeting
-   a tab that is still closing.
+5. **Restart**: restart from a mixed split-pane layout with a shell sibling
+   focused. Confirm a fresh replacement tab keeps the source provider, profile,
+   and cwd; only the old plugin PTY exits, while sibling PIDs and contents
+   survive. Repeat with a nonzero sole survivor. An invalid configuration,
+   missing executable, or missing cwd must preserve the original session and
+   focus. Read-only targets refuse restart until unlocked. Successful local PTY
+   creation is not provider readiness: separately confirm the new tool starts
+   normally. These checks remain manual and require your provider consent.
 6. **Review Diff**: with `workspace-write` explicitly approved, ask the provider
    to make one harmless, predetermined edit in the disposable repository.
    Confirm the review overlay shows that exact diff, supports keyboard/pointer

@@ -13,6 +13,7 @@ mod ime;
 mod kitty_file_transfer;
 mod mouse;
 mod plugin_actions;
+mod plugin_restart;
 mod redraw_scheduler;
 mod renderer_recovery;
 mod runtime_plugins;

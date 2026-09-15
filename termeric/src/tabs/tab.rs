@@ -593,6 +593,13 @@ impl Tab {
 
     /// Plugin identity belongs to the live owner, not its tab's presentation.
     pub(crate) fn pane_plugin_id(&self, pane_id: crate::panes::PaneId) -> Option<&str> {
+        self.pane_plugin_launch(pane_id).map(|(id, _)| id)
+    }
+
+    pub(crate) fn pane_plugin_launch(
+        &self,
+        pane_id: crate::panes::PaneId,
+    ) -> Option<(&str, Option<&str>)> {
         if self.closed || self.is_closing() {
             return None;
         }
@@ -605,7 +612,9 @@ impl Tab {
             &self.terminal_launch
         };
         match launch {
-            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, .. } => Some(plugin_id),
+            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => {
+                Some((plugin_id, profile.as_deref()))
+            }
             _ => None,
         }
     }
