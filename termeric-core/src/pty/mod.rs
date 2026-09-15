@@ -41,6 +41,10 @@ pub fn default_pty_size(cols: u16, rows: u16) -> PtySize {
 
 /// A pseudo-terminal for communicating with a shell process
 pub struct Pty {
+    /// Must be dropped before the writer: portable-pty's Unix writer emits
+    /// LF + VEOF on drop, which must not submit input to a still-live child.
+    /// Rust drops struct fields in declaration order.
+    child: PtyChild,
     /// Exact TERM identity exported to this child.
     term_name: &'static str,
     /// The master side of the PTY
@@ -49,8 +53,6 @@ pub struct Pty {
     reader: Box<dyn Read + Send>,
     /// Writer for PTY input
     writer: Box<dyn Write + Send>,
-    /// The child shell process
-    child: PtyChild,
 }
 
 impl Pty {
@@ -256,9 +258,10 @@ impl Pty {
 
 /// Handle to the PTY after the reader has been taken
 pub struct PtyHandle {
+    // Keep child shutdown ahead of master/writer release, as in Pty above.
+    child: PtyChild,
     master: Box<dyn MasterPty + Send>,
     writer: Option<Box<dyn Write + Send>>,
-    child: PtyChild,
 }
 
 impl PtyHandle {
@@ -577,6 +580,102 @@ mod tests {
                     }
                 );
             }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_child_shutdown_precedes_writer_drop_for_both_owner_forms() {
+        struct DropProbe {
+            writer: Option<Box<dyn Write + Send>>,
+            observer: ChildObserver,
+            report: mpsc::Sender<ChildObservation>,
+        }
+        impl Write for DropProbe {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.writer.as_mut().unwrap().write(data)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.writer.as_mut().unwrap().flush()
+            }
+        }
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                let before = self.observer.poll().unwrap();
+                drop(self.writer.take());
+                // portable-pty's Unix writer destructor emits LF + VEOF.
+                // If it runs first, wait for the ready shell's read to consume
+                // that LF, making the old race deterministic without sleeps.
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                while !before.terminal_closed && self.observer.poll().unwrap().exit.is_none() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "writer EOF did not reach ready child"
+                    );
+                    std::thread::yield_now();
+                }
+                self.report.send(before).unwrap();
+            }
+        }
+        for split in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let submitted = directory.path().join("submitted-input");
+            let mut pty = Pty::new_with_command(
+                80,
+                24,
+                Some("/bin/sh"),
+                &[
+                    "-c".into(),
+                    "printf READY; IFS= read -r value; printf '%s' \"$value\" > \"$1\"".into(),
+                    "shutdown-fixture".into(),
+                    submitted.to_str().unwrap().into(),
+                ],
+            )
+            .unwrap();
+            let observer = pty.child_observer();
+            let receiver = spawn_reader_thread(pty.master.try_clone_reader().unwrap());
+            let mut output = Vec::new();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while output != b"READY" {
+                let event = receiver
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .expect("child readiness missing");
+                if let PtyEvent::Output(bytes) = event {
+                    output.extend(bytes);
+                } else {
+                    panic!("child closed before readiness");
+                }
+            }
+            // This canonical input has not been submitted with Enter. Writer
+            // destruction must never supply the missing newline during close.
+            pty.write_all(b"unsubmitted fixture input").unwrap();
+            assert!(!submitted.exists());
+            let (report, received) = mpsc::channel();
+            let writer = std::mem::replace(&mut pty.writer, Box::new(std::io::sink()));
+            pty.writer = Box::new(DropProbe {
+                writer: Some(writer),
+                observer: observer.clone(),
+                report,
+            });
+            if split {
+                let (handle, reader) = pty.take_reader();
+                drop(handle);
+                drop(reader);
+            } else {
+                drop(pty);
+            }
+            let before_writer_drop = received.recv_timeout(Duration::from_secs(2)).unwrap();
+            let exit = observer.poll().unwrap();
+            assert!(
+                before_writer_drop.terminal_closed,
+                "split={split}: writer dropped before child shutdown; final status: {exit:?}"
+            );
+            assert!(exit.terminal_closed);
+            assert!(exit.exit.is_some_and(|exit| !exit.success));
+            assert!(
+                !submitted.exists(),
+                "closing submitted buffered input, split={split}"
+            );
         }
     }
 

@@ -27,6 +27,15 @@ closed pane also drops its bounded output receiver, releasing a reader blocked
 on backpressure. Final PTY output is drained before process-state fallback is
 allowed to mark a tab or pane closed, avoiding quick-exit output loss.
 
+Both the unsplit `Pty` and reader-split `PtyHandle` declare their child owner
+before their writer/master fields. This is a required destruction-order
+invariant: portable-pty 0.8.1's Unix writer destructor emits LF followed by
+VEOF. Terminating the child first prevents that cleanup from completing a
+blocked read or submitting buffered, unentered input during terminal close.
+The child observer still preserves a naturally completed process's real status;
+the fix does not rewrite successful exits as failures. Detached-writer ownership
+is a separate input-worker lifecycle and is not changed here.
+
 ## Divider geometry
 
 The pane tree is the only divider-geometry source. Every frame passes its

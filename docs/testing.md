@@ -881,6 +881,16 @@ bytes, disconnect, close, and reopen behavior.
 
 ## Pane event-routing lane
 
+PTY shutdown has a deterministic destructor-order regression for both unsplit
+`Pty` and reader-split `PtyHandle`: a shell emits an explicit readiness marker,
+then waits on unsubmitted input. A writer-drop probe records whether child
+shutdown has already happened. It exposes portable-pty 0.8.1's LF/VEOF cleanup
+ordering without arbitrary sleeps and verifies that closing cannot submit the
+pending input or create the fixture's output file. Existing child-observer tests
+retain their unsuccessful forced-exit and exact natural-status assertions. See
+[#124](https://github.com/Tjemmmic/termeric/issues/124) and
+[pane lifecycle](pane-lifecycle.md).
+
 Advanced workspace controls add portable tree/property checks for swap,
 balance, presets, zoom restoration, focus, tab identity, pin order, workspace
 serialization, each split-cwd policy, and atomic rejection of an invalid
