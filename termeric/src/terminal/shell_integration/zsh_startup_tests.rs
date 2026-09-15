@@ -1,6 +1,86 @@
 use super::*;
 use std::process::Command;
 
+#[test]
+fn zsh_launches_that_cannot_run_integration_are_preserved() {
+    let cases: &[&[&str]] = &[
+        &["-f"],
+        &["-dfi"],
+        &["+o", "rcs"],
+        &["-o", "No_Rcs"],
+        &["--no-rcs"],
+        &["+-rcs"],
+        &["+i"],
+        &["--no-interactive"],
+        &["--help"],
+        &["--version"],
+        &["--emulate", "sh"],
+        &["-c", "print ok"],
+        &["-ic", "print ok"],
+        &["-cprint ok"],
+        &["script.zsh"],
+        &["login"],
+        &["--", "-i"],
+        &["-b", "-i"],
+        &["-i-", "script.zsh"],
+        &["-i-f"],
+        &["--future-option"],
+        &["-o"],
+        &["-o", "shoptionletters"],
+        &["--privileged"],
+        &["--rcs=false"],
+        &["-f "],
+        &["- ", "-i"],
+        &["-bfi", "+f"],
+    ];
+    for args in cases {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("must-not-be-created");
+        let mut config = super::tests::shell("zsh", args);
+        config.env.insert("ZDOTDIR".into(), "/user/config".into());
+        let launch = prepare_shell_launch_in(&config, &base).unwrap();
+        assert_eq!(launch.program, config.program, "{args:?}");
+        assert_eq!(launch.args, config.args, "{args:?}");
+        assert_eq!(
+            launch.env,
+            config.env.into_iter().collect::<Vec<_>>(),
+            "{args:?}"
+        );
+        assert!(!launch.integration.is_enabled(), "{args:?}");
+        assert!(!base.exists(), "{args:?}");
+    }
+}
+
+#[test]
+fn zsh_launch_eligibility_respects_option_order_and_stdin_operands() {
+    let cases: &[&[&str]] = &[
+        &[],
+        &["-dil"],
+        &["-f", "+f"],
+        &["+i", "-i"],
+        &["+o", "rcs", "-o", "R_C_S"],
+        &["-ono_rcs", "+ono_rcs"],
+        &["--no-rcs", "--rcs"],
+        &["+-no-rcs"],
+        &["--interactive", "--login", "--no-global-rcs"],
+        &["-i", "--"],
+        &["-i-"],
+        &["-bdi"],
+        &["-is", "argument", "-c", "not a command"],
+        &["-is", "--", "-f"],
+        &["-is", "-b", "-f"],
+        &["--shin-stdin", "--", "argument"],
+    ];
+    let temp = tempfile::tempdir().unwrap();
+    for args in cases {
+        let config = super::tests::shell("zsh", args);
+        let launch = prepare_shell_launch_in(&config, temp.path()).unwrap();
+        assert!(launch.integration.is_enabled(), "{args:?}");
+        assert_eq!(launch.args, config.args);
+        assert_eq!(launch.program, config.program);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn zsh_user_startup_chain_matches_native_order_scope_and_directory_changes() {

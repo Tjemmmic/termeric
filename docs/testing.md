@@ -67,6 +67,15 @@ Zsh unless `TERMERIC_REQUIRE_ZSH_CWD_TESTS=1` is set. Optional global startup
 files are disabled in these fixtures, so their interaction is not accepted;
 see [the remaining startup-chain boundary](osc-integration.md#zsh-configuration-directory-handoff).
 
+Its launch-routing cases additionally check grouped/long/named flags, `+`
+inversion, option order, `-s` operands, and end-of-options markers. Rejected
+command/script, startup-disabled, and unknown launches must leave argv and
+environment untouched without creating integration files.
+`zsh_reenabled_startup_and_stdin_arguments_preserve_prompt_regions` runs four
+real-PTY variants, requiring exact positional values for the `-s` case as well
+as rc loading, first-prompt cwd, and multiline success/failure regions. It
+self-skips without Zsh or fails under `TERMERIC_REQUIRE_ZSH_CWD_TESTS=1`.
+
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
 with isolated configuration, captures its bytes, and feeds only an in-memory
 terminal. It reproduces/prevents directory-to-title injection, round-trips UTF-8

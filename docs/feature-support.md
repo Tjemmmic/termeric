@@ -72,6 +72,10 @@ this behavior. Optional global startup files can still observe or redirect the
 temporary directory between stages; full configuration acceptance remains
 incomplete. See
 [the Zsh startup boundary](osc-integration.md#zsh-configuration-directory-handoff).
+Zsh launch routing also preserves command/script, startup-disabled, and unknown
+forms without changing their environment. Recognized option order/inversions,
+end markers, and stdin positional arguments have pure routing coverage and
+four real-PTY acceptance variants; Bash/Fish argument routing remains separate.
 
 Nushell integration now recognizes scalar REPL options such as `--config-home`
 and grouped short flags while preserving command, service, custom-prelude, and

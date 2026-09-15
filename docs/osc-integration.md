@@ -142,6 +142,32 @@ arbitrary user prompt code or output from other applications.
 
 ### Zsh configuration-directory handoff
 
+Before generating startup files, Termeric checks recognized Zsh invocation
+forms in argument order. Command/script, help/version, emulation/privileged,
+startup-disabled, and unknown forms keep their program, argv, and environment
+unchanged and report integration unavailable. No generated directory is
+created for these launches. This fixes the previous `-f`/`+o rcs` behavior,
+which redirected `ZDOTDIR` even though Zsh would never read the wrapper.
+
+The check follows the [native Zsh invocation grammar](https://zsh.sourceforge.io/Doc/Release/Invocation.html)
+and [option-name inversion rules](https://zsh.sourceforge.io/Doc/Release/Options.html):
+it handles grouped short flags, `+` inversions, separate/attached `-o` values,
+case-insensitive names with ignored underscores, GNU-style hyphenated names,
+and end markers (`--`, `+-`, `-`, `+`, `-b`, and a final grouped `-`). Later
+options can restore eligibility, as with `-f +f` or `+o rcs -o rcs`.
+With `-s`, subsequent operands are positional parameters, not script names;
+option-looking words after an operand/end marker are not parsed again.
+Recognized options cover interactive/login, RCS/global-RCS, stdin input,
+tracing/verbosity, unset-variable handling, and ZLE. This is not a complete
+Zsh CLI validator: other options still run unchanged, without injected
+integration, pending explicit support. It does not correct the separate
+Bash/Fish generic argument classifier.
+
+Pure routing cases verify exact pass-through, no generated files on rejection,
+option ordering, and operand boundaries. Four isolated real-PTY variants verify
+short/long/named re-enabling plus exact `-s` positional arguments, user rc
+loading, first-prompt cwd, and complete multiline success/failure regions.
+
 Launch preparation captures `ZDOTDIR` from the effective profile environment,
 falling back to the inherited environment only when the profile does not set
 it. It then uses a generated directory temporarily to forward `.zshenv`, login
