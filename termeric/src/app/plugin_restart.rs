@@ -111,12 +111,13 @@ impl App {
             }
         };
         if let Some(profile) = profile {
-            self.tabs
+            let tab = self
+                .tabs
                 .as_mut()
                 .unwrap()
                 .tab_mut_by_id(replacement)
-                .unwrap()
-                .set_plugin_profile(profile);
+                .unwrap();
+            tab.set_plugin_profile(tab.single_pane_id(), plugin_id, profile);
         }
         if let Some(identity) = target
             && let Err(error) = self.retire_restarted_plugin_owner(identity, plugin_id)

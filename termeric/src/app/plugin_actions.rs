@@ -1390,16 +1390,13 @@ impl App {
                     .as_ref()
                     .filter(|pending| pending.request_id == request_id)
                     .filter(|pending| pending.profiles.iter().any(|name| name == &choice_id))
-                    .map(|pending| (pending.plugin_id.clone(), choice_id));
-                let Some((plugin_id, profile_name)) = selection else {
+                    .map(|pending| (pending.terminal, pending.plugin_id.clone(), choice_id));
+                let Some((terminal, plugin_id, profile_name)) = selection else {
                     return;
                 };
                 self.info_overlay.dismiss(request_id);
                 self.pending_profile_selection = None;
-                self.execute_plugin_actions(vec![crate::plugin::PluginAction::ApplyProfile {
-                    plugin_id,
-                    profile_name,
-                }]);
+                self.apply_plugin_profile(terminal, &plugin_id, profile_name);
             }
             InfoOverlayAction::SubmitInput { request_id } => {
                 if !self.submit_font_feature_manager_input(request_id)
@@ -1792,7 +1789,9 @@ impl App {
                     profile,
                     env,
                 } => {
-                    let tab_type = plugin_id.map(|id| TabType::Plugin { plugin_id: id });
+                    let tab_type = plugin_id
+                        .clone()
+                        .map(|id| TabType::Plugin { plugin_id: id });
                     if let Some(tabs) = &mut self.tabs {
                         match tabs.new_tab_with_command(
                             &program,
@@ -1804,9 +1803,14 @@ impl App {
                         ) {
                             Ok(id) => {
                                 if let Some(profile) = profile
+                                    && let Some(plugin_id) = plugin_id
                                     && let Some(tab) = tabs.active_tab_mut()
                                 {
-                                    tab.set_plugin_profile(profile);
+                                    tab.set_plugin_profile(
+                                        tab.single_pane_id(),
+                                        &plugin_id,
+                                        profile,
+                                    );
                                 }
                                 log::info!("Plugin opened tab {} running '{}'", id, program);
                                 self.dispatch_plugin_hook(crate::plugin::Hook::TabCreated {
@@ -2022,6 +2026,15 @@ impl App {
                             ],
                         );
                     } else {
+                        let Some(terminal) = self
+                            .tabs
+                            .as_ref()
+                            .and_then(|tabs| tabs.plugin_terminal_identity(&plugin_id))
+                        else {
+                            self.toasts
+                                .warning(format!("No active {plugin_id} terminal found"));
+                            continue;
+                        };
                         let mut lines = vec!["Press a number key to select:".into(), String::new()];
                         let mut choices = Vec::new();
                         for (i, name) in profiles.iter().enumerate() {
@@ -2036,20 +2049,15 @@ impl App {
                                 ));
                             }
                         }
-                        // Also show current profile
-                        if let Some(tabs) = &self.tabs {
-                            if let Some((_, tab)) = tabs.iter().find(|(_, tab)| {
-                                matches!(
-                                    &tab.tab_type,
-                                    crate::tabs::TabType::Plugin { plugin_id: id } if id == &plugin_id
-                                )
-                            }) {
-                                if let Some(ref session) = tab.ai_session {
-                                    lines.push(String::new());
-                                    lines.push(format!("Current: {}", session.profile));
-                                }
-                            }
-                        }
+                        let profile = self
+                            .tabs
+                            .as_ref()
+                            .and_then(|tabs| tabs.tab_by_id(terminal.tab_id))
+                            .and_then(|tab| tab.pane_plugin_launch(terminal.pane_id))
+                            .and_then(|(_, profile)| profile)
+                            .unwrap_or("default");
+                        lines.push(String::new());
+                        lines.push(format!("Next restart: {profile}"));
                         let request_id = self.info_overlay.show_choices(
                             format!("Select Profile — {}", plugin_id),
                             lines,
@@ -2057,6 +2065,7 @@ impl App {
                         );
                         self.pending_profile_selection = Some(PendingProfileSelection {
                             request_id,
+                            terminal,
                             plugin_id,
                             profiles,
                         });
@@ -2069,33 +2078,15 @@ impl App {
                     plugin_id,
                     profile_name,
                 } => {
-                    let applied = self
+                    if let Some(terminal) = self
                         .tabs
-                        .as_mut()
-                        .and_then(|tabs| tabs.plugin_tab_mut(&plugin_id))
-                        .and_then(|tab| {
-                            tab.ai_session.as_ref()?;
-                            tab.set_plugin_profile(profile_name.clone());
-                            Some(())
-                        })
-                        .is_some();
-                    if !applied {
+                        .as_ref()
+                        .and_then(|tabs| tabs.plugin_terminal_identity(&plugin_id))
+                    {
+                        self.apply_plugin_profile(terminal, &plugin_id, profile_name);
+                    } else {
                         self.toasts
-                            .warning(format!("No active {plugin_id} session found"));
-                        continue;
-                    }
-                    log::info!("Profile for '{}' set to '{}'", plugin_id, profile_name);
-                    self.info_overlay.show(
-                        "Profile Applied".to_string(),
-                        vec![
-                            format!("Active profile: {}", profile_name),
-                            String::new(),
-                            "This profile will be used for the".into(),
-                            "next session restart.".into(),
-                        ],
-                    );
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
+                            .warning(format!("No active {plugin_id} terminal found"));
                     }
                 }
             }

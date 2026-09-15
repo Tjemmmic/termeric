@@ -13,6 +13,7 @@ mod ime;
 mod kitty_file_transfer;
 mod mouse;
 mod plugin_actions;
+mod plugin_profiles;
 mod plugin_restart;
 mod redraw_scheduler;
 mod renderer_recovery;
@@ -713,6 +714,7 @@ enum BroadcastState {
 #[derive(Debug, Clone)]
 struct PendingProfileSelection {
     request_id: u64,
+    terminal: crate::tabs::TerminalIdentity,
     plugin_id: String,
     profiles: Vec<String>,
 }

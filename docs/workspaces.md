@@ -27,7 +27,10 @@ Schema 0/1 archives did not carry a launch identity per pane. Migration assigns
 the tab launch to its primary pane, the named tab profile to historical profile
 splits, and the configured shell to historical shell/plugin splits. New
 archives require every pane identity and reject plugin launches outside the
-tab-owned primary pane.
+tab-owned primary pane. Full terminal-local plugin session ownership and
+non-primary plugin restoration are tracked in
+[#126](https://github.com/Tjemmmic/termeric/issues/126); exact-owner command and
+profile routing does not remove this archive restriction.
 
 Each archive represents one native window. Process-level application state
 stores the ordered set of window workspace IDs so automatic startup can

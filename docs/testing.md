@@ -881,6 +881,15 @@ bytes, disconnect, close, and reopen behavior.
 
 ## Pane event-routing lane
 
+Plugin profile regressions use raw local shell PTYs and synthetic launch
+metadata. They verify one-owner mutation, captured picker identity across
+split/collapse/focus, refusal of stale/read-only/closed/replaced owners and
+removed profiles, legacy primary-profile presentation, and preservation of
+supported primary-plugin plus shell/process-profile workspace launches.
+`cargo test -p termeric plugin_profile_tests` runs this lane without a provider.
+Non-primary plugin archive restoration remains unsupported, not a passing test
+claim; see [integration acceptance](integration-acceptance.md).
+
 PTY shutdown has a deterministic destructor-order regression for both unsplit
 `Pty` and reader-split `PtyHandle`: a shell emits an explicit readiness marker,
 then waits on unsubmitted input. A writer-drop probe records whether child

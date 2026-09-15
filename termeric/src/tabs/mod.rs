@@ -1622,10 +1622,11 @@ impl TabManager {
             if let Some(terminal) = tab.focused_terminal_mut() {
                 replay_workspace_scrollback(terminal, &primary.scrollback_lines);
             }
-            if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = &snapshot.launch
+            if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } =
+                &snapshot.launch
                 && let Some(profile) = profile
             {
-                tab.set_plugin_profile(profile.clone());
+                tab.set_plugin_profile(PaneId(snapshot.primary_pane), plugin_id, profile.clone());
             }
             return Ok(Vec::new());
         }
@@ -1649,10 +1650,10 @@ impl TabManager {
             pane_launches,
         )?;
         tab.pane_manager = Some(panes);
-        if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = &snapshot.launch
+        if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = &snapshot.launch
             && let Some(profile) = profile
         {
-            tab.set_plugin_profile(profile.clone());
+            tab.set_plugin_profile(PaneId(snapshot.primary_pane), plugin_id, profile.clone());
         }
         Ok(warnings)
     }
@@ -2361,12 +2362,6 @@ impl TabManager {
                 && !tab.is_closing()
                 && matches!(&tab.tab_type, TabType::Plugin { plugin_id: id } if id == plugin_id)
         })
-    }
-
-    /// Get the first live tab owned by a plugin.
-    pub fn plugin_tab_mut(&mut self, plugin_id: &str) -> Option<&mut Tab> {
-        let index = self.find_plugin_tab_index(plugin_id)?;
-        self.tabs.get_mut(index)
     }
 
     /// First live matching tab, then its focused matching owner or first

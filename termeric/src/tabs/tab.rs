@@ -1025,24 +1025,38 @@ impl Tab {
         !matches!(self.tab_type, TabType::Serial { .. })
     }
 
-    pub(crate) fn set_plugin_profile(&mut self, profile: String) {
-        if let Some(session) = &mut self.ai_session {
+    /// Change one owner's next-launch profile, never sibling launch metadata.
+    pub(crate) fn set_plugin_profile(
+        &mut self,
+        pane_id: crate::panes::PaneId,
+        plugin_id: &str,
+        profile: String,
+    ) -> bool {
+        if self.pane_plugin_id(pane_id) != Some(plugin_id) {
+            return false;
+        }
+        let primary = self
+            .pane_manager
+            .as_ref()
+            .map_or(self.single_pane_id, |panes| panes.primary_id());
+        if pane_id == primary
+            && let Some(session) = &mut self.ai_session
+        {
             session.profile.clone_from(&profile);
         }
         let saved_profile = (profile != "default").then_some(profile);
-        let update = |launch: &mut crate::workspace::WorkspaceLaunch| {
-            if let crate::workspace::WorkspaceLaunch::Plugin {
-                profile: current, ..
-            } = launch
-            {
-                *current = saved_profile.clone();
-            }
-        };
-        if let Some(panes) = &mut self.pane_manager {
-            panes.update_plugin_launch_profile(saved_profile);
+        let launch = if let Some(panes) = &mut self.pane_manager {
+            &mut panes
+                .get_pane_mut(pane_id)
+                .expect("validated plugin pane")
+                .launch
         } else {
-            update(&mut self.terminal_launch);
+            &mut self.terminal_launch
+        };
+        if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = launch {
+            *profile = saved_profile;
         }
+        true
     }
 
     /// Detach the single-terminal owner exactly once before entering pane mode.
@@ -1103,10 +1117,13 @@ impl Tab {
                 self.ai_session = None;
                 self.split_shell = self.terminal_launch_shell.clone();
             }
-            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, .. } => {
+            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => {
                 self.tab_type = TabType::Plugin {
                     plugin_id: plugin_id.clone(),
                 };
+                if let Some(session) = &mut self.ai_session {
+                    session.profile = profile.as_deref().unwrap_or("default").to_string();
+                }
             }
         }
     }
@@ -1134,8 +1151,11 @@ impl Tab {
                 self.ai_session = None;
                 self.split_shell = shell;
             }
-            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, .. } => {
+            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => {
                 self.tab_type = TabType::Plugin { plugin_id };
+                if let Some(session) = &mut self.ai_session {
+                    session.profile = profile.unwrap_or_else(|| "default".into());
+                }
             }
         }
     }

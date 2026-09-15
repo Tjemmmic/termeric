@@ -1699,17 +1699,6 @@ impl PaneManager {
             .write(data)
     }
 
-    pub(crate) fn update_plugin_launch_profile(&mut self, profile: Option<String>) {
-        for pane in self.panes.values_mut() {
-            if let crate::workspace::WorkspaceLaunch::Plugin {
-                profile: current, ..
-            } = &mut pane.launch
-            {
-                current.clone_from(&profile);
-            }
-        }
-    }
-
     #[cfg(test)]
     pub fn spawned_shell_count(&self) -> usize {
         self.spawned_shells

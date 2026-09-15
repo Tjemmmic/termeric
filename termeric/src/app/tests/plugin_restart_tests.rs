@@ -114,7 +114,7 @@ fn failed_restart_preserves_old_owners_layout_and_focus() {
         mark_capture_plugin_owner(&mut app, PaneId(0), "synthetic-capture");
         let seen = register_restart_fixture(&mut app, directory.path(), mode);
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
-        tab.set_plugin_profile("saved-profile".into());
+        tab.set_plugin_profile(PaneId(0), "synthetic-capture", "saved-profile".into());
         if mode == "read-only" {
             tab.pane_manager
                 .as_mut()
@@ -181,7 +181,7 @@ fn successful_restart_retires_only_source_and_preserves_cwd_profile_and_siblings
                 format!("\x1b]7;file://localhost{}\x07", source_cwd.path().display()).as_bytes(),
             );
             let tab = tabs.active_tab_mut().unwrap();
-            tab.set_plugin_profile("saved-profile".into());
+            tab.set_plugin_profile(source, "synthetic-capture", "saved-profile".into());
             if mode == "mixed-plugin-tab" {
                 tab.tab_type = crate::tabs::TabType::Plugin {
                     plugin_id: "synthetic-capture".into(),

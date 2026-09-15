@@ -7769,6 +7769,10 @@ mod tests {
         let stale_request = show_info_fixture(&mut app);
         app.pending_profile_selection = Some(PendingProfileSelection {
             request_id: stale_request,
+            terminal: crate::tabs::TerminalIdentity {
+                tab_id: 0,
+                pane_id: PaneId(0),
+            },
             plugin_id: "fake-ai".into(),
             profiles: vec!["safe-choice".into()],
         });

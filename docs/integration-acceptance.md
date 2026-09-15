@@ -63,11 +63,28 @@ the inherited working directory, and terminal geometry. It emits a known
 response, unified diff, and error after enough output to require scrollback.
 The context workflow selects a synthetic terminal-output source, completes the
 request against its stable destination, and proves the framed payload reaches
-the fake PTY; profile selection activates the advertised profile through the
+the fake PTY; profile selection saves the advertised next-restart profile through the
 same choice action used by the UI. The test uses an isolated session directory
 and never reads an API key or contacts a provider. Restart acceptance also
 asserts that commands no longer resolve to a tab already entering its close
 animation.
+
+Profile selection additionally captures the exact live terminal identity when
+the picker opens. Completion revalidates the configured name and original
+ordinary, writable plugin owner; split/collapse can change routing but cannot
+retarget the choice to a sibling or replacement tab. Only that owner's saved
+launch changes, not the running provider configuration. Raw-shell regressions
+cover same-plugin/different-plugin sibling isolation, shell-presented owners,
+stale/replaced/canceled choices, removed configuration, and primary presentation
+metadata after close/collapse. Supported workspace restoration preserves its
+primary plugin profile and sibling shell/process-profile launches. See
+[#125](https://github.com/Tjemmmic/termeric/issues/125).
+
+This does not lift the existing restriction on non-primary plugin workspace
+launches or plugin-primary pane transfer. Full terminal-local plugin session and
+transcript ownership plus mixed-plugin restoration is tracked separately in
+[#126](https://github.com/Tjemmmic/termeric/issues/126). Synthetic metadata tests
+of mixed plugin owners do not establish provider or complete workspace support.
 
 Run it with:
 
