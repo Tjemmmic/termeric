@@ -96,6 +96,31 @@ fn automatic_and_literal_default_profile_choices_are_distinct_and_revalidated() 
 }
 
 #[test]
+fn profile_beyond_number_shortcuts_can_be_selected_with_keyboard_focus() {
+    let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
+    mark_capture_plugin_owner(&mut app, PaneId(0), "codex");
+    for i in 0..12 {
+        app.config
+            .plugins
+            .codex
+            .profiles
+            .insert(format!("profile-{i:02}"), Default::default());
+    }
+    app.show_plugin_profiles("codex".into());
+    let request = app.info_overlay.request_id();
+    for _ in 0..13 {
+        app.info_overlay.cycle_focus(request, false);
+    }
+    let action = app.info_overlay.activate_focused(request);
+    app.apply_info_overlay_action(action);
+    let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+    assert_eq!(
+        tab.pane_plugin_launch(tab.single_pane_id()),
+        Some(("codex", Some("profile-11")))
+    );
+}
+
+#[test]
 fn profile_picker_bounds_choices_and_keeps_long_names_out_of_choice_ids() {
     let (mut app, _directory, _, _) = harvest_rerun_capture_fixture_in(false);
     mark_capture_plugin_owner(&mut app, PaneId(0), "codex");

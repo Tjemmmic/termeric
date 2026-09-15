@@ -89,6 +89,12 @@ acceptance.
 
 ## Workspace and interaction
 
+Information dialogs have request-scoped Tab/Shift+Tab focus across all declared
+choices, input, and footer buttons, with visible focus, Enter activation, and
+shared AccessKit identity. New consent dialogs retain a non-consenting default;
+local tests do not establish native screen-reader acceptance. See
+[dialog accessibility](accessibility-and-input.md).
+
 | Capability | Status | Current boundary | Tracking |
 |---|---|---|---|
 | Tabs | **Partial** | Create, close, switch, numbered navigation, explicit rename precedence, pinned grouping, shortcut/direct-drag reorder, bounded overflow navigation with active/focused-tab auto-reveal, and complete process-local transfer to the next native window work on Linux. A typed live setting now switches between the established top strip and a DPI-aware bounded vertical-left rail; render, pointer, drag, keyboard-focus, PTY/pane sizing, search/IME, and AccessKit geometry share the same rail offset. Whole-tab transfer preserves split/plugin metadata, reassigns only the destination-local ID, and closes an emptied source window; live-domain placement remains topology-owned. Automated geometry/routing coverage passes, but native X11/Wayland visual, drag, IME, and screen-reader acceptance for the new rail is pending. | [tab-bar placement](tab-bar.md), [advanced controls](advanced-workspaces.md), [modern input/accessibility](accessibility-and-input.md), [#35](https://github.com/Tjemmmic/termeric/issues/35) |

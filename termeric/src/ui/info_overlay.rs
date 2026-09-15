@@ -49,6 +49,14 @@ impl InfoOverlayChoice {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InfoOverlayFocus {
+    Input,
+    Choice(String),
+    Copy,
+    Continue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InfoOverlayAction {
     Copy { request_id: u64 },
     Dismiss { request_id: u64 },
@@ -234,6 +242,7 @@ pub struct InfoOverlay {
     viewport_columns: usize,
     max_line_chars: usize,
     input: Option<InfoOverlayInput>,
+    focus: Option<InfoOverlayFocus>,
 }
 
 impl InfoOverlay {
@@ -251,6 +260,7 @@ impl InfoOverlay {
             viewport_columns: 1,
             max_line_chars: 0,
             input: None,
+            focus: None,
         }
     }
 
@@ -296,6 +306,9 @@ impl InfoOverlay {
             .unwrap_or(0);
         self.choices = bounded_choices(choices, self.lines.len());
         self.input = None;
+        // Continue is the safe default, never the first (possibly consenting)
+        // choice. A new request cannot inherit a previous choice's focus.
+        self.focus = Some(InfoOverlayFocus::Continue);
         self.accepting = true;
         self.scroll_offset = 0;
         self.horizontal_offset = 0;
@@ -331,6 +344,7 @@ impl InfoOverlay {
             max_bytes,
         });
         self.refresh_input_line();
+        self.focus = Some(InfoOverlayFocus::Input);
         request_id
     }
 
@@ -339,6 +353,7 @@ impl InfoOverlay {
             return false;
         }
         self.accepting = false;
+        self.focus = None;
         self.animation.close();
         true
     }
@@ -365,6 +380,90 @@ impl InfoOverlay {
 
     pub fn choices(&self) -> &[InfoOverlayChoice] {
         &self.choices
+    }
+
+    pub fn focus(&self) -> Option<&InfoOverlayFocus> {
+        self.focus.as_ref().filter(|_| self.is_awaiting_current())
+    }
+
+    pub fn input_focused(&self) -> bool {
+        self.focus() == Some(&InfoOverlayFocus::Input)
+    }
+
+    /// Focus is request-scoped and never activates a choice by itself.
+    pub fn set_focus(&mut self, request_id: u64, focus: Option<InfoOverlayFocus>) -> bool {
+        if !self.is_awaiting(request_id)
+            || match &focus {
+                Some(InfoOverlayFocus::Input) => self.input.is_none(),
+                Some(InfoOverlayFocus::Choice(id)) => self.choice(request_id, id).is_none(),
+                _ => false,
+            }
+        {
+            return false;
+        }
+        self.focus = focus;
+        if matches!(self.focus, Some(InfoOverlayFocus::Choice(_))) {
+            self.horizontal_offset = 0;
+        }
+        self.ensure_focus_visible();
+        true
+    }
+
+    pub fn cycle_focus(&mut self, request_id: u64, backwards: bool) -> bool {
+        if !self.is_awaiting(request_id) {
+            return false;
+        }
+        let mut targets = Vec::with_capacity(self.choices.len() + 3);
+        if self.input.is_some() {
+            targets.push(InfoOverlayFocus::Input);
+        }
+        targets.extend(
+            self.choices
+                .iter()
+                .map(|choice| InfoOverlayFocus::Choice(choice.id.clone())),
+        );
+        targets.extend([InfoOverlayFocus::Copy, InfoOverlayFocus::Continue]);
+        let current = targets
+            .iter()
+            .position(|target| Some(target) == self.focus());
+        let next = match (current, backwards) {
+            (Some(index), true) => (index + targets.len() - 1) % targets.len(),
+            (Some(index), false) => (index + 1) % targets.len(),
+            (None, true) => targets.len() - 1,
+            (None, false) => 0,
+        };
+        self.set_focus(request_id, Some(targets.swap_remove(next)))
+    }
+
+    pub fn activate_focused(&self, request_id: u64) -> InfoOverlayAction {
+        if !self.is_awaiting(request_id) {
+            return InfoOverlayAction::None;
+        }
+        match self.focus() {
+            Some(InfoOverlayFocus::Choice(id)) => InfoOverlayAction::Choose {
+                request_id,
+                choice_id: id.clone(),
+            },
+            Some(InfoOverlayFocus::Copy) => InfoOverlayAction::Copy { request_id },
+            _ if self.input.is_some() => InfoOverlayAction::SubmitInput { request_id },
+            _ => InfoOverlayAction::Dismiss { request_id },
+        }
+    }
+
+    fn ensure_focus_visible(&mut self) {
+        match self.focus() {
+            Some(InfoOverlayFocus::Input) => self.ensure_input_visible(),
+            Some(InfoOverlayFocus::Choice(id)) => {
+                let line = self.choice(self.request_id, id).unwrap().source_line;
+                if line < self.scroll_offset {
+                    self.scroll_offset = line;
+                } else if line >= self.scroll_offset.saturating_add(self.viewport_rows) {
+                    self.scroll_offset = line.saturating_add(1).saturating_sub(self.viewport_rows);
+                }
+                self.clamp_scroll();
+            }
+            _ => {}
+        }
     }
 
     pub fn input_info(&self, request_id: u64) -> Option<InfoOverlayInputInfo> {
@@ -597,7 +696,7 @@ impl InfoOverlay {
         self.viewport_rows = rows.max(1);
         self.viewport_columns = columns.max(1);
         self.clamp_scroll();
-        self.ensure_input_visible();
+        self.ensure_focus_visible();
     }
 
     pub fn scroll_lines(&mut self, request_id: u64, delta: isize) -> bool {
@@ -607,6 +706,10 @@ impl InfoOverlay {
         let before = self.scroll_offset;
         self.scroll_offset = self.scroll_offset.saturating_add_signed(delta);
         self.clamp_scroll();
+        if before != self.scroll_offset && matches!(self.focus(), Some(InfoOverlayFocus::Choice(_)))
+        {
+            self.focus = None;
+        }
         before != self.scroll_offset
     }
 
@@ -653,6 +756,11 @@ impl InfoOverlay {
             self.horizontal_offset = horizontal;
         }
         self.clamp_scroll();
+        if before.0 != self.scroll_offset
+            && matches!(self.focus(), Some(InfoOverlayFocus::Choice(_)))
+        {
+            self.focus = None;
+        }
         before != (self.scroll_offset, self.horizontal_offset)
     }
 
@@ -808,6 +916,142 @@ fn bounded_choices(choices: Vec<InfoOverlayChoice>, line_count: usize) -> Vec<In
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keyboard_focus_reaches_all_choices_and_buttons_with_safe_defaults() {
+        let mut overlay = InfoOverlay::new();
+        let request = overlay.show_choices(
+            "Choices",
+            (0..64).map(|i| format!("row {i}")).collect(),
+            (0..MAX_INFO_CHOICES)
+                .map(|i| {
+                    InfoOverlayChoice::new(format!("id-{i}"), format!("Choice {i}"), i * 2, None)
+                })
+                .collect(),
+        );
+        overlay.set_viewport(4, 30);
+        assert_eq!(
+            overlay.activate_focused(request),
+            InfoOverlayAction::Dismiss {
+                request_id: request
+            }
+        );
+        for i in 0..MAX_INFO_CHOICES {
+            assert!(overlay.cycle_focus(request, false));
+            assert_eq!(
+                overlay.focus(),
+                Some(&InfoOverlayFocus::Choice(format!("id-{i}")))
+            );
+            assert_eq!(
+                overlay.activate_focused(request),
+                InfoOverlayAction::Choose {
+                    request_id: request,
+                    choice_id: format!("id-{i}")
+                }
+            );
+            assert!(
+                (overlay.scroll_offset()..overlay.scroll_offset() + overlay.viewport_rows())
+                    .contains(&(i * 2))
+            );
+        }
+        overlay.cycle_focus(request, false);
+        assert_eq!(
+            overlay.activate_focused(request),
+            InfoOverlayAction::Copy {
+                request_id: request
+            }
+        );
+        overlay.cycle_focus(request, false);
+        assert_eq!(overlay.focus(), Some(&InfoOverlayFocus::Continue));
+        overlay.cycle_focus(request, false);
+        assert_eq!(
+            overlay.focus(),
+            Some(&InfoOverlayFocus::Choice("id-0".into()))
+        );
+        overlay.cycle_focus(request, true);
+        assert_eq!(overlay.focus(), Some(&InfoOverlayFocus::Continue));
+        overlay.cycle_focus(request, true);
+        assert_eq!(overlay.focus(), Some(&InfoOverlayFocus::Copy));
+        overlay.cycle_focus(request, true);
+        overlay.set_viewport(1, 20);
+        assert_eq!(overlay.scroll_offset(), 62);
+        overlay.scroll_to_top(request);
+        assert!(overlay.focus().is_none());
+        assert_eq!(
+            overlay.activate_focused(request),
+            InfoOverlayAction::Dismiss {
+                request_id: request
+            }
+        );
+    }
+
+    #[test]
+    fn focused_choices_cannot_survive_dismissal_or_replacement() {
+        let mut overlay = InfoOverlay::new();
+        let first = overlay.show_choices(
+            "Consent",
+            vec!["Allow".into()],
+            vec![InfoOverlayChoice::new("allow", "Allow", 0, None)],
+        );
+        overlay.cycle_focus(first, false);
+        assert!(overlay.dismiss(first));
+        assert!(!overlay.cycle_focus(first, false));
+        assert_eq!(overlay.activate_focused(first), InfoOverlayAction::None);
+        let second = overlay.show_choices(
+            "Different consent",
+            vec!["Allow".into()],
+            vec![InfoOverlayChoice::new("allow", "Allow", 0, None)],
+        );
+        assert!(!overlay.set_focus(first, Some(InfoOverlayFocus::Choice("allow".into()))));
+        assert_eq!(
+            overlay.activate_focused(second),
+            InfoOverlayAction::Dismiss { request_id: second }
+        );
+        assert!(!overlay.set_focus(second, Some(InfoOverlayFocus::Choice("missing".into()))));
+    }
+
+    #[test]
+    fn input_focus_cycles_through_choices_and_footer_without_editing() {
+        let mut overlay = InfoOverlay::new();
+        let request = overlay.show_input(
+            "Edit",
+            vec!["Value".into(), "Reset".into()],
+            0,
+            "Value: ",
+            "warm",
+            30,
+            vec![InfoOverlayChoice::new("reset", "Reset", 1, None)],
+        );
+        assert!(overlay.input_focused());
+        overlay.set_viewport(1, 2);
+        assert!(overlay.horizontal_offset() > 0);
+        overlay.cycle_focus(request, false);
+        assert!(!overlay.input_focused());
+        assert_eq!(overlay.horizontal_offset(), 0);
+        assert_eq!(
+            overlay.activate_focused(request),
+            InfoOverlayAction::Choose {
+                request_id: request,
+                choice_id: "reset".into()
+            }
+        );
+        overlay.cycle_focus(request, false);
+        assert_eq!(
+            overlay.activate_focused(request),
+            InfoOverlayAction::Copy {
+                request_id: request
+            }
+        );
+        overlay.cycle_focus(request, false);
+        assert_eq!(
+            overlay.activate_focused(request),
+            InfoOverlayAction::SubmitInput {
+                request_id: request
+            }
+        );
+        overlay.cycle_focus(request, false);
+        assert!(overlay.input_focused());
+        assert_eq!(overlay.input_value(request), Some("warm"));
+    }
     use super::*;
 
     #[test]

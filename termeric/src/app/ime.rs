@@ -74,7 +74,7 @@ impl App {
     /// surfaces without an editable field intentionally swallow IME input.
     fn accepts_ime_text(&self) -> bool {
         if self.info_overlay.is_active() {
-            return self.info_overlay.has_input();
+            return self.info_overlay.input_focused();
         }
         if matches!(self.broadcast, BroadcastState::Armed { .. })
             || self.guardrail.is_active()
@@ -120,7 +120,7 @@ impl App {
         }
 
         let printable = || text.chars().filter(|c| !c.is_control());
-        if self.info_overlay.has_input() {
+        if self.info_overlay.input_focused() {
             let request_id = self.info_overlay.request_id();
             self.info_overlay.insert_input_text(request_id, text);
         } else if self.command_palette.is_active() {
@@ -189,8 +189,11 @@ impl App {
         &self,
         panes: &[crate::terminal::container::PaneRenderInfo],
     ) -> Option<crate::renderer::ImePreeditRenderInfo> {
+        if !self.accepts_ime_text() {
+            return None;
+        }
         let renderer = self.renderer.as_ref()?;
-        if self.info_overlay.has_input() {
+        if self.info_overlay.input_focused() {
             let request_id = self.info_overlay.request_id();
             let input = self.info_overlay.input_info(request_id)?;
             let (window_width, window_height) = renderer.window_size();
@@ -335,6 +338,11 @@ mod tests {
         app.handle_ime_event(Ime::Preedit("しょうが".into(), None));
         assert_eq!(app.info_overlay.input_value(request), Some("root"));
         app.handle_ime_event(Ime::Commit("生姜".into()));
+        assert_eq!(app.info_overlay.input_value(request), Some("root生姜"));
+        assert!(app.ime.preedit().is_none());
+        app.info_overlay.cycle_focus(request, false); // Copy button, not text.
+        app.handle_ime_event(Ime::Preedit("blocked".into(), None));
+        app.handle_ime_event(Ime::Commit("must not arrive".into()));
         assert_eq!(app.info_overlay.input_value(request), Some("root生姜"));
         assert!(app.ime.preedit().is_none());
     }

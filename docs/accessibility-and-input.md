@@ -212,6 +212,21 @@ Shift+wheel scroll long lines, and Home/End variants move to horizontal or
 vertical boundaries. Rendering, pointer rows/buttons, viewport sizing, and
 AccessKit all use `InfoOverlayLayout`.
 
+Tab and Shift+Tab cycle through the optional input, every declared choice,
+Copy, and Continue/Save; Enter activates only the focused control. Number
+shortcuts remain available, but are no longer required to reach later choices.
+Focus has an accent outline, scrolls choice rows into view, survives viewport
+resize, and uses the same owner in AccessKit. Manual vertical scrolling leaves
+choice focus so Enter cannot activate an offscreen choice. IME commits and
+preedit are accepted only while the input itself is focused.
+
+New non-input dialogs focus Continue, never the first consent/destructive
+choice. Escape retains dismissal/cancellation behavior, repeated Enter key
+events are ignored, and replacement/dismissal revokes the old focus identity.
+Keyboard traversal does not itself accept consent or change application data.
+Native visual and screen-reader acceptance remain deferred; automated tests
+exercise the state, request identity, geometry, and action routing locally.
+
 The semantic tree contains only the modal dialog, heading, visible document
 slice, polite position status, explicit choices, Copy, and default action
 button. An optional single-line text input is used by typed plugin settings; it

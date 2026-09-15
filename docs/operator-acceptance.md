@@ -513,6 +513,15 @@ or closure cannot focus or write to its replacement. Report-only actions must
 leave focus alone. These checks have hermetic ownership coverage but still need
 real notification-daemon and compositor acceptance when native testing resumes.
 
+For information-dialog keyboard checks (no provider needed), open About and
+cycle Copy/Continue with Tab and Shift+Tab. In a local settings or font-feature
+dialog, traverse its input, choices, and footer; confirm Enter activates the
+focused control and IME text is ignored on buttons. In a long choice list,
+verify later choices scroll into view and show the same focus in Orca. Resize,
+dismiss, and replace the dialog: focus must never activate an old choice or
+default to consent. These visual/input-method checks remain deferred even when
+the hermetic dialog tests pass.
+
 Run the candidate under real X11 and Wayland sessions, fill every check with
 `pass`, `fail`, `unavailable`, or `accepted_limitation`, and attach evidence for
 pass/fail results. Validate while working:

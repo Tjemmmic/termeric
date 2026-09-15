@@ -212,7 +212,9 @@ impl Renderer {
                 let cx = content_x + i as f32 * char_scale;
                 self.text_pipeline.push_char(c, cx, line_y, color);
             }
-            if let Some(input) = input {
+            if let Some(input) = input
+                && info.focus == Some(crate::ui::info_overlay::InfoOverlayFocus::Input)
+            {
                 let cursor_column =
                     input.label.chars().count() + input.value[..input.cursor_byte].chars().count();
                 if cursor_column >= info.horizontal_offset
@@ -399,6 +401,50 @@ impl Renderer {
             continue_pressed,
         );
 
+        // Keyboard and assistive focus use the same geometry as hit testing.
+        if let Some(focus) = &info.focus {
+            use crate::ui::info_overlay::InfoOverlayFocus;
+            let bounds = match focus {
+                InfoOverlayFocus::Input => info.input.as_ref().and_then(|input| {
+                    layout.source_line_rect(input.source_line, info.scroll_offset, info.total_lines)
+                }),
+                InfoOverlayFocus::Choice(id) => info
+                    .choices
+                    .iter()
+                    .find(|choice| &choice.id == id)
+                    .and_then(|choice| {
+                        layout.source_line_rect(
+                            choice.source_line,
+                            info.scroll_offset,
+                            info.total_lines,
+                        )
+                    }),
+                InfoOverlayFocus::Copy => Some(layout.copy_button),
+                InfoOverlayFocus::Continue => Some(layout.continue_button),
+            };
+            if let Some(bounds) = bounds {
+                let color = adjust_alpha(self.ui.palette_accent, anim);
+                self.rect_pipeline
+                    .push_rect(bounds.x, bounds.y, bounds.width, 2.0, color);
+                self.rect_pipeline.push_rect(
+                    bounds.x,
+                    bounds.y + bounds.height - 2.0,
+                    bounds.width,
+                    2.0,
+                    color,
+                );
+                self.rect_pipeline
+                    .push_rect(bounds.x, bounds.y, 2.0, bounds.height, color);
+                self.rect_pipeline.push_rect(
+                    bounds.x + bounds.width - 2.0,
+                    bounds.y,
+                    2.0,
+                    bounds.height,
+                    color,
+                );
+            }
+        }
+
         // ── Keyboard hint ──
         let hint_y = btn_y + btn_h + cell_height * 0.5;
         let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.35 * anim);
@@ -412,12 +458,12 @@ impl Renderer {
             .min(info.total_lines);
         let hint_text = if info.total_lines > layout.rows_that_fit || info.horizontal_offset > 0 {
             format!(
-                "{first_line}-{last_line}/{} c{} | Arrows | C copy | Enter/Esc close",
+                "Tab focus | Enter act | Esc close | {first_line}-{last_line}/{} c{}",
                 info.total_lines,
                 info.horizontal_offset + 1
             )
         } else {
-            "C copy  |  Enter/Esc dismiss".into()
+            "Tab focus | Enter act | Esc close".into()
         };
         let hint_text: String = hint_text
             .chars()

@@ -21,8 +21,8 @@ Built-in **Select Profile** commands offer **Automatic profile** separately from
 Automatic clears the saved reference and uses repository/configured defaults at
 the next restart; the resolved launch reference is then saved on the replacement.
 The picker sorts names and shows at most 31 named profiles plus Automatic, with
-a notice if more exist. The first nine choices have number shortcuts; remaining
-visible choices use the overlay's pointer/accessibility controls. Automatic stays
+a notice if more exist. The first nine choices have number shortcuts; all choices
+are reachable with Tab/Shift+Tab and Enter, pointer, or accessibility controls. Automatic stays
 available when all named profiles have been removed.
 
 Plugin commands prefer a matching owner in the active tab, then search other

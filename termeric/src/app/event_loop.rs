@@ -314,11 +314,19 @@ impl ApplicationHandler<AppEvent> for App {
                         use crate::ui::info_overlay::InfoOverlayAction;
                         use winit::keyboard::{Key, NamedKey};
                         let request_id = self.info_overlay.request_id();
-                        let action = if self.info_overlay.has_input() {
+                        let action = if event.logical_key == Key::Named(NamedKey::Tab) {
+                            self.ime.clear_preedit();
+                            self.info_overlay
+                                .cycle_focus(request_id, self.modifiers.shift_key());
+                            InfoOverlayAction::None
+                        } else if event.logical_key == Key::Named(NamedKey::Enter) {
+                            if event.repeat {
+                                InfoOverlayAction::None
+                            } else {
+                                self.info_overlay.activate_focused(request_id)
+                            }
+                        } else if self.info_overlay.input_focused() {
                             match &event.logical_key {
-                                Key::Named(NamedKey::Enter) => {
-                                    InfoOverlayAction::SubmitInput { request_id }
-                                }
                                 Key::Named(NamedKey::Escape) => {
                                     InfoOverlayAction::CancelInput { request_id }
                                 }
@@ -393,8 +401,12 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                         } else {
                             match &event.logical_key {
-                                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
-                                    InfoOverlayAction::Dismiss { request_id }
+                                Key::Named(NamedKey::Escape) => {
+                                    if self.info_overlay.has_input() {
+                                        InfoOverlayAction::CancelInput { request_id }
+                                    } else {
+                                        InfoOverlayAction::Dismiss { request_id }
+                                    }
                                 }
                                 Key::Named(NamedKey::ArrowUp) => InfoOverlayAction::ScrollLines {
                                     request_id,
@@ -1318,6 +1330,10 @@ impl ApplicationHandler<AppEvent> for App {
                             let (mx, my) = (pos.0 as f32, pos.1 as f32);
                             let request_id = self.info_overlay.request_id();
                             let action = if layout.copy_button.contains(mx, my) {
+                                self.info_overlay.set_focus(
+                                    request_id,
+                                    Some(crate::ui::info_overlay::InfoOverlayFocus::Copy),
+                                );
                                 crate::ui::info_overlay::InfoOverlayAction::Copy { request_id }
                             } else if layout.continue_button.contains(mx, my) {
                                 if self.info_overlay.has_input() {
@@ -1340,6 +1356,10 @@ impl ApplicationHandler<AppEvent> for App {
                                     .input_info(request_id)
                                     .is_some_and(|input| input.source_line == line)
                                 {
+                                    self.info_overlay.set_focus(
+                                        request_id,
+                                        Some(crate::ui::info_overlay::InfoOverlayFocus::Input),
+                                    );
                                     let column =
                                         self.info_overlay.horizontal_offset().saturating_add(
                                             ((mx - layout.content.x) / layout.char_scale)

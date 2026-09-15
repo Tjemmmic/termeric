@@ -2386,6 +2386,7 @@ impl App {
                 visible_lines,
                 choices,
                 input: self.info_overlay.input_info(self.info_overlay.request_id()),
+                focus: self.info_overlay.focus().cloned(),
                 total_lines: self.info_overlay.lines().len(),
                 scroll_offset,
                 horizontal_offset,

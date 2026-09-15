@@ -1458,7 +1458,17 @@ impl App {
             return;
         }
         let action = match (request.action, target) {
-            (Action::Focus, _) => {
+            (Action::Focus, target) => {
+                use crate::ui::info_overlay::InfoOverlayFocus;
+                let focus = match target {
+                    InfoSemanticTarget::Content(_) => None,
+                    InfoSemanticTarget::Input(_) => Some(InfoOverlayFocus::Input),
+                    InfoSemanticTarget::Choice { id, .. } => Some(InfoOverlayFocus::Choice(id)),
+                    InfoSemanticTarget::Copy(_) => Some(InfoOverlayFocus::Copy),
+                    InfoSemanticTarget::Dismiss(_) => Some(InfoOverlayFocus::Continue),
+                };
+                self.info_overlay.set_focus(request_id, focus);
+                self.ime.clear_preedit();
                 self.accessibility.focus_override = Some(request.target_node);
                 InfoOverlayAction::None
             }
@@ -1477,6 +1487,10 @@ impl App {
                     return;
                 };
                 if self.info_overlay.replace_input_text(request_id, value) {
+                    self.info_overlay.set_focus(
+                        request_id,
+                        Some(crate::ui::info_overlay::InfoOverlayFocus::Input),
+                    );
                     self.accessibility.focus_override = Some(request.target_node);
                 }
                 InfoOverlayAction::None
@@ -3873,19 +3887,19 @@ impl App {
         nodes.push((INFO_DIALOG, dialog));
         nodes.push((ROOT, root));
 
-        let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_info_node(*node)
-                && nodes.iter().any(|(current, _)| current == node)
-                && (awaiting || *node == INFO_DIALOG)
+        let model_focus = self.info_overlay.focus().and_then(|focus| {
+            use crate::ui::info_overlay::InfoOverlayFocus;
+            match focus {
+                InfoOverlayFocus::Input => input_id,
+                InfoOverlayFocus::Choice(id) => choice_nodes
+                    .iter()
+                    .find(|(choice, _)| &choice.id == id)
+                    .map(|(_, node)| *node),
+                InfoOverlayFocus::Copy => Some(copy_id),
+                InfoOverlayFocus::Continue => Some(dismiss_id),
+            }
         });
-        let focus = requested_focus.unwrap_or(if awaiting {
-            input_id.unwrap_or(dismiss_id)
-        } else {
-            INFO_DIALOG
-        });
-        if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = None;
-        }
+        let focus = model_focus.unwrap_or(if awaiting { content_id } else { INFO_DIALOG });
         self.accessibility.focus_override = Some(focus);
         SemanticSnapshot { nodes, focus }
     }
@@ -7678,6 +7692,74 @@ mod tests {
                 Some('1'),
             )],
         )
+    }
+
+    #[test]
+    fn info_overlay_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
+        use crate::ui::info_overlay::{InfoOverlayAction, InfoOverlayFocus};
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let request = show_info_fixture(&mut app);
+        app.accessibility_snapshot();
+        app.info_overlay.cycle_focus(request, false);
+        let snapshot = app.accessibility_snapshot();
+        let choice = app.accessibility.info_nodes[&InfoSemanticTarget::Choice {
+            request_id: request,
+            id: "safe-choice".into(),
+        }];
+        assert_eq!(snapshot.focus, choice);
+        let layout = app.info_accessibility_layout();
+        let bounds = snapshot
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == choice)
+            .unwrap()
+            .1
+            .bounds()
+            .unwrap();
+        let expected = info_rect(
+            layout
+                .source_line_rect(1, app.info_overlay.scroll_offset(), 40)
+                .unwrap(),
+        );
+        assert!((bounds.y0 - expected.y0).abs() < 0.05);
+        assert_eq!(
+            app.info_overlay.activate_focused(request),
+            InfoOverlayAction::Choose {
+                request_id: request,
+                choice_id: "safe-choice".into()
+            }
+        );
+        let copy = app.accessibility.info_nodes[&InfoSemanticTarget::Copy(request)];
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: copy,
+            data: None,
+        });
+        assert_eq!(app.info_overlay.focus(), Some(&InfoOverlayFocus::Copy));
+        assert_eq!(
+            app.info_overlay.activate_focused(request),
+            InfoOverlayAction::Copy {
+                request_id: request
+            }
+        );
+        assert_eq!(app.accessibility_snapshot().focus, copy);
+        let replacement = app
+            .info_overlay
+            .show("Replacement", vec!["No choice".into()]);
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: choice,
+            data: None,
+        });
+        assert_eq!(app.info_overlay.focus(), Some(&InfoOverlayFocus::Continue));
+        assert_eq!(
+            app.info_overlay.activate_focused(replacement),
+            InfoOverlayAction::Dismiss {
+                request_id: replacement
+            }
+        );
     }
 
     #[test]
