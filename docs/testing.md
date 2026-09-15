@@ -29,6 +29,16 @@ per delivered rerun and no user-input record for protocol fences or refusals.
 
 ## Candidate-bound shell acceptance
 
+The shared real-shell semantic probe sends one command only after a parsed
+input-ready prompt and the preceding command's completion, while continuing
+to answer terminal queries. It also requires the exact working directory at
+the first input-ready prompt and at the end. This replaces a startup input
+burst that Nushell 0.115.1 consumed incompletely during terminal negotiation.
+The paced default-config probe passes for all five supported shell families;
+Nushell's two `nushell_native_cwd_` tests remain explicitly ignored known
+failures for literal-percent paths and user-disabled OSC 7 at the first prompt.
+See [the reproductions and remaining work](osc-integration.md#nushell-native-producer-confirmed-gaps).
+
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
 with isolated configuration, captures its bytes, and feeds only an in-memory
 terminal. It reproduces/prevents directory-to-title injection, round-trips UTF-8
@@ -1329,8 +1339,9 @@ fixtures cover native-producer launch routing and a standard opt-in module,
 respectively. They can be promoted to required real-PTY gates with
 `TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1` and
 `TERMERIC_REQUIRE_ELVISH_ACCEPTANCE=1`. The Elvish probe now passes locally with
-an isolated 0.21.0 binary; environments without it still explicitly self-skip
-unless required. Nushell remains untested because its executable is absent. The
+an isolated 0.21.0 binary; the ordinary-directory Nushell probe passes with an
+isolated 0.115.1 binary. Environments without these shells still explicitly
+self-skip unless required. Nushell's known cwd failures are documented above. The
 fake-AI lane launches both built-ins through real
 PTYs and drives all twelve commands without credentials or network access. The
 native X11 workspace fixture adds exact OSC 52,

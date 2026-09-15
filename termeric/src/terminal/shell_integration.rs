@@ -925,6 +925,52 @@ mod tests {
         rc_contents: &str,
         expected_support: ShellIntegrationSupport,
     ) {
+        run_shell_semantics_probe_in_home(
+            program,
+            shell_name,
+            rc_path,
+            rc_contents,
+            expected_support,
+            "home",
+        );
+    }
+
+    #[test]
+    #[ignore = "known Nushell 0.115.1 OSC 7 percent bug; see docs/osc-integration.md"]
+    fn nushell_native_cwd_preserves_literal_percent_escapes() {
+        let program = executable_on_path("nu").expect("this regression requires nu");
+        run_shell_semantics_probe_in_home(
+            &program,
+            "nushell",
+            ".config/nushell/config.nu",
+            "print 'CUSTOM_RC_NUSHELL'\n",
+            ShellIntegrationSupport::Enabled("nushell"),
+            "home%2Fpercent",
+        );
+    }
+
+    #[test]
+    #[ignore = "known Nushell 0.115.1 first-prompt OSC 7 gap; see docs/osc-integration.md"]
+    fn nushell_native_cwd_is_available_at_first_prompt_after_user_disables_it() {
+        let program = executable_on_path("nu").expect("this regression requires nu");
+        run_shell_semantics_probe_in_home(
+            &program,
+            "nushell",
+            ".config/nushell/config.nu",
+            "$env.config.shell_integration.osc7 = false\nprint 'CUSTOM_RC_NUSHELL'\n",
+            ShellIntegrationSupport::Enabled("nushell"),
+            "home",
+        );
+    }
+
+    fn run_shell_semantics_probe_in_home(
+        program: &str,
+        shell_name: &'static str,
+        rc_path: &str,
+        rc_contents: &str,
+        expected_support: ShellIntegrationSupport,
+        home_component: &str,
+    ) {
         use sha2::{Digest, Sha256};
         let program_path = std::fs::canonicalize(program).unwrap();
         let program_digest = format!(
@@ -932,7 +978,7 @@ mod tests {
             Sha256::digest(std::fs::read(&program_path).unwrap())
         );
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
+        let home = temp.path().join(home_component);
         let rc = home.join(rc_path);
         std::fs::create_dir_all(rc.parent().unwrap()).unwrap();
         std::fs::write(&rc, rc_contents).unwrap();
@@ -953,6 +999,7 @@ mod tests {
         assert_eq!(launch.integration, expected_support);
         let mut environment = launch.env;
         environment.push(("HOME".into(), home.display().to_string()));
+        environment.push(("PWD".into(), home.display().to_string()));
         environment.push((
             "XDG_CONFIG_HOME".into(),
             home.join(".config").display().to_string(),
@@ -969,19 +1016,18 @@ mod tests {
         .unwrap();
         let (mut handle, reader) = pty.take_reader();
         let rx = spawn_reader_thread(reader);
-        if shell_name == "nushell" {
-            handle
-                .write_all(b"print (\n'first:second'\n)\r^false\rexit\r")
-                .unwrap();
+        let commands: [&[u8]; 3] = if shell_name == "nushell" {
+            [b"print (\n'first:second'\n)\r", b"^false\r", b"exit\r"]
         } else if shell_name == "elvish" {
-            handle
-                .write_all(b"echo [\nfirst:second\n]\rfalse\rexit\r")
-                .unwrap();
+            [b"echo [\nfirst:second\n]\r", b"false\r", b"exit\r"]
         } else {
-            handle
-                .write_all(b"printf '%s:%s\\n' first \\\nsecond\rfalse\rexit\r")
-                .unwrap();
-        }
+            [
+                b"printf '%s:%s\\n' first \\\nsecond\r",
+                b"false\r",
+                b"exit\r",
+            ]
+        };
+        let mut next_command = 0;
 
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut bytes = Vec::new();
@@ -1013,6 +1059,27 @@ mod tests {
                             _ => {}
                         }
                     }
+                    // Editors can consume queued keystrokes while collecting
+                    // terminal-query replies. Wait for an input-ready prompt
+                    // and the preceding command's completion before each send.
+                    // Repaints alone must not advance the input sequence.
+                    let tracker = &terminal.shell_integration().prompt_tracker;
+                    if next_command < commands.len()
+                        && tracker.completed_count() == next_command
+                        && tracker.active_region().is_some_and(|region| {
+                            region.command_row.is_some() && region.output_row.is_none()
+                        })
+                    {
+                        if next_command == 0 {
+                            assert_eq!(
+                                terminal.reported_working_directory().map(|cwd| cwd.path()),
+                                home.to_str(),
+                                "{shell_name}: first input-ready prompt needs the exact cwd"
+                            );
+                        }
+                        handle.write_all(commands[next_command]).unwrap();
+                        next_command += 1;
+                    }
                 }
                 Ok(PtyEvent::Closed) => {
                     reader_closed = true;
@@ -1034,6 +1101,11 @@ mod tests {
         );
 
         let stdout = String::from_utf8_lossy(&bytes);
+        assert_eq!(
+            next_command,
+            commands.len(),
+            "{shell_name}: not all commands sent"
+        );
         assert!(
             stdout.contains(&format!("CUSTOM_RC_{}", shell_name.to_uppercase())),
             "{shell_name} did not load its user rc: {}",
@@ -1048,6 +1120,11 @@ mod tests {
             terminal.reported_working_directory().is_some(),
             "{shell_name} emitted no OSC 7 directory report: {}",
             stdout.escape_debug()
+        );
+        assert_eq!(
+            terminal.reported_working_directory().unwrap().path(),
+            home.to_str().unwrap(),
+            "{shell_name}: cwd report must preserve the actual directory exactly"
         );
 
         let mut state = crate::harvest::HarvestTerminalState::default();

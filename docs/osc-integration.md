@@ -137,14 +137,47 @@ startup/editor wiring and complete command regions; this is not desktop or
 user-configuration acceptance.
 
 These producer fixes cover **Bash, Zsh, Fish, and opt-in Elvish**. Nushell uses
-its own native producer and remains acceptance-pending. This does not sanitize
+its own native producer and has the confirmed gaps below. This does not sanitize
 arbitrary user prompt code or output from other applications.
+
+### Nushell native producer: confirmed gaps
+
+An isolated Nushell 0.115.1 real-PTY probe passes ordinary-directory startup,
+custom rc preservation, multiline execution, terminal-query replies, and
+success/failure Harvest regions. Two stronger directory cases fail:
+
+- A literal `%2F` in a real directory name is transmitted without escaping its
+  percent sign; strict URI decoding turns it into `/`, changing the path.
+- With `shell_integration.osc7 = false` in the user's config, Termeric's current
+  `--execute` prelude enables later reports but not the first prompt's report.
+  Checking only after commands run hides this startup gap.
+
+These observations match the [Nushell 0.115.1 REPL implementation](https://github.com/nushell/nushell/blob/0.115.1/crates/nu-cli/src/repl.rs):
+its OSC 7 encoder escapes controls but not literal percent signs, and startup
+OSC flags are captured before the pre-REPL command runs. The terminal's strict
+URI parser is not at fault and must not be relaxed to accept ambiguous paths.
+
+The two `nushell_native_cwd_` regressions are explicitly ignored **known
+failures**, not accepted behavior and not green release evidence. With `nu`
+available, reproduce them using:
+
+```bash
+cargo test --workspace --locked nushell_native_cwd_ -- --ignored --nocapture
+```
+
+The next implementation must establish correctly encoded cwd reporting before
+the first input-ready prompt, preserve custom rc definitions/hooks and launch
+options, avoid duplicate or transiently incorrect native reports, and remove
+these ignores only when both tests pass. A validated upstream producer or
+Termeric-owned startup/reporting path are possible approaches; emitting a late
+correction alone does not satisfy first-prompt correctness. These gaps do not
+block unrelated implementation or deferred operator testing.
 
 Normal interactive Bash, Zsh, and Fish launches emit a hostless OSC 7 report at
 each prompt, with literal percent signs escaped before transmission. An
 unambiguous Nushell REPL launch enables Nushell's native OSC 7 and OSC 133
-settings after the user's normal configuration loads; its real-PTY result is
-still acceptance-pending. Nushell scripts, command strings, language-server/IDE
+settings after the user's normal configuration loads; its ordinary-directory
+real-PTY probe passes, with the cwd limitations above. Nushell scripts, command strings, language-server/IDE
 modes, and existing pre-REPL commands are preserved without injection. The
 generated Elvish module emits the same hostless OSC 7 and OSC 133 lifecycle
 after the user adds `use termeric-integration` to `~/.config/elvish/rc.elv`.
