@@ -1618,7 +1618,12 @@ impl Plugin for DeclarativePlugin {
                 .map_or(HookResponse::Ignored, |profile| {
                     self.action_for(&profile.id, context)
                 }),
-            Hook::WorkspaceRestore {
+            Hook::PaneLaunch {
+                plugin_id,
+                profile,
+                cwd,
+            }
+            | Hook::WorkspaceRestore {
                 plugin_id,
                 profile,
                 cwd,
@@ -1640,7 +1645,16 @@ impl Plugin for DeclarativePlugin {
                 };
                 let mut restore_context = context.clone();
                 restore_context.cwd.clone_from(cwd);
-                self.action_for(selected, &restore_context)
+                let mut response = self.action_for(selected, &restore_context);
+                // Explicit pane launches use the host's pane cwd policy, not
+                // a tab profile's active/inherit placement default.
+                if matches!(hook, Hook::PaneLaunch { .. })
+                    && let HookResponse::Action(PluginAction::OpenTab { cwd: actual, .. }) =
+                        &mut response
+                {
+                    actual.clone_from(cwd);
+                }
+                response
             }
             _ => HookResponse::Ignored,
         };
@@ -1650,6 +1664,16 @@ impl Plugin for DeclarativePlugin {
         } else {
             response
         }
+    }
+
+    fn pane_profiles(&self) -> Option<Vec<String>> {
+        (!self.manifest.profiles.is_empty()).then(|| {
+            self.manifest
+                .profiles
+                .iter()
+                .map(|profile| profile.id.clone())
+                .collect()
+        })
     }
 
     fn commands(&self) -> Vec<PluginCommand> {
@@ -3160,6 +3184,46 @@ args = ["--quiet"]
 working_directory = "inherit"
 "#
         )
+    }
+
+    #[test]
+    fn explicit_pane_hook_preserves_profile_but_uses_host_cwd_policy() {
+        let manifest: PluginManifest =
+            toml::from_str(&manifest("1.0.0", "", "synthetic-not-executed")).unwrap();
+        let mut plugin = DeclarativePlugin::new(
+            manifest,
+            None,
+            BTreeSet::from([PluginPermission::ProcessSpawn]),
+        );
+        assert_eq!(plugin.pane_profiles().unwrap(), vec!["default", "quiet"]);
+        let context = PluginContext {
+            cwd: Some("/chosen/pane".into()),
+            tab_count: 1,
+            active_tab: 0,
+            terminal_size: (39, 12),
+        };
+        for name in ["default", "quiet"] {
+            let response = plugin.on_hook(
+                &Hook::PaneLaunch {
+                    plugin_id: "sample-tools".into(),
+                    profile: Some(name.into()),
+                    cwd: context.cwd.clone(),
+                },
+                &context,
+            );
+            assert!(
+                matches!(response, HookResponse::Action(PluginAction::OpenTab { cwd: Some(cwd), profile: Some(profile), .. }) if cwd == "/chosen/pane" && profile == name)
+            );
+        }
+        assert!(matches!(
+            plugin.on_hook(
+                &Hook::CommandInvoked {
+                    command_id: "sample-tools.open-quiet".into()
+                },
+                &context
+            ),
+            HookResponse::Action(PluginAction::OpenTab { cwd: None, .. })
+        ));
     }
 
     fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {

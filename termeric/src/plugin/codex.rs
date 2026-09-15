@@ -310,7 +310,12 @@ impl Plugin for CodexPlugin {
                 | "codex.select-profile" => HookResponse::Handled,
                 _ => HookResponse::Ignored,
             },
-            Hook::WorkspaceRestore {
+            Hook::PaneLaunch {
+                plugin_id,
+                profile,
+                cwd,
+            }
+            | Hook::WorkspaceRestore {
                 plugin_id,
                 profile,
                 cwd,
@@ -327,6 +332,10 @@ impl Plugin for CodexPlugin {
 
     fn commands(&self) -> Vec<PluginCommand> {
         ai_common::standard_ai_commands("codex", "Codex")
+    }
+
+    fn pane_profiles(&self) -> Option<Vec<String>> {
+        Some(self.config.profiles.keys().cloned().collect())
     }
 
     fn keybindings(&self) -> Vec<PluginKeybinding> {

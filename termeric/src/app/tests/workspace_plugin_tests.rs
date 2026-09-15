@@ -5,7 +5,7 @@ use crate::workspace::{
     WorkspaceTabSnapshot,
 };
 
-fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
+pub(super) fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("fake-workspace-plugin");
     std::fs::write(&program, "#!/bin/sh\nstty raw -echo\nprintf '%s\\n' \"$PWD\" \"$TEST_TAG\" \"$*\" > \"$CAPTURE_DIR/$TEST_TAG\"\nexec cat >/dev/null\n").unwrap();
@@ -122,7 +122,7 @@ fn fixture() -> (App, tempfile::TempDir, WorkspaceTabSnapshot) {
     (App::new_headless(config).unwrap(), dir, snapshot)
 }
 
-fn manager(app: &App) -> TabManager {
+pub(super) fn manager(app: &App) -> TabManager {
     TabManager::new_with_geometry(
         crate::terminal::geometry::TerminalGeometry::from_cells(120, 40, 10.0, 20.0),
         app.config.shell.clone(),
@@ -414,7 +414,9 @@ impl Plugin for RestoreResponseFixture {
     }
     fn on_hook(&mut self, hook: &crate::plugin::Hook, ctx: &PluginContext) -> HookResponse {
         use crate::plugin::{Hook, PluginAction};
-        let Hook::WorkspaceRestore { profile, cwd, .. } = hook else {
+        let (Hook::WorkspaceRestore { profile, cwd, .. } | Hook::PaneLaunch { profile, cwd, .. }) =
+            hook
+        else {
             return HookResponse::Ignored;
         };
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -508,6 +510,27 @@ fn workspace_plugin_hooks_are_targeted_and_mismatched_or_ambiguous_actions_are_r
         );
         assert_eq!(tabs.count(), 1);
         assert_eq!(called.load(Ordering::SeqCst), 1);
+        assert_eq!(unrelated.load(Ordering::SeqCst), 0);
+        // The same rejection contract applies to fresh explicit pane launches.
+        let ctx = PluginContext {
+            cwd: snapshot.panes[0].working_directory.clone(),
+            tab_count: 1,
+            active_tab: 0,
+            terminal_size: (40, 20),
+        };
+        assert!(
+            app.resolve_plugin_terminal_launch(
+                &crate::plugin::Hook::PaneLaunch {
+                    plugin_id: "synthetic-workspace".into(),
+                    profile: Some("saved".into()),
+                    cwd: ctx.cwd.clone(),
+                },
+                &ctx
+            )
+            .is_err(),
+            "{mode}"
+        );
+        assert_eq!(called.load(Ordering::SeqCst), 2);
         assert_eq!(unrelated.load(Ordering::SeqCst), 0);
     }
 }

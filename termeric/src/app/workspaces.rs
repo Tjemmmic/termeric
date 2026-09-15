@@ -1,7 +1,6 @@
 //! Complete workspace persistence and relaunch orchestration.
 
 use super::*;
-use crate::plugin::PluginAction;
 use crate::tabs::TabType;
 use crate::workspace::{
     WorkspaceConfigReference, WorkspaceLaunch, WorkspaceRestoreOutcome, WorkspaceSnapshot,
@@ -363,108 +362,22 @@ impl App {
                         active_tab: tabs.active_index(),
                         terminal_size: (self.cols, self.rows),
                     };
-                    self.resolve_workspace_plugin_launch(plugin_id, profile.as_deref(), cwd, &ctx)
-                        .map_err(|error| {
-                            anyhow::anyhow!(
-                                "workspace tab {} pane {}: {error:#}",
-                                snapshot.id,
-                                pane.id
-                            )
-                        })?
+                    self.resolve_plugin_terminal_launch(
+                        &crate::plugin::Hook::WorkspaceRestore {
+                            plugin_id: plugin_id.clone(),
+                            profile: profile.clone(),
+                            cwd,
+                        },
+                        &ctx,
+                    )
+                    .map_err(|error| {
+                        anyhow::anyhow!("workspace tab {} pane {}: {error:#}", snapshot.id, pane.id)
+                    })?
                 }
             };
             launches.insert(pane.id, (resolved, shell));
         }
         Ok(launches)
-    }
-
-    fn validate_workspace_plugin_profile(
-        &self,
-        plugin_id: &str,
-        profile: Option<&str>,
-    ) -> anyhow::Result<()> {
-        let configured = match plugin_id {
-            "codex" => {
-                self.config.plugins.codex.enabled
-                    && profile
-                        .is_none_or(|name| self.config.plugins.codex.profiles.contains_key(name))
-            }
-            "claude-code" => {
-                self.config.plugins.claude_code.enabled
-                    && profile.is_none_or(|name| {
-                        self.config.plugins.claude_code.profiles.contains_key(name)
-                    })
-            }
-            _ => true, // Other registered plugins validate their own profile namespace.
-        };
-        if !configured {
-            anyhow::bail!(
-                "plugin {plugin_id:?} or its saved/resolved profile {profile:?} is no longer configured"
-            );
-        }
-        Ok(())
-    }
-
-    fn resolve_workspace_plugin_launch(
-        &mut self,
-        plugin_id: &str,
-        profile: Option<&str>,
-        cwd: Option<String>,
-        ctx: &PluginContext,
-    ) -> anyhow::Result<(WorkspaceLaunch, crate::config::ShellConfig)> {
-        self.validate_workspace_plugin_profile(plugin_id, profile)?;
-        let actions = self.plugin_manager.dispatch_to(
-            plugin_id,
-            &crate::plugin::Hook::WorkspaceRestore {
-                plugin_id: plugin_id.into(),
-                profile: profile.map(str::to_owned),
-                cwd: cwd.clone(),
-            },
-            ctx,
-        );
-        let mut launch = None;
-        for action in actions {
-            match action {
-                PluginAction::OpenTab {
-                    program,
-                    args,
-                    cwd: actual_cwd,
-                    plugin_id: actual_id,
-                    profile: actual_profile,
-                    env,
-                    ..
-                } => {
-                    if launch.is_some()
-                        || actual_id.as_deref() != Some(plugin_id)
-                        || profile.is_some_and(|saved| actual_profile.as_deref() != Some(saved))
-                        || actual_cwd != cwd
-                        || program.is_empty()
-                    {
-                        anyhow::bail!("plugin returned an ambiguous or mismatched restore launch");
-                    }
-                    self.validate_workspace_plugin_profile(plugin_id, actual_profile.as_deref())?;
-                    // Archive cwd is authoritative, including the documented
-                    // missing-cwd fallback. PWD must not override it indirectly.
-                    let env = env.into_iter().filter(|(key, _)| key != "PWD").collect();
-                    launch = Some((
-                        WorkspaceLaunch::Plugin {
-                            plugin_id: plugin_id.into(),
-                            profile: actual_profile,
-                        },
-                        crate::config::ShellConfig {
-                            program: Some(program),
-                            args,
-                            env,
-                        },
-                    ));
-                }
-                PluginAction::ShowNotice { .. } => anyhow::bail!(
-                    "plugin did not provide a clean restore launch; configuration needs attention"
-                ),
-                _ => anyhow::bail!("plugin returned an unsupported restore action"),
-            }
-        }
-        launch.ok_or_else(|| anyhow::anyhow!("plugin {plugin_id:?} is not available"))
     }
 }
 

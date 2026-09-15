@@ -104,8 +104,10 @@ layouts using fake executables in real local PTYs. It checks distinct profiles
 of the same and different plugins, exact cwd/argv/environment, archive
 round-trips, nonzero primary IDs, migration without invented plugin launches,
 targeted hook validation, and failed-tab rollback. Fresh plugin owners do not
-resume recordings or conversations. Explicit plugin-pane creation and movement
-remain guarded under [#126](https://github.com/Tjemmmic/termeric/issues/126).
+resume recordings or conversations. [Explicit plugin-pane creation](plugin-panes.md)
+now has fake-PTY coverage for palette dispatch, profiles/cwd/geometry, ownership,
+rollback, and close/collapse/resplit. Plugin-pane movement remains guarded under
+[#126](https://github.com/Tjemmmic/termeric/issues/126).
 These tests do not establish provider readiness or native visual acceptance.
 
 Diff capture now frames arbitrary PTY chunks with bounded line/capture/history

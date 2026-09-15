@@ -916,9 +916,13 @@ argv/environment, archive save/load/restore, nonzero primary IDs, literal
 `default` and resolved default references, missing-cwd fallback, missing or
 disabled configuration, spawn failure, exact-target hook validation, and
 rollback without disturbing existing tabs. Model/storage regressions also
-cover schema-0/1/2 migration without inventing plugin launches. Explicit
-plugin-pane creation/movement and real-provider/native acceptance are not
-claimed by this lane; see [integration acceptance](integration-acceptance.md).
+cover schema-0/1/2 migration without inventing plugin launches. The separate
+`cargo test -p termeric plugin_pane_creation_tests` lane checks explicit palette
+creation with fake PTYs, exact profile/cwd/kernel geometry, preservation of the
+original owner, rollback of focus/zoom/layout, refused destinations, and
+close/collapse/resplit. See [plugin panes](plugin-panes.md). Plugin-pane movement
+and real-provider/native acceptance are not claimed by these lanes; see
+[integration acceptance](integration-acceptance.md).
 
 PTY shutdown has a deterministic destructor-order regression for both unsplit
 `Pty` and reader-split `PtyHandle`: a shell emits an explicit readiness marker,

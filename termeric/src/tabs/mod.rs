@@ -2,6 +2,7 @@
 //!
 //! Provides support for tabbed terminal sessions within a single window.
 
+mod plugin_panes;
 mod tab;
 mod title;
 

@@ -51,6 +51,14 @@ pub enum Hook {
     },
     /// A plugin command was invoked (from command palette or keybinding)
     CommandInvoked { command_id: String },
+    /// Resolve a fresh plugin-owned pane requested explicitly by the user.
+    /// The host validates and places the returned launch without executing
+    /// unrelated actions or emitting a tab-created event.
+    PaneLaunch {
+        plugin_id: String,
+        profile: Option<String>,
+        cwd: Option<String>,
+    },
     /// Recreate a plugin-owned tab from a persisted workspace. The named
     /// profile is an explicit archive reference and therefore takes priority
     /// over repository and default profile selection.
@@ -72,6 +80,7 @@ impl Hook {
             Self::TabSwitched { .. } => "tab-switched",
             Self::CommandExecuted { .. } => "command-executed",
             Self::CommandInvoked { .. } => "command-invoked",
+            Self::PaneLaunch { .. } => "pane-launch",
             Self::WorkspaceRestore { .. } => "workspace-restore",
         }
     }
@@ -245,6 +254,12 @@ pub trait Plugin: std::fmt::Debug + Send {
     /// Commands this plugin adds to the command palette.
     fn commands(&self) -> Vec<PluginCommand> {
         vec![]
+    }
+
+    /// Opt into explicit local pane creation. Names refer to launch profiles,
+    /// not running sessions. None keeps event-only plugins out of this UI.
+    fn pane_profiles(&self) -> Option<Vec<String>> {
+        None
     }
 
     /// Keybindings this plugin wants to register.

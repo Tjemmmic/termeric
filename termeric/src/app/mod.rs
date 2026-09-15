@@ -13,6 +13,8 @@ mod ime;
 mod kitty_file_transfer;
 mod mouse;
 mod plugin_actions;
+mod plugin_launch;
+mod plugin_panes;
 mod plugin_profiles;
 mod plugin_restart;
 mod redraw_scheduler;
@@ -3564,6 +3566,10 @@ impl App {
     fn handle_palette_result(&mut self, result: PaletteResult) {
         match result {
             PaletteResult::RunAction(id) => {
+                if let Some(value) = id.strip_prefix("plugin-pane.") {
+                    self.open_plugin_pane_command(value);
+                    return;
+                }
                 if let Some(name) = id.strip_prefix("profile.open.") {
                     self.open_terminal_profile(name);
                     return;
@@ -4276,7 +4282,7 @@ impl App {
     fn refresh_launch_profile_commands(&mut self) {
         use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
 
-        let commands = self
+        let mut commands: Vec<RegisteredCommand> = self
             .config
             .profiles
             .iter()
@@ -4302,6 +4308,7 @@ impl App {
                 }
             })
             .collect();
+        commands.extend(self.plugin_pane_commands());
         self.command_palette
             .replace_launch_profile_commands(commands);
     }

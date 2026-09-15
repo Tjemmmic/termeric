@@ -4638,6 +4638,9 @@ mod terminal_session_tests;
 mod workspace_plugin_tests;
 
 #[cfg(unix)]
+mod plugin_pane_creation_tests;
+
+#[cfg(unix)]
 #[test]
 fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
@@ -6811,7 +6814,8 @@ fn headless_config_application_updates_plugins_harvest_and_palette() {
     assert!(app.harvest.is_none());
     app.command_palette.open();
     let disabled_count = app.command_palette.build_info().total_count;
-    assert_eq!(enabled_count - disabled_count, 16);
+    // Existing plugin/Harvest commands plus two explicit pane placements.
+    assert_eq!(enabled_count - disabled_count, 18);
 }
 
 #[test]

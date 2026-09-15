@@ -134,6 +134,13 @@ pub struct Pane {
     suppress_protocol_replies: bool,
 }
 
+/// One resolved local launch; process arguments are never inferred from focus.
+pub(crate) struct LocalPaneLaunch {
+    pub identity: crate::workspace::WorkspaceLaunch,
+    pub shell: ShellConfig,
+    pub cwd: Option<String>,
+}
+
 impl Pane {
     /// Create a new pane with a shell
     pub fn new(
@@ -1080,8 +1087,52 @@ impl PaneManager {
         }
     }
 
+    /// Prospective geometry uses the unzoomed tree, exactly as splitting does.
+    pub(crate) fn split_geometry(
+        &self,
+        target: PaneId,
+        direction: SplitDirection,
+    ) -> anyhow::Result<TerminalGeometry> {
+        let layout = self.tree.calculate_layout(PaneRect {
+            x: 0.0,
+            y: 0.0,
+            width: self.total_width,
+            height: self.total_height,
+        });
+        let rect = layout.get(&target).context("split target is missing")?;
+        Ok(Self::child_geometry(
+            rect.width,
+            rect.height,
+            self.cell_width,
+            self.cell_height,
+            direction,
+        ))
+    }
+
+    pub(crate) fn child_geometry(
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+        direction: SplitDirection,
+    ) -> TerminalGeometry {
+        let (width, height) = match direction {
+            SplitDirection::Horizontal => (width, (height - PANE_DIVIDER_THICKNESS).max(0.0) / 2.0),
+            SplitDirection::Vertical => ((width - PANE_DIVIDER_THICKNESS).max(0.0) / 2.0, height),
+        };
+        TerminalGeometry::from_available_pixels(width, height, cell_width, cell_height)
+    }
+
     /// Split the focused pane
     pub fn split(&mut self, direction: SplitDirection) -> anyhow::Result<PaneId> {
+        self.split_local(direction, None)
+    }
+
+    fn split_local(
+        &mut self,
+        direction: SplitDirection,
+        launch: Option<&LocalPaneLaunch>,
+    ) -> anyhow::Result<PaneId> {
         if !self.tree.has_split_capacity() {
             anyhow::bail!("divider ID space exhausted");
         }
@@ -1094,38 +1145,9 @@ impl PaneManager {
         let new_id = PaneId(self.next_id);
         self.next_id = next_id;
 
-        // Calculate size for the new pane (roughly half of current)
-        let layout = self.calculate_layout();
-        let parent_rect = layout.get(&self.focused).cloned().unwrap_or(PaneRect {
-            x: 0.0,
-            y: 0.0,
-            width: self.total_width,
-            height: self.total_height,
-        });
-
-        let geometry = match direction {
-            SplitDirection::Horizontal => {
-                // Split horizontally (new pane below)
-                let new_height = (parent_rect.height - PANE_DIVIDER_THICKNESS).max(0.0) / 2.0;
-                TerminalGeometry::from_available_pixels(
-                    parent_rect.width,
-                    new_height,
-                    self.cell_width,
-                    self.cell_height,
-                )
-            }
-            SplitDirection::Vertical => {
-                // Split vertically (new pane to the right)
-                let new_width = (parent_rect.width - PANE_DIVIDER_THICKNESS).max(0.0) / 2.0;
-                TerminalGeometry::from_available_pixels(
-                    new_width,
-                    parent_rect.height,
-                    self.cell_width,
-                    self.cell_height,
-                )
-            }
-        };
-
+        let geometry = self
+            .split_geometry(self.focused, direction)
+            .expect("validated focused split target");
         let working_dir = match self.cwd_mode {
             crate::config::PaneCwdMode::Focused => self.panes.get(&self.focused).and_then(|pane| {
                 crate::tabs::terminal_working_directory(&pane.terminal)
@@ -1141,13 +1163,20 @@ impl PaneManager {
                 .ok()
                 .map(|path| path.to_string_lossy().into_owned()),
         };
-        let mut pane = match Pane::new(
+        let shell = launch.map_or(&self.shell, |launch| &launch.shell);
+        let cwd = launch.map_or(working_dir.as_deref(), |launch| launch.cwd.as_deref());
+        let mut pane = match Pane::new_local(
             new_id,
             geometry,
-            &self.shell,
-            self.scrollback_lines,
-            self.scrollback_bytes,
-            working_dir.as_deref(),
+            shell,
+            (self.scrollback_lines, self.scrollback_bytes),
+            cwd,
+            launch.is_some_and(|launch| {
+                matches!(
+                    launch.identity,
+                    crate::workspace::WorkspaceLaunch::Plugin { .. }
+                )
+            }),
         ) {
             Ok(pane) => pane,
             Err(error) => {
@@ -1156,7 +1185,13 @@ impl PaneManager {
                 return Err(error);
             }
         };
-        pane.launch.clone_from(&self.split_launch);
+        pane.launch
+            .clone_from(launch.map_or(&self.split_launch, |launch| &launch.identity));
+        if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = &pane.launch
+            && let Some(session) = &mut pane.integration.ai_session
+        {
+            session.profile = profile.clone().unwrap_or_else(|| "default".into());
+        }
         pane.terminal
             .set_screen_checksum_reporting(self.screen_checksum_reporting);
         pane.terminal
@@ -1203,12 +1238,30 @@ impl PaneManager {
         target: PaneId,
         direction: SplitDirection,
     ) -> anyhow::Result<PaneId> {
+        self.split_target_local(target, direction, None)
+    }
+
+    pub(crate) fn split_target_with_launch(
+        &mut self,
+        target: PaneId,
+        direction: SplitDirection,
+        launch: &LocalPaneLaunch,
+    ) -> anyhow::Result<PaneId> {
+        self.split_target_local(target, direction, Some(launch))
+    }
+
+    fn split_target_local(
+        &mut self,
+        target: PaneId,
+        direction: SplitDirection,
+        launch: Option<&LocalPaneLaunch>,
+    ) -> anyhow::Result<PaneId> {
         if !self.panes.contains_key(&target) {
             anyhow::bail!("pane {} does not exist", target.0);
         }
         let previous_focus = self.focused;
         self.focused = target;
-        match self.split(direction) {
+        match self.split_local(direction, launch) {
             Ok(created) => Ok(created),
             Err(error) => {
                 self.focused = previous_focus;

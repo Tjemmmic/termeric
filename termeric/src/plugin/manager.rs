@@ -15,6 +15,16 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
+    pub(crate) fn pane_launch_profiles(&self) -> Vec<(String, String, Vec<String>)> {
+        self.plugins
+            .iter()
+            .filter_map(|plugin| {
+                plugin
+                    .pane_profiles()
+                    .map(|profiles| (plugin.id().into(), plugin.name().into(), profiles))
+            })
+            .collect()
+    }
     /// Create a new empty plugin manager.
     pub fn new() -> Self {
         Self {
