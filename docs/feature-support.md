@@ -168,6 +168,12 @@ see [profile behavior and limits](plugin-panes.md).
 
 ## Performance and resource evidence
 
+The schema-5 core resource soak includes sustained diff-history count and
+owned-capacity pressure, exact completion, eviction reconciliation, and
+independently recounted retained allocations. Older core records do not prove
+this workload; current results still do not establish displayed/vendor-GPU
+stability. See [resource-soak boundaries](resource-soak.md).
+
 | Area | Status | Current boundary | Tracking |
 |---|---|---|---|
 | Performance measurement | **Partial** | A versioned, fail-closed 62-metric contract covers core, renderer, PTY, terminal and Unicode-picker search, tab/pane scaling, 10k/100k history, allocation traffic, displayed RSS/PSS/private memory, idle CPU/frame submissions, and native key-to-present latency; missing/duplicate/unit-drifted/malformed/context-drifted rows fail, and unavailable optional probes remain explicit skips. Cross-report comparisons suppress incompatible machine, unit, and adapter rows rather than reporting false percentages. A separate opt-in X11 runner gives Termeric, Alacritty, kitty, WezTerm, Ghostty, and Konsole identical child bytes and isolated requested settings, accounts terminal process trees, and permits ranking startup, PTY response, RSS, or idle CPU only when that metric's grid/retention/pixel contract matches. A five-sample local Termeric/Ghostty artifact now permits startup and PTY-response comparison but correctly refuses RSS/idle ranking because native pixel sizes differ. Separate core and displayed resource-soak runners record process growth. A clean-candidate multi-terminal record, compositor scanout latency, portable vendor utilization, and release-duration history remain open. | [benchmark method](performance.md), [soak method](resource-soak.md), [#18](https://github.com/Tjemmmic/termeric/issues/18), [#23](https://github.com/Tjemmmic/termeric/issues/23) |

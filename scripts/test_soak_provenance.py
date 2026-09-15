@@ -33,7 +33,9 @@ class CoreRunnerProvenanceTests(unittest.TestCase):
             progress = [
                 {"iteration": 1, "scrollback_bytes": 1024, "image_bytes": 4096,
                  "transcript_queue_bytes": 2048, "transcript_queue_bytes_after_finish": 0,
-                 "transcript_entries_accepted": 68, "transcript_entries_dropped": 0},
+                 "transcript_entries_accepted": 68, "transcript_entries_dropped": 0,
+                 "diff_completed": 80, "diff_evicted": 72, "diff_retained": 8,
+                 "diff_history_peak_count": 64, "diff_history_peak_bytes": 3_900_000},
                 {"complete": True, "iterations": 1},
             ]
 

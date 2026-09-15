@@ -29,6 +29,8 @@ tabs. Each iteration includes:
 - high-volume ASCII, styled, CJK, combining-mark, and emoji-ZWJ output;
 - alternating terminal resizes, scrollback eviction, and full-history search;
 - bounded raw image storage and replacement;
+- one persistent diff history, repeatedly filled past its count and owned-byte
+  ceilings with fragmented synthetic UTF-8 patches;
 - three-pane and four-tab PTY creation, output, exit, and cleanup;
 - replacement of an on-disk session snapshot; and
 - bounded asynchronous transcript input/output, durable shutdown, and file
@@ -64,11 +66,30 @@ Both runners require at least two samples and at least half of the nominal
 `duration / sample_interval` cadence. A stalled or misconfigured sampler can no
 longer report zero growth from a single point and pass the memory-stability gate.
 
+Core schema **5** adds sustained diff-history evidence. Each iteration feeds
+64 small and 16 roughly 200-KiB patches through one detector retained for the
+entire run, splitting headers and UTF-8 scalars across 257-byte fragments.
+All 80 patches must complete once with monotonic identities, old IDs must be
+evicted, and the workload must reach both 64 retained patches and at least
+3 MiB of owned history before eviction. Sampled retention may never exceed
+64 patches or 4 MiB. The diagnostic recomputes string/vector capacities and
+checks the detector's accounting rather than trusting its byte counter alone.
+
+Every progress record contains completed, evicted, retained, peak-count, and
+peak-owned-byte metrics. The runner and independent validator require full
+coverage, exact workload completion, both pressure thresholds, bounded peaks,
+and per-iteration retention/eviction reconciliation against the previous
+iteration. Missing/type-confused fields, skipped pressure, weakened fixed
+thresholds, or a resealed over-limit record cannot pass. Schema-4 and earlier
+core evidence remains historical and is rejected as current-schema evidence;
+it cannot establish this newer workload. The displayed schema remains 6.
+
 ## Running it
 
 ### Launch provenance contract
 
-Schema **4 core / 6 displayed** fixes the reproduced launch-attribution defect
+The provenance policy introduced in **4 core / 6 displayed**, and retained in
+current core schema 5, fixes the reproduced launch-attribution defect
 in [#108](https://github.com/Tjemmmic/termeric/issues/108). Earlier core records
 read Git identity and hashed the executable pathname after the scenario; older
 displayed records also hashed that pathname after execution. A checkout/rebuild
@@ -294,7 +315,7 @@ sample do not define the growth result. Tighten these budgets only with repeated
 artifacts from the same class of runner; do not hide a regression by raising
 them without an investigation.
 
-The schema-4 core runner JSON records UTC time, commit plus dirty-worktree
+The schema-5 core runner JSON records UTC time, commit plus dirty-worktree
 disclosure, explicit pass/eligibility state, WGPU backend, a source-relative
 test-binary path with byte length and SHA-256, every raw sample, reconstructable
 terminal outcomes, scenario progress, resource-category summaries, explicit

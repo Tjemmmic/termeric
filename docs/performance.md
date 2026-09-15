@@ -379,6 +379,13 @@ and intentionally selected terminal versions.
 
 ## Profiling recipes
 
+The core resource soak now includes a persistent diff history with 80 synthetic
+captures per iteration, count/owned-capacity pressure, eviction reconciliation,
+and independently recounted allocations. Schema-5 evidence is required for
+this workload; older observations do not cover it. This checks retention limits
+and process growth, not provider behavior or renderer/compositor performance.
+See [the sustained workload](resource-soak.md).
+
 Build the optimized, symbol-preserving profiling target first so compilation is
 never included in a profile and allocation/call stacks are not erased by the
 stripped release profile:

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from scripts.run_soak import (
     CORE_SOAK_RECORD_KIND,
     CORE_SOAK_SCHEMA_VERSION,
+    DIFF_SOAK_THRESHOLDS,
     MAX_INVENTORY_LABELS,
     MAX_PROCESS_LABEL_CHARACTERS,
     TRANSCRIPT_ENTRIES_PER_ITERATION,
@@ -85,6 +86,8 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
                 "transcript_queue_bytes_after_finish": 0,
                 "transcript_entries_accepted": TRANSCRIPT_ENTRIES_PER_ITERATION,
                 "transcript_entries_dropped": 0,
+                "diff_completed": 80, "diff_evicted": 72, "diff_retained": 8,
+                "diff_history_peak_count": 64, "diff_history_peak_bytes": 3_900_000,
             },
             {"complete": True, "iterations": 1},
         ]
@@ -99,6 +102,7 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
         )
         samples = [resource_sample(index) for index in range(4)]
         thresholds = {
+            **DIFF_SOAK_THRESHOLDS,
             "max_rss_kib": 500_000.0,
             "max_rss_growth_kib": 10_000.0,
             "max_thread_growth": 2.0,
@@ -195,6 +199,26 @@ class CoreSoakRecordValidationTests(unittest.TestCase):
     def test_authentic_clean_record_validates(self) -> None:
         validated = self.validate()
         self.assertEqual(validated["status"], "pass")
+
+    def test_diff_history_leak_cannot_pass_even_with_resealed_log_and_checks(self):
+        self.record["progress"][0]["diff_history_peak_bytes"] = 8 * 1024 * 1024
+        self.log.write_text("\n".join(f"TERMERIC_SOAK {json.dumps(item)}" for item in self.record["progress"]) + "\n")
+        self.record["artifacts"]["scenario_log"].update(bytes=self.log.stat().st_size, sha256=file_sha256(self.log))
+        self.record["checks"] = build_core_soak_checks(self.record["samples"], self.record["progress"], self.record["thresholds"], self.record["outcomes"], gpu_smoke_requested=False, provenance=self.record["provenance"])
+        self.write_record()
+        with self.assertRaises(SoakValidationError):
+            self.validate()
+
+    def test_legacy_schema_and_missing_or_weakened_diff_limits_are_rejected(self):
+        original = copy.deepcopy(self.record)
+        for mutate in [
+            lambda record: record.update(schema_version=4),
+            lambda record: record["progress"][0].pop("diff_evicted"),
+            lambda record: record["thresholds"].update(max_diff_history_bytes=8 * 1024 * 1024),
+            lambda record: record["thresholds"].pop("diffs_per_iteration"),
+        ]:
+            self.record = copy.deepcopy(original)
+            self.assert_mutation_rejected(mutate)
 
     def test_missing_tampered_and_legacy_provenance_cannot_validate(self):
         original = copy.deepcopy(self.record)

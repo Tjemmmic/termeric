@@ -13,6 +13,7 @@ from scripts.run_soak import (
     classify_file_descriptor,
     counted_labels,
     evaluate_outcome_checks,
+    evaluate_diff_history_checks,
     evaluate_progress_ceilings,
     evaluate_resource_ceilings,
     file_sha256,
@@ -53,8 +54,30 @@ class SoakCeilingTests(unittest.TestCase):
             with self.assertRaises(KeyError):
                 process_snapshot(12345, 0)
 
-    def test_report_schema_is_versioned_for_resource_inventories(self):
-        self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 4)
+    def test_report_schema_is_versioned_for_retained_diff_history(self):
+        self.assertEqual(CORE_SOAK_SCHEMA_VERSION, 5)
+
+    def test_diff_history_requires_pressure_eviction_and_owned_capacity_bounds(self):
+        valid = {"iteration": 1, "diff_completed": 80, "diff_evicted": 72,
+                 "diff_retained": 8, "diff_history_peak_count": 64,
+                 "diff_history_peak_bytes": 3_900_000}
+        second = {**valid, "iteration": 2, "diff_evicted": 80}
+        self.assertTrue(all(check["passed"] for check in evaluate_diff_history_checks([valid, second])))
+        for field, value in [
+            ("diff_completed", 79), ("diff_evicted", 0), ("diff_evicted", 71),
+            ("diff_retained", 65), ("diff_history_peak_count", 65),
+            ("diff_history_peak_count", 63), ("diff_history_peak_bytes", 0),
+            ("diff_history_peak_bytes", 4 * 1024 * 1024 + 1),
+            ("diff_completed", True), ("diff_completed", -1),
+        ]:
+            with self.subTest(field=field, value=value):
+                self.assertFalse(all(check["passed"] for check in evaluate_diff_history_checks([{**valid, field: value}])))
+        for field in valid.keys() - {"iteration"}:
+            missing = {key: value for key, value in valid.items() if key != field}
+            self.assertFalse(all(check["passed"] for check in evaluate_diff_history_checks([missing])))
+        self.assertFalse(all(check["passed"] for check in evaluate_diff_history_checks([])))
+        # Each record must reconcile against its predecessor, not just totals.
+        self.assertFalse(all(check["passed"] for check in evaluate_diff_history_checks([valid, valid])))
 
     def test_binary_digest_is_exact_and_content_bound(self):
         with TemporaryDirectory() as directory:

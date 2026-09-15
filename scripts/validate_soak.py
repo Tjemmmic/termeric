@@ -20,6 +20,8 @@ if str(ROOT) not in sys.path:
 from scripts.run_soak import (
     CORE_SOAK_RECORD_KIND,
     CORE_SOAK_SCHEMA_VERSION,
+    DIFF_PROGRESS_FIELDS,
+    DIFF_SOAK_THRESHOLDS,
     FILE_DESCRIPTOR_KINDS,
     INVENTORY_DIMENSIONS,
     MAX_INVENTORY_LABELS,
@@ -194,6 +196,7 @@ def validate_thresholds(value: object) -> dict[str, Any]:
             "transcript_entries_per_iteration",
             "max_inventory_labels_per_dimension",
             "max_process_label_characters",
+            *DIFF_SOAK_THRESHOLDS,
         },
         "thresholds",
     )
@@ -212,6 +215,7 @@ def validate_thresholds(value: object) -> dict[str, Any]:
         minimum=2,
     )
     fixed = {
+        **DIFF_SOAK_THRESHOLDS,
         "transcript_entries_per_iteration": TRANSCRIPT_ENTRIES_PER_ITERATION,
         "max_inventory_labels_per_dimension": MAX_INVENTORY_LABELS,
         "max_process_label_characters": MAX_PROCESS_LABEL_CHARACTERS,
@@ -303,6 +307,7 @@ def validate_progress(value: object, log: Path) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise SoakValidationError("progress must be an array")
     workload_fields = {
+        *DIFF_PROGRESS_FIELDS,
         "iteration",
         "scrollback_bytes",
         "image_bytes",

@@ -363,6 +363,20 @@ impl DiffDetector {
     pub fn unreviewed_count(&self) -> usize {
         self.detected.iter().filter(|d| !d.reviewed).count()
     }
+
+    #[cfg(test)]
+    pub(crate) fn history_diagnostics(&self) -> (usize, usize) {
+        // Independently count owned capacities so an accounting regression
+        // cannot make the soak pass merely by under-reporting history_bytes.
+        let owned = self.detected.capacity() * std::mem::size_of::<DetectedDiff>()
+            + self
+                .detected
+                .iter()
+                .map(DetectedDiff::owned_bytes)
+                .sum::<usize>();
+        assert_eq!(owned, self.history_bytes);
+        (self.detected.len(), owned)
+    }
     pub fn mark_reviewed(&mut self, id: u64) -> bool {
         let Some(diff) = self.detected.iter_mut().find(|diff| diff.id == id) else {
             return false;

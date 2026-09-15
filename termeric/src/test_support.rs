@@ -319,6 +319,7 @@ fn scheduled_resource_soak_scenario() {
     let mut terminal = Terminal::new(120, 40);
     terminal.set_scrollback_limits(50_000, 16 * 1024 * 1024);
     let mut images = ImageStorage::new(32, 4 * 1024 * 1024);
+    let mut diffs = crate::terminal::diff_detector::DiffDetector::new();
     let mut iteration = 0usize;
 
     while Instant::now() < deadline {
@@ -436,11 +437,18 @@ fn scheduled_resource_soak_scenario() {
         assert_eq!(drained_queue_bytes, 0, "transcript queue did not drain");
         std::fs::remove_file(transcript_path).unwrap();
 
+        let diff_metrics = soak_diff_history(&mut diffs, iteration);
+
         iteration += 1;
         println!(
-            "TERMERIC_SOAK {{\"iteration\":{iteration},\"scrollback_bytes\":{},\"image_bytes\":{},\"transcript_queue_bytes\":{queued_bytes},\"transcript_queue_bytes_after_finish\":{drained_queue_bytes},\"transcript_entries_accepted\":{accepted_entries},\"transcript_entries_dropped\":{dropped_entries}}}",
+            "TERMERIC_SOAK {{\"iteration\":{iteration},\"scrollback_bytes\":{},\"image_bytes\":{},\"transcript_queue_bytes\":{queued_bytes},\"transcript_queue_bytes_after_finish\":{drained_queue_bytes},\"transcript_entries_accepted\":{accepted_entries},\"transcript_entries_dropped\":{dropped_entries},\"diff_completed\":{},\"diff_evicted\":{},\"diff_retained\":{},\"diff_history_peak_count\":{},\"diff_history_peak_bytes\":{}}}",
             terminal.memory_usage().scrollback_bytes,
             images.memory_usage(),
+            diff_metrics.0,
+            diff_metrics.1,
+            diff_metrics.2,
+            diff_metrics.3,
+            diff_metrics.4,
         );
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -448,6 +456,74 @@ fn scheduled_resource_soak_scenario() {
     assert!(iteration > 0);
     assert!(terminal.memory_usage().scrollback_bytes <= 16 * 1024 * 1024);
     println!("TERMERIC_SOAK {{\"complete\":true,\"iterations\":{iteration}}}");
+}
+
+/// Feed one persistent history past both its count and owned-capacity ceilings.
+/// All bytes are synthetic; no provider, process, or working tree is involved.
+#[cfg(target_os = "linux")]
+fn soak_diff_history(
+    detector: &mut crate::terminal::diff_detector::DiffDetector,
+    iteration: usize,
+) -> (usize, usize, usize, usize, usize) {
+    let before = detector.history_diagnostics().0;
+    let mut completed = 0;
+    let mut peak_count = 0;
+    let mut peak_bytes = 0;
+    for patch in 0..80 {
+        let payload = if patch < 64 {
+            "small 界".into()
+        } else {
+            "界".repeat(340)
+        };
+        let lines = if patch < 64 { 1 } else { 200 };
+        let mut data = format!(
+            "--- a/soak-{iteration}-{patch}\n+++ b/soak-{iteration}-{patch}\n@@ -0,0 +1,{lines} @@\n"
+        );
+        for _ in 0..lines {
+            data.push('+');
+            data.push_str(&payload);
+            data.push('\n');
+        }
+        data.push_str("shell prompt\n");
+        // Deliberately split UTF-8 scalars and headers across reads.
+        for chunk in data.as_bytes().chunks(257) {
+            detector.feed_bytes(chunk, |diff| {
+                completed += 1;
+                assert_eq!(diff.filename, format!("soak-{iteration}-{patch}"));
+                assert_eq!(diff.id, (iteration * 80 + completed) as u64);
+            });
+        }
+        let (count, bytes) = detector.history_diagnostics();
+        peak_count = peak_count.max(count);
+        peak_bytes = peak_bytes.max(bytes);
+        assert!(count <= 64 && bytes <= 4 * 1024 * 1024);
+    }
+    let retained = detector.history_diagnostics().0;
+    let evicted = before + completed - retained;
+    assert_eq!(completed, 80);
+    assert_eq!(peak_count, 64);
+    assert!(peak_bytes >= 3 * 1024 * 1024);
+    assert!(evicted > 0);
+    assert!(
+        detector
+            .detected_by_id((iteration * 80 + 1) as u64)
+            .is_none()
+    );
+    assert!(
+        detector
+            .take_notices()
+            .all(|notice| notice.contains("evicted"))
+    );
+    (completed, evicted, retained, peak_count, peak_bytes)
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn persistent_diff_history_soak_exercises_count_and_byte_eviction() {
+    let mut detector = crate::terminal::diff_detector::DiffDetector::new();
+    for iteration in 0..3 {
+        soak_diff_history(&mut detector, iteration);
+    }
 }
 
 #[test]

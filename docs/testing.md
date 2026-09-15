@@ -763,6 +763,15 @@ queue backlog, accepted/dropped entry counts, and post-flush backlog. The gate
 requires complete metric coverage, all 68 writes, no drops, a bounded peak, and
 zero bytes after each durable shutdown:
 
+Core schema 5 additionally keeps one diff detector alive for the whole run.
+Each iteration completes 80 fragmented synthetic patches, fills both count and
+owned-capacity history budgets, and evicts old identities. Recomputed capacity
+metrics, pressure coverage, exact completion and per-iteration eviction balance
+are mandatory. Unit fixtures inject missing metrics, wrong types, under-driven
+workloads, excess retention, accounting mismatches and resealed over-limit
+records; the current validator rejects older core schemas. See
+[resource soak testing](resource-soak.md).
+
 Focused-pane session coverage separately assigns distinct cwd, command, and
 history state to two live panes and proves focus selects all persisted fields as
 one unit. Version 1, version 3, and current focused-pane fixtures protect format
@@ -844,7 +853,7 @@ exactly as required. Exact scenario boundaries, ceilings, artifact fields, and
 known blind spots are documented in
 [`resource-soak.md`](resource-soak.md).
 
-Core schema 4 and native schema 6 pin the measured executable through a Linux
+Core schema 5 and native schema 6 pin the measured executable through a Linux
 parent-owned descriptor and retain source state before build/setup, at launch,
 and after execution. Fake runner-path and pure validator tests reject drift,
 missing/malformed provenance, stale schema versions, incomplete launch lists,

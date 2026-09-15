@@ -23,10 +23,20 @@ if str(ROOT) not in sys.path:
 
 from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_identity
 
-CORE_SOAK_SCHEMA_VERSION = 4
+CORE_SOAK_SCHEMA_VERSION = 5
 CORE_SOAK_RECORD_KIND = "termeric-core-resource-soak"
 SOAK_PREFIX = "TERMERIC_SOAK "
 TRANSCRIPT_ENTRIES_PER_ITERATION = 68
+DIFF_SOAK_THRESHOLDS = {
+    "diffs_per_iteration": 80,
+    "max_diff_history_count": 64,
+    "max_diff_history_bytes": 4 * 1024 * 1024,
+    "min_diff_history_peak_bytes": 3 * 1024 * 1024,
+}
+DIFF_PROGRESS_FIELDS = frozenset({
+    "diff_completed", "diff_evicted", "diff_retained",
+    "diff_history_peak_count", "diff_history_peak_bytes",
+})
 MAX_PROCESS_LABEL_CHARACTERS = 32
 MAX_INVENTORY_LABELS = 64
 COLLAPSED_INVENTORY_LABEL = "<other-labels>"
@@ -512,6 +522,41 @@ def evaluate_progress_ceilings(
     ]
 
 
+def evaluate_diff_history_checks(progress: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    workload = [item for item in progress if "iteration" in item]
+    complete = [item for item in workload if all(
+        type(item.get(field)) is int and item[field] >= 0 for field in DIFF_PROGRESS_FIELDS
+    )]
+    def check(name: str, valid: int) -> dict[str, Any]:
+        return {"name": name, "actual": valid, "min": len(workload),
+                "passed": bool(workload) and valid == len(workload)}
+    previous_retained = 0
+    balanced = 0
+    for item in complete:
+        if (item["diff_evicted"] > 0
+                and previous_retained + item["diff_completed"]
+                == item["diff_evicted"] + item["diff_retained"]):
+            balanced += 1
+        previous_retained = item["diff_retained"]
+    return [
+        check("diff history metric coverage", len(complete)),
+        check("diff history owned-byte ceiling", sum(
+            item["diff_history_peak_bytes"] <= DIFF_SOAK_THRESHOLDS["max_diff_history_bytes"]
+            for item in complete)),
+        check("diff history retained-count ceiling", sum(
+            item["diff_retained"] <= item["diff_history_peak_count"] <= DIFF_SOAK_THRESHOLDS["max_diff_history_count"]
+            for item in complete)),
+        check("diff capture workload completion", sum(
+            item["diff_completed"] == DIFF_SOAK_THRESHOLDS["diffs_per_iteration"]
+            for item in complete)),
+        check("diff history pressure coverage", sum(
+            item["diff_history_peak_count"] == DIFF_SOAK_THRESHOLDS["max_diff_history_count"]
+            and item["diff_history_peak_bytes"] >= DIFF_SOAK_THRESHOLDS["min_diff_history_peak_bytes"]
+            for item in complete)),
+        check("diff history eviction reconciliation", balanced),
+    ]
+
+
 def evaluate_outcome_checks(
     *,
     gpu_smoke_requested: bool,
@@ -591,6 +636,7 @@ def build_core_soak_checks(
             gpu_error_count=outcomes["gpu_error_count"],
         )
     )
+    checks.extend(evaluate_diff_history_checks(progress))
     if provenance is not None:
         checks.extend(provenance_checks(
             provenance, ["gpu-smoke", "scenario"] if gpu_smoke_requested else ["scenario"]
@@ -742,6 +788,7 @@ def run_scenario(args: argparse.Namespace, executable: PinnedExecutable) -> None
         for pattern in ["validation error", "device lost", "device removed"]
     )
     thresholds = {
+        **DIFF_SOAK_THRESHOLDS,
         "max_rss_kib": args.max_rss_mib * 1024,
         "max_rss_growth_kib": args.max_rss_growth_mib * 1024,
         "max_thread_growth": args.max_thread_growth,
