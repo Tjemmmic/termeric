@@ -43,6 +43,16 @@ independently cover the supplemental initial encoder's control/Unicode/URI
 handling, raw/encoded bounds, conditional output, and no duplicate on reentry.
 See [the reproductions and remaining work](osc-integration.md#nushell-native-producer-confirmed-gaps).
 
+`nushell_launch_tests` verifies exact argv/environment preservation and no
+generated files for non-REPL/unknown modes, plus recognized REPL option arity,
+grouped short flags, equals values, and `--`. It does not execute server or
+plugin modes. `nushell_repl_launch_options_preserve_custom_config_and_command_lifecycle`
+executes three isolated real-Nushell PTY variants with custom configuration
+paths and checks the first cwd, unchanged rc bytes, multiline commands, and
+success/failure regions. It self-skips without `nu`, or fails when
+`TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE=1` is set. See
+[launch eligibility](osc-integration.md#nushell-launch-eligibility).
+
 `terminal::shell_integration::bash_cwd_tests` executes the generated Bash hook
 with isolated configuration, captures its bytes, and feeds only an in-memory
 terminal. It reproduces/prevents directory-to-title injection, round-trips UTF-8

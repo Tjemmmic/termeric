@@ -292,7 +292,12 @@ fn prepare_shell_launch_in(shell: &ShellConfig, base: &Path) -> Result<ShellLaun
 
     if !is_interactive_shell_launch(shell_name, &launch.args) {
         launch.integration = ShellIntegrationSupport::Unavailable(
-            "Shell integration is disabled for command/script shell arguments".into(),
+            if shell_name == "nu" {
+                "Nushell integration is disabled for non-REPL, custom-prelude, or unrecognized arguments"
+            } else {
+                "Shell integration is disabled for command/script shell arguments"
+            }
+            .into(),
         );
         return Ok(launch);
     }
@@ -393,54 +398,66 @@ fn is_interactive_elvish_launch(args: &[String]) -> bool {
 }
 
 fn is_interactive_nushell_launch(args: &[String]) -> bool {
-    let mut expects_value = false;
-    for arg in args {
-        if expects_value {
-            expects_value = false;
-            continue;
+    // This is an integration eligibility check, not a replacement CLI parser.
+    // Only known REPL options may receive our prelude. In particular, utility
+    // and server modes (including future flags) must keep their original argv.
+    // A user --execute is also left alone: composing arbitrary Nushell source
+    // with our prelude cannot be done safely by concatenating arguments.
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            return args.next().is_none();
         }
-        if matches!(arg.as_str(), "-c" | "--commands" | "--command")
-            || arg.starts_with("--commands=")
-            || arg.starts_with("--command=")
-            || (arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains('c'))
-            || matches!(arg.as_str(), "--lsp" | "--testbin")
-            || arg.starts_with("--ide-")
-        {
-            return false;
-        }
-
-        // `--execute` runs before an interactive REPL, but combining an
-        // arbitrary user prelude with ours without parsing Nushell would be
-        // ambiguous. Preserve such launches exactly and report no integration.
-        if matches!(arg.as_str(), "-e" | "--execute")
-            || arg.starts_with("--execute=")
-            || (arg.starts_with("-e") && arg.len() > 2)
-        {
-            return false;
-        }
-
-        if matches!(
-            arg.as_str(),
-            "-I" | "--include-path"
-                | "--config"
-                | "--env-config"
-                | "--plugin-config"
-                | "--plugins"
-                | "--log-level"
-                | "--log-target"
-                | "--threads"
-                | "--table-mode"
-                | "--error-style"
-        ) {
-            expects_value = true;
-            continue;
-        }
-
-        if !arg.starts_with('-') {
+        if let Some(long) = arg.strip_prefix("--") {
+            let (name, inline) = long
+                .split_once('=')
+                .map_or((long, None), |(name, value)| (name, Some(value)));
+            match name {
+                "interactive" | "login" | "no-config-file" | "no-history" | "no-std-lib" => {
+                    if inline.is_some() {
+                        return false;
+                    }
+                }
+                "include-path" | "config" | "env-config" | "config-home" | "plugin-config"
+                | "plugins" | "log-level" | "log-target" | "log-file" | "threads"
+                | "table-mode" | "error-style" => {
+                    // Scalar values may themselves start with '-' or contain
+                    // spaces/equals signs. Consume exactly one argument.
+                    let value = inline.or_else(|| args.next().map(String::as_str));
+                    if value.is_none_or(str::is_empty) {
+                        return false;
+                    }
+                }
+                // Variable-arity and unknown options are deliberately not
+                // guessed; Nushell still receives them unchanged.
+                _ => return false,
+            }
+        } else if let Some(short) = arg.strip_prefix('-').filter(|arg| !arg.is_empty()) {
+            let mut flags = short.chars();
+            while let Some(flag) = flags.next() {
+                match flag {
+                    'i' | 'l' | 'n' => {}
+                    'I' | 'm' => {
+                        // Nushell permits -im value and -im=value, but not
+                        // concatenated values such as -mrounded.
+                        let value = if flags.as_str().is_empty() {
+                            args.next().map(String::as_str)
+                        } else {
+                            flags.as_str().strip_prefix('=')
+                        };
+                        if value.is_none_or(str::is_empty) {
+                            return false;
+                        }
+                        break;
+                    }
+                    _ => return false,
+                }
+            }
+        } else {
             return false;
         }
     }
-    !expects_value
+    true
 }
 
 fn is_interactive_launch(args: &[String]) -> bool {
@@ -545,6 +562,9 @@ mod elvish_cwd_tests;
 mod nushell_cwd_tests;
 
 #[cfg(test)]
+mod nushell_launch_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::process::Command;
@@ -552,7 +572,7 @@ mod tests {
     use termeric_core::Pty;
     use termeric_core::pty::{PtyEvent, spawn_reader_thread};
 
-    fn shell(program: &str, args: &[&str]) -> ShellConfig {
+    pub(super) fn shell(program: &str, args: &[&str]) -> ShellConfig {
         ShellConfig {
             program: Some(program.into()),
             args: args.iter().map(|arg| (*arg).into()).collect(),
@@ -755,7 +775,7 @@ mod tests {
             assert_eq!(
                 launch.integration,
                 ShellIntegrationSupport::Unavailable(
-                    "Shell integration is disabled for command/script shell arguments".into()
+                    "Nushell integration is disabled for non-REPL, custom-prelude, or unrecognized arguments".into()
                 )
             );
         }
@@ -940,13 +960,16 @@ mod tests {
         rc_contents: &str,
         expected_support: ShellIntegrationSupport,
     ) {
-        run_shell_semantics_probe_in_home(
+        run_shell_semantics_probe_with_options(
             program,
             shell_name,
             rc_path,
             rc_contents,
             expected_support,
-            "home",
+            ShellProbeOptions {
+                home_component: "home",
+                args: &[],
+            },
         );
     }
 
@@ -954,13 +977,16 @@ mod tests {
     #[ignore = "known Nushell 0.115.1 OSC 7 percent bug; see docs/osc-integration.md"]
     fn nushell_native_cwd_preserves_literal_percent_escapes() {
         let program = executable_on_path("nu").expect("this regression requires nu");
-        run_shell_semantics_probe_in_home(
+        run_shell_semantics_probe_with_options(
             &program,
             "nushell",
             ".config/nushell/config.nu",
             "print 'CUSTOM_RC_NUSHELL'\n",
             ShellIntegrationSupport::Enabled("nushell"),
-            "home%2Fpercent",
+            ShellProbeOptions {
+                home_component: "home%2Fpercent",
+                args: &[],
+            },
         );
     }
 
@@ -975,23 +1001,62 @@ mod tests {
             eprintln!("skipping Nushell first-prompt cwd: nu unavailable");
             return;
         };
-        run_shell_semantics_probe_in_home(
+        run_shell_semantics_probe_with_options(
             &program,
             "nushell",
             ".config/nushell/config.nu",
             "$env.config.shell_integration.osc7 = false\nprint 'CUSTOM_RC_NUSHELL'\n",
             ShellIntegrationSupport::Enabled("nushell"),
-            "home",
+            ShellProbeOptions {
+                home_component: "home",
+                args: &[],
+            },
         );
     }
 
-    fn run_shell_semantics_probe_in_home(
+    #[test]
+    #[cfg(unix)]
+    fn nushell_repl_launch_options_preserve_custom_config_and_command_lifecycle() {
+        let Some(program) = executable_on_path("nu") else {
+            assert_ne!(
+                std::env::var("TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE").as_deref(),
+                Ok("1")
+            );
+            eprintln!("skipping Nushell launch-options acceptance: nu unavailable");
+            return;
+        };
+        for args in [
+            vec!["--config-home", "custom config", "-im", "rounded"],
+            vec!["--config-home=custom config", "-im=rounded", "--"],
+            vec!["--config", "custom config/config.nu", "-iI=library"],
+        ] {
+            eprintln!("Nushell REPL launch-options probe: {args:?}");
+            run_shell_semantics_probe_with_options(
+                &program,
+                "nushell",
+                "custom config/config.nu",
+                "$env.config.shell_integration.osc7 = false\nprint 'CUSTOM_RC_NUSHELL'\n",
+                ShellIntegrationSupport::Enabled("nushell"),
+                ShellProbeOptions {
+                    home_component: "home",
+                    args: &args,
+                },
+            );
+        }
+    }
+
+    struct ShellProbeOptions<'a> {
+        home_component: &'a str,
+        args: &'a [&'a str],
+    }
+
+    fn run_shell_semantics_probe_with_options(
         program: &str,
         shell_name: &'static str,
         rc_path: &str,
         rc_contents: &str,
         expected_support: ShellIntegrationSupport,
-        home_component: &str,
+        options: ShellProbeOptions<'_>,
     ) {
         use sha2::{Digest, Sha256};
         let program_path = std::fs::canonicalize(program).unwrap();
@@ -1000,7 +1065,7 @@ mod tests {
             Sha256::digest(std::fs::read(&program_path).unwrap())
         );
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join(home_component);
+        let home = temp.path().join(options.home_component);
         let rc = home.join(rc_path);
         std::fs::create_dir_all(rc.parent().unwrap()).unwrap();
         std::fs::write(&rc, rc_contents).unwrap();
@@ -1016,8 +1081,11 @@ mod tests {
         let version = version.lines().next().unwrap();
         assert!(!version.is_empty());
 
-        let launch =
-            prepare_shell_launch_in(&shell(program, &[]), &temp.path().join("generated")).unwrap();
+        let launch = prepare_shell_launch_in(
+            &shell(program, options.args),
+            &temp.path().join("generated"),
+        )
+        .unwrap();
         assert_eq!(launch.integration, expected_support);
         let mut environment = launch.env;
         environment.push(("HOME".into(), home.display().to_string()));

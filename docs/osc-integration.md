@@ -140,6 +140,34 @@ These producer fixes cover **Bash, Zsh, Fish, and opt-in Elvish**. Nushell uses
 its own native producer and has the confirmed gaps below. This does not sanitize
 arbitrary user prompt code or output from other applications.
 
+### Nushell launch eligibility
+
+Termeric injects its pre-REPL setup only for recognized interactive Nushell
+argument forms. It preserves program, argument boundaries, and environment
+exactly for commands/scripts, help/version, IDE/LSP/MCP modes, user `--execute`
+preludes, unknown options, and ambiguous variable-arity options. These launches
+still run normally; Harvest reports integration unavailable. No generated
+startup files are written for them. This avoids assuming that every argument
+beginning with `-` describes an interactive shell.
+
+Recognized REPL options include interactive/login/no-config/history/stdlib
+switches and scalar configuration, include-path, plugin, logging, table, and
+error-style options. `--config-home` and `--log-file` now consume their values
+correctly. Long `--name=value`, grouped `-iln`, and value-taking short forms
+such as `-im rounded`, `-im=rounded`, and `-I library` preserve the original argv.
+A final bare `--` is allowed; anything after it is a script operand, even if it
+looks like a flag. Unknown and variable-arity forms are passed through without
+integration instead of guessing where their values end. This is an integration
+eligibility check, not a replacement for Nushell's validation of option values.
+
+The argument grammar is checked against [Nushell 0.115.1's CLI implementation](https://github.com/nushell/nushell/blob/0.115.1/src/command.rs)
+and the actual binary. Pure routing regressions cover rejected modes without
+starting services or plugins. Three isolated real-PTY variants cover custom
+configuration paths with spaces, separate/equals values, grouped short flags,
+and the end-of-options delimiter, including first-prompt cwd and complete
+success/failure command regions. Older-version `--threads` scalar routing is
+retained but not runtime-tested on 0.115.1, where that option was removed.
+
 ### Nushell native producer: confirmed gaps
 
 An isolated Nushell 0.115.1 real-PTY probe passes ordinary-directory startup,
