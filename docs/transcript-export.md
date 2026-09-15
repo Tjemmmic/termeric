@@ -6,7 +6,7 @@ provider, stop recording, or write anything into a terminal.
 
 ## Snapshot boundary
 
-For a tab with an attached transcript recorder, the action enqueues one ordered
+For the selected plugin terminal with an attached recorder, the action enqueues one ordered
 checkpoint without waiting. A full recorder queue rejects the export with a
 retry message; it does not silently move the boundary to a later time. The
 recording worker processes earlier entries, flushes its buffered file, and
@@ -29,7 +29,7 @@ whether the writer had reached the file cap at the checkpoint.
 
 An attached recorder's error is an export error. There is no silent
 scrollback fallback for a failed checkpoint, unreadable file, or malformed
-record. If the tab has **no attached recorder**, the action instead captures
+record. If that terminal has **no attached recorder**, the action instead captures
 retained history/visible rows from its focused active screen and clearly
 reports a scrollback-only Markdown export. It does not search for historical
 recordings on disk or claim to reconstruct a stopped recording.

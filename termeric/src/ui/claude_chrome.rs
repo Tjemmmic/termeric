@@ -18,10 +18,10 @@ impl HostTarget {
     }
 }
 
-/// Persistent state for an AI plugin session tab (Claude Code, Codex, etc.)
+/// State for one AI plugin terminal owner (Claude Code, Codex, etc.).
 #[derive(Debug, Clone)]
 pub struct AiSessionState {
-    /// Currently active profile name
+    /// Saved next-launch profile; changing it does not reconfigure the process.
     pub profile: String,
     /// Where this session is running
     pub host: HostTarget,
@@ -61,11 +61,6 @@ impl AiSessionState {
         {
             self.repo_name = Some(name.to_string_lossy().to_string());
         }
-    }
-
-    /// Toggle transcript recording
-    pub fn toggle_recording(&mut self) {
-        self.recording = !self.recording;
     }
 }
 
@@ -115,15 +110,5 @@ mod tests {
         assert_eq!(state.branch.as_deref(), Some("main"));
         assert!(state.dirty);
         assert_eq!(state.repo_name.as_deref(), Some("termeric"));
-    }
-
-    #[test]
-    fn test_toggle_recording() {
-        let mut state = AiSessionState::default();
-        assert!(!state.recording);
-        state.toggle_recording();
-        assert!(state.recording);
-        state.toggle_recording();
-        assert!(!state.recording);
     }
 }

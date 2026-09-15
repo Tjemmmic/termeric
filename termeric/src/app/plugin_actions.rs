@@ -1276,11 +1276,12 @@ impl App {
         match action {
             DiffReviewAction::Copy { request_id } => {
                 let raw = self.diff_review.target(request_id).and_then(|target| {
-                    self.tabs
-                        .as_ref()?
-                        .iter()
-                        .find(|(_, tab)| tab.id == target.tab_id)
-                        .and_then(|(_, tab)| tab.diff_detector.detected_by_id(target.diff_id))
+                    let tabs = self.tabs.as_ref()?;
+                    tabs.origin_for_pane(target.tab_id, target.pane_id)?;
+                    tabs.tab_by_id(target.tab_id)?
+                        .pane_session(target.pane_id)?
+                        .diff_detector
+                        .detected_by_id(target.diff_id)
                         .map(|diff| diff.raw.clone())
                 });
                 if let Some(raw) = raw {
@@ -1294,9 +1295,13 @@ impl App {
                 let target = self.diff_review.target(request_id);
                 if self.diff_review.dismiss(request_id)
                     && let (Some(target), Some(tabs)) = (target, &mut self.tabs)
+                    && tabs
+                        .origin_for_pane(target.tab_id, target.pane_id)
+                        .is_some()
                     && let Some(tab) = tabs.tab_mut_by_id(target.tab_id)
+                    && let Some(state) = tab.pane_session_mut(target.pane_id)
                 {
-                    tab.diff_detector.mark_reviewed(target.diff_id);
+                    state.diff_detector.mark_reviewed(target.diff_id);
                 }
             }
             DiffReviewAction::ScrollRows { request_id, delta } => {
@@ -1492,12 +1497,25 @@ impl App {
             && matches!(plugin_id, "claude-code" | "codex")
         {
             match suffix {
+                "toggle-transcript" => {
+                    if let Some(identity) = self
+                        .tabs
+                        .as_ref()
+                        .and_then(|tabs| tabs.plugin_terminal_identity(plugin_id))
+                    {
+                        self.toggle_terminal_transcript(identity);
+                    } else {
+                        self.toasts
+                            .warning(format!("No active {plugin_id} terminal"));
+                    }
+                    return;
+                }
                 "review-diff" => {
-                    self.open_diff_review();
+                    self.open_plugin_diff_review(plugin_id);
                     return;
                 }
                 "copy-diff" => {
-                    self.copy_latest_diff();
+                    self.copy_plugin_diff(plugin_id);
                     return;
                 }
                 "insert-context" => {
@@ -1528,37 +1546,40 @@ impl App {
         }
     }
 
-    /// Open the diff review overlay with the latest unreviewed diff
-    pub(super) fn open_diff_review(&mut self) {
-        if let Some(tabs) = &self.tabs {
-            // Find the first tab with unreviewed diffs
-            for (_, tab) in tabs.iter() {
-                if tab.diff_detector.unreviewed_count() > 0 {
-                    if let Some(diff) = tab.diff_detector.latest_unreviewed() {
-                        self.diff_review.show(diff, tab.id);
-                        return;
-                    }
-                }
-            }
-        }
-        log::info!("No unreviewed diffs to show");
-        self.toasts.info("No unreviewed diffs");
+    fn selected_diff(
+        &self,
+        plugin_id: &str,
+    ) -> Option<(
+        crate::tabs::TerminalIdentity,
+        crate::terminal::diff_detector::DetectedDiff,
+    )> {
+        let tabs = self.tabs.as_ref()?;
+        let identity = tabs.plugin_terminal_identity(plugin_id)?;
+        tabs.origin_for_pane(identity.tab_id, identity.pane_id)?;
+        let diff = tabs
+            .tab_by_id(identity.tab_id)?
+            .pane_session(identity.pane_id)?
+            .diff_detector
+            .latest_unreviewed()?
+            .clone();
+        Some((identity, diff))
     }
 
-    /// Copy the latest detected diff to clipboard
-    pub(super) fn copy_latest_diff(&mut self) {
-        let diff = self.tabs.as_ref().and_then(|tabs| {
-            tabs.iter()
-                .find_map(|(_, tab)| tab.diff_detector.latest_unreviewed().cloned())
-        });
-        if let Some(diff) = diff {
-            let filename = diff.filename.clone();
-            self.copy_to_clipboard(diff.raw, "Copied diff");
-            log::info!("Copied diff for '{}' to clipboard", filename);
-            return;
+    fn open_plugin_diff_review(&mut self, plugin_id: &str) {
+        if let Some((identity, diff)) = self.selected_diff(plugin_id) {
+            self.diff_review
+                .show(&diff, identity.tab_id, identity.pane_id);
+        } else {
+            self.toasts.info("No unreviewed diffs");
         }
-        log::info!("No diffs to copy");
-        self.toasts.info("No unreviewed diffs to copy");
+    }
+
+    fn copy_plugin_diff(&mut self, plugin_id: &str) {
+        if let Some((_, diff)) = self.selected_diff(plugin_id) {
+            self.copy_to_clipboard(diff.raw, "Copied diff");
+        } else {
+            self.toasts.info("No unreviewed diffs to copy");
+        }
     }
 
     /// Open the context picker modal targeting a specific plugin tab
@@ -1891,112 +1912,7 @@ impl App {
                 PluginAction::InjectContext { plugin_id, text } => {
                     self.inject_context_to_plugin(&plugin_id, &text);
                 }
-                PluginAction::ToggleTranscript => {
-                    let has_session = self
-                        .tabs
-                        .as_ref()
-                        .and_then(|tabs| tabs.active_tab())
-                        .is_some_and(|tab| tab.ai_session.is_some());
-                    if !has_session {
-                        self.toasts
-                            .warning("Activate an AI plugin tab to toggle its transcript");
-                        continue;
-                    }
-                    if let Some(tabs) = &mut self.tabs {
-                        if let Some(tab) = tabs.active_tab_mut() {
-                            if let Some(ref mut session) = tab.ai_session {
-                                session.toggle_recording();
-                                if session.recording {
-                                    // Start recording — create a new TranscriptRecorder
-                                    if let Some(base) = crate::session::sessions_base_dir() {
-                                        let transcript_dir = base.join("transcripts");
-                                        match crate::session::transcript::TranscriptRecorder::new(
-                                            &transcript_dir,
-                                            session.repo_name.as_deref(),
-                                            session.branch.as_deref(),
-                                            &session.host.badge_label(),
-                                            &session.profile,
-                                        ) {
-                                            Ok(recorder) => {
-                                                let path = recorder.path().display().to_string();
-                                                tab.start_transcript(recorder);
-                                                log::info!(
-                                                    "Transcript recording started: {}",
-                                                    path
-                                                );
-                                                self.info_overlay.show(
-                                                    "Transcript Started".to_string(),
-                                                    vec![
-                                                        "Recording session output to:".into(),
-                                                        format!("  {}", path),
-                                                        String::new(),
-                                                        "Common token prefixes are redacted, but"
-                                                            .into(),
-                                                        "this is not a complete secret scanner."
-                                                            .into(),
-                                                    ],
-                                                );
-                                            }
-                                            Err(e) => {
-                                                session.recording = false; // revert
-                                                log::error!("Failed to start transcript: {}", e);
-                                                self.info_overlay.show(
-                                                    "Transcript Error".to_string(),
-                                                    vec![format!(
-                                                        "Failed to start recording: {}",
-                                                        e
-                                                    )],
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        session.recording = false;
-                                        self.info_overlay.show(
-                                            "Transcript Error".to_string(),
-                                            vec!["Session data directory is unavailable".into()],
-                                        );
-                                    }
-                                } else {
-                                    // Stop recording — drop the recorder
-                                    if let Some(mut recorder) = tab.stop_transcript() {
-                                        let path = recorder.path().display().to_string();
-                                        match recorder.finish(std::time::Duration::from_millis(500))
-                                        {
-                                            Ok(()) => {
-                                                log::info!(
-                                                    "Transcript recording stopped: {}",
-                                                    path
-                                                );
-                                                self.info_overlay.show(
-                                                    "Transcript Stopped".to_string(),
-                                                    vec![
-                                                        "Transcript saved to:".into(),
-                                                        format!("  {}", path),
-                                                    ],
-                                                );
-                                            }
-                                            Err(error) => {
-                                                log::error!(
-                                                    "Transcript shutdown incomplete: {error}"
-                                                );
-                                                self.info_overlay.show(
-                                                    "Transcript Incomplete".to_string(),
-                                                    vec![
-                                                        format!("Could not durably flush: {error}"),
-                                                        format!("Partial path: {path}"),
-                                                    ],
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
-                }
+                PluginAction::ToggleTranscript => self.toggle_transcript(),
                 PluginAction::ListProfiles { plugin_id } => {
                     // Gather profile names from config
                     let profiles: Vec<String> = match plugin_id.as_str() {
@@ -2170,7 +2086,16 @@ impl App {
 
     /// Toggle transcript recording for the active plugin session
     pub(super) fn toggle_transcript(&mut self) {
-        self.execute_plugin_actions(vec![crate::plugin::PluginAction::ToggleTranscript]);
+        if let Some(identity) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.active_tab())
+            .map(|tab| tab.focused_terminal_identity())
+        {
+            self.toggle_terminal_transcript(identity);
+        } else {
+            self.toasts.warning("No active plugin terminal");
+        }
     }
 
     /// Inject context text into the selected live plugin terminal owner.

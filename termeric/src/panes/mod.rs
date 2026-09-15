@@ -125,6 +125,7 @@ pub struct Pane {
     /// owner when a pane is reparented.
     pub(crate) launch: crate::workspace::WorkspaceLaunch,
     pub(crate) launch_shell: ShellConfig,
+    pub(crate) integration: crate::session::terminal_state::TerminalSession,
     event_overflow_reported: bool,
     /// Daemon-owned terminals consume protocol replies at the real PTY; their
     /// GUI replicas must not send a duplicate reply through the relay.
@@ -170,6 +171,7 @@ impl Pane {
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
             last_command: None,
+            integration: Default::default(),
             launch: crate::workspace::WorkspaceLaunch::Shell,
             launch_shell: shell.clone(),
             event_overflow_reported: false,
@@ -212,6 +214,7 @@ impl Pane {
                 "Persistent-domain relays do not install a local shell hook".into(),
             ),
             last_command: Some("termeric domain relay".into()),
+            integration: Default::default(),
             launch: crate::workspace::WorkspaceLaunch::Shell,
             launch_shell: ShellConfig::default(),
             event_overflow_reported: false,
@@ -226,7 +229,7 @@ impl Pane {
         &mut self,
         mut on_output: impl FnMut(PaneId, &[u8]),
     ) -> (bool, Vec<TerminalEvent>) {
-        let mut changed = false;
+        let mut changed = self.integration.poll_notices();
         let was_closed = self.closed;
         let mut app_events = Vec::new();
         let mut reader_disconnected = false;
@@ -242,6 +245,13 @@ impl Pane {
             };
             match event {
                 PtyEvent::Output(data) => {
+                    self.integration.observe_output(
+                        &data,
+                        matches!(
+                            self.launch,
+                            crate::workspace::WorkspaceLaunch::Plugin { .. }
+                        ),
+                    );
                     on_output(self.id, &data);
                     self.terminal.process(&data);
                     changed = true;
@@ -260,6 +270,7 @@ impl Pane {
 
         // Catch events explicitly queued outside the parser and replies left by
         // the final output chunk.
+        self.integration.finish_output();
         changed |= self.drain_terminal_events(&mut app_events);
 
         if changed
@@ -327,7 +338,9 @@ impl Pane {
                 "pane is read-only",
             ));
         }
-        self.pty.write_all(data)
+        self.pty.write_all(data)?;
+        self.integration.record_input(data);
+        Ok(())
     }
 
     /// Write an app-mediated terminal reply without bypassing the read-only
@@ -541,6 +554,7 @@ impl PaneManager {
             last_command: owner.last_command,
             launch: owner.launch,
             launch_shell: owner.launch_shell,
+            integration: owner.integration,
             event_overflow_reported: false,
             suppress_protocol_replies: owner.suppress_protocol_replies,
         };

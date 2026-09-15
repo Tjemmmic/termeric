@@ -37,6 +37,13 @@ copies an accepted entry into memory and returns immediately. The defaults are:
 - a 250 ms periodic buffered flush; and
 - a 500 ms bounded durable flush during stop or normal teardown.
 
+The recorder and its error/cap state belong to one terminal owner, not to an
+entire split tab. They move with that owner on split/collapse. Output, diff
+observation, and successful user writes are recorded at that exact owner;
+protocol replies and sibling traffic are excluded. Pending UI notices are
+bounded to 16 per owner and drained with pane attribution. A failed or capped
+worker clears only its owner's recording flag.
+
 The worker creates the file, redacts common token prefixes, serializes JSONL,
 batches writes through `BufWriter`, tracks exact serialized bytes, and calls
 `sync_data` during a clean shutdown. It does not create temporary plaintext

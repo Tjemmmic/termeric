@@ -24,6 +24,7 @@ pub mod state;
 mod system_accessibility;
 #[cfg(test)]
 mod tests;
+mod transcripts;
 mod unicode_picker;
 mod workspace_actions;
 mod workspaces;
@@ -2009,7 +2010,10 @@ impl App {
 
             if let Some(tabs) = &mut self.tabs {
                 if let Some(tab) = tabs.active_tab_mut() {
-                    if let Some(ref mut session) = tab.ai_session {
+                    if let Some(session) = tab
+                        .focused_session_mut()
+                        .and_then(|state| state.ai_session.as_mut())
+                    {
                         session.update_git(branch.as_deref(), dirty, wd.as_deref());
                         Some(crate::ui::claude_chrome::ChromeBarInfo {
                             repo_name: session.repo_name.clone(),

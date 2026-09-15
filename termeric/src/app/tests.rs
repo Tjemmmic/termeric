@@ -3011,7 +3011,10 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
             "+new".into(),
             "finished".into(),
         ] {
-            tab.diff_detector.feed_line(&line);
+            tab.focused_session_mut()
+                .unwrap()
+                .diff_detector
+                .feed_line(&line);
         }
     }
     let first_tab_id = tabs.iter().next().unwrap().1.id;
@@ -3020,6 +3023,8 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
         .next()
         .unwrap()
         .1
+        .focused_session()
+        .unwrap()
         .diff_detector
         .latest_unreviewed()
         .unwrap()
@@ -3028,14 +3033,14 @@ fn diff_review_done_marks_only_its_original_tab_and_exact_diff() {
 
     let mut app = App::new_headless(Config::default()).unwrap();
     app.tabs = Some(tabs);
-    let request_id = app.diff_review.show(&first_diff, first_tab_id);
+    let request_id = app.diff_review.show(&first_diff, first_tab_id, PaneId(0));
     app.apply_diff_review_action(crate::ui::diff_review::DiffReviewAction::Dismiss { request_id });
 
     let tabs = app.tabs.as_ref().unwrap();
     assert_eq!(tabs.active_index(), 1);
     let mut tabs = tabs.iter();
-    assert_eq!(tabs.next().unwrap().1.diff_detector.unreviewed_count(), 0);
-    assert_eq!(tabs.next().unwrap().1.diff_detector.unreviewed_count(), 1);
+    assert_eq!(tabs.next().unwrap().1.unreviewed_diff_count(), 0);
+    assert_eq!(tabs.next().unwrap().1.unreviewed_diff_count(), 1);
 }
 
 #[cfg(unix)]
@@ -4020,6 +4025,7 @@ fn harvest_rerun_single_tab_origin_uses_the_same_exact_user_write_policy() {
 fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusals() {
     for split in [false, true] {
         let (mut app, directory, entry, captures) = harvest_rerun_capture_fixture_in(split);
+        let pane_id = PaneId(entry.source.pane_id);
         let recorder = crate::session::transcript::TranscriptRecorder::new(
             directory.path(),
             None,
@@ -4032,6 +4038,8 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
             .as_mut()
             .unwrap()
             .active_tab_mut()
+            .unwrap()
+            .pane_session_mut(pane_id)
             .unwrap()
             .start_transcript(recorder);
         app.execute_sprout_action(
@@ -4052,6 +4060,8 @@ fn harvest_rerun_records_exact_user_input_once_but_not_protocol_fences_or_refusa
             .as_mut()
             .unwrap()
             .active_tab_mut()
+            .unwrap()
+            .pane_session_mut(pane_id)
             .unwrap()
             .stop_transcript()
             .unwrap();
@@ -4622,6 +4632,9 @@ mod plugin_restart_tests;
 mod plugin_profile_tests;
 
 #[cfg(unix)]
+mod terminal_session_tests;
+
+#[cfg(unix)]
 #[test]
 fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
@@ -4809,6 +4822,10 @@ fn mark_capture_plugin_owner(app: &mut App, pane_id: PaneId, plugin_id: &str) {
         );
         tab.restore_terminal_owner(panes.take_remaining_pane().unwrap());
     }
+    tab.pane_session_mut(pane_id)
+        .unwrap()
+        .ai_session
+        .get_or_insert_with(Default::default);
 }
 
 #[cfg(unix)]
@@ -7800,10 +7817,12 @@ done
                     ) && !tab.is_closing()
                 })
                 .is_some_and(|(_, tab)| {
-                    tab.ai_session
+                    tab.focused_session()
+                        .unwrap()
+                        .ai_session
                         .as_ref()
                         .is_some_and(|session| session.recording)
-                        && tab.transcript.is_some()
+                        && tab.focused_session().unwrap().transcript.is_some()
                 });
             assert!(recording, "{plugin_id} fake session was not live");
 
@@ -7868,7 +7887,7 @@ done
                         })
                         .map(|(_, tab)| tab)
                 })
-                .and_then(|tab| tab.ai_session.as_ref())
+                .and_then(|tab| tab.focused_session().unwrap().ai_session.as_ref())
                 .map(|session| session.profile.as_str());
             assert_eq!(selected_profile, Some("acceptance"));
             assert!(app.pending_profile_selection.is_none());
@@ -7893,7 +7912,7 @@ done
                 .tabs
                 .as_ref()
                 .and_then(|tabs| tabs.active_tab())
-                .is_some_and(|tab| tab.transcript.is_some())
+                .is_some_and(|tab| tab.focused_session().unwrap().transcript.is_some())
             {
                 app.execute_plugin_command(&format!("{plugin_id}.toggle-transcript"));
             }
@@ -8730,6 +8749,8 @@ fn complete_workspace_round_trip_restores_nested_panes_plugin_profile_and_focus(
         ));
         assert_eq!(
             plugin
+                .focused_session()
+                .unwrap()
                 .ai_session
                 .as_ref()
                 .map(|session| session.profile.as_str()),
@@ -9543,7 +9564,9 @@ fn cli_named_profile_launches_the_exact_builtin_plugin_profile() {
         crate::tabs::TabType::Plugin { plugin_id } if plugin_id == "codex"
     ));
     assert_eq!(
-        tab.ai_session
+        tab.focused_session()
+            .unwrap()
+            .ai_session
             .as_ref()
             .map(|session| session.profile.as_str()),
         Some("review")

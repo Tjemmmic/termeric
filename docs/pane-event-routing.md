@@ -12,7 +12,7 @@ bridge as a normal tab.
 2. `TabManager::poll_events()` visits every tab. A pane-owning tab delegates to
    `PaneManager::poll_events()`, which visits every pane, not only the focused
    pane.
-3. Each output chunk is offered to the owning tab's transcript/diff hook and
+3. Each output chunk is offered to that terminal owner's transcript/diff state and
    then parsed into its terminal. Harvest observes each terminal's semantic
    state separately after polling; inactive-tab activity is marked without
    changing focus.

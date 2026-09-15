@@ -75,16 +75,33 @@ ordinary, writable plugin owner; split/collapse can change routing but cannot
 retarget the choice to a sibling or replacement tab. Only that owner's saved
 launch changes, not the running provider configuration. Raw-shell regressions
 cover same-plugin/different-plugin sibling isolation, shell-presented owners,
-stale/replaced/canceled choices, removed configuration, and primary presentation
+stale/replaced/canceled choices, removed configuration, and surviving-owner
 metadata after close/collapse. Supported workspace restoration preserves its
 primary plugin profile and sibling shell/process-profile launches. See
 [#125](https://github.com/Tjemmmic/termeric/issues/125).
 
-This does not lift the existing restriction on non-primary plugin workspace
-launches or plugin-primary pane transfer. Full terminal-local plugin session and
-transcript ownership plus mixed-plugin restoration is tracked separately in
-[#126](https://github.com/Tjemmmic/termeric/issues/126). Synthetic metadata tests
-of mixed plugin owners do not establish provider or complete workspace support.
+AI metadata, transcript recorders, and diff detectors now live beside each
+terminal owner rather than on the tab. Raw-PTY fixtures prove that output and
+successful user input are recorded only for that owner; protocol replies and
+sibling traffic are excluded. Independent recording controls preserve focus,
+read-only refusal, recorder flags, and surviving session metadata on collapse.
+Export chooses the plugin owner's transcript or scrollback, not its focused
+shell sibling. Diff review retains an exact pane identity, including delayed
+dismissal after focus changes and refusal to mark replacement-owner diffs.
+Failure/backpressure notices are owner-local and capped at 16 pending messages.
+Session chrome now reads the focused owner's metadata, so focusing a shell
+sibling cannot overwrite another terminal's Git/profile/recording state.
+
+This is the ownership dependency of
+[#126](https://github.com/Tjemmmic/termeric/issues/126). It does not lift the
+restriction on non-primary plugin workspace launches or plugin-primary pane
+transfer. Synthetic metadata tests of mixed plugin owners do not establish
+provider, native visual, or complete workspace support.
+
+Diff capture still needs bounded retained/in-progress storage and incremental
+text framing across PTY reads. Those existing limitations are tracked in
+[#127](https://github.com/Tjemmmic/termeric/issues/127) before broader plugin-pane
+enablement; terminal-local ownership alone does not provide those guarantees.
 
 Run it with:
 
@@ -298,7 +315,7 @@ exact-origin user writes reject closed/closing destinations; protocol replies
 retain their separate route. Editable-line tracking is cleared only for a
 successfully written currently focused destination. Feedback says "sent", not
 "executed": a PTY write is not evidence that a shell accepted or completed it.
-Successful exact-pane user writes retain tab-scoped transcript input accounting
+Successful exact-pane user writes retain owner-local transcript input accounting
 once; protocol replies and refused reruns are not recorded as user input.
 
 The regression suite uses three raw byte-capture PTYs plus a single-terminal

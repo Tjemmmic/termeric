@@ -20,7 +20,7 @@ fn profile_application_changes_only_the_exact_plugin_owner() {
             tab.tab_type = TabType::Plugin {
                 plugin_id: "codex".into(),
             };
-            tab.ai_session = Some(Default::default());
+            tab.pane_session_mut(PaneId(0)).unwrap().ai_session = Some(Default::default());
         }
         app.execute_plugin_actions(vec![PluginAction::ApplyProfile {
             plugin_id: "codex".into(),
@@ -72,6 +72,8 @@ fn profile_application_changes_only_the_exact_plugin_owner() {
                     .unwrap()
                     .active_tab()
                     .unwrap()
+                    .focused_session()
+                    .unwrap()
                     .ai_session
                     .as_ref()
                     .unwrap()
@@ -85,6 +87,8 @@ fn profile_application_changes_only_the_exact_plugin_owner() {
                     .as_ref()
                     .unwrap()
                     .active_tab()
+                    .unwrap()
+                    .focused_session()
                     .unwrap()
                     .ai_session
                     .as_ref()
@@ -149,6 +153,8 @@ fn profile_picker_never_falls_back_to_a_replacement_tab() {
             .as_ref()
             .unwrap()
             .tab_by_id(replacement)
+            .unwrap()
+            .focused_session()
             .unwrap()
             .ai_session
             .as_ref()
@@ -381,7 +387,15 @@ fn workspace_restore_preserves_primary_plugin_profile_and_sibling_launches() {
             Some(("codex", Some("primary-profile")))
         );
         assert_eq!(tab.pane_plugin_launch(PaneId(1)), None);
-        assert_eq!(tab.ai_session.as_ref().unwrap().profile, "primary-profile");
+        assert_eq!(
+            tab.pane_session(PaneId(0))
+                .unwrap()
+                .ai_session
+                .as_ref()
+                .unwrap()
+                .profile,
+            "primary-profile"
+        );
         let captured = restored
             .capture_workspace("restored".into(), false, Default::default())
             .unwrap();

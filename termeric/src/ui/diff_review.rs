@@ -61,6 +61,7 @@ impl DiffReviewRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DiffReviewTarget {
     pub tab_id: usize,
+    pub pane_id: crate::panes::PaneId,
     pub diff_id: u64,
 }
 
@@ -226,7 +227,12 @@ impl DiffReviewOverlay {
         }
     }
 
-    pub fn show(&mut self, diff: &DetectedDiff, tab_id: usize) -> u64 {
+    pub fn show(
+        &mut self,
+        diff: &DetectedDiff,
+        tab_id: usize,
+        pane_id: crate::panes::PaneId,
+    ) -> u64 {
         self.request_id = self.request_id.wrapping_add(1).max(1);
         self.filename = bounded_text(&diff.filename, MAX_DIFF_FILENAME_CHARS);
         self.rows = bounded_rows(diff);
@@ -238,6 +244,7 @@ impl DiffReviewOverlay {
             .unwrap_or(0);
         self.target = Some(DiffReviewTarget {
             tab_id,
+            pane_id,
             diff_id: diff.id,
         });
         self.accepting = true;
@@ -552,7 +559,7 @@ mod tests {
             MAX_DIFF_REVIEW_LINE_CHARS + 50,
         );
         let raw = diff.raw.clone();
-        let request = overlay.show(&diff, 12);
+        let request = overlay.show(&diff, 12, crate::panes::PaneId(0));
         assert_eq!(overlay.rows().len(), MAX_DIFF_REVIEW_ROWS);
         assert_eq!(overlay.max_line_chars(), MAX_DIFF_REVIEW_LINE_CHARS);
         assert!(matches!(
@@ -567,7 +574,7 @@ mod tests {
     fn two_axis_scroll_and_dismiss_are_request_scoped() {
         let mut overlay = DiffReviewOverlay::new();
         let first_diff = fixture(1, 20, 100);
-        let first = overlay.show(&first_diff, 9);
+        let first = overlay.show(&first_diff, 9, crate::panes::PaneId(0));
         overlay.set_viewport(4, 10);
         assert!(overlay.scroll_rows(first, 100));
         assert_eq!(overlay.scroll_offset(), overlay.max_scroll_offset());
@@ -575,7 +582,7 @@ mod tests {
         assert_eq!(overlay.horizontal_offset(), overlay.max_horizontal_offset());
 
         let current_diff = fixture(2, 1, 1);
-        let current = overlay.show(&current_diff, 10);
+        let current = overlay.show(&current_diff, 10, crate::panes::PaneId(0));
         assert!(!overlay.dismiss(first));
         assert!(overlay.dismiss(current));
         assert!(overlay.is_active());

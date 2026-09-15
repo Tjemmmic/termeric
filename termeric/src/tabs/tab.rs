@@ -4,13 +4,13 @@
 
 use crate::config::ShellConfig;
 use crate::session::Session;
-use crate::session::transcript::{TranscriptNotice, TranscriptRecorder, TranscriptWrite};
+use crate::session::terminal_state::TerminalSession;
+#[cfg(test)]
+use crate::session::transcript::TranscriptRecorder;
 use crate::terminal::container::TerminalContainer;
-use crate::terminal::diff_detector::{DiffDetector, strip_ansi};
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::TerminalGeometry;
 use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
-use crate::ui::claude_chrome::AiSessionState;
 use anyhow::Context;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -51,6 +51,7 @@ pub(crate) struct TabTerminalOwner {
     pub read_only: bool,
     pub launch: crate::workspace::WorkspaceLaunch,
     pub launch_shell: ShellConfig,
+    pub integration: TerminalSession,
 }
 
 /// What kind of tab this is
@@ -117,12 +118,8 @@ pub struct Tab {
     /// Live domain backing this tab, when its PTYs are authenticated relay
     /// processes rather than locally owned terminal children.
     pub(crate) live_domain: Option<LiveDomainTab>,
-    /// Diff detector for plugin tabs (watches output for unified diffs)
-    pub diff_detector: DiffDetector,
-    /// AI session state (for plugin tabs running AI tools like Claude Code, Codex, etc.)
-    pub ai_session: Option<AiSessionState>,
-    /// Active transcript recorder (writes JSONL to disk while recording)
-    pub transcript: Option<TranscriptRecorder>,
+    /// Single-owner state; moved into the adopted pane when splitting.
+    integration: TerminalSession,
     /// Pane manager for split panes (None = single terminal, no splits)
     pub pane_manager: Option<crate::panes::PaneManager>,
     /// Stable tab-local identity retained when pane mode collapses back to one
@@ -143,7 +140,6 @@ pub struct Tab {
     terminal_launch: crate::workspace::WorkspaceLaunch,
     terminal_launch_shell: ShellConfig,
     user_notices: Vec<String>,
-    transcript_failure_reported: bool,
     event_overflow_reported: bool,
 }
 
@@ -198,9 +194,7 @@ impl Tab {
             last_command: None,
             tab_type: TabType::Shell,
             live_domain: None,
-            diff_detector: DiffDetector::new(),
-            ai_session: None,
-            transcript: None,
+            integration: TerminalSession::default(),
             pane_manager: None,
             single_pane_id: crate::panes::PaneId(0),
             pane_allocation: Default::default(),
@@ -211,7 +205,6 @@ impl Tab {
             terminal_launch: crate::workspace::WorkspaceLaunch::Shell,
             terminal_launch_shell: shell.clone(),
             user_notices: Vec::new(),
-            transcript_failure_reported: false,
             event_overflow_reported: false,
         })
     }
@@ -335,13 +328,7 @@ impl Tab {
             last_command: Some(program.to_string()),
             tab_type: tab_type.clone().unwrap_or(TabType::Shell),
             live_domain: None,
-            diff_detector: DiffDetector::new(),
-            ai_session: if matches!(tab_type, Some(TabType::Plugin { .. })) {
-                Some(AiSessionState::default())
-            } else {
-                None
-            },
-            transcript: None,
+            integration: TerminalSession::new(matches!(tab_type, Some(TabType::Plugin { .. }))),
             pane_manager: None,
             single_pane_id: crate::panes::PaneId(0),
             pane_allocation: Default::default(),
@@ -360,7 +347,6 @@ impl Tab {
             },
             terminal_launch_shell: ShellConfig::default(),
             user_notices: Vec::new(),
-            transcript_failure_reported: false,
             event_overflow_reported: false,
         })
     }
@@ -369,7 +355,7 @@ impl Tab {
     /// and returning only bounded app-facing events.
     pub fn poll_events(&mut self) -> (bool, Vec<TerminalEvent>) {
         debug_assert!(self.pane_manager.is_none());
-        let mut had_output = self.poll_transcript_notices();
+        let mut had_output = self.integration.poll_notices();
         let was_closed = self.closed;
         let mut app_events = Vec::new();
         let mut reader_disconnected = false;
@@ -385,7 +371,13 @@ impl Tab {
             };
             match event {
                 PtyEvent::Output(data) => {
-                    self.observe_output(&data);
+                    self.integration.observe_output(
+                        &data,
+                        matches!(
+                            self.terminal_launch,
+                            crate::workspace::WorkspaceLaunch::Plugin { .. }
+                        ),
+                    );
                     if let Some(terminal) = &mut self.terminal {
                         terminal.process(&data);
                     }
@@ -406,7 +398,7 @@ impl Tab {
         // Update title when there's output (directory may have changed)
         if had_output {
             self.update_title();
-            self.finish_output_observation();
+            self.integration.finish_output();
         }
 
         // Only use process state after the reader disconnects. A child may
@@ -425,43 +417,6 @@ impl Tab {
             had_output || self.closed != was_closed || !app_events.is_empty(),
             app_events,
         )
-    }
-
-    /// Observe a raw output chunk for tab-level transcript/diff integrations.
-    /// Pane polling calls this same hook without retaining another copy.
-    pub(crate) fn observe_output(&mut self, data: &[u8]) {
-        if matches!(self.tab_type, TabType::Plugin { .. }) {
-            if let Ok(text) = std::str::from_utf8(data) {
-                for line in text.lines() {
-                    let clean = strip_ansi(line);
-                    self.diff_detector.feed_line(&clean);
-                }
-            }
-        }
-        if let Some(ref mut recorder) = self.transcript {
-            if let Ok(text) = std::str::from_utf8(data) {
-                let result = recorder.record_output(text);
-                self.handle_transcript_write(result);
-            }
-        }
-    }
-
-    /// Finalize tab-level output observers after one complete poll. Harvest is
-    /// state-owned by each terminal and is observed separately by App.
-    pub(crate) fn finish_output_observation(&mut self) {
-        if !matches!(self.tab_type, TabType::Plugin { .. }) {
-            return;
-        }
-        let pre_count = self.diff_detector.unreviewed_count();
-        self.diff_detector.flush();
-        if self.diff_detector.unreviewed_count() > pre_count {
-            if let Some(ref mut recorder) = self.transcript {
-                if let Some(diff) = self.diff_detector.latest_unreviewed() {
-                    let result = recorder.record_diff(&diff.filename, &diff.raw);
-                    self.handle_transcript_write(result);
-                }
-            }
-        }
     }
 
     fn drain_terminal_events(&mut self, app_events: &mut Vec<TerminalEvent>) -> bool {
@@ -689,8 +644,7 @@ impl Tab {
         )
     }
 
-    /// Write user/application input to the focused live PTY and record it once
-    /// at tab transcript scope.
+    /// Write user input and record it only on the receiving terminal.
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
         if self.focused_pane_read_only() {
             return Err(std::io::Error::new(
@@ -698,7 +652,6 @@ impl Tab {
                 "pane is read-only",
             ));
         }
-        self.record_user_input(data);
         if let Some(panes) = &mut self.pane_manager {
             panes
                 .focused_pane_mut()
@@ -718,17 +671,9 @@ impl Tab {
                         "single terminal owner is detached",
                     )
                 })?
-                .write_all(data)
-        }
-    }
-
-    /// Shared tab-scoped transcript accounting for focused and exact user input.
-    pub(super) fn record_user_input(&mut self, data: &[u8]) {
-        if let Some(ref mut recorder) = self.transcript
-            && let Ok(text) = std::str::from_utf8(data)
-        {
-            let result = recorder.record_input(text);
-            self.handle_transcript_write(result);
+                .write_all(data)?;
+            self.integration.record_input(data);
+            Ok(())
         }
     }
 
@@ -921,9 +866,7 @@ impl Tab {
             last_command: None,
             tab_type: TabType::Shell,
             live_domain: None,
-            diff_detector: DiffDetector::new(),
-            ai_session: None,
-            transcript: None,
+            integration: TerminalSession::default(),
             pane_manager: None,
             single_pane_id: crate::panes::PaneId(0),
             pane_allocation: Default::default(),
@@ -934,7 +877,6 @@ impl Tab {
             terminal_launch: crate::workspace::WorkspaceLaunch::Shell,
             terminal_launch_shell: shell.clone(),
             user_notices: Vec::new(),
-            transcript_failure_reported: false,
             event_overflow_reported: false,
         })
     }
@@ -1035,12 +977,9 @@ impl Tab {
         if self.pane_plugin_id(pane_id) != Some(plugin_id) {
             return false;
         }
-        let primary = self
-            .pane_manager
-            .as_ref()
-            .map_or(self.single_pane_id, |panes| panes.primary_id());
-        if pane_id == primary
-            && let Some(session) = &mut self.ai_session
+        if let Some(session) = self
+            .pane_session_mut(pane_id)
+            .and_then(|state| state.ai_session.as_mut())
         {
             session.profile.clone_from(&profile);
         }
@@ -1084,6 +1023,7 @@ impl Tab {
             read_only: self.single_read_only,
             launch: self.terminal_launch.clone(),
             launch_shell: self.terminal_launch_shell.clone(),
+            integration: std::mem::take(&mut self.integration),
         })
     }
 
@@ -1104,26 +1044,22 @@ impl Tab {
         self.harvest = pane.harvest;
         self.shell_integration = pane.shell_integration;
         self.last_command = pane.last_command;
+        self.integration = pane.integration;
         self.terminal_launch = pane.launch;
         self.terminal_launch_shell = pane.launch_shell;
         match &self.terminal_launch {
             crate::workspace::WorkspaceLaunch::Shell => {
                 self.tab_type = TabType::Shell;
-                self.ai_session = None;
                 self.split_shell = self.terminal_launch_shell.clone();
             }
             crate::workspace::WorkspaceLaunch::Profile { name } => {
                 self.tab_type = TabType::Profile { name: name.clone() };
-                self.ai_session = None;
                 self.split_shell = self.terminal_launch_shell.clone();
             }
-            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => {
+            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, .. } => {
                 self.tab_type = TabType::Plugin {
                     plugin_id: plugin_id.clone(),
                 };
-                if let Some(session) = &mut self.ai_session {
-                    session.profile = profile.as_deref().unwrap_or("default").to_string();
-                }
             }
         }
     }
@@ -1143,19 +1079,14 @@ impl Tab {
         match launch {
             crate::workspace::WorkspaceLaunch::Shell => {
                 self.tab_type = TabType::Shell;
-                self.ai_session = None;
                 self.split_shell = shell;
             }
             crate::workspace::WorkspaceLaunch::Profile { name } => {
                 self.tab_type = TabType::Profile { name };
-                self.ai_session = None;
                 self.split_shell = shell;
             }
-            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } => {
+            crate::workspace::WorkspaceLaunch::Plugin { plugin_id, .. } => {
                 self.tab_type = TabType::Plugin { plugin_id };
-                if let Some(session) = &mut self.ai_session {
-                    session.profile = profile.unwrap_or_else(|| "default".into());
-                }
             }
         }
     }
@@ -1175,62 +1106,86 @@ impl Tab {
         self.pty.as_ref()?.size().ok()
     }
 
-    fn handle_transcript_write(&mut self, result: std::io::Result<TranscriptWrite>) {
-        match result {
-            Ok(TranscriptWrite::Backpressure) => self.user_notices.push(
-                "Transcript writer is behind; recording dropped data instead of blocking the terminal"
-                    .into(),
-            ),
-            Err(error) if !self.transcript_failure_reported => {
-                self.transcript_failure_reported = true;
-                self.user_notices
-                    .push(format!("Transcript recording failed: {error}"));
-            }
-            _ => {}
+    pub(crate) fn pane_session(&self, id: crate::panes::PaneId) -> Option<&TerminalSession> {
+        if let Some(panes) = &self.pane_manager {
+            return Some(&panes.get_pane(id)?.integration);
         }
+        (id == self.single_pane_id && self.terminal.is_some()).then_some(&self.integration)
     }
 
-    fn poll_transcript_notices(&mut self) -> bool {
-        let Some(recorder) = &mut self.transcript else {
-            return false;
-        };
-        let notices = recorder.poll_notices();
-        for notice in &notices {
-            match notice {
-                TranscriptNotice::CapReached { max_bytes } => self.user_notices.push(format!(
-                    "Transcript reached its {} MiB cap; recording stopped before data was truncated",
-                    max_bytes / (1024 * 1024)
-                )),
-                TranscriptNotice::Failed(error) if !self.transcript_failure_reported => {
-                    self.transcript_failure_reported = true;
-                    self.user_notices.push(format!(
-                        "Transcript recording failed; output may be incomplete: {error}"
-                    ));
-                }
-                TranscriptNotice::Failed(_) => {}
-            }
+    pub(crate) fn pane_terminal(&self, id: crate::panes::PaneId) -> Option<&Terminal> {
+        if let Some(panes) = &self.pane_manager {
+            return Some(&panes.get_pane(id)?.terminal);
         }
-        if !notices.is_empty()
-            && let Some(session) = &mut self.ai_session
-        {
-            session.recording = false;
+        if id != self.single_pane_id {
+            return None;
         }
-        !notices.is_empty()
+        self.terminal.as_ref()
     }
 
-    /// Attach a fresh recorder and reset per-recorder error reporting.
+    pub(crate) fn pane_session_mut(
+        &mut self,
+        id: crate::panes::PaneId,
+    ) -> Option<&mut TerminalSession> {
+        if let Some(panes) = &mut self.pane_manager {
+            return Some(&mut panes.get_pane_mut(id)?.integration);
+        }
+        (id == self.single_pane_id && self.terminal.is_some()).then_some(&mut self.integration)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focused_session(&self) -> Option<&TerminalSession> {
+        self.pane_session(self.focused_terminal_identity().pane_id)
+    }
+
+    pub(crate) fn focused_session_mut(&mut self) -> Option<&mut TerminalSession> {
+        self.pane_session_mut(self.focused_terminal_identity().pane_id)
+    }
+
+    pub(crate) fn owned_pane_ids(&self) -> Vec<crate::panes::PaneId> {
+        self.pane_manager
+            .as_ref()
+            .map_or_else(|| vec![self.single_pane_id], |panes| panes.pane_ids())
+    }
+
+    pub(crate) fn unreviewed_diff_count(&self) -> usize {
+        self.owned_pane_ids()
+            .into_iter()
+            .filter_map(|id| self.pane_session(id))
+            .map(|state| state.diff_detector.unreviewed_count())
+            .sum()
+    }
+
+    /// Attach a recorder to the focused owner only.
+    #[cfg(test)]
     pub fn start_transcript(&mut self, recorder: TranscriptRecorder) {
-        self.transcript = Some(recorder);
-        self.transcript_failure_reported = false;
+        if let Some(state) = self.focused_session_mut() {
+            state.start_transcript(recorder);
+        }
     }
 
-    /// Stop recording and return the recorder so the caller can report its path.
+    #[cfg(test)]
     pub fn stop_transcript(&mut self) -> Option<TranscriptRecorder> {
-        self.transcript.take()
+        self.focused_session_mut()?.stop_transcript()
     }
 
     pub fn drain_user_notices(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.user_notices)
+        let mut notices = std::mem::take(&mut self.user_notices);
+        if let Some(panes) = &mut self.pane_manager {
+            for id in panes.pane_ids() {
+                if let Some(pane) = panes.get_pane_mut(id) {
+                    notices.extend(
+                        pane.integration
+                            .drain_notices()
+                            .into_iter()
+                            .map(|text| format!("Pane {}: {text}", id.0)),
+                    );
+                }
+            }
+        } else {
+            notices.extend(self.integration.drain_notices());
+        }
+        notices
     }
 
     /// Check if this tab has meaningful content worth saving

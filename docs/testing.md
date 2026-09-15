@@ -881,6 +881,15 @@ bytes, disconnect, close, and reopen behavior.
 
 ## Pane event-routing lane
 
+`cargo test -p termeric terminal_session_tests` covers terminal-local recorder
+ownership across split/collapse/close, same-owner input/output with sibling and
+protocol exclusion, independent plugin controls, exact transcript/scrollback
+export, and stale diff-review identity. All child processes are raw local shell
+fixtures; output events and plugin metadata are synthetic. The red regression
+for the old tab-wide recorder captured sibling output in another owner's
+transcript. Recorder flag/failure-notice tests additionally enforce per-owner
+isolation and the 16-notice bound. No provider or native visual result is implied.
+
 Plugin profile regressions use raw local shell PTYs and synthetic launch
 metadata. They verify one-owner mutation, captured picker identity across
 split/collapse/focus, refusal of stale/read-only/closed/replaced owners and

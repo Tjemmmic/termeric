@@ -10,14 +10,17 @@ impl App {
                 .warning("A session export is already in progress in this window");
             return;
         }
-        let Some(tab) = self.tabs.as_ref().and_then(|tabs| {
-            let index = tabs.find_plugin_tab_index(plugin_id)?;
-            tabs.iter().find(|(i, _)| *i == index).map(|(_, tab)| tab)
+        let Some((tab, identity)) = self.tabs.as_ref().and_then(|tabs| {
+            let identity = tabs.plugin_terminal_identity(plugin_id)?;
+            Some((tabs.tab_by_id(identity.tab_id)?, identity))
         }) else {
             self.toasts.warning(format!("No {plugin_id} tab is open"));
             return;
         };
-        let source = if let Some(recorder) = &tab.transcript {
+        let source = if let Some(recorder) = tab
+            .pane_session(identity.pane_id)
+            .and_then(|state| state.transcript.as_ref())
+        {
             match recorder.checkpoint() {
                 Ok(pending) => ExportSource::Transcript(pending),
                 Err(error) => {
@@ -26,7 +29,7 @@ impl App {
                 }
             }
         } else {
-            let Some(terminal) = tab.focused_terminal() else {
+            let Some(terminal) = tab.pane_terminal(identity.pane_id) else {
                 self.toasts
                     .warning("No terminal content is available for export");
                 return;
@@ -120,15 +123,20 @@ mod tests {
         config.shell.args.clear();
         let mut app = App::new_headless(config).unwrap();
         app.allow_auto_restore = false;
-        app.init_tabs().unwrap();
-        app.tabs
-            .as_mut()
-            .unwrap()
-            .active_tab_mut()
-            .unwrap()
-            .tab_type = crate::tabs::TabType::Plugin {
-            plugin_id: "export-fixture".into(),
-        };
+        let mut tabs =
+            crate::tabs::TabManager::new(80, 24, Default::default(), 1000, 8 * 1024 * 1024);
+        tabs.new_tab_with_command(
+            "/bin/cat",
+            &[],
+            None,
+            None,
+            Some(crate::tabs::TabType::Plugin {
+                plugin_id: "export-fixture".into(),
+            }),
+            Default::default(),
+        )
+        .unwrap();
+        app.tabs = Some(tabs);
         app
     }
 

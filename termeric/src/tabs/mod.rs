@@ -1808,16 +1808,13 @@ impl TabManager {
 
         for (i, tab) in self.tabs.iter_mut().enumerate() {
             let tab_id = tab.id;
-            if let Some(mut panes) = tab.pane_manager.take() {
+            if let Some(panes) = &mut tab.pane_manager {
                 let mut saw_output = false;
                 let (pane_changed, pane_events) = panes.poll_events(|_, data| {
-                    saw_output = true;
-                    tab.observe_output(data);
+                    saw_output |= !data.is_empty();
                 });
-                tab.pane_manager = Some(panes);
                 if saw_output {
                     tab.update_title();
-                    tab.finish_output_observation();
                 }
                 if pane_changed {
                     if i != self.active {
@@ -2200,7 +2197,6 @@ impl TabManager {
                         io::Error::new(io::ErrorKind::NotFound, "originating pane no longer exists")
                     })?
                     .write(data)?;
-                tab.record_user_input(data);
                 Ok(())
             }
         }
@@ -2356,6 +2352,7 @@ impl TabManager {
     }
 
     /// Find the index of the first tab owned by a given plugin
+    #[cfg(test)]
     pub fn find_plugin_tab_index(&self, plugin_id: &str) -> Option<usize> {
         self.tabs.iter().position(|tab| {
             !tab.closed
@@ -2422,7 +2419,7 @@ impl TabManager {
                     tab.close_progress()
                 },
                 tab_type: tab.tab_type.clone(),
-                unreviewed_diff_count: tab.diff_detector.unreviewed_count(),
+                unreviewed_diff_count: tab.unreviewed_diff_count(),
             })
             .collect()
     }

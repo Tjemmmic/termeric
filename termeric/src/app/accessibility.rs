@@ -7913,6 +7913,7 @@ mod tests {
                 reviewed: false,
             },
             usize::MAX,
+            PaneId(0),
         )
     }
 

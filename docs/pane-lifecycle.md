@@ -27,6 +27,17 @@ closed pane also drops its bounded output receiver, releasing a reader blocked
 on backpressure. Final PTY output is drained before process-state fallback is
 allowed to mark a tab or pane closed, avoiding quick-exit output loss.
 
+Each terminal also owns a `TerminalSession`: AI-session metadata, its optional
+transcript worker, diff detector, and bounded recorder notices. Splitting moves
+this state into the adopted pane; collapse moves the survivor's complete state
+back without cloning or redirecting its recorder. Closing an owner drops only
+that owner's recorder, using the existing bounded durable flush. Polling and
+successful user writes record beside the exact PTY; sibling output/input and
+protocol replies cannot contaminate the transcript. Background failures and
+caps update only the affected owner's recording state. This ownership model is
+the first dependency of [#126](https://github.com/Tjemmmic/termeric/issues/126),
+not permission to bypass current plugin-primary transfer/archive restrictions.
+
 Both the unsplit `Pty` and reader-split `PtyHandle` declare their child owner
 before their writer/master fields. This is a required destruction-order
 invariant: portable-pty 0.8.1's Unix writer destructor emits LF followed by

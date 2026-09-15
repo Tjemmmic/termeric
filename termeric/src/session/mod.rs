@@ -15,6 +15,7 @@ pub mod panel;
 pub mod restore;
 pub mod save;
 mod snapshot;
+pub(crate) mod terminal_state;
 pub mod transcript;
 
 use serde::{Deserialize, Serialize};
