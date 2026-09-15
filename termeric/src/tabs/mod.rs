@@ -2205,6 +2205,26 @@ impl TabManager {
         }
     }
 
+    /// Capture a live event route before retaining it across asynchronous work.
+    /// A tab route names the current single owner only at capture time.
+    pub(crate) fn identity_for_origin(
+        &self,
+        origin: TerminalEventOrigin,
+    ) -> Option<TerminalIdentity> {
+        let (tab_id, pane_id) = match origin {
+            TerminalEventOrigin::Tab { tab_id } => {
+                let tab = self.tab_by_id(tab_id)?;
+                if tab.pane_manager.is_some() {
+                    return None;
+                }
+                (tab_id, tab.single_pane_id())
+            }
+            TerminalEventOrigin::Pane { tab_id, pane_id } => (tab_id, pane_id),
+        };
+        (self.origin_for_pane(tab_id, pane_id)? == origin)
+            .then_some(TerminalIdentity { tab_id, pane_id })
+    }
+
     /// Resolve a stable tab-local pane identity to its current owner. Unlike
     /// an event's mode-specific route, this survives split/collapse, but never
     /// crosses tab namespaces or substitutes a different single survivor.

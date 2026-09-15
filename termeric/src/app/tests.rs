@@ -387,7 +387,8 @@ fn kitty_download_consent_is_request_scoped_and_terminal_type_gated() {
             .as_ref()
             .is_some_and(|pending| {
                 pending.request_id == confirmation
-                    && pending.key.origin == origin
+                    && Some(pending.key.origin)
+                        == app.tabs.as_ref().unwrap().identity_for_origin(origin)
                     && pending.key.id == "download-1"
                     && pending.reply_uses_8bit_controls
             })
@@ -520,6 +521,57 @@ fn kitty_upload_collects_exact_paths_before_request_scoped_consent() {
     });
     assert!(app.kitty_file_transfers.pending_upload.is_none());
     assert!(app.kitty_file_transfers.active_uploads.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn kitty_transfer_confirmation_never_replies_to_a_replacement_owner() {
+    let (mut app, directory, entry, _) = harvest_rerun_capture_fixture_in(false);
+    app.handle_kitty_file_transfer(
+        TerminalEventOrigin::Tab {
+            tab_id: entry.source.tab_id,
+        },
+        kitty_capture_command(termeric_core::KittyFileTransferAction::Send),
+    );
+    let request_id = app.info_overlay.request_id();
+    assert!(app.kitty_file_transfers.pending.is_some());
+    split_harvest_capture_owner(&mut app, directory.path());
+    app.close_control_pane(entry.source.tab_id as u64, 0)
+        .unwrap();
+    let captures = current_harvest_capture_routes(&mut app, directory.path());
+    app.handle_kitty_download_choice(request_id, "kitty-download-allow");
+    assert!(app.kitty_file_transfers.pending.is_none());
+    assert!(app.kitty_file_transfers.active.is_empty());
+    assert!(
+        fenced_harvest_capture(&mut app, &captures)
+            .iter()
+            .all(Vec::is_empty),
+        "a pending transfer must never reply to the replacement single owner"
+    );
+}
+
+#[cfg(unix)]
+pub(super) fn kitty_capture_command(
+    action: termeric_core::KittyFileTransferAction,
+) -> termeric_core::KittyFileTransferCommand {
+    termeric_core::KittyFileTransferCommand {
+        action,
+        compression: termeric_core::KittyFileTransferCompression::None,
+        file_type: termeric_core::KittyFileTransferType::Regular,
+        transmission_type: termeric_core::KittyFileTransmissionType::Simple,
+        id: "capture-session".into(),
+        file_id: String::new(),
+        quiet: 0,
+        mtime_ns: None,
+        permissions: None,
+        size: None,
+        name: None,
+        status: None,
+        parent: None,
+        data: Box::default(),
+        bypass_present: false,
+        reply_uses_8bit_controls: false,
+    }
 }
 
 #[test]
@@ -3127,7 +3179,7 @@ fn harvest_rerun_capture_fixture() -> (
 }
 
 #[cfg(unix)]
-fn harvest_rerun_capture_fixture_in(
+pub(super) fn harvest_rerun_capture_fixture_in(
     split: bool,
 ) -> (
     App,
@@ -3230,7 +3282,7 @@ fn harvest_rerun_capture_fixture_in(
 }
 
 #[cfg(unix)]
-fn fenced_harvest_capture(
+pub(super) fn fenced_harvest_capture(
     app: &mut App,
     captures: &[(crate::tabs::TerminalEventOrigin, std::path::PathBuf)],
 ) -> Vec<Vec<u8>> {
@@ -3271,7 +3323,7 @@ fn fenced_harvest_capture(
 }
 
 #[cfg(unix)]
-fn split_harvest_capture_owner(app: &mut App, directory: &std::path::Path) -> PaneId {
+pub(super) fn split_harvest_capture_owner(app: &mut App, directory: &std::path::Path) -> PaneId {
     let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
     let shell = ShellConfig {
         program: Some("/bin/sh".into()),
@@ -3300,7 +3352,7 @@ fn split_harvest_capture_owner(app: &mut App, directory: &std::path::Path) -> Pa
 }
 
 #[cfg(unix)]
-fn current_harvest_capture_routes(
+pub(super) fn current_harvest_capture_routes(
     app: &mut App,
     directory: &std::path::Path,
 ) -> Vec<(crate::tabs::TerminalEventOrigin, std::path::PathBuf)> {

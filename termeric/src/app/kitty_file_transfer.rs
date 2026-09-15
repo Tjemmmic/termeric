@@ -1,7 +1,7 @@
 //! Consent-gated Kitty OSC 5113 downloads onto the terminal host.
 
 use super::{App, AppEvent, EVENT_LOOP_PROXY};
-use crate::tabs::{TabType, TerminalEventOrigin};
+use crate::tabs::{TabType, TerminalEventOrigin, TerminalIdentity};
 use crate::ui::info_overlay::InfoOverlayChoice;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,9 +32,12 @@ const WORKER_QUEUE_CAPACITY: usize = 1_024;
 const UPLOAD_BATCH_CHUNKS: usize = 8;
 const PENDING_UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[cfg(all(test, target_os = "linux"))]
+mod routing_tests;
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct TransferKey {
-    pub(super) origin: TerminalEventOrigin,
+    pub(super) origin: TerminalIdentity,
     pub(super) id: String,
 }
 
@@ -175,6 +178,15 @@ impl App {
         origin: TerminalEventOrigin,
         command: KittyFileTransferCommand,
     ) {
+        // Event routes are mode-specific. Consent, session lookup, and worker
+        // callbacks must retain the owner, never the current tab/pane mode.
+        let Some(origin) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.identity_for_origin(origin))
+        else {
+            return;
+        };
         if command.action == KittyFileTransferAction::Receive {
             self.request_kitty_upload(origin, command);
             return;
@@ -286,7 +298,7 @@ impl App {
 
     fn request_kitty_upload(
         &mut self,
-        origin: TerminalEventOrigin,
+        origin: TerminalIdentity,
         command: KittyFileTransferCommand,
     ) {
         let key = TransferKey {
@@ -538,7 +550,7 @@ impl App {
 
     fn request_kitty_download(
         &mut self,
-        origin: TerminalEventOrigin,
+        origin: TerminalIdentity,
         command: KittyFileTransferCommand,
     ) {
         let key = TransferKey {
@@ -691,15 +703,19 @@ impl App {
         });
     }
 
-    fn kitty_download_origin_allowed(&self, origin: TerminalEventOrigin) -> bool {
-        let tab_id = match origin {
-            TerminalEventOrigin::Tab { tab_id } | TerminalEventOrigin::Pane { tab_id, .. } => {
-                tab_id
-            }
-        };
+    fn kitty_transfer_origin(&self, identity: TerminalIdentity) -> Option<TerminalEventOrigin> {
+        self.tabs
+            .as_ref()?
+            .origin_for_pane(identity.tab_id, identity.pane_id)
+    }
+
+    fn kitty_download_origin_allowed(&self, origin: TerminalIdentity) -> bool {
+        if self.kitty_transfer_origin(origin).is_none() {
+            return false;
+        }
         self.tabs
             .as_ref()
-            .and_then(|tabs| tabs.tab_by_id(tab_id))
+            .and_then(|tabs| tabs.tab_by_id(origin.tab_id))
             .is_some_and(|tab| {
                 tab.live_domain.is_some()
                     || matches!(tab.tab_type, TabType::Shell | TabType::Profile { .. })
@@ -748,7 +764,9 @@ impl App {
         if self
             .tabs
             .as_ref()
-            .and_then(|tabs| tabs.terminal_for_origin(pending.key.origin))
+            .and_then(|tabs| {
+                tabs.origin_for_pane(pending.key.origin.tab_id, pending.key.origin.pane_id)
+            })
             .is_none()
         {
             return true;
@@ -863,7 +881,9 @@ impl App {
         if self
             .tabs
             .as_ref()
-            .and_then(|tabs| tabs.terminal_for_origin(pending.key.origin))
+            .and_then(|tabs| {
+                tabs.origin_for_pane(pending.key.origin.tab_id, pending.key.origin.pane_id)
+            })
             .is_none()
         {
             return true;
@@ -1214,7 +1234,9 @@ impl App {
             .is_some_and(|active| {
                 self.tabs
                     .as_ref()
-                    .and_then(|tabs| tabs.terminal_for_origin(active.key.origin))
+                    .and_then(|tabs| {
+                        tabs.origin_for_pane(active.key.origin.tab_id, active.key.origin.pane_id)
+                    })
                     .is_none()
             })
         {
@@ -1270,22 +1292,17 @@ impl App {
         };
         let origin = active.key.origin;
         let progress_toast_id = active.progress_toast_id;
-        let origin_exists = self
-            .tabs
-            .as_ref()
-            .and_then(|tabs| tabs.terminal_for_origin(origin))
-            .is_some();
-        let mut written = origin_exists;
+        let resolved_origin = self.kitty_transfer_origin(origin);
+        let mut written = resolved_origin.is_some();
         for canonical in &completion.frames {
             if !written {
                 break;
             }
             let reply =
                 Terminal::frame_pty_reply_for_mode(canonical, completion.reply_uses_8bit_controls);
-            written = self
-                .tabs
-                .as_mut()
-                .is_some_and(|tabs| tabs.write_to_origin(origin, &reply).is_ok());
+            written = self.tabs.as_mut().is_some_and(|tabs| {
+                resolved_origin.is_some_and(|route| tabs.write_to_origin(route, &reply).is_ok())
+            });
         }
         if let Some(acknowledge) = completion.acknowledge.take() {
             let _ = acknowledge.try_send(written);
@@ -1316,10 +1333,13 @@ impl App {
 
     fn write_kitty_status(
         &mut self,
-        origin: TerminalEventOrigin,
+        identity: TerminalIdentity,
         reply_uses_8bit_controls: bool,
         status: KittyFileTransferStatus,
     ) -> bool {
+        let Some(origin) = self.kitty_transfer_origin(identity) else {
+            return false;
+        };
         let canonical = status.canonical_reply();
         let reply = Terminal::frame_pty_reply_for_mode(&canonical, reply_uses_8bit_controls);
         if let Some(tabs) = &mut self.tabs {
@@ -1342,7 +1362,12 @@ impl App {
                     || self
                         .tabs
                         .as_ref()
-                        .and_then(|tabs| tabs.terminal_for_origin(pending.key.origin))
+                        .and_then(|tabs| {
+                            tabs.origin_for_pane(
+                                pending.key.origin.tab_id,
+                                pending.key.origin.pane_id,
+                            )
+                        })
                         .is_none()
             });
         if stale_pending {
@@ -1364,7 +1389,12 @@ impl App {
                     || self
                         .tabs
                         .as_ref()
-                        .and_then(|tabs| tabs.terminal_for_origin(pending.key.origin))
+                        .and_then(|tabs| {
+                            tabs.origin_for_pane(
+                                pending.key.origin.tab_id,
+                                pending.key.origin.pane_id,
+                            )
+                        })
                         .is_none()
             });
         if stale_pending_upload {
@@ -1381,7 +1411,9 @@ impl App {
             .filter_map(|(token, active)| {
                 self.tabs
                     .as_ref()
-                    .and_then(|tabs| tabs.terminal_for_origin(active.key.origin))
+                    .and_then(|tabs| {
+                        tabs.origin_for_pane(active.key.origin.tab_id, active.key.origin.pane_id)
+                    })
                     .is_none()
                     .then_some(*token)
             })
@@ -1396,7 +1428,9 @@ impl App {
             .filter_map(|(token, active)| {
                 self.tabs
                     .as_ref()
-                    .and_then(|tabs| tabs.terminal_for_origin(active.key.origin))
+                    .and_then(|tabs| {
+                        tabs.origin_for_pane(active.key.origin.tab_id, active.key.origin.pane_id)
+                    })
                     .is_none()
                     .then_some(*token)
             })
@@ -1443,13 +1477,8 @@ fn format_transfer_bytes_sent(bytes: u64) -> String {
     format_transfer_bytes(bytes).replace("received", "sent")
 }
 
-fn describe_origin(origin: TerminalEventOrigin) -> String {
-    match origin {
-        TerminalEventOrigin::Tab { tab_id } => format!("tab {tab_id}"),
-        TerminalEventOrigin::Pane { tab_id, pane_id } => {
-            format!("tab {tab_id}, pane {}", pane_id.0)
-        }
-    }
+fn describe_origin(origin: TerminalIdentity) -> String {
+    format!("tab {}, pane {}", origin.tab_id, origin.pane_id.0)
 }
 
 fn transfer_status(

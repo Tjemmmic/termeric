@@ -393,6 +393,14 @@ destination appears. Pre-create a destination with sentinel content, retry,
 and confirm Termeric reports a collision without changing it. Start a larger
 transfer, cancel it, and confirm no destination is published.
 
+When you resume native testing, also exercise owner lifetime in both directions:
+keep the requesting pane while splitting/collapsing its layout and confirm that
+the same transfer continues there, even with a sibling focused. Remove the
+requester while approval is pending or data is in flight; no reply or file data
+may appear in the surviving/replacement pane, and the old approval must not
+authorize it. Repeat with a nonzero surviving pane. Hermetic owner-routing
+regressions cover these transitions, but native acceptance is still deferred.
+
 For the upload command, the approval must list the exact resolved
 `host-source.txt` path before any read occurs. Verify `child-received.txt`
 matches byte-for-byte. Repeat with two regular files, then separately request a

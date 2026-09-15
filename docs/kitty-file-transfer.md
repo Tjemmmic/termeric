@@ -92,6 +92,15 @@ render/input path. A persistent toast reports only entry and byte counts; it
 does not expose paths. Replies use the captured origin even if focus changes.
 A vanished origin cancels instead of falling back to the focused terminal.
 
+Session keys retain the stable tab-local pane identity, not a tab-versus-pane
+event route. Path collection, consent, command lookup, cancellation, and worker
+replies follow the same surviving owner through split/collapse (including a
+nonzero surviving pane). Removing that owner never transfers its approval or
+host-file bytes to a replacement single pane. Closed/closing owners are rejected
+before reply delivery; stale upload completions receive a failed delivery
+acknowledgement and their active session is canceled. Protocol replies still
+bypass editable-input and broadcast routes, including in a read-only pane.
+
 Attached live domains relay the raw OSC to the GUI, which owns consent and the
 filesystem transaction. A detached domain immediately returns `EPERM`; its
 daemon never writes desktop-host files or preserves a request for later.
@@ -123,3 +132,10 @@ real-client procedure and evidence fields are in
 [`operator-acceptance.md`](operator-acceptance.md#5a-kitty-terminal-file-transfer-client).
 Until both direction rows pass on a candidate build, do not advertise complete
 bidirectional Kitty transfer or mark the feature Supported.
+
+Owner-routing regressions use raw local PTY capture plus synthetic worker
+completions: both directions, S7/S8 framing, pending path collection, split and
+collapse, a nonzero survivor, removed/replaced/closed/closing owners, sibling
+session-ID isolation, pruning, and replayed completion. These tests do not start
+a native window or approve real host-file workers, and are not native-client
+acceptance. See [#120](https://github.com/Tjemmmic/termeric/issues/120).
