@@ -1,4 +1,5 @@
 import unittest
+import tomllib
 
 from scripts.check_feature_support import (
     ROOT,
@@ -72,10 +73,12 @@ class FeatureSupportContractTests(unittest.TestCase):
         )
 
     def test_benchmark_metric_count_rejects_documentation_drift(self):
-        changed = self.matrix.replace("62-metric contract", "61-metric contract")
+        count = len(tomllib.loads(self.metrics.decode("utf-8"))["metric"])
+        changed = self.matrix.replace(f"{count}-metric contract", f"{count - 1}-metric contract")
+        self.assertNotEqual(changed, self.matrix)
         self.assertTrue(
             any(
-                "manifest contains 62" in failure
+                f"manifest contains {count}" in failure
                 for failure in validate_benchmark_metric_count(changed, self.metrics)
             )
         )

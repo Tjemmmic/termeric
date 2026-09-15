@@ -4,6 +4,8 @@
 
 mod framing;
 #[cfg(test)]
+pub(crate) mod performance;
+#[cfg(test)]
 mod streaming_tests;
 
 use framing::{Framer, MAX_LINE_BYTES};

@@ -268,6 +268,41 @@ metrics. Push/pull-request CI runs those tests, the release workloads, and
 uploads the JSON artifact even when a budget fails. The committed baseline is
 a comparison reference, not a universal pass/fail threshold.
 
+### Passive streamed-diff observer
+
+Four required release metrics isolate the passive diff observer used by
+plugin-owned terminals. They never launch a provider, PTY, or window:
+
+- `latency.diff_observer.plain_4mib`: 4 MiB of plain 128-byte LF-terminated
+  lines, delivered in 4096-byte reads, with no captures or rejection notices.
+- `latency.diff_observer.patches_bulk` and `patches_fragmented`: the identical
+  stream of 64 small plus sixteen 200-line patches, each large data line
+  containing 340 copies of `界`. SGR-decorated headers/data, OSC-decorated
+  prompt boundaries, and CRLF exercise framing with 4096- versus 257-byte
+  reads. All 80 completions, stable-ID totals, total normalized raw lengths,
+  final raw/parsed content, and byte-pressure eviction are checked.
+- `memory.diff_observer.retained_history`: independently recounted final
+  history storage after that stream. Both read sizes must retain the same
+  storage, at least 3 MiB and no more than the hard 4 MiB history ceiling.
+  This includes string/vector capacities, preallocated slots, and conservative
+  inline charges; it is **not** peak live allocation, allocation traffic, or RSS.
+
+Fixture generation, detector construction/destruction, and correctness/storage
+diagnostics are outside timing. Timed work includes framing, capture, parsing,
+constant-cost completion counters, retention, eviction, and EOF. One unrecorded
+warmup precedes five recorded samples with fresh detectors; paired read order
+alternates. Initial broad rails cap each whole-stream p95 at 100 ms and the
+fragmented/bulk median ratio at 4. These are regression alarms, not claims of
+sub-frame dispatch latency or an optimization win. Tighten them only with
+repeatable host/CI evidence. The ordinary Rust fixture test and Python tests
+prove correctness and reject over-budget, missing, or skipped evidence.
+
+The separate [resource soak](resource-soak.md) checks persistent history peaks
+and repeated eviction; this benchmark supplies the missing processing-cost
+baseline. Neither measures the transcript callback, full app polling, native
+presentation, or an authenticated provider. Use `--skip-displayed` to keep
+native display checks deferred while collecting these metrics.
+
 ## Comparing other terminals
 
 [`scripts/compare_terminals.py`](../scripts/compare_terminals.py) records an

@@ -5,6 +5,30 @@ schema_version = 1
 # an empty row whose workload starts with `skipped:`; absence is never a skip.
 
 [[metric]]
+name = "latency.diff_observer.plain_4mib"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "latency.diff_observer.patches_bulk"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "latency.diff_observer.patches_fragmented"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
+name = "memory.diff_observer.retained_history"
+unit = "bytes"
+producer = "application"
+samples = 5
+
+[[metric]]
 name = "core.parser.plain_4mib"
 unit = "ms"
 producer = "core"

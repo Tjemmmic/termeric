@@ -68,6 +68,13 @@ path. Overall observer-owned storage is bounded by history plus one pending
 line/header or patch and one bounded finalization; allocator bookkeeping and
 the terminal grid are separate, not an RSS promise.
 
+The [release performance lane](performance.md#passive-streamed-diff-observer)
+records observer-only plain-output and decorated-patch processing cost,
+same-stream fragmentation overhead, and final retained history storage. Its
+synthetic workloads exercise completion and eviction without starting a
+provider; the separate persistent resource soak covers repeated history peaks.
+Neither replaces real provider/operator acceptance.
+
 Oldest-first eviction applies equally to reviewed and unreviewed patches.
 Identities increase monotonically and never wrap; exhaustion stops new
 captures. A delayed review action retains tab, pane, and diff identities and

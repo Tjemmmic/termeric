@@ -1,5 +1,36 @@
 schema_version = 1
 
+# Observer-only whole-stream safety rails, not a GUI frame-time guarantee.
+[[metric_budget]]
+name = "plain output passive diff scan rail"
+metric = "latency.diff_observer.plain_4mib"
+statistic = "p95"
+max = 100.0
+
+[[metric_budget]]
+name = "bulk streamed diff capture rail"
+metric = "latency.diff_observer.patches_bulk"
+statistic = "p95"
+max = 100.0
+
+[[metric_budget]]
+name = "fragmented streamed diff capture rail"
+metric = "latency.diff_observer.patches_fragmented"
+statistic = "p95"
+max = 100.0
+
+[[metric_budget]]
+name = "streamed diff retained history byte ceiling"
+metric = "memory.diff_observer.retained_history"
+statistic = "max"
+max = 4194304.0
+
+[[ratio_budget]]
+name = "diff capture fragmentation overhead rail"
+numerator = "latency.diff_observer.patches_fragmented"
+denominator = "latency.diff_observer.patches_bulk"
+max_ratio = 4.0
+
 # Ratios compare related workloads in the same process/run, avoiding a false
 # precision tied to one developer machine. Values are intentionally broad
 # initial regression rails and should tighten only after multiple CI baselines.

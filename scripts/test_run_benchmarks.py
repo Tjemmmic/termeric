@@ -59,6 +59,51 @@ def comparable_report(value: float) -> dict:
 
 
 class BenchmarkBudgetTests(unittest.TestCase):
+    def test_streaming_diff_budgets_reject_regressions_and_missing_evidence(self):
+        with (Path(__file__).parents[1] / "benchmarks" / "budgets.toml").open("rb") as stream:
+            checked_in = tomllib.load(stream)
+        metrics = [
+            item for item in checked_in["metric_budget"]
+            if ".diff_observer." in item["metric"]
+        ]
+        ratios = [
+            item for item in checked_in["ratio_budget"]
+            if ".diff_observer." in item["numerator"]
+        ]
+        self.assertEqual(len(metrics), 4)
+        self.assertEqual(len(ratios), 1)
+        for budget in metrics:
+            with self.subTest(metric=budget["metric"]):
+                maximum = 4194304.0 if budget["metric"].startswith("memory.") else 100.0
+                self.assertEqual(budget["max"], maximum)
+                self.assertFalse(budget.get("allow_skipped", False))
+                selected = {"metric_budget": [budget]}
+                for value, passes in [(maximum, True), (maximum + 1, False)]:
+                    sampled = {"metrics": [{
+                        "name": budget["metric"],
+                        "samples": [value] * 5,
+                        "statistics": summarize([value] * 5),
+                    }]}
+                    self.assertEqual(evaluate_budgets(sampled, selected)[0]["passed"], passes)
+                self.assertFalse(evaluate_budgets({"metrics": []}, selected)[0]["passed"])
+                skipped = {"metrics": [{
+                    "name": budget["metric"], "samples": [], "statistics": {"count": 0},
+                    "workload": "skipped: synthetic regression fixture",
+                }]}
+                self.assertFalse(evaluate_budgets(skipped, selected)[0]["passed"])
+
+        ratio = ratios[0]
+        self.assertEqual(ratio["max_ratio"], 4.0)
+        for bulk, fragmented, passes in [(10.0, 40.0, True), (10.0, 40.1, False), (0.0, 1.0, False)]:
+            sampled = {"metrics": [
+                {"name": name, "statistics": summarize([value] * 5)}
+                for name, value in [(ratio["denominator"], bulk), (ratio["numerator"], fragmented)]
+            ]}
+            selected = {"ratio_budget": [ratio]}
+            self.assertEqual(evaluate_budgets(sampled, selected)[0]["passed"], passes)
+            for missing in sampled["metrics"]:
+                self.assertFalse(evaluate_budgets({"metrics": [missing]}, selected)[0]["passed"])
+
     def test_checked_in_metric_contract_is_valid_and_unique(self):
         contract = load_metric_contract()
         names = [entry["name"] for entry in contract["metric"]]

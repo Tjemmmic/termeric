@@ -651,6 +651,14 @@ strict Linux `status`/`smaps_rollup` parsing, displayed-memory context and skip
 dispositions, the broad idle-RSS rail, and budget fail-closed cases without
 executing the release workloads.
 
+The required passive-diff metrics compare identical decorated Unicode patch
+streams at 4096- and 257-byte read sizes, plain 4 MiB output, and independently
+recounted retained history. Ordinary Rust coverage checks completion/content
+and eviction; Python coverage deliberately exceeds every checked-in diff rail
+and rejects missing/skipped evidence. No provider is launched. See the
+[timing and memory boundaries](performance.md#passive-streamed-diff-observer);
+add `--skip-displayed` when native acceptance remains deferred.
+
 CLDR data generation is separately hermetic. The generator accepts only the
 documented CLDR 48.0.0 and Emoji 17.0 SHA-256 identities, and its unit tests
 exercise duplicate/malformed input, qualification mapping, deterministic

@@ -557,6 +557,36 @@ fn release_benchmark_suite() {
         None,
     );
 
+    let diff = crate::terminal::diff_detector::performance::benchmark_streaming_diff();
+    for (name, unit, samples, workload) in [
+        (
+            "latency.diff_observer.plain_4mib",
+            "ms",
+            diff.plain_ms,
+            "warm observer-only scan of 4 MiB plain 128-byte LF lines in 4096-byte reads; no captures",
+        ),
+        (
+            "latency.diff_observer.patches_bulk",
+            "ms",
+            diff.bulk_ms,
+            "warm observer-only capture of 64 small and 16 200-line Unicode patches with SGR/OSC/CRLF in 4096-byte reads; includes completion and history eviction",
+        ),
+        (
+            "latency.diff_observer.patches_fragmented",
+            "ms",
+            diff.fragmented_ms,
+            "warm observer-only capture of the identical 80-patch SGR/OSC/CRLF stream in 257-byte reads; includes completion and history eviction",
+        ),
+        (
+            "memory.diff_observer.retained_history",
+            "bytes",
+            diff.retained_bytes,
+            "independently recounted final history storage after the 80-patch stream; capacities and conservative inline charges, not allocator traffic or RSS",
+        ),
+    ] {
+        emit_benchmark(name, unit, samples, workload, None);
+    }
+
     let unicode_picker = benchmark_unicode_picker();
     emit_benchmark(
         "latency.unicode_annotation_index_validation",
