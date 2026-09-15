@@ -171,7 +171,11 @@ A leading hook reports the completed command before user prompt output; a
 trailing hook reports cwd and the next prompt. Both return their incoming status,
 so user hooks see the same `$?` as native Bash. Existing `PS0` text and deferred
 expansions remain intact before the appended command-start marker. No user rc
-file is rewritten. Hooks which replace these variables after startup can still
+file is rewritten. Optional prompt variables and the first-prompt sentinel use
+unset-safe defaults, so enabling `set -u` in the user's rc does not raise startup
+errors or suppress OSC/Harvest command regions. Nounset remains enabled; unset
+and declared-empty prompt configurations are covered alongside scalar and array
+hooks. Hooks which replace these variables after startup can still
 remove the integration; this is not universal prompt-framework compatibility.
 
 Isolated Bash 5.3.15 PTY regressions compare scalar, indexed-array and sparse-array

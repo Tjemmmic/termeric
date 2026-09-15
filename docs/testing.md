@@ -34,6 +34,9 @@ PTYs with and without Termeric's generated startup file. Scalar, indexed-array,
 and sparse-array fixtures assert native hook order and incoming status, one
 invocation per prompt, unchanged rc contents, deferred user `PS0` expansion,
 and correct success/failure Harvest regions despite nonzero hook returns.
+Nounset fixtures cover scalar/array hooks, unset prompt variables, and an empty
+indexed array. They reject unbound-variable diagnostics and verify that the
+user's `set -u` option remains enabled through the final submitted command.
 These tests skip explicitly if Bash 5.1+ is unavailable; they do not promote missing
 shells or the required three-shell acceptance record to passed.
 

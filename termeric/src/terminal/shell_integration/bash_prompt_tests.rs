@@ -63,12 +63,17 @@ second_hook() {{
         30,
         Some(&program),
         &args,
-        &[("HOME".into(), home.display().to_string())],
+        &[
+            ("HOME".into(), home.display().to_string()),
+            ("LC_ALL".into(), "C".into()),
+        ],
     )
     .unwrap();
     let (mut handle, reader) = pty.take_reader();
     let receive = spawn_reader_thread(reader);
-    handle.write_all(b"true\rfalse\rexit\r").unwrap();
+    handle
+        .write_all(b"true\rfalse\rprintf '%s' \"$-\" > \"$HOME/options\"; exit\r")
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut bytes = Vec::new();
     let mut closed = false;
@@ -89,7 +94,20 @@ second_hook() {{
         "Bash prompt fixture timed out"
     );
     assert_eq!(std::fs::read_to_string(home.join(".bashrc")).unwrap(), rc);
-    Some((std::fs::read_to_string(home.join("hooks")).unwrap(), bytes))
+    if prompt_command.contains("set -u") {
+        assert!(
+            std::fs::read_to_string(home.join("options"))
+                .unwrap()
+                .contains('u'),
+            "integration must not disable the user's nounset option"
+        );
+    }
+    let hooks = match std::fs::read_to_string(home.join("hooks")) {
+        Ok(hooks) => hooks,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => panic!("read Bash hook trace: {error}"),
+    };
+    Some((hooks, bytes))
 }
 
 fn assert_prompt_preserved(command: &str) {
@@ -110,6 +128,7 @@ fn assert_prompt_preserved(command: &str) {
         "each hook must run once per prompt"
     );
     let output = String::from_utf8_lossy(&bytes);
+    assert!(!output.contains("unbound variable"), "{output}");
     assert_eq!(
         String::from_utf8_lossy(&baseline_bytes)
             .matches("USER_PRECOMMAND expanded ")
@@ -150,4 +169,45 @@ fn bash_array_prompt_hooks_preserve_order_status_and_precommand_prompt() {
 #[test]
 fn bash_sparse_prompt_hooks_preserve_order_status_and_precommand_prompt() {
     assert_prompt_preserved("PROMPT_COMMAND=([2]='first_hook' [9]='second_hook')");
+}
+
+#[test]
+fn bash_nounset_preserves_scalar_prompt_hooks() {
+    assert_prompt_preserved("PROMPT_COMMAND='first_hook; second_hook'\nset -u");
+}
+
+#[test]
+fn bash_nounset_preserves_array_prompt_hooks() {
+    assert_prompt_preserved("PROMPT_COMMAND=('first_hook' 'second_hook')\nset -u");
+}
+
+#[test]
+fn bash_nounset_with_unset_prompt_variables_still_emits_command_regions() {
+    assert_nounset_without_user_hooks("unset PROMPT_COMMAND PS0\nset -u");
+}
+
+#[test]
+fn bash_nounset_with_empty_prompt_array_still_emits_command_regions() {
+    assert_nounset_without_user_hooks("PROMPT_COMMAND=()\nunset PS0\nset -u");
+}
+
+fn assert_nounset_without_user_hooks(rc_commands: &str) {
+    let Some((hooks, bytes)) = probe(rc_commands, true) else {
+        eprintln!("skipping Bash prompt composition: Bash 5.1+ unavailable");
+        return;
+    };
+    assert!(hooks.is_empty());
+    let output = String::from_utf8_lossy(&bytes);
+    assert!(!output.contains("unbound variable"), "{output}");
+    let mut terminal = termeric_core::Terminal::new(100, 30);
+    terminal.process(&bytes);
+    let mut harvest = crate::harvest::HarvestTerminalState::default();
+    let regions = harvest.observe(&terminal.shell_integration().prompt_tracker, true);
+    assert_eq!(
+        regions
+            .iter()
+            .filter_map(|region| region.exit_code)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
 }
