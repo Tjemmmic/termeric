@@ -4590,6 +4590,33 @@ fn unicode_picker_never_inserts_into_a_replacement_single_owner() {
 
 #[cfg(unix)]
 #[test]
+fn plugin_context_command_never_targets_a_focused_shell_sibling() {
+    let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
+    mark_capture_plugin_owner(&mut app, PaneId(0), "synthetic-capture");
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .tab_type = crate::tabs::TabType::Plugin {
+        plugin_id: "synthetic-capture".into(),
+    };
+    assert!(app.inject_context_to_plugin("synthetic-capture", "fixture context"));
+    assert_eq!(
+        fenced_harvest_capture(&mut app, &captures),
+        vec![
+            b"\n--- Context ---\nfixture context\n--- End Context ---\n".to_vec(),
+            vec![],
+            vec![],
+        ]
+    );
+}
+
+#[cfg(unix)]
+mod plugin_terminal_tests;
+
+#[cfg(unix)]
+#[test]
 fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
     let plugin_directory = tempfile::tempdir().unwrap();
@@ -7529,7 +7556,7 @@ fn headless_plugin_dispatch_surfaces_missing_target() {
         .iter()
         .map(|toast| toast.message.as_str())
         .collect();
-    assert_eq!(messages, vec!["No writable codex tab found"]);
+    assert_eq!(messages, vec!["No writable codex terminal found"]);
 }
 
 #[cfg(unix)]

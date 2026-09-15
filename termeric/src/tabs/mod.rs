@@ -2369,20 +2369,36 @@ impl TabManager {
         self.tabs.get_mut(index)
     }
 
-    /// Write data to a plugin-owned tab's PTY
-    pub fn write_to_plugin_tab(&mut self, plugin_id: &str, data: &[u8]) -> bool {
-        if let Some(idx) = self.find_plugin_tab_index(plugin_id) {
-            self.tabs[idx].write(data).is_ok()
-        } else {
-            false
-        }
+    /// First live matching tab, then its focused matching owner or first
+    /// matching pane in visual order. Tab presentation is not launch identity.
+    pub(crate) fn plugin_terminal_identity(&self, plugin_id: &str) -> Option<TerminalIdentity> {
+        self.tabs.iter().find_map(|tab| {
+            tab.plugin_pane_id(plugin_id)
+                .map(|pane_id| TerminalIdentity {
+                    tab_id: tab.id,
+                    pane_id,
+                })
+        })
     }
 
-    /// Copy the last N lines from a plugin-owned tab's terminal
-    pub fn copy_from_plugin_tab(&self, plugin_id: &str, lines: usize) -> Option<String> {
-        let idx = self.find_plugin_tab_index(plugin_id)?;
-        let tab = &self.tabs[idx];
-        let all_lines = tab.focused_terminal()?.grid().export_scrollback_text();
+    /// Checked user input to the selected plugin owner, without focus/broadcast
+    /// routing or a fallback when that owner is read-only.
+    pub fn write_to_plugin_terminal(&mut self, plugin_id: &str, data: &[u8]) -> bool {
+        let Some(identity) = self.plugin_terminal_identity(plugin_id) else {
+            return false;
+        };
+        self.origin_for_pane(identity.tab_id, identity.pane_id)
+            .is_some_and(|origin| self.write_user_to_origin(origin, data).is_ok())
+    }
+
+    /// Copy the last N lines from the selected plugin owner's terminal.
+    pub fn copy_from_plugin_terminal(&self, plugin_id: &str, lines: usize) -> Option<String> {
+        let identity = self.plugin_terminal_identity(plugin_id)?;
+        let origin = self.origin_for_pane(identity.tab_id, identity.pane_id)?;
+        let all_lines = self
+            .terminal_for_origin(origin)?
+            .grid()
+            .export_scrollback_text();
         let start = all_lines.len().saturating_sub(lines);
         Some(all_lines[start..].join("\n"))
     }

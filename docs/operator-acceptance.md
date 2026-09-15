@@ -577,6 +577,14 @@ working directory, asynchronous completion and split/collapse refusal. Testing
 context insertion with a real AI CLI remains part of the explicitly authorized
 provider section below, not this provider-free manual check.
 
+Direct plugin Context, Clear, Copy, and Jump to Error also have provider-free
+raw-shell coverage for mixed-pane ownership. When you choose to test real
+plugins later, keep a shell sibling focused and verify that Context/Clear/Copy
+still address only the plugin pane; Jump to Error should deliberately focus that
+pane and leave the sibling's scroll position alone. A read-only plugin pane must
+refuse Context/Clear without redirecting to a writable sibling. These are later
+operator checks, not permission for an automated provider run.
+
 ## Authenticated Codex, Claude Code, and Harvest Explain
 
 This section is deliberately last. It is a manual test plan, not authorization

@@ -8,6 +8,15 @@ has lost its focused pane.
 
 ## Routing contract
 
+- Explicit plugin Context, Clear, Copy, and Jump to Error commands resolve the
+  live plugin launch owner, not the focused pane of a plugin-tagged tab. They
+  also work when a plugin pane lives in a shell-tagged mixed tab. Selection is
+  deterministic: first matching tab in tab order, then its focused matching
+  plugin pane or first matching pane in visual order. Context/Clear/Copy do not
+  change focus; checked writes refuse a read-only selected owner without trying
+  a different pane. Jump to Error focuses the selected owner, refreshes focused
+  surfaces, and searches only its output. Tab-wide restart/profile/transcript
+  operations retain their separate lifecycle semantics.
 - Harvest Re-run is an exact-source action, not keyboard input. It may focus
   its producing terminal for visibility, but writes only to that captured
   owner, bypassing broadcast/alias/completion routing. Destructive confirmation
@@ -50,6 +59,13 @@ changes rebind search results, URL activation data, selection, scrollback, and
 synchronized-output state. Coordinate tests cover asymmetric pane origins and
 scrollback offsets. The normal single-terminal route still uses the same
 focused APIs, preserving its prior behavior.
+
+Plugin-command regressions use synthetic plugin launch metadata on raw local
+capture shells, never real provider executables. They cover focused shell
+siblings, mixed tab presentation, split/collapse/nonzero survivors, checked
+write refusal, exact copied output, matching-focus preference, and error
+navigation without changing sibling scroll state. See
+[#122](https://github.com/Tjemmmic/termeric/issues/122).
 
 Pane lifecycle/dividers and event/reply ownership are documented in
 [pane-lifecycle.md](pane-lifecycle.md) and

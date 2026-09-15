@@ -1718,26 +1718,33 @@ impl App {
         written
     }
 
-    /// Scroll the plugin tab to the last line containing an error-like pattern.
+    /// Scroll the selected plugin owner to its last error-like line.
     ///
-    /// First switches to the plugin tab (if not already active), then scans
-    /// scrollback for error/failed/panic/exception patterns and scrolls there.
+    /// Focus that exact live owner, refresh its surfaces, then scan only its
+    /// scrollback for error/failed/panic/exception patterns.
     pub(super) fn jump_to_last_error(&mut self, plugin_id: &str) {
-        let Some(tabs) = &mut self.tabs else { return };
-
-        // Switch to the plugin tab so active_tab_mut() works on it
-        if let Some(idx) = tabs.find_plugin_tab_index(plugin_id) {
-            tabs.switch_to(idx);
-        } else {
+        let Some(identity) = self
+            .tabs
+            .as_ref()
+            .and_then(|tabs| tabs.plugin_terminal_identity(plugin_id))
+        else {
             log::info!("No '{}' tab found for jump-to-error", plugin_id);
             self.toasts.warning(format!("No {plugin_id} tab is open"));
             return;
+        };
+        if self
+            .focus_plugin_pane(identity.tab_id as u64, identity.pane_id.0)
+            .is_err()
+        {
+            self.toasts
+                .warning(format!("The {plugin_id} terminal is no longer available"));
+            return;
         }
-
-        if let Some(tab) = tabs.active_tab_mut() {
-            let Some(terminal) = tab.focused_terminal_mut() else {
-                return;
-            };
+        let terminal = self.tabs.as_mut().and_then(|tabs| {
+            let origin = tabs.origin_for_pane(identity.tab_id, identity.pane_id)?;
+            tabs.terminal_for_origin_mut(origin)
+        });
+        if let Some(terminal) = terminal {
             let lines = terminal.grid().export_scrollback_text();
             let error_pos = lines.iter().rposition(|line| {
                 let lower = line.to_lowercase();
@@ -1839,8 +1846,7 @@ impl App {
                 PluginAction::ClearPluginTab { plugin_id } => {
                     let cleared = if let Some(tabs) = &mut self.tabs {
                         // Send Ctrl+C then clear
-                        tabs.write_to_plugin_tab(&plugin_id, b"\x03")
-                            && tabs.write_to_plugin_tab(&plugin_id, b"clear\r")
+                        tabs.write_to_plugin_terminal(&plugin_id, b"\x03clear\r")
                     } else {
                         false
                     };
@@ -1848,14 +1854,14 @@ impl App {
                         self.toasts.success(format!("Cleared {plugin_id}"));
                     } else {
                         self.toasts
-                            .warning(format!("No writable {plugin_id} tab found"));
+                            .warning(format!("No writable {plugin_id} terminal found"));
                     }
                 }
                 PluginAction::CopyFromPluginTab { plugin_id, lines } => {
                     let text = self
                         .tabs
                         .as_ref()
-                        .and_then(|tabs| tabs.copy_from_plugin_tab(&plugin_id, lines));
+                        .and_then(|tabs| tabs.copy_from_plugin_terminal(&plugin_id, lines));
                     if let Some(text) = text.filter(|text| !text.is_empty()) {
                         self.copy_to_clipboard(
                             text,
@@ -2190,13 +2196,13 @@ impl App {
         self.execute_plugin_actions(vec![crate::plugin::PluginAction::ToggleTranscript]);
     }
 
-    /// Inject context text into the explicitly selected plugin tab.
+    /// Inject context text into the selected live plugin terminal owner.
     pub(super) fn inject_context_to_plugin(&mut self, plugin_id: &str, text: &str) -> bool {
         let injected = format!("\n--- Context ---\n{}\n--- End Context ---\n", text);
         let written = self
             .tabs
             .as_mut()
-            .is_some_and(|tabs| tabs.write_to_plugin_tab(plugin_id, injected.as_bytes()));
+            .is_some_and(|tabs| tabs.write_to_plugin_terminal(plugin_id, injected.as_bytes()));
         if written {
             log::info!(
                 "Injected {} chars of context into {}",
@@ -2206,7 +2212,7 @@ impl App {
             self.toasts.success(format!("Context sent to {plugin_id}"));
         } else {
             self.toasts
-                .warning(format!("No writable {plugin_id} tab found"));
+                .warning(format!("No writable {plugin_id} terminal found"));
         }
         written
     }
