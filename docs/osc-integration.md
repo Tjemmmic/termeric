@@ -89,13 +89,20 @@ local Git inspection, plugins, pane/process spawn, session/workspace capture,
 or local-domain control. This prevents a remote shell from making a remote path
 look like a valid local cwd.
 
-The generated Bash emitter percent-encodes every pathname byte except ASCII
+The generated Bash and Zsh emitters percent-encode every pathname byte except ASCII
 letters/digits and `/._~-` before framing OSC 7. Ordinary ASCII paths use a fast
-path; encoding uses Bash builtins with function-local byte-oriented locale and
+path; encoding uses shell builtins with function-local byte-oriented locale and
 does not spawn a helper or change the caller's locale. This prevents BEL, ESC,
 and raw C1 bytes in directory names from terminating the report or becoming
 other terminal commands. An isolated Bash reproduction previously turned a
-synthetic directory value into an independent title-change event.
+synthetic directory value into an independent title-change event. Zsh has the
+same real-shell regression. Its encoder additionally localizes shell options
+with `emulate -L zsh` and disables multibyte interpretation within the helper;
+the caller's indexing, splitting, multibyte options, and locale are restored.
+This also replaces the old Zsh percent-substitution expression, which appended
+`%25` even to ordinary paths because an unescaped `%` anchors its pattern at the
+end of the value. See the upstream [Zsh expansion reference](https://zsh.sourceforge.io/Doc/Release/Expansion.html)
+and [local option semantics](https://zsh.sourceforge.io/Doc/Release/Options.html).
 
 Both raw input and encoded output are bounded to 4,089 bytes, leaving seven
 bytes for `file://` within the receiver's 4-KiB URI ceiling. Empty, relative, or
@@ -105,8 +112,8 @@ invalid-UTF-8 directories eligible for cwd inheritance: the receiver retains
 its existing rejection policy and last valid report. Long encoded Unicode paths
 can reach the URI ceiling earlier than ASCII paths.
 
-This producer fix and real-Bash byte/framing regressions cover **Bash only**.
-The generated Zsh, Fish, and Elvish emitters still escape only percent signs and
+These producer fixes and real-shell byte/framing regressions cover **Bash and
+Zsh only**. The generated Fish and Elvish emitters still escape only percent signs and
 need equivalent producer hardening and native tests; their control-bearing cwd
 output is not safe to treat as verified. Nushell uses its own native producer
 and remains acceptance-pending. This does not sanitize arbitrary user prompt

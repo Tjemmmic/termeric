@@ -38,6 +38,21 @@ prompt marks. No native window receives the synthetic protocol strings. Other
 shell emitters are not covered by those Bash results; see
 [cwd emission boundaries](osc-integration.md#working-directories).
 
+`terminal::shell_integration::zsh_cwd_tests` independently runs the generated
+Zsh rc in an isolated real shell and feeds captured bytes into the in-memory
+terminal parser. Four regressions cover control-sequence injection, every
+nonzero Unix byte, UTF-8 and URI punctuation, exact raw/encoded URI limits,
+unchanged prompt markers, and caller locale/option restoration with default,
+KSH_ARRAYS, SH_WORD_SPLIT, and non-multibyte configurations. They self-skip if
+Zsh is absent; `TERMERIC_REQUIRE_ZSH_CWD_TESTS=1` makes absence a failure:
+
+```bash
+TERMERIC_REQUIRE_ZSH_CWD_TESTS=1 cargo test --workspace --locked zsh_cwd_
+```
+
+These checks exercise the emitter, not a native desktop or the user's real Zsh
+configuration. Fish/Elvish producer hardening remains separate work.
+
 `terminal::shell_integration::bash_prompt_tests` compares isolated real Bash
 PTYs with and without Termeric's generated startup file. Scalar, indexed-array,
 and sparse-array fixtures assert native hook order and incoming status, one
