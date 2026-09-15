@@ -95,6 +95,21 @@ whether the durable flush completed and identifies the partial path when it did
 not. Application teardown logs the same incomplete-persistence condition when
 there is no remaining UI in which to display it.
 
+Shutdown finalizes the recorder's text decoders once and disconnects its sole
+command sender. Already accepted entries and checkpoints drain in order; no
+spare queue slot or extra shutdown command is needed. The worker publishes one
+completion result only after flushing, syncing, and dropping its sink and
+pending commands. A timed-out `finish()` retains that completion receiver, so
+another call cannot report success while persistence or cleanup is still
+running. Each call has its own bounded wait, and joins are attempted only for
+an already-finished thread. The cached result preserves success or the original
+failure kind/message across retries, even if UI notices were already consumed.
+Failure to enqueue a final UTF-8 replacement during the first `finish()` also
+remains an error rather than disappearing after a timeout. A worker
+panic/disconnection is a failure, never
+implicit success. A timeout cannot cancel a blocked filesystem operation or
+guarantee persistence after process exit.
+
 ## Deterministic coverage
 
 Structured export now uses an ordered writer checkpoint plus a separately
@@ -114,7 +129,11 @@ Injected backends cover:
 - disk-full/write failure and unavailable-directory startup failure;
 - worker-event wakeups and one-shot notices; and
 - clean shutdown proving the batched sink receives one durable `sync_data`, and
-  shutdown while persistence is slow, including the bounded timeout.
+  shutdown while persistence is slow, including the bounded timeout;
+- channel-gated sync and sink destruction, proving repeated shutdown remains
+  timed out until actual completion without an unbounded thread join;
+- full-queue drain, late-write refusal, final UTF-8 loss across retries, cached
+  startup/sync failures after notice consumption, and worker-panic refusal.
 
 Redaction regressions cover all prefixes/delimiters, Unicode around the former
 40-byte cutoff, long and densely repeated synthetic tokens, nested metadata,

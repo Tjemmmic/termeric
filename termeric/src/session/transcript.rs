@@ -5,6 +5,8 @@
 //! accounting, and the durable shutdown flush.
 
 #[cfg(test)]
+mod shutdown_tests;
+#[cfg(test)]
 mod streaming_tests;
 mod utf8;
 
@@ -125,7 +127,6 @@ enum WriterCommand {
         entry: TranscriptEntry,
         accounted_bytes: usize,
     },
-    Shutdown(mpsc::Sender<std::io::Result<()>>),
     Checkpoint(mpsc::Sender<std::io::Result<TranscriptCheckpoint>>),
 }
 
@@ -196,6 +197,9 @@ pub struct TranscriptRecorder {
     event_rx: Receiver<WriterEvent>,
     queued_bytes: Arc<AtomicUsize>,
     worker: Option<JoinHandle<()>>,
+    completion_rx: Receiver<std::io::Result<()>>,
+    shutdown_result: Option<std::io::Result<()>>,
+    shutdown_text_error: Option<std::io::Error>,
     pub entry_count: usize,
     limits: RecorderLimits,
     cap_reached: bool,
@@ -255,12 +259,13 @@ impl TranscriptRecorder {
     ) -> std::io::Result<Self> {
         let (command_tx, command_rx) = mpsc::sync_channel(limits.queue_entries.max(1));
         let (event_tx, event_rx) = mpsc::channel();
+        let (completion_tx, completion_rx) = mpsc::channel();
         let queued_bytes = Arc::new(AtomicUsize::new(0));
         let worker_queued_bytes = Arc::clone(&queued_bytes);
         let worker = std::thread::Builder::new()
             .name("termeric-transcript".into())
             .spawn(move || {
-                transcript_worker(
+                let result = transcript_worker(
                     factory,
                     metadata,
                     limits.max_file_bytes,
@@ -268,7 +273,10 @@ impl TranscriptRecorder {
                     event_tx,
                     worker_queued_bytes,
                     wake,
-                )
+                );
+                // Publish only after the worker's writer, sink and queued
+                // commands have been dropped, including failure cleanup.
+                let _ = completion_tx.send(result);
             })?;
 
         Ok(Self {
@@ -277,6 +285,9 @@ impl TranscriptRecorder {
             event_rx,
             queued_bytes,
             worker: Some(worker),
+            completion_rx,
+            shutdown_result: None,
+            shutdown_text_error: None,
             entry_count: 1,
             limits,
             cap_reached: false,
@@ -523,64 +534,51 @@ impl TranscriptRecorder {
     }
 
     pub fn finish(&mut self, timeout: Duration) -> std::io::Result<()> {
-        let deadline = Instant::now() + timeout;
-        let text_result = self.finish_text_streams();
-        let Some(command_tx) = self.command_tx.take() else {
-            return Ok(());
-        };
-        let (ack_tx, ack_rx) = mpsc::channel();
-        let mut command = WriterCommand::Shutdown(ack_tx);
-        loop {
-            match command_tx.try_send(command) {
-                Ok(()) => break,
-                Err(TrySendError::Full(returned)) if Instant::now() < deadline => {
-                    command = returned;
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(TrySendError::Full(_)) => {
+        let started = Instant::now();
+        if self.command_tx.is_some() {
+            self.shutdown_text_error = match self.finish_text_streams() {
+                Ok(TranscriptWrite::Written) => None,
+                Ok(_) => Some(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "transcript final UTF-8 replacement was not recorded before shutdown",
+                )),
+                Err(error) => Some(error),
+            };
+            // Disconnect is ordered after all accepted commands, needs no
+            // spare queue slot, and prevents producers from extending shutdown.
+            self.command_tx.take();
+        }
+        if self.shutdown_result.is_none() {
+            let result = match self
+                .completion_rx
+                .recv_timeout(timeout.saturating_sub(started.elapsed()))
+            {
+                Ok(result) => result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Keep the receiver and final-text failure for retries.
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
-                        "transcript queue did not drain before shutdown timeout",
+                        "transcript durable shutdown exceeded timeout",
                     ));
                 }
-                Err(TrySendError::Disconnected(_)) => {
-                    return self
-                        .poll_notices()
-                        .into_iter()
-                        .find_map(|notice| match notice {
-                            TranscriptNotice::Failed(error) => {
-                                Some(Err(std::io::Error::other(error)))
-                            }
-                            TranscriptNotice::CapReached { .. }
-                            | TranscriptNotice::TextReplaced { .. } => None,
-                        })
-                        .unwrap_or_else(|| {
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::BrokenPipe,
-                                "transcript writer stopped before shutdown",
-                            ))
-                        });
-                }
-            }
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "transcript writer stopped without a completion result",
+                )),
+            };
+            self.shutdown_result =
+                Some(result.and_then(|()| self.shutdown_text_error.take().map_or(Ok(()), Err)));
         }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let result = ack_rx.recv_timeout(remaining).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "transcript durable flush exceeded shutdown timeout",
-            )
-        })?;
-        if let Some(worker) = self.worker.take() {
+        // A completion confirms persistence and sink cleanup, not that the
+        // scheduler has let the final send/return finish. Never block on join.
+        if self.worker.as_ref().is_some_and(JoinHandle::is_finished)
+            && let Some(worker) = self.worker.take()
+        {
             let _ = worker.join();
         }
-        result?;
-        match text_result? {
-            TranscriptWrite::Written => Ok(()),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                "transcript final UTF-8 replacement was not recorded before shutdown",
-            )),
+        match self.shutdown_result.as_ref().unwrap() {
+            Ok(()) => Ok(()),
+            Err(error) => Err(std::io::Error::new(error.kind(), error.to_string())),
         }
     }
 }
@@ -671,12 +669,12 @@ fn transcript_worker(
     event_tx: mpsc::Sender<WriterEvent>,
     queued_bytes: Arc<AtomicUsize>,
     wake: Option<WakeCallback>,
-) {
+) -> std::io::Result<()> {
     let sink = match factory() {
         Ok(sink) => sink,
         Err(error) => {
             publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
-            return;
+            return Err(error);
         }
     };
     let mut writer = BufWriter::new(sink);
@@ -695,11 +693,11 @@ fn transcript_worker(
         max_file_bytes,
     ) {
         publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
-        return;
+        return Err(error);
     }
     if let Err(error) = writer.flush() {
         publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
-        return;
+        return Err(error);
     }
 
     loop {
@@ -722,7 +720,7 @@ fn transcript_worker(
                             &wake,
                             WriterEvent::Failed(format!("serialize transcript: {error}")),
                         );
-                        return;
+                        return Err(std::io::Error::other(error));
                     }
                 };
                 if written_bytes.saturating_add(line.len() + 1) > max_file_bytes {
@@ -731,19 +729,16 @@ fn transcript_worker(
                     continue;
                 }
                 if line.len() + 1 > MAX_TRANSCRIPT_RECORD_BYTES {
-                    publish_writer_event(
-                        &event_tx,
-                        &wake,
-                        WriterEvent::Failed("transcript record exceeds 16 MiB".into()),
-                    );
-                    return;
+                    let error = std::io::Error::other("transcript record exceeds 16 MiB");
+                    publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
+                    return Err(error);
                 }
                 if let Err(error) = writer
                     .write_all(&line)
                     .and_then(|()| writer.write_all(b"\n"))
                 {
                     publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
-                    return;
+                    return Err(error);
                 }
                 written_bytes += line.len() + 1;
                 digest.update(&line);
@@ -753,9 +748,10 @@ fn transcript_worker(
             Ok(WriterCommand::Checkpoint(reply)) => {
                 if let Err(error) = writer.flush() {
                     let message = error.to_string();
+                    let kind = error.kind();
                     let _ = reply.send(Err(error));
-                    publish_writer_event(&event_tx, &wake, WriterEvent::Failed(message));
-                    return;
+                    publish_writer_event(&event_tx, &wake, WriterEvent::Failed(message.clone()));
+                    return Err(std::io::Error::new(kind, message));
                 }
                 dirty = false;
                 last_flush = Instant::now();
@@ -765,24 +761,20 @@ fn transcript_worker(
                     recording_limit_reached: capped,
                 }));
             }
-            Ok(WriterCommand::Shutdown(ack)) => {
-                let result = writer.flush().and_then(|()| writer.get_mut().sync_data());
-                let _ = ack.send(result);
-                return;
-            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if let Err(error) = writer.flush().and_then(|()| writer.get_mut().sync_data()) {
                     publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
+                    return Err(error);
                 }
-                return;
+                return Ok(());
             }
         }
 
         if dirty && last_flush.elapsed() >= FLUSH_INTERVAL {
             if let Err(error) = writer.flush() {
                 publish_writer_event(&event_tx, &wake, WriterEvent::Failed(error.to_string()));
-                return;
+                return Err(error);
             }
             dirty = false;
             last_flush = Instant::now();

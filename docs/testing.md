@@ -753,6 +753,13 @@ backpressure, cap reach, disk full, and shutdown during work. See
 [`background-io.md`](background-io.md) for the concurrency and persistence
 contracts.
 
+`session::transcript::shutdown_tests` uses channel-gated fake storage to prove
+that a second shutdown call cannot turn an unfinished durable sync or sink
+cleanup into success. Full-queue drain, exactly-once sync, late-write refusal,
+retained final-UTF-8-loss errors, already-consumed failure notices, and worker
+panics exercise both retryable waits and cached terminal results. These tests
+do not invoke a provider or depend on a real slow filesystem.
+
 ## Resource soak lane
 
 Linux pushes and pull requests run a 30-second process soak; the weekly schedule
