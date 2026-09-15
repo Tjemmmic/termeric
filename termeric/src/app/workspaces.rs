@@ -245,7 +245,23 @@ impl App {
         tabs: &mut TabManager,
         snapshot: &WorkspaceTabSnapshot,
     ) -> anyhow::Result<(usize, Vec<String>)> {
-        let pane_launches = self.resolve_workspace_pane_launches(snapshot)?;
+        snapshot.validate()?;
+        let count = tabs.count();
+        let active = tabs.active_index();
+        let result = self.restore_workspace_tab_inner(tabs, snapshot);
+        if result.is_err() {
+            tabs.rollback_workspace_tab(count, active);
+        }
+        result
+    }
+
+    fn restore_workspace_tab_inner(
+        &mut self,
+        tabs: &mut TabManager,
+        snapshot: &WorkspaceTabSnapshot,
+    ) -> anyhow::Result<(usize, Vec<String>)> {
+        // Resolve every identity before spawning any PTY for this tab.
+        let pane_launches = self.resolve_workspace_pane_launches(snapshot, tabs)?;
         match &snapshot.launch {
             WorkspaceLaunch::Shell => tabs.new_shell_tab_from_workspace(snapshot, &pane_launches),
             WorkspaceLaunch::Profile { name } => {
@@ -271,66 +287,27 @@ impl App {
                     )
                 }
             }
-            WorkspaceLaunch::Plugin { plugin_id, profile } => {
+            WorkspaceLaunch::Plugin { plugin_id, .. } => {
                 let mut warnings = Vec::new();
                 let cwd = usable_workspace_cwd(snapshot, &mut warnings);
-                let ctx = PluginContext {
-                    cwd: cwd.clone(),
-                    tab_count: tabs.count(),
-                    active_tab: tabs.active_index(),
-                    terminal_size: (self.cols, self.rows),
-                };
-                let actions = self.plugin_manager.dispatch(
-                    &crate::plugin::Hook::WorkspaceRestore {
-                        plugin_id: plugin_id.clone(),
-                        profile: profile.clone(),
-                        cwd: cwd.clone(),
-                    },
-                    &ctx,
-                );
-                let mut launch = None;
-                for action in actions {
-                    match action {
-                        PluginAction::OpenTab {
-                            program,
-                            args,
-                            cwd,
-                            title,
-                            plugin_id,
-                            profile,
-                            env,
-                        } => launch = Some((program, args, cwd, title, plugin_id, profile, env)),
-                        PluginAction::ShowNotice { title, lines } => {
-                            warnings.push(format!("{title}: {}", lines.join(" ")));
-                        }
-                        other => warnings.push(format!(
-                            "plugin returned unsupported restore action {other:?}"
-                        )),
-                    }
-                }
-                let (program, args, cwd, title, action_plugin_id, resolved_profile, env) =
-                    launch
-                        .ok_or_else(|| anyhow::anyhow!("plugin {plugin_id:?} is not available"))?;
-                if action_plugin_id.as_deref() != Some(plugin_id.as_str()) {
-                    anyhow::bail!("plugin restore response did not match {plugin_id:?}");
-                }
-                if profile.is_some() && resolved_profile.as_deref() != profile.as_deref() {
-                    anyhow::bail!(
-                        "saved plugin profile {:?} is no longer configured",
-                        profile.as_deref().unwrap_or_default()
-                    );
-                }
-                ensure_program_available(&program)?;
+                let (_, shell) = &pane_launches[&snapshot.primary_pane];
                 tabs.new_tab_with_command(
-                    &program,
-                    &args,
+                    shell.program.as_deref().expect("validated plugin program"),
+                    &shell.args,
                     cwd.as_deref(),
-                    title.as_deref(),
+                    Some(&snapshot.title),
                     Some(TabType::Plugin {
                         plugin_id: plugin_id.clone(),
                     }),
-                    env,
-                )?;
+                    shell
+                        .env
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("required plugin executable is missing or unusable: {error:#}")
+                })?;
                 let index = tabs
                     .last_tab_index()
                     .ok_or_else(|| anyhow::anyhow!("plugin tab was not created"))?;
@@ -341,50 +318,153 @@ impl App {
     }
 
     fn resolve_workspace_pane_launches(
-        &self,
+        &mut self,
         snapshot: &WorkspaceTabSnapshot,
+        tabs: &TabManager,
     ) -> anyhow::Result<std::collections::HashMap<u32, (WorkspaceLaunch, crate::config::ShellConfig)>>
     {
         let mut launches = std::collections::HashMap::new();
         for pane in &snapshot.panes {
-            if pane.id == snapshot.primary_pane {
-                continue;
-            }
-            let launch = pane
-                .launch
-                .clone()
-                .unwrap_or_else(|| match &snapshot.launch {
-                    WorkspaceLaunch::Profile { name } => {
-                        WorkspaceLaunch::Profile { name: name.clone() }
-                    }
-                    WorkspaceLaunch::Shell | WorkspaceLaunch::Plugin { .. } => {
-                        WorkspaceLaunch::Shell
-                    }
-                });
-            let shell = match &launch {
-                WorkspaceLaunch::Shell => self.config.shell.clone(),
+            let launch = pane.launch.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "workspace tab {} pane {} has no launch identity",
+                    snapshot.id,
+                    pane.id
+                )
+            })?;
+            let (resolved, shell) = match launch {
+                WorkspaceLaunch::Shell => (launch.clone(), self.config.shell.clone()),
                 WorkspaceLaunch::Profile { name } => {
                     let profile = self.config.launch_profile(name)?;
                     if profile.serial_config().is_some() {
-                        anyhow::bail!(
-                            "workspace tab {} pane {} cannot clone serial profile {name:?}",
-                            snapshot.id,
-                            pane.id
-                        );
+                        if pane.id != snapshot.primary_pane || snapshot.panes.len() != 1 {
+                            anyhow::bail!(
+                                "workspace tab {} pane {} cannot clone serial profile {name:?}",
+                                snapshot.id,
+                                pane.id
+                            );
+                        }
+                        (launch.clone(), crate::config::ShellConfig::default())
+                    } else {
+                        (launch.clone(), profile.shell_config())
                     }
-                    profile.shell_config()
                 }
-                WorkspaceLaunch::Plugin { .. } => {
-                    anyhow::bail!(
-                        "workspace tab {} pane {} cannot own a detached plugin launch",
-                        snapshot.id,
-                        pane.id
-                    );
+                WorkspaceLaunch::Plugin { plugin_id, profile } => {
+                    // The normal workspace cwd fallback is reported by the
+                    // owner constructor. Never borrow a sibling/focused cwd.
+                    let cwd = pane
+                        .working_directory
+                        .as_ref()
+                        .filter(|cwd| std::path::Path::new(cwd).is_dir())
+                        .cloned();
+                    let ctx = PluginContext {
+                        cwd: cwd.clone(),
+                        tab_count: tabs.count(),
+                        active_tab: tabs.active_index(),
+                        terminal_size: (self.cols, self.rows),
+                    };
+                    self.resolve_workspace_plugin_launch(plugin_id, profile.as_deref(), cwd, &ctx)
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "workspace tab {} pane {}: {error:#}",
+                                snapshot.id,
+                                pane.id
+                            )
+                        })?
                 }
             };
-            launches.insert(pane.id, (launch, shell));
+            launches.insert(pane.id, (resolved, shell));
         }
         Ok(launches)
+    }
+
+    fn validate_workspace_plugin_profile(
+        &self,
+        plugin_id: &str,
+        profile: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let configured = match plugin_id {
+            "codex" => {
+                self.config.plugins.codex.enabled
+                    && profile
+                        .is_none_or(|name| self.config.plugins.codex.profiles.contains_key(name))
+            }
+            "claude-code" => {
+                self.config.plugins.claude_code.enabled
+                    && profile.is_none_or(|name| {
+                        self.config.plugins.claude_code.profiles.contains_key(name)
+                    })
+            }
+            _ => true, // Other registered plugins validate their own profile namespace.
+        };
+        if !configured {
+            anyhow::bail!(
+                "plugin {plugin_id:?} or its saved/resolved profile {profile:?} is no longer configured"
+            );
+        }
+        Ok(())
+    }
+
+    fn resolve_workspace_plugin_launch(
+        &mut self,
+        plugin_id: &str,
+        profile: Option<&str>,
+        cwd: Option<String>,
+        ctx: &PluginContext,
+    ) -> anyhow::Result<(WorkspaceLaunch, crate::config::ShellConfig)> {
+        self.validate_workspace_plugin_profile(plugin_id, profile)?;
+        let actions = self.plugin_manager.dispatch_to(
+            plugin_id,
+            &crate::plugin::Hook::WorkspaceRestore {
+                plugin_id: plugin_id.into(),
+                profile: profile.map(str::to_owned),
+                cwd: cwd.clone(),
+            },
+            ctx,
+        );
+        let mut launch = None;
+        for action in actions {
+            match action {
+                PluginAction::OpenTab {
+                    program,
+                    args,
+                    cwd: actual_cwd,
+                    plugin_id: actual_id,
+                    profile: actual_profile,
+                    env,
+                    ..
+                } => {
+                    if launch.is_some()
+                        || actual_id.as_deref() != Some(plugin_id)
+                        || profile.is_some_and(|saved| actual_profile.as_deref() != Some(saved))
+                        || actual_cwd != cwd
+                        || program.is_empty()
+                    {
+                        anyhow::bail!("plugin returned an ambiguous or mismatched restore launch");
+                    }
+                    self.validate_workspace_plugin_profile(plugin_id, actual_profile.as_deref())?;
+                    // Archive cwd is authoritative, including the documented
+                    // missing-cwd fallback. PWD must not override it indirectly.
+                    let env = env.into_iter().filter(|(key, _)| key != "PWD").collect();
+                    launch = Some((
+                        WorkspaceLaunch::Plugin {
+                            plugin_id: plugin_id.into(),
+                            profile: actual_profile,
+                        },
+                        crate::config::ShellConfig {
+                            program: Some(program),
+                            args,
+                            env,
+                        },
+                    ));
+                }
+                PluginAction::ShowNotice { .. } => anyhow::bail!(
+                    "plugin did not provide a clean restore launch; configuration needs attention"
+                ),
+                _ => anyhow::bail!("plugin returned an unsupported restore action"),
+            }
+        }
+        launch.ok_or_else(|| anyhow::anyhow!("plugin {plugin_id:?} is not available"))
     }
 }
 
@@ -405,18 +485,5 @@ fn usable_workspace_cwd(
             snapshot.id
         ));
         None
-    }
-}
-
-fn ensure_program_available(program: &str) -> anyhow::Result<()> {
-    let status = std::process::Command::new(program)
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    if status.is_ok_and(|status| status.success()) {
-        Ok(())
-    } else {
-        anyhow::bail!("required plugin executable {program:?} is missing or unusable")
     }
 }

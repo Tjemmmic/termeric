@@ -796,7 +796,7 @@ Workspace Manager rename, full relaunch, and focused-terminal input through the
 real window. See [`workspaces.md`](workspaces.md).
 
 Mixed-launch workspace tests move a live named-profile pane into a shell tab,
-round-trip its schema-2 pane identity, and execute distinct hermetic shell and
+round-trip its explicit pane identity, and execute distinct hermetic shell and
 profile markers after restore. They also cover profile adoption after pane-mode
 collapse, inherited future splits, schema-1 launch migration, atomic rejection
 of tab-owned plugin-pane detachment, and permitted movement of ordinary splits
@@ -908,8 +908,17 @@ split/collapse/focus, refusal of stale/read-only/closed/replaced owners and
 removed profiles, legacy primary-profile presentation, and preservation of
 supported primary-plugin plus shell/process-profile workspace launches.
 `cargo test -p termeric plugin_profile_tests` runs this lane without a provider.
-Non-primary plugin archive restoration remains unsupported, not a passing test
-claim; see [integration acceptance](integration-acceptance.md).
+
+`cargo test -p termeric workspace_plugin_tests` exercises schema-3 mixed
+shell/process-profile/plugin restoration with local fake executables only.
+It covers same-plugin distinct profiles, different plugins, per-pane cwd and
+argv/environment, archive save/load/restore, nonzero primary IDs, literal
+`default` and resolved default references, missing-cwd fallback, missing or
+disabled configuration, spawn failure, exact-target hook validation, and
+rollback without disturbing existing tabs. Model/storage regressions also
+cover schema-0/1/2 migration without inventing plugin launches. Explicit
+plugin-pane creation/movement and real-provider/native acceptance are not
+claimed by this lane; see [integration acceptance](integration-acceptance.md).
 
 PTY shutdown has a deterministic destructor-order regression for both unsplit
 `Pty` and reader-split `PtyHandle`: a shell emits an explicit readiness marker,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-pub const WORKSPACE_SCHEMA_VERSION: u32 = 2;
+pub const WORKSPACE_SCHEMA_VERSION: u32 = 3;
 pub const MAX_WORKSPACE_TABS: usize = 64;
 pub const MAX_WORKSPACE_PANES_PER_TAB: usize = 64;
 
@@ -126,7 +126,7 @@ impl WorkspaceTabSnapshot {
             pane.validate()?;
             if pane.launch.is_none() {
                 anyhow::bail!(
-                    "workspace tab {} pane {} is missing its schema-2 launch identity",
+                    "workspace tab {} pane {} is missing its launch identity",
                     self.id,
                     pane.id
                 );
@@ -141,15 +141,6 @@ impl WorkspaceTabSnapshot {
         {
             anyhow::bail!(
                 "workspace tab {} primary pane launch does not match the tab launch",
-                self.id
-            );
-        }
-        if self.panes.iter().any(|pane| {
-            pane.id != self.primary_pane
-                && matches!(pane.launch, Some(WorkspaceLaunch::Plugin { .. }))
-        }) {
-            anyhow::bail!(
-                "workspace tab {} has a plugin launch outside its primary pane",
                 self.id
             );
         }
@@ -495,13 +486,16 @@ pub(crate) mod tests {
         let mut workspace = sample_workspace();
         workspace.tabs[0].panes[0].launch = None;
         assert!(workspace.validate().is_err());
+    }
 
+    #[test]
+    fn nonprimary_plugin_launch_identity_is_valid() {
         let mut workspace = sample_workspace();
         workspace.tabs[0].panes[1].launch = Some(WorkspaceLaunch::Plugin {
             plugin_id: "fake".into(),
             profile: None,
         });
-        assert!(workspace.validate().is_err());
+        assert!(workspace.validate().is_ok());
     }
 
     #[test]

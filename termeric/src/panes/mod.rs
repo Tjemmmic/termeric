@@ -41,7 +41,9 @@ use crate::config::ShellConfig;
 use crate::terminal::container::{SplitContainer, TerminalContainer};
 use crate::terminal::events::{MAX_FORWARDED_TERMINAL_EVENTS_PER_POLL, drain_terminal_events};
 use crate::terminal::geometry::TerminalGeometry;
-use crate::terminal::shell_integration::{ShellIntegrationSupport, prepare_shell_launch};
+use crate::terminal::shell_integration::{
+    ShellIntegrationSupport, ShellLaunch, prepare_shell_launch,
+};
 use anyhow::Context;
 use std::collections::HashMap;
 use std::io;
@@ -142,11 +144,45 @@ impl Pane {
         scrollback_bytes: usize,
         working_dir: Option<&str>,
     ) -> anyhow::Result<Self> {
+        Self::new_local(
+            id,
+            geometry,
+            shell,
+            (scrollback_lines, scrollback_bytes),
+            working_dir,
+            false,
+        )
+    }
+
+    fn new_local(
+        id: PaneId,
+        geometry: TerminalGeometry,
+        shell: &ShellConfig,
+        scrollback: (usize, usize),
+        working_dir: Option<&str>,
+        plugin: bool,
+    ) -> anyhow::Result<Self> {
         let mut terminal = Terminal::new(geometry.cols, geometry.rows);
         terminal.set_pixel_geometry(geometry.pixel_width.into(), geometry.pixel_height.into());
-        terminal.set_scrollback_limits(scrollback_lines, scrollback_bytes);
-        let mut launch = prepare_shell_launch(shell);
+        terminal.set_scrollback_limits(scrollback.0, scrollback.1);
+        let mut launch = if plugin {
+            ShellLaunch {
+                program: shell.program.clone(),
+                args: shell.args.clone(),
+                env: shell
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                integration: ShellIntegrationSupport::Unavailable(
+                    "Plugin launches do not install local shell hooks".into(),
+                ),
+            }
+        } else {
+            prepare_shell_launch(shell)
+        };
         if let Some(working_dir) = working_dir {
+            launch.env.retain(|(key, _)| key != "PWD");
             launch.env.push(("PWD".into(), working_dir.into()));
         }
         let pty = Pty::new_with_env_and_size(
@@ -171,7 +207,7 @@ impl Pane {
             harvest: crate::harvest::HarvestTerminalState::default(),
             shell_integration: launch.integration,
             last_command: None,
-            integration: Default::default(),
+            integration: crate::session::terminal_state::TerminalSession::new(plugin),
             launch: crate::workspace::WorkspaceLaunch::Shell,
             launch_shell: shell.clone(),
             event_overflow_reported: false,
@@ -429,6 +465,8 @@ pub struct PaneManager {
     panes: HashMap<PaneId, Pane>,
     /// Currently focused pane
     focused: PaneId,
+    /// Saved/adopted launch primary, retained independently of numeric IDs.
+    primary: PaneId,
     /// View-only maximization; the underlying split tree remains unchanged.
     zoomed: Option<PaneId>,
     /// Last intentional route from a pane in a direction. This makes crossing
@@ -496,6 +534,7 @@ impl PaneManager {
             tree: PaneTree::new(id),
             panes,
             focused: id,
+            primary: id,
             zoomed: None,
             navigation_memory: HashMap::new(),
             shell,
@@ -569,6 +608,7 @@ impl PaneManager {
             tree: PaneTree::with_next_local_split_id(id, allocation.next_divider),
             panes,
             focused: id,
+            primary: id,
             zoomed: None,
             navigation_memory: HashMap::new(),
             shell,
@@ -623,6 +663,7 @@ impl PaneManager {
             .unwrap_or(0)
             .saturating_add(1);
         let primary_id = PaneId(snapshot.primary_pane);
+        manager.primary = primary_id;
         if primary_id != PaneId(0) {
             let mut primary = manager
                 .panes
@@ -673,15 +714,20 @@ impl PaneManager {
                     snapshot.id, pane_snapshot.id
                 )
             })?;
-            let mut pane = Pane::new(
+            let mut pane = Pane::new_local(
                 id,
                 geometry,
                 shell,
-                scrollback_lines,
-                scrollback_bytes,
+                (scrollback_lines, scrollback_bytes),
                 cwd.as_deref(),
+                matches!(launch, crate::workspace::WorkspaceLaunch::Plugin { .. }),
             )?;
             pane.launch.clone_from(launch);
+            if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = launch
+                && let Some(session) = &mut pane.integration.ai_session
+            {
+                session.profile = profile.clone().unwrap_or_else(|| "default".into());
+            }
             pane.launch_shell.clone_from(shell);
             pane.terminal
                 .set_screen_checksum_reporting(manager.screen_checksum_reporting);
@@ -900,7 +946,9 @@ impl PaneManager {
     }
 
     pub fn primary_id(&self) -> PaneId {
-        if self.panes.contains_key(&PaneId(0)) {
+        if self.panes.contains_key(&self.primary) {
+            self.primary
+        } else if self.panes.contains_key(&PaneId(0)) {
             PaneId(0)
         } else {
             self.tree

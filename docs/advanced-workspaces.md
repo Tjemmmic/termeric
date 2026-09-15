@@ -131,13 +131,14 @@ destination is converted to pane mode without spawning another process. The
 terminal, PTY handle, reader, shell metadata, title, and Harvest state move as
 one owner and are resized to the destination geometry. Source and destination
 broadcast state is cancelled before further input. Shell and named-profile
-panes may cross unlike tab types because schema-2 persistence records each
+panes may cross unlike tab types because workspace persistence records each
 launch independently. A source with one pane, a missing second window, a
-closing destination tab, a live-domain endpoint, or a focused tab-owned plugin
+closing destination tab, a live-domain endpoint, or a focused plugin
 process fails without detaching anything. An ordinary split inside a plugin tab
-is not plugin-owned and may move. Live-domain topology and plugin session
-identity remain owned by their respective controllers rather than being
-silently reparented by this process-local command.
+is not plugin-owned and may move. Live-domain topology remains daemon-owned.
+Plugin session state is now terminal-owned and mixed-plugin archive restoration
+is supported, but explicit plugin-pane movement remains guarded until its
+separate lifecycle work is complete.
 
 ## Broadcast safety and routing
 

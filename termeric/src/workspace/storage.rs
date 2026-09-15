@@ -328,6 +328,9 @@ fn migrate_workspace(workspace: &mut WorkspaceSnapshot) -> Result<()> {
             }
             workspace.version = WORKSPACE_SCHEMA_VERSION;
         }
+        // Schema 2 already stored every launch identity. Do not infer or
+        // rewrite any of them when enabling mixed-plugin layouts in schema 3.
+        2 => workspace.version = WORKSPACE_SCHEMA_VERSION,
         WORKSPACE_SCHEMA_VERSION => {}
         version => anyhow::bail!(
             "workspace schema {version} is newer than supported schema {WORKSPACE_SCHEMA_VERSION}"
@@ -849,6 +852,42 @@ mod tests {
         )
         .unwrap();
         assert!(load_workspace_from_dir(temp.path()).is_err());
+    }
+
+    #[test]
+    fn schema_two_keeps_exact_identities_and_legacy_plugin_splits_stay_shells() {
+        for version in [0, 1, 2] {
+            let mut workspace = sample_workspace();
+            workspace.version = version;
+            workspace.tabs[0].launch = super::super::WorkspaceLaunch::Plugin {
+                plugin_id: "codex".into(),
+                profile: Some("saved".into()),
+            };
+            let primary = workspace.tabs[0].primary_pane;
+            let primary_launch = workspace.tabs[0].launch.clone();
+            for pane in &mut workspace.tabs[0].panes {
+                pane.launch = if version < 2 {
+                    None
+                } else if pane.id == primary {
+                    Some(primary_launch.clone())
+                } else {
+                    Some(super::super::WorkspaceLaunch::Profile { name: "dev".into() })
+                };
+            }
+            migrate_workspace(&mut workspace).unwrap();
+            assert_eq!(workspace.version, WORKSPACE_SCHEMA_VERSION);
+            workspace.validate().unwrap();
+            for pane in &workspace.tabs[0].panes {
+                let expected = if pane.id == primary {
+                    workspace.tabs[0].launch.clone()
+                } else if version < 2 {
+                    super::super::WorkspaceLaunch::Shell
+                } else {
+                    super::super::WorkspaceLaunch::Profile { name: "dev".into() }
+                };
+                assert_eq!(pane.launch.as_ref(), Some(&expected));
+            }
+        }
     }
 
     #[test]

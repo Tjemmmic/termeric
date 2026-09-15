@@ -10,7 +10,7 @@ described as restored.
 
 Each workspace has its own directory in the platform data directory under
 `termeric/workspaces/<workspace-id>/`. `workspace.toml` records schema version
-2, stable ID and display name, timestamps, the active tab, informational theme
+3, stable ID and display name, timestamps, the active tab, informational theme
 and shell references, and up to 64 ordered tabs. A tab records:
 
 - shell, reusable terminal-profile, or versioned plugin launch type and its
@@ -19,18 +19,19 @@ and shell references, and up to 64 ordered tabs. A tab records:
   primary, and focused pane;
 - a recursive pane tree with horizontal/vertical direction and exact split
   ratios from 0.1 through 0.9;
-- up to 64 pane records with stable IDs, their exact shell or named-profile
+- up to 64 pane records with stable IDs, their exact shell, named-profile, or plugin
   relaunch identity, OSC title, cwd, last-command metadata, and an optional
   scrollback object reference.
 
 Schema 0/1 archives did not carry a launch identity per pane. Migration assigns
 the tab launch to its primary pane, the named tab profile to historical profile
-splits, and the configured shell to historical shell/plugin splits. New
-archives require every pane identity and reject plugin launches outside the
-tab-owned primary pane. Full terminal-local plugin session ownership and
-non-primary plugin restoration are tracked in
-[#126](https://github.com/Tjemmmic/termeric/issues/126); exact-owner command and
-profile routing does not remove this archive restriction.
+splits, and the configured shell to historical shell/plugin splits. Schema 2
+identities migrate unchanged. Schema 3 requires every pane identity and permits
+mixed shell/profile/plugin layouts, including distinct profiles of the same
+plugin and different plugins. Migration never invents sibling plugin launches.
+The explicit launch primary is preserved even when its ID is not zero.
+Explicit plugin-pane creation and plugin-pane movement remain guarded pending
+the remaining work in [#126](https://github.com/Tjemmmic/termeric/issues/126).
 
 Each archive represents one native window. Process-level application state
 stores the ordered set of window workspace IDs so automatic startup can
@@ -66,8 +67,9 @@ leaf count and nesting depth.
 
 Restore validates and migrates metadata before launching anything. Corrupt tabs
 and missing scrollback objects are skipped independently. An unavailable cwd
-falls back to the process default with a warning. A plugin tab is skipped when
-its built-in plugin, named profile, or executable is unavailable; other tabs
+falls back to the process default with a warning, never to a focused sibling's
+cwd. A whole tab is skipped when any pane's built-in plugin, named profile, or
+executable is unavailable; other tabs
 still restore. Filtering an earlier corrupt tab remaps focus to the exact
 surviving source tab rather than retaining a stale list index. If the saved
 focused tab itself cannot restore, the first recovered tab receives focus. If
@@ -89,6 +91,24 @@ they differ from the current configuration, restore keeps the current safe
 configuration and reports the mismatch. Plugin profile references are stricter:
 an explicitly saved profile must still exist so restoration cannot silently
 launch a materially different permission or sandbox policy.
+
+Every pane launch is resolved before spawning that tab's PTYs. Plugin restore
+hooks are dispatched only to the named plugin and must return exactly one
+matching launch with the saved profile and that pane's usable cwd. Ambiguous
+responses, notices indicating configuration fallback, and unrelated actions
+are rejected without executing those actions. An unspecified profile may
+resolve to the current configured default; its resolved reference is retained
+for the next save. A configured profile literally named `default` remains an
+explicit reference. Plugin panes bypass interactive-shell hook injection, and
+hook-provided `PWD` cannot override the saved cwd or missing-cwd fallback.
+
+Actual PTY creation checks executable availability; restoration does not run an
+extra `--version` probe. A spawn/layout failure drops that tab's newly created
+owners immediately, without close animations or disturbing already recovered
+tabs. This cannot undo external side effects of processes already started.
+Restored plugin sessions start with fresh metadata; active recorders, pending
+diffs, and provider conversations are not resumed. Fake-executable tests prove
+local launch and archive behavior, not provider readiness or native appearance.
 
 ## User workflow
 

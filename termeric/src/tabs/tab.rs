@@ -979,6 +979,21 @@ impl Tab {
         plugin_id: &str,
         profile: String,
     ) -> bool {
+        self.set_plugin_profile_reference(
+            pane_id,
+            plugin_id,
+            (profile != "default").then_some(profile),
+        )
+    }
+
+    /// Restore an exact profile reference, including None or a configured
+    /// profile literally named "default", without applying picker sentinels.
+    pub(crate) fn set_plugin_profile_reference(
+        &mut self,
+        pane_id: crate::panes::PaneId,
+        plugin_id: &str,
+        profile: Option<String>,
+    ) -> bool {
         if self.pane_plugin_id(pane_id) != Some(plugin_id) {
             return false;
         }
@@ -986,9 +1001,8 @@ impl Tab {
             .pane_session_mut(pane_id)
             .and_then(|state| state.ai_session.as_mut())
         {
-            session.profile.clone_from(&profile);
+            session.profile = profile.clone().unwrap_or_else(|| "default".into());
         }
-        let saved_profile = (profile != "default").then_some(profile);
         let launch = if let Some(panes) = &mut self.pane_manager {
             &mut panes
                 .get_pane_mut(pane_id)
@@ -997,8 +1011,8 @@ impl Tab {
         } else {
             &mut self.terminal_launch
         };
-        if let crate::workspace::WorkspaceLaunch::Plugin { profile, .. } = launch {
-            *profile = saved_profile;
+        if let crate::workspace::WorkspaceLaunch::Plugin { profile: saved, .. } = launch {
+            *saved = profile;
         }
         true
     }

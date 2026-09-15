@@ -76,8 +76,8 @@ retarget the choice to a sibling or replacement tab. Only that owner's saved
 launch changes, not the running provider configuration. Raw-shell regressions
 cover same-plugin/different-plugin sibling isolation, shell-presented owners,
 stale/replaced/canceled choices, removed configuration, and surviving-owner
-metadata after close/collapse. Supported workspace restoration preserves its
-primary plugin profile and sibling shell/process-profile launches. See
+metadata after close/collapse. Workspace restoration preserves each pane's
+plugin profile alongside sibling shell/process-profile launches. See
 [#125](https://github.com/Tjemmmic/termeric/issues/125).
 
 AI metadata, transcript recorders, and diff detectors now live beside each
@@ -99,11 +99,14 @@ epoch. Malformed text uses annotated replacement characters and bounded
 warnings, not silent whole-chunk loss. Protocol/sibling/refused writes are
 excluded. These local regressions do not establish real-provider acceptance.
 
-This is the ownership dependency of
-[#126](https://github.com/Tjemmmic/termeric/issues/126). It does not lift the
-restriction on non-primary plugin workspace launches or plugin-primary pane
-transfer. Synthetic metadata tests of mixed plugin owners do not establish
-provider, native visual, or complete workspace support.
+The workspace lane now restores schema-3 mixed plugin/shell/process-profile
+layouts using fake executables in real local PTYs. It checks distinct profiles
+of the same and different plugins, exact cwd/argv/environment, archive
+round-trips, nonzero primary IDs, migration without invented plugin launches,
+targeted hook validation, and failed-tab rollback. Fresh plugin owners do not
+resume recordings or conversations. Explicit plugin-pane creation and movement
+remain guarded under [#126](https://github.com/Tjemmmic/termeric/issues/126).
+These tests do not establish provider readiness or native visual acceptance.
 
 Diff capture now frames arbitrary PTY chunks with bounded line/capture/history
 storage, validates complete hunk counts, and rejects oversized or malformed

@@ -1507,6 +1507,15 @@ impl TabManager {
         self.tabs.len().checked_sub(1)
     }
 
+    /// Remove only the uncommitted tail created by one workspace-tab restore.
+    /// Dropping it tears down its PTYs immediately, without close animations,
+    /// automatic snapshots, or disturbing already-restored/existing owners.
+    pub(crate) fn rollback_workspace_tab(&mut self, count: usize, active: usize) {
+        assert!(count <= self.tabs.len());
+        self.tabs.truncate(count);
+        self.active = active.min(self.tabs.len().saturating_sub(1));
+    }
+
     pub(crate) fn new_shell_tab_from_workspace(
         &mut self,
         snapshot: &crate::workspace::WorkspaceTabSnapshot,
@@ -1622,11 +1631,15 @@ impl TabManager {
             if let Some(terminal) = tab.focused_terminal_mut() {
                 replay_workspace_scrollback(terminal, &primary.scrollback_lines);
             }
-            if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } =
-                &snapshot.launch
-                && let Some(profile) = profile
+            if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = pane_launches
+                .get(&snapshot.primary_pane)
+                .map_or(&snapshot.launch, |(launch, _)| launch)
             {
-                tab.set_plugin_profile(PaneId(snapshot.primary_pane), plugin_id, profile.clone());
+                tab.set_plugin_profile_reference(
+                    PaneId(snapshot.primary_pane),
+                    plugin_id,
+                    profile.clone(),
+                );
             }
             return Ok(Vec::new());
         }
@@ -1650,10 +1663,15 @@ impl TabManager {
             pane_launches,
         )?;
         tab.pane_manager = Some(panes);
-        if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = &snapshot.launch
-            && let Some(profile) = profile
+        if let crate::workspace::WorkspaceLaunch::Plugin { plugin_id, profile } = pane_launches
+            .get(&snapshot.primary_pane)
+            .map_or(&snapshot.launch, |(launch, _)| launch)
         {
-            tab.set_plugin_profile(PaneId(snapshot.primary_pane), plugin_id, profile.clone());
+            tab.set_plugin_profile_reference(
+                PaneId(snapshot.primary_pane),
+                plugin_id,
+                profile.clone(),
+            );
         }
         Ok(warnings)
     }

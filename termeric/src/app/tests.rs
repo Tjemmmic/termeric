@@ -4635,6 +4635,9 @@ mod plugin_profile_tests;
 mod terminal_session_tests;
 
 #[cfg(unix)]
+mod workspace_plugin_tests;
+
+#[cfg(unix)]
 #[test]
 fn context_picker_targets_the_plugin_owner_not_its_focused_shell_sibling() {
     let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture();
