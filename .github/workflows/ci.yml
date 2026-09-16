@@ -51,6 +51,7 @@ jobs:
       - name: Prove native GUI harness contracts
         run: |
           python3 -m unittest scripts.test_gui_acceptance
+          python3 -m unittest scripts.test_gui_candidate
           python3 -m unittest scripts.test_check_gui_visual
       - name: Prove native evidence-record contracts
         run: python3 -m unittest scripts.test_native_acceptance_record
@@ -278,12 +279,14 @@ jobs:
       - name: Check native harness record analysis
         run: |
           python3 -m unittest scripts/test_gui_acceptance.py
+          python3 -m unittest scripts.test_gui_candidate
           python3 -m unittest scripts.test_run_native_gui_soak
       - name: Run X11 interaction and visual scenarios
         run: >-
           env WGPU_BACKEND=gl EGL_PLATFORM=x11
           xvfb-run -a -s "-screen 0 1280x800x24"
           python3 scripts/gui_acceptance.py --backend x11
+          --require-clean
           --start-window-manager
           --force-surface-loss
           --force-surface-outdated
@@ -303,12 +306,14 @@ jobs:
         run: >-
           env WGPU_BACKEND=gl
           python3 scripts/gui_acceptance.py --backend wayland --start-weston
+          --require-clean
           --binary target/debug/termeric
           --artifacts target/gui-acceptance/wayland
       - name: Run Wayland fullscreen and sibling-isolation scenario
         run: >-
           env WGPU_BACKEND=gl
           python3 scripts/gui_acceptance.py --backend wayland --start-sway
+          --require-clean
           --scenario fullscreen
           --binary target/debug/termeric
           --artifacts target/gui-acceptance/wayland-fullscreen
@@ -316,6 +321,7 @@ jobs:
         run: >-
           env WGPU_BACKEND=gl
           python3 scripts/gui_acceptance.py --backend wayland --start-sway
+          --require-clean
           --scenario interaction
           --force-surface-loss
           --force-surface-outdated

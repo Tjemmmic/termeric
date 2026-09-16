@@ -456,6 +456,15 @@ TERMERIC_GPU_SMOKE=1 cargo test -p termeric \
 ```
 
 Native window and surface behavior runs in the dedicated Xvfb/Weston CI lane.
+All four native harness commands now request `--require-clean`, preserving
+direct executable identity through a parent-owned descriptor and rejecting
+observed source/binary drift before success publication. Private tests in
+`scripts.test_gui_candidate` cover main-path pass/failure records, source drift,
+replacement/deletion, absent results, descriptor cleanup, fresh-directory and
+baseline-update restrictions, exact scenario selection, and explicit visual
+skip policy. A local `/bin/true` versus `/bin/false` replacement fixture proves
+that execution stays on the pinned object while the artifact fails closed.
+Neither this mode nor its tests imply real desktop/provider acceptance.
 It drives the real application through X11 input, PTY transcripts, desktop
 spies, Vim/less/tmux fixtures, one-shot lost/outdated-surface and device-loss
 recovery, and a focused GPU visual signature. See

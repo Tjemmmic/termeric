@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -32,6 +33,10 @@ except ImportError:  # Reported as an explicit missing harness dependency in mai
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.gui_candidate import GuiCandidate
+
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
 BASELINES = ROOT / "termeric" / "tests" / "gui" / "baselines"
 DEFAULT_BINARY = ROOT / "target" / "debug" / "termeric"
@@ -187,6 +192,7 @@ def result_document(
     force_surface_loss: bool,
     force_surface_outdated: bool,
     force_device_loss: bool,
+    binary_sha256: str | None = None,
 ) -> dict[str, object]:
     compositor = (
         "weston"
@@ -203,7 +209,7 @@ def result_document(
         "backend": backend,
         "compositor": compositor,
         "binary": str(binary),
-        "binary_sha256": file_sha256(binary),
+        "binary_sha256": binary_sha256 if binary_sha256 is not None else file_sha256(binary),
         "renderer_injections": {
             "surface_loss": force_surface_loss,
             "surface_outdated": force_surface_outdated,
@@ -2124,6 +2130,15 @@ def required_tools(
 
 
 def main() -> int:
+    with ExitStack() as resources:
+        backend, scenarios, artifacts = run_main(resources)
+    # Strict candidate finalization must finish before printing success.
+    print(f"Termeric {backend} GUI acceptance passed: {', '.join(scenarios)}")
+    print(f"Artifacts: {artifacts}")
+    return 0
+
+
+def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("x11", "wayland"), required=True)
     parser.add_argument("--binary", type=Path, default=DEFAULT_BINARY)
@@ -2145,6 +2160,8 @@ def main() -> int:
         help="scenario to run; repeat the option (default: all X11, launch-only Wayland)",
     )
     parser.add_argument("--update-baselines", action="store_true")
+    parser.add_argument("--require-clean", action="store_true",
+                        help="pin a clean checkout's binary and refuse drift or reused artifacts")
     parser.add_argument(
         "--skip-visual-checks",
         action="store_true",
@@ -2174,7 +2191,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    binary = args.binary.resolve()
+    binary = args.binary.absolute() if args.require_clean else args.binary.resolve()
+    if args.require_clean and args.update_baselines:
+        raise AcceptanceError("clean candidate runs cannot update baselines")
     if not binary.is_file():
         raise AcceptanceError(f"Termeric binary not found: {binary}; run cargo build first")
     if sys.platform != "linux":
@@ -2237,7 +2256,17 @@ def main() -> int:
             "required GUI acceptance tools are unavailable: " + ", ".join(missing)
         )
 
+    if len(scenarios) != len(set(scenarios)):
+        raise AcceptanceError("duplicate scenarios would overwrite acceptance artifacts")
+
     artifacts = args.artifacts.resolve()
+    candidate = None
+    scenario_binary = binary
+    if args.require_clean:
+        candidate = resources.enter_context(GuiCandidate(
+            ROOT, binary, artifacts, scenarios, args.skip_visual_checks,
+        ))
+        scenario_binary = candidate.launch()
     artifacts.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
     terminfo = artifacts / "terminfo"
@@ -2316,14 +2345,14 @@ def main() -> int:
             for scenario in scenarios:
                 try:
                     if scenario == "launch":
-                        run_wayland_launch(binary, artifacts / scenario, environment)
+                        run_wayland_launch(scenario_binary, artifacts / scenario, environment)
                     elif scenario == "interaction":
                         run_wayland_interaction_scenario(
-                            binary, artifacts / scenario, environment
+                            scenario_binary, artifacts / scenario, environment
                         )
                     else:
                         run_wayland_fullscreen_scenario(
-                            binary, artifacts / scenario, environment
+                            scenario_binary, artifacts / scenario, environment
                         )
                 except Exception as error:
                     results.append(
@@ -2336,7 +2365,7 @@ def main() -> int:
             for scenario in scenarios:
                 scenario_dir = artifacts / scenario
                 try:
-                    runners[scenario](binary, scenario_dir, environment, args.update_baselines)
+                    runners[scenario](scenario_binary, scenario_dir, environment, args.update_baselines)
                 except Exception as error:
                     results.append(
                         {"scenario": scenario, "status": "failed", "error": str(error)}
@@ -2377,34 +2406,32 @@ def main() -> int:
             if sway_log is not None:
                 sway_log.close()
             cleanup_private_runtime(sway)
-        (artifacts / "results.json").write_text(
-            json.dumps(
-                result_document(
-                    backend=args.backend,
-                    binary=binary,
-                    scenarios=results,
-                    start_weston=args.start_weston,
-                    start_sway=args.start_sway,
-                    start_window_manager=args.start_window_manager,
-                    force_surface_loss=args.force_surface_loss,
-                    force_surface_outdated=args.force_surface_outdated,
-                    force_device_loss=args.force_device_loss,
-                ),
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
+        document = result_document(
+            backend=args.backend,
+            binary=binary,
+            scenarios=results,
+            start_weston=args.start_weston,
+            start_sway=args.start_sway,
+            start_window_manager=args.start_window_manager,
+            force_surface_loss=args.force_surface_loss,
+            force_surface_outdated=args.force_surface_outdated,
+            force_device_loss=args.force_device_loss,
+            binary_sha256=candidate.digest if candidate else None,
         )
+        if candidate:
+            candidate.publish(document)
+        else:
+            (artifacts / "results.json").write_text(
+                json.dumps(document, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
 
-    print(f"Termeric {args.backend} GUI acceptance passed: {', '.join(scenarios)}")
-    print(f"Artifacts: {artifacts}")
-    return 0
+    return args.backend, scenarios, artifacts
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (AcceptanceError, subprocess.TimeoutExpired) as error:
+    except (AcceptanceError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"GUI acceptance failed: {error}", file=sys.stderr)
         raise SystemExit(1)

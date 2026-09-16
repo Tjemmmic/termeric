@@ -43,6 +43,12 @@ technical evidence only: X11, hosted CI, vendor-GPU, and operator acceptance
 are not promoted. Exact environment, hashes, artifacts, and provenance limits
 are recorded in [the local GUI evidence](gui-acceptance.md#local-software-renderer-evidence-at-7df2d38).
 
+Native GUI CI now requests clean-candidate provenance: direct harness launches
+use one pinned executable, and observed source/binary drift or incomplete
+selected scenarios prevents a successful schema-4 result. Debug runs remain
+available without that guarantee. This strengthens evidence collection, not
+platform promotion; see [the provenance limits](gui-acceptance.md#clean-candidate-mode).
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |

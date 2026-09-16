@@ -218,6 +218,38 @@ budgets.
 
 ## Local reproduction
 
+### Clean-candidate mode
+
+CI now requires `--require-clean` on each GUI harness invocation. Add it to any
+of the local commands below after building from a clean checkout. This opt-in
+mode refuses dirty source, an existing artifact directory, baseline updates,
+and symlinked/out-of-checkout executable paths. Repeated scenarios are refused
+in both modes because they would overwrite their own diagnostic artifacts.
+Use a fresh ignored build subdirectory or an external temporary directory.
+
+A parent-owned Linux executable descriptor stays open across the scenario run;
+every direct application/CLI launch made by the harness receives its `/proc`
+descriptor path. Final source/path/descriptor observations must match the
+initial identities, and every selected scenario must have passed before the
+CLI prints success. A detected change yields a nonzero exit and retained
+failure evidence even if the functional scenarios themselves passed.
+
+Strict runs emit schema-4 `results.json` with an embedded `candidate` object
+and a separate `provenance.json`: observed commit, exact requested scenarios,
+the `skip_visual_checks` option, initial/final executable identities, provenance
+checks, and `candidate_eligible`. The visual option records requested policy;
+it does not claim that every scenario performs pixel comparisons. Default
+debugging runs retain schema 3 and may use dirty source. A failure before any
+scenario result is available retains provenance without fabricating results.
+
+This detects observed drift, not hostile same-user tampering, signed compiler
+provenance, or proof that an existing binary was freshly built from the named
+source. Build first. It pins direct harness invocations, not every independently
+spawned descendant, compositor, installed client, font, or driver. Scenario
+logs are retained but not individually sealed by this mode. Historical schema-3
+results, including the local `7df2d38` observations above, do not gain stronger
+provenance retroactively. Real-desktop and provider acceptance remain separate.
+
 Build first:
 
 ```bash
