@@ -95,9 +95,27 @@ animation-control detection, and encoded-size rejection. Deterministic
 file/event tests cover replacement between decode and completion, preserved-
 timestamp Unix replacement, coalesced generations, disabled/stale completions,
 opened-handle admission, symlink following, and Linux FIFO rejection/recovery.
-These tests do not establish native texture presentation. The existing opt-in
-headless GPU lane compiles and submits the shared image shader/pipeline without
-opening a native window; native presentation remains a separate gate.
+These tests do not establish native texture presentation.
+
+The opt-in headless GPU lane now checks 104 offscreen frames through the same
+background upload, queue, clear, texture cache, and image shader used by the
+window renderer. Real PNG/JPEG decoding feeds all four fits at opacity 0, 0.35,
+and 1 across four shifted/resized content rectangles, including a viewport
+smaller than the image. An independent inverse-mapping/bilinear/sRGB reference
+checks every output pixel (three byte-values of channel tolerance), including
+PNG alpha, clipping, letterboxing, and an opaque foreground rectangle.
+Repeated-frame and replacement checks verify pixels survive CPU-RGBA release,
+one texture remains after replacement, clearing removes that cache entry, and
+a recreated pipeline works after reloading. Oracle regressions reject missing
+images, incorrect fits/opacity, foreground overwrite, and pixels outside the
+content area. The existing software/hardware smoke switches select this lane;
+see [GPU commands](testing.md#linux-software-renderer-smoke-lane).
+
+This is pipeline evidence, not a complete native UI/layer-order test, actual
+window/tab/search/plugin geometry dispatch, OS compositor or physical GPU
+recovery acceptance, or a measurement of driver allocator memory. Pipeline
+recreation is intentionally distinguished from a real device reset. Native
+presentation remains a separate gate.
 
 Before release promotion, manually verify PNG and JPEG backgrounds on X11 and
 Wayland with top and left tabs, search, plugin chrome, split panes, resize,

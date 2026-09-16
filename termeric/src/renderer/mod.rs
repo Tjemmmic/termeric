@@ -36,6 +36,8 @@ pub mod types;
 
 pub use types::*;
 
+#[cfg(test)]
+pub(crate) use background_image::headless_background_render_smoke;
 pub(crate) use background_image::{
     BackgroundImageStamp, DecodedBackgroundImage, load_background_image,
     resolve_background_image_path,

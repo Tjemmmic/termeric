@@ -228,6 +228,8 @@ fn linux_headless_gpu_render_smoke_when_requested() {
         .expect("ligature render smoke failed");
     crate::renderer::headless_image_render_smoke(&device, &queue)
         .expect("Kitty graphics render smoke failed");
+    crate::renderer::headless_background_render_smoke(&device, &queue)
+        .expect("background image render smoke failed");
     let (pixels, width, height) = crate::renderer::headless_gui_visual_snapshot(&device, &queue)
         .expect("GUI visual baseline render failed");
     if let Some(output) = std::env::var_os("TERMERIC_GUI_VISUAL_OUTPUT") {

@@ -442,6 +442,14 @@ Debian/Ubuntu), set `WGPU_BACKEND=vulkan`, and set
 missing software path behind hardware. Set `TERMERIC_GPU_SMOKE_HARDWARE=1` on
 a real-GPU host to require a non-CPU adapter through the same visual subset.
 Without `TERMERIC_GPU_SMOKE=1`, the test prints why it was skipped.
+This lane includes 104 background-image pixel checks through the production
+upload/queue/clear paths: PNG/JPEG, four fits, three opacities, shifted/resized
+viewports, foreground rectangles, repeated frames, replacement, cache removal,
+and pipeline recreation. Every pixel is compared to an independent CPU inverse-
+mapping/sRGB reference. Two GPU-free oracle regressions check rejection of
+missing or misplaced images and incorrect fit/opacity. It verifies CPU-RGBA
+release and retained texture counts, not actual driver allocation usage or
+full native UI layering; see [background evidence](background-images.md).
 The software lane also asserts that adapter diagnostics report a CPU device, so
 a changed WGPU selection policy cannot make the fallback lane pass on hardware.
 

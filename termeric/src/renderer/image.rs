@@ -545,6 +545,11 @@ impl ImagePipeline {
         self.images.remove(&key);
     }
 
+    #[cfg(test)]
+    pub(super) fn retained_image_count(&self) -> usize {
+        self.images.len()
+    }
+
     /// Remove images that are no longer referenced by any active placement.
     ///
     /// `active_ids` is the set of image IDs that are still in use.

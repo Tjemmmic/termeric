@@ -342,42 +342,20 @@ impl Renderer {
     }
 
     pub(crate) fn install_background_image(&mut self, decoded: DecodedBackgroundImage) {
-        self.background_image.revision = self.background_image.revision.wrapping_add(1).max(1);
-        let mut image = StoredImage {
-            id: BACKGROUND_IMAGE_KEY.1,
-            width: decoded.width,
-            height: decoded.height,
-            data: decoded.rgba,
-            revision: self.background_image.revision,
-        };
-        self.background_image_pipeline.upload_image(
+        self.background_image.install(
+            decoded,
             &self.device,
             &self.queue,
-            BACKGROUND_IMAGE_KEY,
-            &image,
+            &mut self.background_image_pipeline,
         );
-        // The dedicated GPU cache owns the steady-state pixels. A renderer
-        // recreation starts a fresh bounded decode, so retaining a second CPU
-        // RGBA copy for the lifetime of every window is unnecessary.
-        image.data = Arc::from([]);
-        self.background_image.image = Some(image);
     }
 
     pub(crate) fn clear_background_image(&mut self) {
-        self.background_image.image = None;
-        self.background_image_pipeline
-            .remove_image(BACKGROUND_IMAGE_KEY);
-        self.background_image_pipeline.clear();
+        self.background_image
+            .clear(&mut self.background_image_pipeline);
     }
 
     pub(super) fn build_background_image_data(&mut self, search_bar_visible: bool) {
-        self.background_image_pipeline.clear();
-        let Some(image) = self.background_image.image.clone() else {
-            return;
-        };
-        if self.background_image.opacity <= 0.0 {
-            return;
-        }
         let search_height = if search_bar_visible {
             self.cell_height + 16.0
         } else {
@@ -385,25 +363,71 @@ impl Renderer {
         };
         let content_left = self.tab_bar_width();
         let content_top = self.tab_bar_height() + self.chrome_bar_height() + search_height;
-        let Some(geometry) = background_geometry(
-            self.background_image.fit,
-            (image.width, image.height),
-            (
-                content_left,
-                content_top,
-                (self.size.0 as f32 - content_left).max(0.0),
-                (self.size.1 as f32 - content_top).max(0.0),
-            ),
-        ) else {
-            return;
-        };
-        self.background_image_pipeline.upload_image(
+        let viewport = (
+            content_left,
+            content_top,
+            (self.size.0 as f32 - content_left).max(0.0),
+            (self.size.1 as f32 - content_top).max(0.0),
+        );
+        self.background_image.queue(
             &self.device,
             &self.queue,
-            BACKGROUND_IMAGE_KEY,
-            &image,
+            &mut self.background_image_pipeline,
+            viewport,
         );
-        self.background_image_pipeline.push_image(
+    }
+}
+
+impl BackgroundImageState {
+    fn install(
+        &mut self,
+        decoded: DecodedBackgroundImage,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &mut super::image::ImagePipeline,
+    ) {
+        self.revision = self.revision.wrapping_add(1).max(1);
+        let mut image = StoredImage {
+            id: BACKGROUND_IMAGE_KEY.1,
+            width: decoded.width,
+            height: decoded.height,
+            data: decoded.rgba,
+            revision: self.revision,
+        };
+        pipeline.upload_image(device, queue, BACKGROUND_IMAGE_KEY, &image);
+        // The dedicated GPU cache owns the steady-state pixels. A renderer
+        // recreation starts a fresh bounded decode, so retaining a second CPU
+        // RGBA copy for the lifetime of every window is unnecessary.
+        image.data = Arc::from([]);
+        self.image = Some(image);
+    }
+
+    fn clear(&mut self, pipeline: &mut super::image::ImagePipeline) {
+        self.image = None;
+        pipeline.remove_image(BACKGROUND_IMAGE_KEY);
+        pipeline.clear();
+    }
+
+    fn queue(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &mut super::image::ImagePipeline,
+        viewport: (f32, f32, f32, f32),
+    ) {
+        pipeline.clear();
+        let Some(image) = self.image.as_ref() else {
+            return;
+        };
+        if self.opacity <= 0.0 {
+            return;
+        }
+        let Some(geometry) = background_geometry(self.fit, (image.width, image.height), viewport)
+        else {
+            return;
+        };
+        pipeline.upload_image(device, queue, BACKGROUND_IMAGE_KEY, image);
+        pipeline.push_image(
             BACKGROUND_IMAGE_KEY,
             geometry.x,
             geometry.y,
@@ -413,11 +437,16 @@ impl Renderer {
             geometry.v_min,
             geometry.u_max,
             geometry.v_max,
-            self.background_image.opacity,
+            self.opacity,
             -1,
         );
     }
 }
+
+#[cfg(test)]
+mod gpu_tests;
+#[cfg(test)]
+pub(crate) use gpu_tests::headless_background_render_smoke;
 
 #[cfg(test)]
 mod tests {
