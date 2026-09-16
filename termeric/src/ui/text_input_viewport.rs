@@ -47,14 +47,26 @@ impl TextInputViewport {
             return None;
         }
         // A byte cursor inside a combining/ZWJ cluster paints at its start.
-        // Locate that boundary without retaining an index for the whole query.
-        let caret = text
-            .grapheme_indices(true)
-            .find(|(offset, grapheme)| offset + grapheme.len() > cursor)
-            .map_or(text.len(), |(offset, _)| offset);
+        // Keep the adjacent slices and remaining iterator so a large cluster
+        // is not segmented again when computing the visible prefix/suffix.
+        let mut following = text.grapheme_indices(true);
+        let mut previous = None;
+        let next = loop {
+            match following.next() {
+                Some((offset, grapheme)) if offset + grapheme.len() <= cursor => {
+                    previous = Some((offset, grapheme));
+                }
+                next => break next,
+            }
+        };
+        let caret = next.map_or(text.len(), |(offset, _)| offset);
         let mut start_byte = caret;
         let mut cursor_columns = 0;
-        for (offset, grapheme) in text[..caret].grapheme_indices(true).rev() {
+        let prefix_end = previous.map_or(0, |(offset, _)| offset);
+        for (offset, grapheme) in previous
+            .into_iter()
+            .chain(text[..prefix_end].grapheme_indices(true).rev())
+        {
             let width = termeric_core::unicode::grapheme_width(grapheme);
             if cursor_columns + width > columns - 1 {
                 break;
@@ -62,15 +74,16 @@ impl TextInputViewport {
             cursor_columns += width;
             start_byte = offset;
         }
-        let mut end_byte = start_byte;
-        let mut used = 0;
-        for (offset, grapheme) in text[start_byte..].grapheme_indices(true) {
+        // The prefix already fits; reuse its width instead of rescanning it.
+        let mut end_byte = caret;
+        let mut used = cursor_columns;
+        for (offset, grapheme) in next.into_iter().chain(following) {
             let width = termeric_core::unicode::grapheme_width(grapheme);
             if used + width > columns {
                 break;
             }
             used += width;
-            end_byte = start_byte + offset + grapheme.len();
+            end_byte = offset + grapheme.len();
         }
         Some(Self {
             text_range: start_byte..end_byte,

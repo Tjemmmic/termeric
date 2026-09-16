@@ -143,7 +143,9 @@ scaled-font quality is intentionally not inferred from these resource checks.
 Search and palette query viewports no longer allocate a full-query grapheme
 index during painting, IME placement, or pointer hit testing. They locate the
 caret with forward iteration, walk backward over the visible prefix, and scan
-the visible suffix without retaining an index. The isolated
+the visible suffix without retaining an index. Adjacent grapheme slices, the
+remaining forward iterator, and the measured prefix width are reused so large
+clusters are not segmented repeatedly. The isolated
 [`query_viewport` regression](../termeric/tests/query_viewport.rs) compares every
 geometry field against the frozen indexed implementation at every scalar caret
 across ASCII, combining/ZWJ, regional-indicator, Indic, and zero-width fixtures.
@@ -159,6 +161,37 @@ This deterministic regression is separate from the 72-metric benchmark report:
 
 ```bash
 cargo test -p termeric --test query_viewport --locked --offline -- --nocapture
+```
+
+An opt-in paired CPU diagnostic checks the memory/time tradeoff against that
+same frozen reference. It verifies exact geometry before timing, warms both
+paths, alternates order, and emits five raw samples per fixture. Each sample is
+450 layout evaluations: 50 passes over start/scalar-midpoint/end carets and
+1/80/512-column fields. Fixture setup and assertions are outside timing.
+It deliberately includes a single 4,001-byte combining cluster: the initial
+allocation-free traversal was roughly twice as slow there because it repeated
+segmentation, which motivated the boundary/prefix reuse above.
+
+Three local release-mode processes (15 samples per fixture) measured these
+medians, in milliseconds per 450-evaluation batch:
+
+| Query fixture | Indexed reference | Boundary-reusing traversal |
+| --- | ---: | ---: |
+| 4,096-byte ASCII | 23.798 | 12.443 |
+| 3,328-byte mixed script | 8.823 | 5.494 |
+| 3,584-byte regional indicators | 6.043 | 4.100 |
+| 4,001-byte combining cluster | 11.499 | 10.972 |
+| 2,688-byte Indic | 8.891 | 7.591 |
+
+These are local microbenchmark diagnostics, not sealed release acceptance,
+portable timing budgets, native input latency, or comparisons to other
+terminals. The separate allocation regression still requires zero requests,
+including the long combining and regional-indicator fixtures. Reproduce the
+paired run without other build/benchmark work competing for CPU:
+
+```bash
+cargo test -p termeric --test query_viewport --release --locked --offline \
+  paired_query_viewport_cpu_benchmark -- --ignored --exact --nocapture
 ```
 
 The synthetic key-to-submit metric intentionally excludes OS keyboard delivery,

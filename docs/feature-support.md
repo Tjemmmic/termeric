@@ -420,6 +420,11 @@ Differential geometry tests and an isolated allocator regression pass, including
 zero allocation requests across 100 evaluations of each long-query fixture.
 This measures temporary allocation traffic, not whole-app RSS or native latency
 (see [performance evidence](performance.md)).
+The paired release-only CPU diagnostic also exposed and drove a fix for repeated
+segmentation of long combining clusters. Boundary/prefix reuse retains exact
+geometry and zero-allocation coverage; three local processes show lower median
+batch times than the indexed reference across all five query fixtures. Those
+microbenchmarks are diagnostic, not native-latency or portable-budget evidence.
 
 Shaped-run retention now has independent 8 MiB persistent and 1 MiB frame-local
 retry budgets, plus a 4,096-entry ceiling on each. Accounting covers owned

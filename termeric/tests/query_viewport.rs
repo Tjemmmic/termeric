@@ -123,6 +123,7 @@ fn streaming_viewport_matches_indexed_reference_at_every_scalar_caret() {
         String::new(),
         "plain text".into(),
         "x".repeat(4096),
+        format!("a{}", "\u{301}".repeat(2000)),
         "a界e\u{301}👩\u{200d}💻🇺🇸z".repeat(16),
         "\u{301}\u{200d}\u{fe0f}a\r\nb".into(),
         "🇦🇧🇨🇩🇪🇫🇬".repeat(8),
@@ -153,7 +154,12 @@ fn streaming_viewport_matches_indexed_reference_at_every_scalar_caret() {
 
 #[test]
 fn viewport_and_pointer_mapping_allocate_no_heap_storage() {
-    for text in ["x".repeat(4096), "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(128)] {
+    for text in [
+        "x".repeat(4096),
+        "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(128),
+        format!("a{}", "\u{301}".repeat(2000)),
+        "🇦🇧🇨🇩🇪🇫🇬".repeat(128),
+    ] {
         let expected = reference(&text, text.len(), 80);
         let old = measure(|| {
             black_box(reference(black_box(&text), text.len(), 80));
@@ -180,6 +186,75 @@ fn viewport_and_pointer_mapping_allocate_no_heap_storage() {
             text.len(),
             old.0,
             old.1
+        );
+    }
+}
+
+#[test]
+#[ignore = "opt-in paired viewport timing diagnostic; not a cross-machine budget"]
+// Compile in debug builds but fail if explicitly invoked there. A const
+// assertion would instead break the ordinary test build.
+#[allow(clippy::assertions_on_constants)]
+fn paired_query_viewport_cpu_benchmark() {
+    use std::time::Instant;
+
+    assert!(
+        !cfg!(debug_assertions),
+        "run this diagnostic with --release"
+    );
+    for (name, text) in [
+        ("ascii", "x".repeat(4096)),
+        ("mixed", "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(128)),
+        ("regional_indicators", "🇦🇧🇨🇩🇪🇫🇬".repeat(128)),
+        ("combining_cluster", format!("a{}", "\u{301}".repeat(2000))),
+        ("indic", "क्\u{200d}षक्ष".repeat(128)),
+    ] {
+        assert!(text.len() <= 4096);
+        let middle = text.char_indices().nth(text.chars().count() / 2).unwrap().0;
+        let cases: Vec<_> = [0, middle, text.len()]
+            .into_iter()
+            .flat_map(|cursor| [1, 80, 512].map(|columns| (cursor, columns)))
+            .collect();
+        for &(cursor, columns) in &cases {
+            assert_eq!(
+                current(&text, cursor, columns),
+                reference(&text, cursor, columns)
+            );
+        }
+        let run = |calculate: fn(&str, usize, usize) -> TextInputViewport| {
+            let started = Instant::now();
+            for _ in 0..50 {
+                for &(cursor, columns) in &cases {
+                    black_box(calculate(
+                        black_box(&text),
+                        black_box(cursor),
+                        black_box(columns),
+                    ));
+                }
+            }
+            started.elapsed().as_secs_f64() * 1000.0
+        };
+        // Equal warmup, then alternate order to avoid always favoring one path.
+        black_box(run(reference));
+        black_box(run(current));
+        let mut indexed_ms = Vec::new();
+        let mut streaming_ms = Vec::new();
+        for sample in 0..5 {
+            if sample % 2 == 0 {
+                indexed_ms.push(run(reference));
+                streaming_ms.push(run(current));
+            } else {
+                streaming_ms.push(run(current));
+                indexed_ms.push(run(reference));
+            }
+        }
+        println!(
+            "VIEWPORT_CPU {}",
+            serde_json::json!({
+                "fixture": name, "query_bytes": text.len(),
+                "workload": "v1; 50 passes; carets=start,scalar-midpoint,end; columns=1,80,512",
+                "indexed_ms": indexed_ms, "streaming_ms": streaming_ms,
+            })
         );
     }
 }
