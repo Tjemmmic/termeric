@@ -1,8 +1,9 @@
 import base64
 import unittest
+from unittest.mock import Mock, call
 
 from scripts.gui_acceptance import input_streams
-from scripts.gui_palette_input import CASES, verify_palette_delivery
+from scripts.gui_palette_input import CASES, apply_edit, verify_palette_delivery
 
 
 class PaletteInputTests(unittest.TestCase):
@@ -37,8 +38,19 @@ class PaletteInputTests(unittest.TestCase):
         self.assertEqual([case[0] for case in CASES], [
             "middle-delete", "left-insert", "home-right", "end-insert",
             "combining-backspace", "zwj-backspace", "flag-backspace",
+            "word-left", "word-right", "word-delete", "word-backspace-combining",
+            "word-backspace-zwj", "word-backspace-flag",
         ])
         self.assertTrue(all(query.startswith("U+") and edits for _, query, edits in CASES))
+
+    def test_ctrl_edits_use_native_modifiers_not_typed_escape_sequences(self):
+        app = Mock()
+        for edit in (("ctrl", "Left"), ("key", "Delete"), ("text", "3")):
+            apply_edit(app, *edit)
+        self.assertEqual(app.mock_calls, [call.wayland_chord(("ctrl",), "Left"),
+                                         call.wayland_chord((), "Delete"), call.wayland_type("3")])
+        with self.assertRaises(ValueError):
+            apply_edit(app, "unknown", "Left")
 
 
 if __name__ == "__main__":

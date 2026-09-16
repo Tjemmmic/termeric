@@ -12,7 +12,9 @@ import stat
 
 # Deliberately independent of the runner's CASES and its reported expected bytes.
 CASE_NAMES = ("middle-delete", "left-insert", "home-right", "end-insert",
-              "combining-backspace", "zwj-backspace", "flag-backspace")
+              "combining-backspace", "zwj-backspace", "flag-backspace",
+              "word-left", "word-right", "word-delete", "word-backspace-combining",
+              "word-backspace-zwj", "word-backspace-flag")
 
 
 def read_artifact(root: Path, name: str, limit: int):
@@ -57,11 +59,11 @@ def valid_pid(value):
 
 
 def reconstruct(report, records):
-    if not isinstance(report, dict) or type(report.get("schema")) is not int or report["schema"] != 1 or report.get("backend") != "wayland" or report.get("error"):
+    if not isinstance(report, dict) or type(report.get("schema")) is not int or report["schema"] != 2 or report.get("backend") != "wayland" or report.get("error"):
         raise ValueError("invalid palette sidecar header or recorded failure")
     cases = report.get("cases")
     if not isinstance(cases, list) or [c.get("case") if isinstance(c, dict) else None for c in cases] != list(CASE_NAMES):
-        raise ValueError("palette evidence must contain exactly the seven ordered cases")
+        raise ValueError("palette evidence must contain exactly the thirteen ordered cases")
     inputs, streams, starts = [], {}, set()
     for record in records:
         if not isinstance(record, dict):
@@ -127,7 +129,7 @@ def collect_palette_evidence(root: Path):
     sidecar, sidecar_seal = read_artifact(root, "interaction/palette-input.json", 64 * 1024)
     transcript, transcript_seal = read_artifact(root, "interaction/pty-transcript.jsonl", 8 * 1024 * 1024)
     reconstruct(decode_json(sidecar), [decode_json(line) for line in transcript.splitlines()])
-    return {"schema": 1, "case_count": len(CASE_NAMES), "artifacts": [sidecar_seal, transcript_seal]}
+    return {"schema": 2, "case_count": len(CASE_NAMES), "artifacts": [sidecar_seal, transcript_seal]}
 
 
 def validate_record(path: Path):

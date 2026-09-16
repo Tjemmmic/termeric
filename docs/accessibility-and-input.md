@@ -105,21 +105,23 @@ model/worker regressions cover placement; native pointer/IME acceptance remains
 deferred. Drag/Shift-selection and semantic SetTextSelection remain
 unimplemented.
 
-The private-Sway interaction lane now exercises seven real-keyboard palette
+The private-Sway interaction lane now requires thirteen real-keyboard palette
 editing cases and exact Unicode insertion, alternating between two real local
 PTY owners. It requires post-insertion fences, no modal-query leakage or
 duplicate insertion, no unrelated focus loss, and restoration of the original
 pane. Its `palette-input.json` sidecar records exact per-owner expected/actual
-bytes. This lane covers unmodified editing, not Ctrl word bindings or pointer
-caret placement.
+bytes. The schema-2 sidecar adds six Ctrl word-edit cases to the seven
+unmodified-edit cases and requires command-palette Ctrl+Delete during setup.
+This lane does not test pointer caret placement.
 It complements the model/geometry tests; it does not test native IME
 composition, visual clipping, Orca, or real-desktop policy. See the
 [native GUI contract](gui-acceptance.md).
 
-Current strict GUI publication independently reconstructs these seven cases
+Current strict GUI publication independently reconstructs these thirteen cases
 from the transcript and seals both files. The offline palette evidence checker
 repeats that reconstruction and verifies both hashes, so missing/changed
-artifacts cannot stand in for the current acceptance contract.
+artifacts or historical seven-case schema-1 sidecars cannot stand in for the
+current acceptance contract.
 
 Native color fonts use the separate bounded RGBA glyph atlas described in
 [Glyph atlas lifetime](glyph-atlas.md). Extended grapheme width remains the

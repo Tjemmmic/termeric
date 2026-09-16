@@ -15,7 +15,27 @@ CASES = (
     ("combining-backspace", "U+2603e\u0301", (("key", "BackSpace"),)),
     ("zwj-backspace", "U+2603👩\u200d💻", (("key", "BackSpace"),)),
     ("flag-backspace", "U+2603🇺🇸", (("key", "BackSpace"),)),
+    ("word-left", "U+X2603", (("ctrl", "Left"), ("key", "Delete"))),
+    ("word-right", "U+260X", (("key", "Home"), ("ctrl", "Right"),
+                              ("ctrl", "Right"), ("ctrl", "Right"),
+                              ("key", "BackSpace"), ("text", "3"))),
+    ("word-delete", "U+👩\u200d💻2603", (("key", "Home"), ("key", "Right"),
+                                         ("key", "Right"), ("ctrl", "Delete"))),
+    ("word-backspace-combining", "U+2603 e\u0301", (("ctrl", "BackSpace"),)),
+    ("word-backspace-zwj", "U+2603 👩\u200d💻", (("ctrl", "BackSpace"),)),
+    ("word-backspace-flag", "U+2603 🇺🇸", (("ctrl", "BackSpace"),)),
 )
+
+
+def apply_edit(app, kind, value):
+    if kind == "key":
+        app.wayland_chord((), value)
+    elif kind == "ctrl":
+        app.wayland_chord(("ctrl",), value)
+    elif kind == "text":
+        app.wayland_type(value)
+    else:
+        raise ValueError(f"unknown palette edit kind: {kind}")
 
 
 def verify_palette_delivery(streams, expected):
@@ -40,11 +60,11 @@ def run_palette_input_checks(gui, app, transcript, original_pid):
         gui.wait_until(value, lambda: gui.pids_receiving_token(records(), value.encode()) == {owner})
 
     report = {
-        "schema": 1, "backend": "wayland", "cases": [],
+        "schema": 2, "backend": "wayland", "cases": [],
         "coverage": "private Sway native query editing and exact local-pane bytes; not native IME, screen-reader, or visual acceptance",
     }
     try:
-        with native_keyboard_lifetime(gui, app, "wayland", duration_ms=120000):
+        with native_keyboard_lifetime(gui, app, "wayland", duration_ms=180000):
             old = started()
             app.wayland_chord(("alt", "shift"), "Right")
             gui.wait_until("palette sibling fixture starts", lambda: len(started() - old) == 1)
@@ -66,18 +86,15 @@ def run_palette_input_checks(gui, app, transcript, original_pid):
                 before = gui.input_streams(records())
                 lost = app.log_count("Window focus changed: false")
                 app.wayland_chord(("ctrl", "shift"), "p")
-                app.wayland_type("QQQunicode")
+                app.wayland_type("junk unicode")
                 app.wayland_chord((), "Home")
-                for _ in range(3):
-                    app.wayland_chord((), "Delete")
+                app.wayland_chord(("ctrl",), "Delete")
+                app.wayland_chord((), "Delete")
                 app.wayland_chord((), "End")
                 app.wayland_chord((), "Return")
                 app.wayland_type(query)
                 for kind, value in edits:
-                    if kind == "key":
-                        app.wayland_chord((), value)
-                    else:
-                        app.wayland_type(value)
+                    apply_edit(app, kind, value)
                 app.wayland_chord((), "Return")
                 fences = {pid: f"PALETTE_END_{name}_{pid}".encode() for pid in (owner, other)}
                 # Each pane's post-selection fence drains fragmented writes
