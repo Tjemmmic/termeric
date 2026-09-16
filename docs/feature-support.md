@@ -65,6 +65,12 @@ normal-height arrow activation, drag, IME, and screen-reader acceptance remain
 separate checks; CI wiring alone does not establish X11 or hosted acceptance.
 See [overflow lane boundaries](gui-acceptance.md#tab-overflow-keyboard-lane).
 
+Normal left clicks now exit F6 chrome focus after hit testing, avoiding swallowed
+typing and preserving the displayed keyboard-scrolled tab target. The native
+overflow lane checks terminal, distant-tab, and split-pane input ownership;
+unit checks protect release/non-primary behavior and existing text-field focus.
+This does not promote screen-reader, IME, or unrun platform acceptance.
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |

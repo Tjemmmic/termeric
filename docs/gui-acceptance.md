@@ -393,11 +393,20 @@ Previous, and New Tab. It requires a thirteenth PTY to start, no navigation byte
 to reach any original PTY, and subsequent typed input to reach only the new PTY.
 Normal window closure must clean up every fixture child. `tab-overflow.json`
 records the sequence and process identities beside the raw PTY/runtime logs.
-Its schema-2 record also covers a 960×128 compact-rail phase: pointer clicks on
+The compact-rail phase, added in schema 2, uses a 960×128 surface: pointer clicks on
 the first tab, Next, Previous, and New Tab must route subsequent typed tokens
 to their exact expected PTYs. Existing-tab clicks must not create another tab.
 The fixture derives its row height from observed PTY cell metrics and fails if
 the geometry cannot exercise the compact layout.
+
+Schema 3 adds F6-to-pointer focus transitions without an intervening Escape:
+click terminal content while chrome is focused, select a distant tab revealed
+by keyboard navigation, then click each half of a split tab. Exact typed-token
+owners must match the active terminal, the displayed tab, and each clicked
+pane respectively. The distant target is calculated from observed cell metrics
+and the rail's one- or two-tab capacity; resetting the viewport before hit
+testing must fail this check. `pointer_focus_input_owners` and `focus_split_pid`
+retain the observations, and normal shutdown must reap the extra split child.
 
 X11 uses its existing window-relative pointer adapter. Private Sway uses a
 small, bounded Wayland virtual-pointer client: its device-free seat cannot

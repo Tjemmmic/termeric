@@ -73,6 +73,16 @@ the focus ring is active:
 - `Enter` or `Space` activates the focused control;
 - `Escape` returns focus to the terminal.
 
+A normal left click also exits F6 chrome navigation after its target has been
+dispatched, so typing follows the clicked tab or pane without an extra Escape.
+The keyboard-anchored tab viewport is preserved until hit testing completes;
+clearing it earlier could select a different tab than the one displayed.
+Modal interception still takes priority. Releases and non-primary buttons do
+not perform this handoff, and an already-terminal focus leaves text-field
+accessibility focus and IME preedit state alone. The native overflow fixture
+checks terminal, distant-tab, and split-pane input ownership after F6 clicks;
+this does not establish screen-reader or platform IME acceptance.
+
 The focus outline uses the exact rendered bounds shared by tab rendering and
 hit testing, including the animated bounds when reduced motion is off. It is
 theme-derived, two physical pixels wide, and does not rely

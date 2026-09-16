@@ -500,6 +500,10 @@ native input and exact PTY token ownership. The private Sway helper creates a
 Wayland virtual pointer without host input-device access; its wire/cleanup
 unit tests require no compositor. Small-height layout tests check disjoint
 bounds, visible anchors where one full tab fits, and rendered-center hit tests.
+It also checks that F6 followed by terminal, distant-tab, or split-pane clicks
+restores exact PTY input ownership without an extra Escape. Unit coverage
+preserves non-primary/release behavior and already-terminal text-field focus
+and IME preedit state; real IME and screen-reader acceptance remain separate.
 See [overflow coverage and exclusions](gui-acceptance.md#tab-overflow-keyboard-lane).
 
 The headless visual subset is deliberately requested from a fallback adapter

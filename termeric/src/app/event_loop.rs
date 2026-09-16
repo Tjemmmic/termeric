@@ -1657,6 +1657,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // (called from handle_mouse_input) does outside-click dismiss.
                 if let Some(pos) = self.last_cursor_pos {
                     self.handle_mouse_input(button, state, pos);
+                    self.finish_pointer_chrome_focus(button, state);
                 }
             }
 

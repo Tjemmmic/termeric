@@ -68,6 +68,10 @@ Keyboard focus now retains the last tab viewport when moving onto overflow or
 toolbar controls. Previously, returning to the active tab's viewport could
 remove the focused arrow and send the next navigation key back to the terminal.
 Leaving chrome clears the retained anchor and restores active-tab tracking.
+Normal left clicks perform this handoff after dispatch, preserving the visible
+keyboard-scrolled target during hit testing and returning typing to the clicked
+tab or pane. The native regression checks both input ownership and a distant
+tab that would be misidentified if the viewport were reset before the click.
 Pure regressions cover top and left layouts; the separate
 [`tab-overflow` scenario](gui-acceptance.md#tab-overflow-keyboard-lane) checks
 native keyboard reachability and PTY isolation without claiming visual acceptance.

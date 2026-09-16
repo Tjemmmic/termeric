@@ -92,6 +92,14 @@ class TabPlacementTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 placement.compact_pointer_targets(geometry)
 
+    def test_compact_metrics_identify_one_or_two_visible_tabs_for_distant_click(self):
+        for geometry, row_height, visible in (((5, 80, 720, 85), 29, 2),
+                                               ((3, 80, 720, 75), 38, 1)):
+            height = placement.compact_row_height(geometry)
+            self.assertEqual(height, row_height)
+            self.assertEqual((128 - 2 * height) // height, visible)
+            self.assertLess(placement.compact_pointer_targets(geometry)["tab"][1], 2 * height)
+
     def test_pointer_adapter_is_backend_specific(self):
         app = mock.Mock(env={"SWAYSOCK": "/private/sway"})
         harness = mock.Mock(AcceptanceError=gui.AcceptanceError)

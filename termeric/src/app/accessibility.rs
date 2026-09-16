@@ -809,6 +809,17 @@ impl App {
         self.refresh_accessibility();
     }
 
+    /// Call after normal pointer dispatch: the keyboard-anchored tab viewport
+    /// must remain intact until hit testing has resolved the clicked target.
+    pub(super) fn finish_pointer_chrome_focus(&mut self, button: MouseButton, state: ElementState) {
+        if button == MouseButton::Left
+            && state == ElementState::Pressed
+            && self.accessibility.keyboard_focus != ChromeFocus::Terminal
+        {
+            self.set_chrome_focus(ChromeFocus::Terminal);
+        }
+    }
+
     fn activate_chrome_focus(&mut self) {
         match self.accessibility.keyboard_focus {
             ChromeFocus::Terminal => {}
@@ -5891,6 +5902,53 @@ mod tests {
                 ChromeFocus::Settings,
             ]
         );
+    }
+
+    #[test]
+    fn dispatched_primary_press_returns_chrome_focus_to_terminal() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        for focus in [
+            ChromeFocus::Tab(19),
+            ChromeFocus::CloseTab(19),
+            ChromeFocus::PreviousTab,
+            ChromeFocus::NextTab,
+            ChromeFocus::NewTab,
+            ChromeFocus::Commands,
+            ChromeFocus::Workspaces,
+            ChromeFocus::Settings,
+        ] {
+            app.set_chrome_focus(focus);
+            app.finish_pointer_chrome_focus(MouseButton::Left, ElementState::Pressed);
+            assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Terminal);
+            assert_eq!(app.accessibility.focus_override, None);
+            assert_eq!(app.chrome_focus_render_target(), None);
+        }
+    }
+
+    #[test]
+    fn pointer_release_and_other_buttons_do_not_change_chrome_focus() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.set_chrome_focus(ChromeFocus::Tab(19));
+        for (button, state) in [
+            (MouseButton::Left, ElementState::Released),
+            (MouseButton::Right, ElementState::Pressed),
+            (MouseButton::Middle, ElementState::Pressed),
+        ] {
+            app.finish_pointer_chrome_focus(button, state);
+            assert_eq!(app.accessibility.keyboard_focus, ChromeFocus::Tab(19));
+            assert_eq!(app.accessibility.focus_override, Some(tab_node(19)));
+        }
+        // An already-terminal focus must not clear a text surface's AT focus
+        // override merely because the normal pointer path finished.
+        app.accessibility.keyboard_focus = ChromeFocus::Terminal;
+        app.accessibility.focus_override = Some(SEARCH_INPUT);
+        app.search.start();
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), Some((0, 5))));
+        let preedit = app.ime.preedit().cloned();
+        assert!(preedit.is_some());
+        app.finish_pointer_chrome_focus(MouseButton::Left, ElementState::Pressed);
+        assert_eq!(app.accessibility.focus_override, Some(SEARCH_INPUT));
+        assert_eq!(app.ime.preedit(), preedit.as_ref());
     }
 
     #[test]

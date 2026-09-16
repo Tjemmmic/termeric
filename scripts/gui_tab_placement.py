@@ -46,7 +46,7 @@ def rail_reduced_width(current: tuple[int, ...], top: tuple[int, ...]) -> bool:
             and current[0] == top[0] and current[3] == top[3])
 
 
-def compact_pointer_targets(geometry: tuple[int, ...]) -> dict[str, tuple[int, int]]:
+def compact_row_height(geometry: tuple[int, ...]) -> int:
     # This fixture uses a 960x128 scale-1 surface and the default 220px rail.
     # Derive row height from the actual PTY cell metrics, not the host font name.
     rows, cols, width, height = geometry
@@ -55,6 +55,11 @@ def compact_pointer_targets(geometry: tuple[int, ...]) -> dict[str, tuple[int, i
     row_height = max(18, math.floor(height / rows * 1.1 + 0.5)) + 10
     if not 3 * row_height <= 128 < 5 * row_height:
         raise ValueError("fixture font does not force a compact rail with a full tab")
+    return row_height
+
+
+def compact_pointer_targets(geometry: tuple[int, ...]) -> dict[str, tuple[int, int]]:
+    row_height = compact_row_height(geometry)
     control_y = math.floor(128 - row_height / 2)
     return {"tab": (20, math.floor(row_height * 1.5)),
             "previous": (36, control_y), "next": (110, control_y),
@@ -244,7 +249,8 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         app.renderer_resize(backend, 960, 128)
         gui.wait_until("short rail PTY resize", lambda: (
             gui.latest_terminal_geometry(gui.read_records(transcript), original)[3] < 128))
-        points = compact_pointer_targets(gui.latest_terminal_geometry(gui.read_records(transcript), original))
+        compact_geometry = gui.latest_terminal_geometry(gui.read_records(transcript), original)
+        points = compact_pointer_targets(compact_geometry)
         if backend == "wayland":
             for kind in ("get_seats", "get_tree"):
                 response = gui.run(["swaymsg", "-t", kind], env=app.env)
@@ -268,16 +274,56 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         gui.wait_until("compact new tab receives input", lambda: gui.pids_receiving_token(
             gui.read_records(transcript), b"COMPACT_NEW_174") == {compact_added})
         pointer_owners["COMPACT_NEW_174"] = compact_added
+
+        # F6 changes chrome focus, not the active PTY. A terminal click must
+        # return typing to that owner without requiring an extra Escape.
+        focus_owners = {}
+
+        def assert_focus_input(token, owner):
+            native_text(app, backend, token)
+            gui.wait_until(token, lambda: gui.pids_receiving_token(
+                gui.read_records(transcript), token.encode()) == {owner})
+            focus_owners[token] = owner
+
+        for key in ("F6", "Home"):
+            chord((), key)
+        native_click(gui, app, backend, (300, 70))
+        assert_focus_input("POINTER_TERMINAL_FOCUS_174", compact_added)
+
+        # Click the first visible row of the distant, keyboard-scrolled tab
+        # viewport. Clearing chrome focus before hit testing would select tab
+        # zero instead of the distant visible tab. Derive its index from the
+        # observed cell height because the compact rail can fit one or two tabs.
+        visible_tabs = (128 - 2 * compact_row_height(compact_geometry)) // compact_row_height(compact_geometry)
+        distant_owner = starts()[-visible_tabs]
+        for key in ("F6", "Home", "Return", "Escape", "F6", "Home"):
+            chord((), key)
+        for _ in range((count + 1) * 2):
+            chord((), "Down")
+        native_click(gui, app, backend, points["tab"])
+        assert_focus_input("POINTER_DISTANT_TAB_174", distant_owner)
+
+        chord(("alt", "shift"), "Right")
+        gui.wait_until("focus fixture split starts", lambda: len(starts()) == count + 3)
+        split_pid = starts()[-1]
+        for point, owner, token in (
+                ((300, 70), distant_owner, "POINTER_LEFT_PANE_174"),
+                ((700, 70), split_pid, "POINTER_RIGHT_PANE_174")):
+            for key in ("F6", "Home"):
+                chord((), key)
+            native_click(gui, app, backend, point)
+            assert_focus_input(token, owner)
         app.close_normally(backend)
         gui.wait_until("overflow fixture child cleanup", lambda: all(
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 2, "backend": backend, "original_pids": pids,
+            "schema": 3, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
-            "coverage": "overflow keyboard and compact pointer routing; not screenshot, drag, or screen-reader acceptance",
+            "pointer_focus_input_owners": focus_owners, "focus_split_pid": split_pid,
+            "coverage": "overflow keyboard, compact pointer, and F6-to-pointer tab/pane focus routing; not screenshot, drag, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()
