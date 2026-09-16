@@ -44,8 +44,8 @@ their separate control rows.
 Tab dragging remains bound to the tab selected at button-down. Motion cannot
 reorder a different tab after a keyboard selection change or source closure;
 the original open tab must still be selected. Returning to it while holding
-the button permits its drag to continue until release or window focus loss.
-Focus loss finishes tab/divider/scrollbar and native selection gestures at
+the button permits its drag to continue until release, window focus loss, or
+modal takeover. These interruptions finish tab/divider/scrollbar and native selection gestures at
 their last preview; returning while still holding the button cannot resume them.
 Pinned boundaries and the existing live-domain preview/acknowledgment rules
 are retained. Native overflow tests check forward/reverse local reordering and
@@ -53,8 +53,15 @@ held-button Ctrl+Tab isolation using exact PTY identities. Private Sway also
 checks release while hidden and return while still held, with observed focus
 transitions. Live-domain finalization extracts each control once and restores
 rejected previews, including when another control is pending. Lost release
-without a focus transition, device unplug, modal interruptions, edge
+without a focus transition or modal takeover, device unplug, edge
 auto-scrolling, and native pinned/live-domain drag acceptance remain separate.
+
+Modal takeover is reconciled before native/user-event dispatch, before animation
+cleanup, and after queued PTY work. A release consumed by the modal cannot leave
+a background drag active, and dismissing the modal does not resume that gesture.
+Panel hover handling and application-owned terminal mouse reports retain their
+separate paths. Private Sway exercises palette takeover during a held tab drag
+with no focus loss; other modal types have unit rather than native acceptance.
 
 ## Shared geometry
 

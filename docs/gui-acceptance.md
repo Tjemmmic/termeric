@@ -438,7 +438,7 @@ directory. Default X11 and the private Sway interaction CI command select it;
 that wiring is not a hosted or X11 execution result. Like `tab-placement`, this
 uses only synthetic local PTYs, without graphics clients or AI providers.
 It does not verify normal-height arrow activation, lost release without a focus
-transition, device unplug, modal interruption, edge auto-scrolling,
+transition or modal takeover, device unplug, edge auto-scrolling,
 pinned/live-domain native drags, screenshots,
 IME, screen-reader announcements, or real-desktop appearance. Pure geometry
 tests cover disjoint control/tab bounds and center hit targets from sub-row
@@ -461,7 +461,7 @@ The overflow lane now switches to an empty private workspace while holding a
 tab, then returns and moves the pointer both after releasing elsewhere and
 while still held. It retains a private virtual keyboard during the gesture so
 short-lived key injection cannot introduce unrelated device-removal focus
-events. Schema-5 `tab-overflow.json` records observed loss/regain counts for
+events. `tab-overflow.json` records observed loss/regain counts for
 both cases and exact PTY routing checks. The held-return test fails on the
 previous binary and passes after native gesture cleanup; Sway still delivers
 the hidden release, so that case alone does not prove missing-release handling.
@@ -469,6 +469,14 @@ The X11 adapter is unit tested but native X11 execution remains pending.
 Live-domain preview reconciliation is unit tested separately, not promoted to
 native drag acceptance. Real-desktop and the excluded lifecycle cases above
 remain deferred checks.
+
+Schema 6 adds a held-tab drag interrupted by opening the command palette. The
+query must be swallowed by the palette, movement/release must not reorder the
+background tabs, and exact PTY order must survive dismissal. A persistent
+private keyboard and a zero-focus-loss assertion prevent focus-loss cleanup
+from masking modal-lifecycle bugs. The previous binary fails this regression;
+the fixed private Sway run passes. Other modal types, native live-domain gestures,
+and X11 execution are not promoted by this check.
 
 Background-image functional promotion likewise requires automated static PNG
 and JPEG cases with each fit and opacity extreme under top and left tabs.

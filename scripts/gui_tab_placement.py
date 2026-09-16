@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import contextmanager
 from pathlib import Path
 
 from scripts.gui_wayland_pointer import VirtualPointer
@@ -109,8 +110,15 @@ def native_drag(gui, app, backend, start, end, surface, during_drag=None):
 
 
 def native_interrupted_drag(gui, app, backend, start, end, surface, *, release_while_hidden=True):
-    if backend != "wayland":
+    with native_keyboard_lifetime(gui, app, backend):
         return _native_interrupted_drag(gui, app, backend, start, end, surface, release_while_hidden=release_while_hidden)
+
+
+@contextmanager
+def native_keyboard_lifetime(gui, app, backend):
+    if backend != "wayland":
+        yield
+        return
     # A real desktop retains its keyboard while switching windows. Individual
     # wtype invocations disconnect theirs, generating unrelated focus losses.
     keyboard = gui.subprocess.Popen(gui.wtype_command("-s", "30000"), env=app.env,
@@ -121,7 +129,7 @@ def native_interrupted_drag(gui, app, backend, start, end, surface, *, release_w
             return (keyboard.poll() is None and log.rfind("Window focus changed: true")
                     > log.rfind("Window focus changed: false"))
         gui.wait_until("persistent private keyboard focus", focused)
-        return _native_interrupted_drag(gui, app, backend, start, end, surface, release_while_hidden=release_while_hidden)
+        yield
     finally:
         keyboard.terminate()
         try:
@@ -458,6 +466,22 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             gui, app, backend, source, destination, (960, drag_height), release_while_hidden=False)
         select_and_check(0, "DRAG_HELD_RETURN_FIRST_174", original)
         select_and_check(1, "DRAG_HELD_RETURN_SECOND_174", pids[1])
+        with native_keyboard_lifetime(gui, app, backend):
+            lost_before_modal = app.log_count("Window focus changed: false")
+            def open_palette():
+                chord(("ctrl", "shift"), "p")
+                native_text(app, backend, "MODAL_CAPTURE_174")
+                gui.time.sleep(0.15)
+            native_drag(gui, app, backend, source, destination, (960, drag_height),
+                        during_drag=open_palette)
+            chord((), "Escape")
+            gui.time.sleep(0.15)
+            if app.log_count("Window focus changed: false") != lost_before_modal:
+                raise gui.AcceptanceError("modal drag was interrupted by unrelated focus loss")
+            if gui.pids_receiving_token(gui.read_records(transcript), b"MODAL_CAPTURE_174"):
+                raise gui.AcceptanceError("modal drag query leaked into a PTY")
+        select_and_check(0, "DRAG_MODAL_FIRST_174", original)
+        select_and_check(1, "DRAG_MODAL_SECOND_174", pids[1])
         if len(starts()) != count + 3:
             raise gui.AcceptanceError("tab dragging unexpectedly created another PTY")
         app.close_normally(backend)
@@ -465,7 +489,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 5, "backend": backend, "original_pids": pids,
+            "schema": 6, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
@@ -473,8 +497,9 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             "drag_input_owners": drag_owners, "drag_surface": [960, drag_height],
             "drag_focus_transitions": focus_transitions,
             "drag_held_focus_transitions": held_focus_transitions,
+            "modal_drag_focus_losses": 0,
             "drag_points": {"source": source, "destination": destination},
-            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, and window-focus interruption routing; not screenshot, no-focus lost-release, edge-autoscroll, or screen-reader acceptance",
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus and palette interruption routing; not screenshot, no-focus/non-modal lost-release, edge-autoscroll, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

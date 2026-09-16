@@ -2,6 +2,83 @@ use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[test]
+fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
+    let openers: [fn(&mut App); 9] = [
+        |app| app.command_palette.open(),
+        |app| app.settings_panel.toggle(),
+        |app| app.shortcuts_panel.open(),
+        |app| {
+            app.info_overlay.show("Notice", vec![]);
+        },
+        |app| app.unicode_picker.open(),
+        |app| app.domain_picker.open(&app.config.domains),
+        |app| app.commands_panel.toggle(),
+        |app| app.session_panel.open_workspaces(),
+        |app| app.session_dropdown_open = true,
+    ];
+    for open in openers {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.mouse_pressed = true;
+        app.scrollbar_dragging = true;
+        app.tab_dragging = Some(TabDrag {
+            tab_id: 42,
+            live: None,
+        });
+        app.divider_dragging = Some(DividerDrag {
+            tab_id: 42,
+            target: crate::panes::DividerTarget::Local(7),
+            last_ratio_millis: 500,
+        });
+        app.mouse_state.handle_press(
+            MouseButton::Left,
+            termeric_core::Point::new(0, 0),
+            ModifiersState::empty(),
+        );
+        app.mouse_state.handle_move(termeric_core::Point::new(0, 5));
+        open(&mut app);
+        app.handle_mouse_move((100.0, 100.0));
+        assert!(!app.mouse_pressed);
+        assert!(!app.scrollbar_dragging);
+        assert!(app.tab_dragging.is_none());
+        assert!(app.divider_dragging.is_none());
+        assert!(!app.mouse_state.current_selection().unwrap().active);
+    }
+}
+
+#[test]
+fn native_modal_cleanup_preserves_unobscured_drag_and_protocol_button() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.mouse_pressed = true;
+    app.tab_dragging = Some(TabDrag {
+        tab_id: 42,
+        live: None,
+    });
+    app.terminal_mouse_button = Some(MouseReportButton::Left);
+    app.finish_obscured_native_pointer_gesture();
+    assert!(app.mouse_pressed);
+    assert!(app.tab_dragging.is_some());
+    app.command_palette.open();
+    app.finish_obscured_native_pointer_gesture();
+    app.command_palette.close();
+    app.finish_obscured_native_pointer_gesture();
+    assert!(!app.mouse_pressed);
+    assert!(app.tab_dragging.is_none());
+    // Application-owned release reporting has a separate owner/lifecycle.
+    assert_eq!(app.terminal_mouse_button, Some(MouseReportButton::Left));
+}
+
+#[test]
+fn closing_modal_still_finishes_native_gesture_before_animation_cleanup() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.shortcuts_panel.open();
+    app.shortcuts_panel.close();
+    assert!(app.shortcuts_panel.is_active());
+    app.mouse_pressed = true;
+    app.finish_obscured_native_pointer_gesture();
+    assert!(!app.mouse_pressed);
+}
+
+#[test]
 fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.mouse_pressed = true;

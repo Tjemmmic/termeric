@@ -1935,6 +1935,7 @@ impl App {
 
     /// Render the terminal
     fn render(&mut self) -> bool {
+        self.finish_obscured_native_pointer_gesture();
         let reduced_motion = self.reduced_motion_enabled();
         self.sync_native_window_title();
         // Do not run animation/update paths that enqueue more redraws while a

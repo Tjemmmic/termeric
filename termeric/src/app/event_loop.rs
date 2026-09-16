@@ -183,6 +183,7 @@ impl ApplicationHandler<AppEvent> for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        self.finish_obscured_native_pointer_gesture();
         if let (Some(adapter), Some(window)) = (&mut self.accessibility_adapter, &self.window) {
             adapter.process_event(window, &event);
         }
@@ -1964,6 +1965,7 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
+        self.finish_obscured_native_pointer_gesture();
         match event {
             AppEvent::SystemAccessibilityChanged(preferences) => {
                 self.redraw_scheduler.request(RedrawReason::Accessibility);
@@ -2247,6 +2249,7 @@ impl ApplicationHandler<AppEvent> for App {
 
         // Native redraw requests are coalesced here. PTY reader threads wake
         // this loop through a user event, so no polling deadline is required.
+        self.finish_obscured_native_pointer_gesture();
         if self.redraw_scheduler.has_pending()
             && !self.surface_lost
             && !self.window_occluded

@@ -3,6 +3,30 @@
 use super::*;
 
 impl App {
+    /// A modal takes native pointer ownership even if the physical button
+    /// remains held. Do this before dispatch/dismissal and animation cleanup,
+    /// not only on release (which the modal may consume).
+    pub(super) fn finish_obscured_native_pointer_gesture(&mut self) {
+        if self.guardrail.is_active()
+            || self.info_overlay.is_active()
+            || self.diff_review.is_active()
+            || self.context_picker.is_active()
+            || self.domain_picker.is_active()
+            || self.unicode_picker.is_active()
+            || self.command_palette.is_active()
+            || self.shortcuts_panel.is_active()
+            || self.settings_panel.is_active()
+            || self.commands_panel.is_open()
+            || self.session_panel.is_open()
+            || self.session_dropdown_open
+            || self.harvest.as_ref().is_some_and(|harvest| {
+                harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
+            })
+        {
+            self.finish_native_pointer_gesture();
+        }
+    }
+
     /// End native gestures at their last preview, even if no release reaches
     /// this window. Live-domain changes use the normal acknowledgment/rollback
     /// path; dropping their drag state alone would orphan a local preview.
@@ -80,6 +104,7 @@ impl App {
         state: ElementState,
         position: (f64, f64),
     ) {
+        self.finish_obscured_native_pointer_gesture();
         let Some(renderer) = &self.renderer else {
             return;
         };
@@ -639,6 +664,7 @@ impl App {
 
     /// Handle mouse movement
     pub(super) fn handle_mouse_move(&mut self, position: (f64, f64)) {
+        self.finish_obscured_native_pointer_gesture();
         let Some(renderer) = &self.renderer else {
             return;
         };

@@ -78,7 +78,11 @@ owners. Window focus loss now finishes native tab/divider/scrollbar/selection
 gestures at their last preview, with one-time live-domain finalization and
 rejected-preview rollback. Private Sway tests observe loss/regain for release
 while hidden and return while still held; the latter reproduces the old bug.
-No-focus lost-release, device unplug, modal interruption, edge auto-scrolling,
+Modal takeover also finishes native gestures before input dispatch or animation
+cleanup, preserving separate panel hover and terminal-protocol release paths.
+Private Sway verifies palette interruption without focus loss, PTY query leakage,
+or background tab reorder; other modal types have unit rather than native checks.
+No-focus/non-modal lost-release, device unplug, edge auto-scrolling,
 and native pinned/live-domain drag acceptance remain separate work.
 
 ## Terminal compatibility

@@ -512,8 +512,14 @@ elsewhere and while returning still held, then verifies unchanged PTY ordering.
 The held-return case fails on the previous binary and passes with cleanup.
 Unit tests finish native tab/divider/scrollbar/selection state without release,
 extract original live-domain controls once, and restore rejected previews while
-preserving an earlier pending control. No-focus lost-release, device unplug,
-modal interruption, native pinned/live-domain drags, and real-desktop acceptance
+preserving an earlier pending control. A further native regression opens the
+command palette during a held tab drag, verifies the palette query never reaches
+a PTY, rejects unrelated focus loss, and checks original tab order after motion,
+release, and dismissal. It fails on the previous binary. Unit cases cover nine
+modal/panel types, unobscured drags, closing-animation interception, and preserved
+terminal-protocol button state. Other modal types lack native acceptance.
+No-focus/non-modal lost-release, device unplug,
+native pinned/live-domain drags, and real-desktop acceptance
 are not inferred from these results. Terminal mouse-reporting policy is unchanged.
 See [overflow coverage and exclusions](gui-acceptance.md#tab-overflow-keyboard-lane).
 

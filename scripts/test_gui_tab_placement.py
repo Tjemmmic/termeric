@@ -201,6 +201,27 @@ class TabPlacementTests(unittest.TestCase):
             mock.call.workspace("2"), mock.call.workspace("1"),
             mock.call.pointer.move(20, 101, 960, 174), mock.call.pointer.set_left_button(False)])
 
+    def test_private_keyboard_timeout_is_killed_and_reaped(self):
+        app = mock.Mock(env={})
+        app.log_path.read_text.return_value = "Window focus changed: true"
+        keyboard = mock.Mock()
+        keyboard.poll.return_value = None
+        keyboard.wait.side_effect = [gui.subprocess.TimeoutExpired("wtype", 5), 0]
+        harness = mock.Mock(subprocess=gui.subprocess, wtype_command=gui.wtype_command)
+        harness.wait_until.side_effect = lambda _, predicate: self.assertTrue(predicate())
+        with mock.patch.object(gui.subprocess, "Popen", return_value=keyboard):
+            with placement.native_keyboard_lifetime(harness, app, "wayland"):
+                keyboard.terminate.assert_not_called()
+        keyboard.terminate.assert_called_once_with()
+        keyboard.kill.assert_called_once_with()
+        self.assertEqual(keyboard.wait.call_args_list, [mock.call(timeout=5), mock.call(timeout=5)])
+
+    def test_x11_keyboard_lifetime_does_not_launch_a_wayland_device(self):
+        harness = mock.Mock()
+        with placement.native_keyboard_lifetime(harness, mock.Mock(), "x11"):
+            pass
+        harness.subprocess.Popen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
