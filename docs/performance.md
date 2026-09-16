@@ -81,11 +81,20 @@ WGPU_BACKEND=vulkan python3 scripts/run_benchmarks.py \
 Do not compare debug builds, mix cold and warm results, or compare different
 renderer adapters as if they were the same machine. Baseline comparison is
 fail-closed at the evidence layer: architecture, CPU identity, logical CPU
-count, metric units, and per-metric adapter/input context must agree. The
-artifact records every skipped row and its reason; CI budgets still run when a
-historical baseline belongs to a different host, but no cross-host percentage
-is emitted. Keep the complete JSON artifact in CI/release evidence; a Markdown
-table alone discards useful context.
+count, metric units, nonempty exact workload descriptions, and per-metric
+adapter/input context must agree. Missing, invalid, changed, or explicitly
+skipped workload descriptions cannot produce a comparison percentage, even
+when both records reuse the same metric name and unit. Matching rows remain
+comparable when another row is rejected; if no rows match, the comparison is
+explicitly unavailable. The artifact records every skipped row and its reason;
+CI budgets still run when a historical baseline belongs to a different host,
+but no cross-host percentage is emitted. Keep the complete JSON artifact in
+CI/release evidence; a Markdown table alone discards useful context.
+
+This comparison checks declared workload identity, not hidden fixture changes.
+Producers must update the workload description or versioned context whenever
+fixture inputs or measurement boundaries change; identical labels alone are
+not a content hash or proof of equivalent runtime load.
 
 ## Workloads and boundaries
 

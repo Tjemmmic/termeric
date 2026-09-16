@@ -1,4 +1,6 @@
+import json
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import tomllib
@@ -10,6 +12,7 @@ from scripts.run_benchmarks import (
     evaluate_budgets,
     isolate_display_backend,
     load_metric_contract,
+    main,
     merge_metrics,
     parse_process_rss_kib,
     parse_smaps_rollup_kib,
@@ -29,12 +32,14 @@ def report(value: float) -> dict:
             {
                 "name": "work",
                 "unit": "ms",
+                "workload": "fixed work fixture v1",
                 "samples": [value] * 5,
                 "statistics": summarize([value] * 5),
             },
             {
                 "name": "control",
                 "unit": "ms",
+                "workload": "fixed control fixture v1",
                 "samples": [10.0] * 5,
                 "statistics": summarize([10.0] * 5),
             },
@@ -582,6 +587,84 @@ class BenchmarkBudgetTests(unittest.TestCase):
         comparison = compare_reports(report(10.0), report(12.0))[0]
         self.assertEqual(comparison["metric"], "work")
         self.assertAlmostEqual(comparison["change_percent"], 20.0)
+
+    def test_baseline_comparison_skips_changed_workload_without_losing_control(self):
+        baseline = comparable_report(10.0)
+        current = comparable_report(1.0)
+        current["metrics"][0]["workload"] = "smaller work fixture v2"
+        diagnostics, comparable = comparison_diagnostics(baseline, current)
+        self.assertTrue(diagnostics["passed"])
+        self.assertEqual(comparable, {"control"})
+        self.assertEqual(diagnostics["skipped_metrics"], [{
+            "metric": "work",
+            "reason": "metric workload is missing, invalid, or changed",
+            "baseline_workload": "fixed work fixture v1",
+            "current_workload": "smaller work fixture v2",
+        }])
+        for selected in [None, comparable, {"work", "control"}]:
+            comparisons = compare_reports(baseline, current, selected)
+            self.assertEqual([item["metric"] for item in comparisons], ["control"])
+
+    def test_baseline_comparison_rejects_missing_or_invalid_workload_on_either_side(self):
+        for invalid in [None, "", " \t", 17, False, [], {}, "skipped: unavailable"]:
+            for sides in [(0,), (1,), (0, 1)]:
+                with self.subTest(invalid=invalid, sides=sides):
+                    reports = [comparable_report(10.0), comparable_report(1.0)]
+                    for side in sides:
+                        if invalid is None:
+                            reports[side]["metrics"][0].pop("workload")
+                        else:
+                            reports[side]["metrics"][0]["workload"] = invalid
+                    diagnostics, comparable = comparison_diagnostics(*reports)
+                    self.assertTrue(diagnostics["passed"])
+                    self.assertEqual(comparable, {"control"})
+                    self.assertEqual(len(diagnostics["skipped_metrics"]), 1)
+                    self.assertEqual([item["metric"] for item in compare_reports(*reports)], ["control"])
+
+    def test_baseline_comparison_with_no_matching_workloads_has_no_percentages(self):
+        baseline = comparable_report(10.0)
+        current = comparable_report(1.0)
+        for row in current["metrics"]:
+            row["workload"] += " changed"
+        diagnostics, comparable = comparison_diagnostics(baseline, current)
+        self.assertFalse(diagnostics["passed"])
+        self.assertEqual(comparable, set())
+        self.assertEqual(len(diagnostics["skipped_metrics"]), 2)
+        self.assertTrue(any("no metrics comparable" in error for error in diagnostics["errors"]))
+        self.assertEqual(compare_reports(baseline, current), [])
+
+    def test_cli_artifact_records_workload_skip_without_false_percentage(self):
+        baseline = comparable_report(10.0)
+        current = comparable_report(1.0)
+        current["metrics"][0]["workload"] = "smaller work fixture v2"
+        contract = {"schema_version": 1, "metric": [
+            {"name": "work", "unit": "ms", "producer": "application", "samples": 5},
+            {"name": "control", "unit": "ms", "producer": "core", "samples": 5},
+        ]}
+        # Exercise artifact publication without launching Rust, a display, or
+        # any external client. The unrelated real-suite budget inventory is
+        # outside this two-row comparison fixture.
+        with tempfile.TemporaryDirectory() as directory:
+            baseline_path = Path(directory) / "baseline.json"
+            output_path = Path(directory) / "result.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            with (
+                patch("sys.argv", ["run_benchmarks.py", "--skip-displayed", "--baseline", str(baseline_path), "--output", str(output_path)]),
+                patch("scripts.run_benchmarks.load_metric_contract", return_value=contract),
+                patch("scripts.run_benchmarks.run_rust_suite", side_effect=[[current["metrics"][1]], [current["metrics"][0]]]) as producer,
+                patch("scripts.run_benchmarks.skipped_display_metrics", return_value=[]),
+                patch("scripts.run_benchmarks.environment_metadata", return_value=current["environment"]),
+                patch("scripts.run_benchmarks.evaluate_budgets", return_value=[]),
+                patch("builtins.print"),
+            ):
+                main()
+            self.assertEqual(producer.call_count, 2)
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertTrue(result["metric_contract"]["passed"])
+            self.assertTrue(result["comparison_contract"]["passed"])
+            self.assertEqual(result["comparison_contract"]["comparable_metrics"], ["control"])
+            self.assertEqual(result["comparison_contract"]["skipped_metrics"][0]["metric"], "work")
+            self.assertEqual([row["metric"] for row in result["comparison"]], ["control"])
 
     def test_baseline_comparison_rejects_a_different_machine(self):
         baseline = comparable_report(10.0)

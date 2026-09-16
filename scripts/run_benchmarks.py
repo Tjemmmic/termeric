@@ -628,6 +628,17 @@ def evaluate_budgets(report: dict[str, Any], budgets: dict[str, Any]) -> list[di
     return results
 
 
+def matching_workload(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    """A shared metric name is not evidence of an equivalent workload."""
+    before = previous.get("workload")
+    return (
+        isinstance(before, str)
+        and bool(before.strip())
+        and not before.startswith("skipped:")
+        and before == current.get("workload")
+    )
+
+
 def comparison_diagnostics(
     baseline: dict[str, Any], current: dict[str, Any]
 ) -> tuple[dict[str, Any], set[str]]:
@@ -672,6 +683,14 @@ def comparison_diagnostics(
         if previous_median is None or current_median is None:
             skipped.append({"metric": name, "reason": "one report has no median"})
             continue
+        if not matching_workload(previous, metric):
+            skipped.append({
+                "metric": name,
+                "reason": "metric workload is missing, invalid, or changed",
+                "baseline_workload": previous.get("workload"),
+                "current_workload": metric.get("workload"),
+            })
+            continue
         if previous.get("context") != metric.get("context"):
             skipped.append(
                 {
@@ -710,6 +729,8 @@ def compare_reports(
         if old[name].get("unit") != metric.get("unit"):
             continue
         if old[name].get("context") != metric.get("context"):
+            continue
+        if not matching_workload(old[name], metric):
             continue
         previous = old[name]["statistics"].get("median")
         present = metric["statistics"].get("median")
