@@ -58,8 +58,11 @@ that wiring. See [tab-placement acceptance](gui-acceptance.md#tab-placement-geom
 Overflow keyboard focus now preserves its tab viewport while crossing chrome
 controls. A dedicated native regression checks last-close/Previous/New Tab
 traversal and prevents navigation bytes from leaking into existing PTYs.
-Both layout directions have pure coverage; native overflow visuals, arrow
-activation, drag, IME, and screen-reader acceptance remain separate checks.
+Both layout directions have pure coverage. Short left rails now share one
+control row to avoid controls covering tabs; the native regression also checks
+compact tab/Previous/Next/New Tab pointer routing. Native overflow visuals,
+normal-height arrow activation, drag, IME, and screen-reader acceptance remain
+separate checks; CI wiring alone does not establish X11 or hosted acceptance.
 See [overflow lane boundaries](gui-acceptance.md#tab-overflow-keyboard-lane).
 
 ## Terminal compatibility

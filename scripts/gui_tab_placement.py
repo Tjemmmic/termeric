@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+
+from scripts.gui_wayland_pointer import VirtualPointer
 
 
 def configuration_for_position(config: str, position: str) -> str:
@@ -41,6 +44,34 @@ def rail_reduced_width(current: tuple[int, ...], top: tuple[int, ...]) -> bool:
     return (len(current) == len(top) == 4 and min(*current, *top) > 0
             and current[1] < top[1] and current[2] < top[2]
             and current[0] == top[0] and current[3] == top[3])
+
+
+def compact_pointer_targets(geometry: tuple[int, ...]) -> dict[str, tuple[int, int]]:
+    # This fixture uses a 960x128 scale-1 surface and the default 220px rail.
+    # Derive row height from the actual PTY cell metrics, not the host font name.
+    rows, cols, width, height = geometry
+    if min(rows, cols, width, height) <= 0 or not 220 <= 960 - width < 250:
+        raise ValueError("compact fixture did not retain its expected left rail")
+    row_height = max(18, math.floor(height / rows * 1.1 + 0.5)) + 10
+    if not 3 * row_height <= 128 < 5 * row_height:
+        raise ValueError("fixture font does not force a compact rail with a full tab")
+    control_y = math.floor(128 - row_height / 2)
+    return {"tab": (20, math.floor(row_height * 1.5)),
+            "previous": (36, control_y), "next": (110, control_y),
+            "new": (183, control_y)}
+
+
+def native_click(gui, app, backend, point):
+    if backend == "x11":
+        app.click(*point)
+    elif backend == "wayland" and app.env.get("SWAYSOCK"):
+        # The private single-output Sway fixture has no borders or gaps, and
+        # its single tiled client starts at (0, 0). Never use the user's seat.
+        with VirtualPointer(app.env) as pointer:
+            pointer.click(*point, 960, 128)
+        gui.time.sleep(0.12)
+    else:
+        raise ValueError("compact pointer fixture requires X11 or private Sway")
 
 
 def run_tab_placement_scenario(gui, binary: Path, run_dir: Path, env: dict,
@@ -209,14 +240,44 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         native_text(app, backend, "OVERFLOW_CREATED_174")
         gui.wait_until("overflow-created tab receives input", lambda: gui.pids_receiving_token(
             gui.read_records(transcript), b"OVERFLOW_CREATED_174") == {added})
+
+        app.renderer_resize(backend, 960, 128)
+        gui.wait_until("short rail PTY resize", lambda: (
+            gui.latest_terminal_geometry(gui.read_records(transcript), original)[3] < 128))
+        points = compact_pointer_targets(gui.latest_terminal_geometry(gui.read_records(transcript), original))
+        if backend == "wayland":
+            for kind in ("get_seats", "get_tree"):
+                response = gui.run(["swaymsg", "-t", kind], env=app.env)
+                (run_dir / f"compact-{kind}.json").write_text(response.stdout, encoding="utf-8")
+        for key in ("F6", "Home", "Return", "Escape"):
+            chord((), key)
+        pointer_owners = {}
+        for name, owner in (("tab", original), ("next", pids[1]), ("previous", original)):
+            native_click(gui, app, backend, points[name])
+            token = f"COMPACT_{name.upper()}_174"
+            native_text(app, backend, token)
+            gui.wait_until(token, lambda: gui.pids_receiving_token(
+                gui.read_records(transcript), token.encode()) == {owner})
+            if len(starts()) != count + 1:
+                raise gui.AcceptanceError("compact tab/arrow click unexpectedly created a tab")
+            pointer_owners[token] = owner
+        native_click(gui, app, backend, points["new"])
+        gui.wait_until("compact New Tab click", lambda: len(starts()) == count + 2)
+        compact_added = starts()[-1]
+        native_text(app, backend, "COMPACT_NEW_174")
+        gui.wait_until("compact new tab receives input", lambda: gui.pids_receiving_token(
+            gui.read_records(transcript), b"COMPACT_NEW_174") == {compact_added})
+        pointer_owners["COMPACT_NEW_174"] = compact_added
         app.close_normally(backend)
         gui.wait_until("overflow fixture child cleanup", lambda: all(
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 1, "backend": backend, "original_pids": pids,
+            "schema": 2, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
-            "coverage": "overflow keyboard reachability; not screenshot, drag, or screen-reader acceptance",
+            "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
+            "compact_created_pid": compact_added,
+            "coverage": "overflow keyboard and compact pointer routing; not screenshot, drag, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

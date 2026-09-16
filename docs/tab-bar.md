@@ -32,6 +32,15 @@ When all tabs do not fit, bounded previous/next controls reserve fixed rows and
 the viewport automatically follows the active tab or F6 keyboard focus. Hidden
 tabs remain reachable without shrinking labels into unusable slivers.
 
+Short overflowing rails (less than five tab-row heights) share one bottom row
+between Previous, Next, and New Tab. This prevents the old separate Next row
+from covering a visible tab and intercepting its clicks. At least three row
+heights are needed for the toolbar, one full tab, and the compact controls.
+Below that size, tab labels are omitted rather than overlapping controls;
+keyboard tab shortcuts still work. Controls use the available rail height and
+disappear when no space remains below the toolbar. Normal-height rails retain
+their separate control rows.
+
 ## Shared geometry
 
 Rail width is part of the authoritative terminal geometry. The same physical

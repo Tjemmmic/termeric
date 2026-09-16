@@ -495,6 +495,11 @@ See [the scenario boundaries](gui-acceptance.md#tab-placement-geometry-and-keybo
 The separate `tab-overflow` native scenario forces a twelve-tab left rail and
 checks keyboard traversal to New Tab without input leakage into old PTYs.
 Pure renderer tests also cover top/left viewport retention and focus reset.
+Its compact-rail phase checks tab and Previous/Next/New Tab clicks through
+native input and exact PTY token ownership. The private Sway helper creates a
+Wayland virtual pointer without host input-device access; its wire/cleanup
+unit tests require no compositor. Small-height layout tests check disjoint
+bounds, visible anchors where one full tab fits, and rendered-center hit tests.
 See [overflow coverage and exclusions](gui-acceptance.md#tab-overflow-keyboard-lane).
 
 The headless visual subset is deliberately requested from a fallback adapter

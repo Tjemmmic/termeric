@@ -59,6 +59,33 @@ struct VerticalTabBarLayout {
     add_y: f32,
     previous_y: Option<f32>,
     next_y: Option<f32>,
+    control_height: f32,
+    inline_controls: bool,
+}
+
+impl VerticalTabBarLayout {
+    fn control_rect(&self, target: TabBarClick, rail_width: f32) -> Option<(f32, f32, f32, f32)> {
+        if self.control_height <= 0.0 || rail_width <= 0.0 {
+            return None;
+        }
+        let (column, y) = match target {
+            TabBarClick::PreviousTab => (0.0, self.previous_y?),
+            TabBarClick::NextTab => (1.0, self.next_y?),
+            TabBarClick::NewTab => (2.0, self.add_y),
+            _ => return None,
+        };
+        let width = if self.inline_controls {
+            rail_width / 3.0
+        } else {
+            rail_width
+        };
+        let x = if self.inline_controls {
+            column * width
+        } else {
+            0.0
+        };
+        Some((x, y, width, self.control_height))
+    }
 }
 
 fn vertical_tab_bar_width(window_width: f32, scale_factor: f32) -> f32 {
@@ -81,6 +108,43 @@ fn vertical_tab_bar_layout(
     let rail_height = (window_height - row_height).max(0.0);
     let tab_space = (rail_height - row_height).max(0.0);
     let overflow = !tabs.is_empty() && tabs.len() as f32 * row_height > tab_space;
+    // Below five rows, separate toolbar/Previous/tab/Next/New rows overlap.
+    // Keep full-size labels and share one bottom control row instead. If even
+    // one full tab cannot fit, retain navigation controls, not partial labels.
+    if window_height < row_height * 3.0 || (overflow && window_height < row_height * 5.0) {
+        let control_height = row_height.min(rail_height);
+        let add_y = window_height.max(row_height) - control_height;
+        let available = (rail_height - control_height).max(0.0);
+        let visible_count = ((available / row_height).floor() as usize).min(tabs.len());
+        let anchor = anchor.min(tabs.len().saturating_sub(1));
+        let start = anchor
+            .saturating_sub(visible_count / 2)
+            .min(tabs.len().saturating_sub(visible_count));
+        let end = start + visible_count;
+        let mut y = row_height;
+        let slots = tabs[start..end]
+            .iter()
+            .enumerate()
+            .map(|(offset, tab)| {
+                let height = row_height * tab_animation_multiplier(tab);
+                let slot = VerticalTabSlot {
+                    index: start + offset,
+                    y,
+                    height,
+                };
+                y += height;
+                slot
+            })
+            .collect();
+        return VerticalTabBarLayout {
+            tabs: slots,
+            add_y,
+            previous_y: (anchor > 0).then_some(add_y),
+            next_y: (anchor + 1 < tabs.len()).then_some(add_y),
+            control_height,
+            inline_controls: true,
+        };
+    }
     if !overflow {
         let mut y = row_height;
         let slots = tabs
@@ -98,6 +162,8 @@ fn vertical_tab_bar_layout(
             add_y: y.min((window_height - row_height).max(row_height)),
             previous_y: None,
             next_y: None,
+            control_height: row_height,
+            inline_controls: false,
         };
     }
 
@@ -131,6 +197,8 @@ fn vertical_tab_bar_layout(
         add_y: (window_height - row_height).max(row_height),
         previous_y: (start > 0).then_some(row_height),
         next_y: (end < tabs.len()).then_some((window_height - row_height * 2.0).max(row_height)),
+        control_height: row_height,
+        inline_controls: false,
     }
 }
 
@@ -140,26 +208,24 @@ fn vertical_tab_bar_hit_test(
     x: f32,
     y: f32,
     rail_width: f32,
-    row_height: f32,
     close_size: f32,
 ) -> TabBarClick {
     if x < 0.0 || x >= rail_width {
         return TabBarClick::None;
     }
-    if layout
-        .previous_y
-        .is_some_and(|top| y >= top && y < top + row_height)
-    {
-        return TabBarClick::PreviousTab;
-    }
-    if layout
-        .next_y
-        .is_some_and(|top| y >= top && y < top + row_height)
-    {
-        return TabBarClick::NextTab;
-    }
-    if y >= layout.add_y && y < layout.add_y + row_height {
-        return TabBarClick::NewTab;
+    for target in [
+        TabBarClick::PreviousTab,
+        TabBarClick::NextTab,
+        TabBarClick::NewTab,
+    ] {
+        if layout
+            .control_rect(target, rail_width)
+            .is_some_and(|(left, top, width, height)| {
+                x >= left && x < left + width && y >= top && y < top + height
+            })
+        {
+            return target;
+        }
     }
     for slot in &layout.tabs {
         if y < slot.y || y >= slot.y + slot.height {
@@ -905,31 +971,60 @@ impl Renderer {
                 0.0
             }
         };
-        for (target, y, points_down) in [
-            (TabBarClick::PreviousTab, layout.previous_y, false),
-            (TabBarClick::NextTab, layout.next_y, true),
+        for target in [
+            TabBarClick::PreviousTab,
+            TabBarClick::NextTab,
+            TabBarClick::NewTab,
         ] {
-            let Some(y) = y else { continue };
+            let Some((x, y, width, height)) = layout.control_rect(target, rail_width) else {
+                continue;
+            };
+            let inset = 2.0_f32.min(width / 2.0).min(height / 2.0);
             let hover = hover_for(target);
             self.rect_pipeline.push_rounded_rect(
-                2.0,
-                y + 2.0,
-                rail_width - 4.0,
-                row_height - 4.0,
+                x + inset,
+                y + inset,
+                (width - inset * 2.0).max(0.0),
+                (height - inset * 2.0).max(0.0),
                 adjust_alpha(self.ui.tab_inactive, 0.35 + hover * 0.25),
                 4.0,
             );
-            let center_x = rail_width / 2.0;
-            let center_y = y + row_height / 2.0;
-            let arm = (row_height * 0.16).min(5.5) * (1.0 + hover * 0.15);
-            let direction = if points_down { 1.0 } else { -1.0 };
+            let center_x = x + width / 2.0;
+            let center_y = y + height / 2.0;
+            let arm = (height.min(width) * 0.16).min(5.5) * (1.0 + hover * 0.15);
+            let thickness = (1.5 + hover * 0.3).min(height * 0.5).min(width * 0.5);
+            if target == TabBarClick::NewTab {
+                let color = adjust_alpha(self.ui.tab_text_inactive, 0.9 + hover * 0.1);
+                self.rect_pipeline.push_line(
+                    center_x - arm,
+                    center_y,
+                    center_x + arm,
+                    center_y,
+                    thickness,
+                    color,
+                );
+                self.rect_pipeline.push_line(
+                    center_x,
+                    center_y - arm,
+                    center_x,
+                    center_y + arm,
+                    thickness,
+                    color,
+                );
+                continue;
+            }
+            let direction = if target == TabBarClick::NextTab {
+                1.0
+            } else {
+                -1.0
+            };
             let color = adjust_alpha(self.ui.tab_text_inactive, 0.75 + hover * 0.25);
             self.rect_pipeline.push_line(
                 center_x - arm,
                 center_y - direction * arm * 0.45,
                 center_x,
                 center_y + direction * arm * 0.45,
-                1.5 + hover * 0.3,
+                thickness,
                 color,
             );
             self.rect_pipeline.push_line(
@@ -937,40 +1032,10 @@ impl Renderer {
                 center_y + direction * arm * 0.45,
                 center_x + arm,
                 center_y - direction * arm * 0.45,
-                1.5 + hover * 0.3,
+                thickness,
                 color,
             );
         }
-
-        let add_hover = hover_for(TabBarClick::NewTab);
-        self.rect_pipeline.push_rounded_rect(
-            2.0,
-            layout.add_y + 2.0,
-            rail_width - 4.0,
-            row_height - 4.0,
-            adjust_alpha(self.ui.tab_inactive, 0.35 + add_hover * 0.25),
-            4.0,
-        );
-        let add_center_x = rail_width / 2.0;
-        let add_center_y = layout.add_y + row_height / 2.0;
-        let add_arm = (row_height * 0.16).min(5.5) * (1.0 + add_hover * 0.15);
-        let add_color = adjust_alpha(self.ui.tab_text_inactive, 0.9 + add_hover * 0.1);
-        self.rect_pipeline.push_line(
-            add_center_x - add_arm,
-            add_center_y,
-            add_center_x + add_arm,
-            add_center_y,
-            1.5 + add_hover * 0.3,
-            add_color,
-        );
-        self.rect_pipeline.push_line(
-            add_center_x,
-            add_center_y - add_arm,
-            add_center_x,
-            add_center_y + add_arm,
-            1.5 + add_hover * 0.3,
-            add_color,
-        );
 
         self.build_top_toolbar_controls(window_width, row_height);
         let border = adjust_alpha(self.ui.tab_border, 0.7);
@@ -1128,9 +1193,9 @@ impl Renderer {
                         size,
                     ))
                 }
-                TabBarClick::NewTab => Some((0.0, layout.add_y, rail_width, height)),
-                TabBarClick::PreviousTab => layout.previous_y.map(|y| (0.0, y, rail_width, height)),
-                TabBarClick::NextTab => layout.next_y.map(|y| (0.0, y, rail_width, height)),
+                TabBarClick::NewTab | TabBarClick::PreviousTab | TabBarClick::NextTab => {
+                    layout.control_rect(target, rail_width)
+                }
                 TabBarClick::CommandsButton => {
                     Some((window_width - height * 3.0, 0.0, height, height))
                 }
@@ -1198,15 +1263,7 @@ impl Renderer {
                 return TabBarClick::None;
             }
             let layout = self.vertical_tab_bar_layout(tabs, window_height);
-            return vertical_tab_bar_hit_test(
-                &layout,
-                tabs,
-                x,
-                y,
-                rail_width,
-                tab_bar_height,
-                self.cell_height,
-            );
+            return vertical_tab_bar_hit_test(&layout, tabs, x, y, rail_width, self.cell_height);
         }
 
         // Only handle clicks within the tab bar vertical bounds
@@ -1433,6 +1490,91 @@ mod tests {
     }
 
     #[test]
+    fn short_vertical_rail_does_not_cover_the_active_tab_with_next() {
+        let tabs = tabs(20, 10);
+        let layout = vertical_tab_bar_layout(&tabs, 128.0, 32.0, 10);
+        let active = layout.tabs.iter().find(|slot| slot.index == 10).unwrap();
+        assert_eq!(
+            vertical_tab_bar_hit_test(
+                &layout,
+                &tabs,
+                20.0,
+                active.y + active.height / 2.0,
+                220.0,
+                18.0,
+            ),
+            TabBarClick::Tab(10)
+        );
+    }
+
+    #[test]
+    fn vertical_controls_stay_disjoint_in_bounds_and_hit_their_rendered_centers() {
+        for row_height in [28.0, 32.0, 64.0, 90.0] {
+            for rows in [0.0, 0.5, 1.0, 1.1, 2.0, 2.9, 3.0, 3.9, 4.0, 4.9, 5.0, 6.0] {
+                let height = row_height * rows;
+                for count in [0, 1, 2, 20] {
+                    for anchor in 0..count.max(1) {
+                        let tabs = tabs(count, anchor);
+                        let layout = vertical_tab_bar_layout(&tabs, height, row_height, anchor);
+                        let mut rectangles = Vec::new();
+                        for target in [
+                            TabBarClick::PreviousTab,
+                            TabBarClick::NextTab,
+                            TabBarClick::NewTab,
+                        ] {
+                            if let Some(rect @ (x, y, w, h)) = layout.control_rect(target, 220.0) {
+                                assert!(x >= 0.0 && y >= row_height && w > 0.0 && h > 0.0);
+                                assert!(x + w <= 220.001 && y + h <= height + 0.001);
+                                assert_eq!(
+                                    vertical_tab_bar_hit_test(
+                                        &layout,
+                                        &tabs,
+                                        x + w / 2.0,
+                                        y + h / 2.0,
+                                        220.0,
+                                        18.0,
+                                    ),
+                                    target
+                                );
+                                rectangles.push(rect);
+                            }
+                        }
+                        if !tabs.is_empty() && rows >= 3.0 {
+                            assert!(layout.tabs.iter().any(|slot| slot.index == anchor));
+                        }
+                        for slot in &layout.tabs {
+                            assert!(slot.y >= row_height && slot.y + slot.height <= height + 0.001);
+                            assert_eq!(
+                                vertical_tab_bar_hit_test(
+                                    &layout,
+                                    &tabs,
+                                    20.0,
+                                    slot.y + slot.height / 2.0,
+                                    220.0,
+                                    18.0,
+                                ),
+                                TabBarClick::Tab(slot.index)
+                            );
+                            rectangles.push((0.0, slot.y, 220.0, slot.height));
+                        }
+                        for (index, &(x, y, w, h)) in rectangles.iter().enumerate() {
+                            for &(other_x, other_y, other_w, other_h) in &rectangles[index + 1..] {
+                                let overlap_width = (x + w).min(other_x + other_w) - x.max(other_x);
+                                let overlap_height =
+                                    (y + h).min(other_y + other_h) - y.max(other_y);
+                                assert!(
+                                    overlap_width <= 0.001 || overlap_height <= 0.001,
+                                    "rows={rows} count={count} anchor={anchor}: {rectangles:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn vertical_tab_width_preserves_a_minimum_terminal_viewport() {
         assert_eq!(vertical_tab_bar_width(800.0, 1.0), 220.0);
         assert_eq!(vertical_tab_bar_width(320.0, 1.0), 160.0);
@@ -1449,7 +1591,7 @@ mod tests {
             .find(|slot| slot.index == 17)
             .expect("active slot");
         assert_eq!(
-            vertical_tab_bar_hit_test(&layout, &tabs, 20.0, active.y + 5.0, 220.0, 32.0, 18.0,),
+            vertical_tab_bar_hit_test(&layout, &tabs, 20.0, active.y + 5.0, 220.0, 18.0),
             TabBarClick::Tab(17)
         );
         assert_eq!(
@@ -1459,7 +1601,6 @@ mod tests {
                 205.0,
                 active.y + active.height / 2.0,
                 220.0,
-                32.0,
                 18.0,
             ),
             TabBarClick::CloseTab(17)
@@ -1471,13 +1612,12 @@ mod tests {
                 20.0,
                 layout.previous_y.unwrap() + 5.0,
                 220.0,
-                32.0,
                 18.0,
             ),
             TabBarClick::PreviousTab
         );
         assert_eq!(
-            vertical_tab_bar_hit_test(&layout, &tabs, 20.0, layout.add_y + 5.0, 220.0, 32.0, 18.0,),
+            vertical_tab_bar_hit_test(&layout, &tabs, 20.0, layout.add_y + 5.0, 220.0, 18.0),
             TabBarClick::NewTab
         );
     }

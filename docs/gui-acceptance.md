@@ -393,6 +393,20 @@ Previous, and New Tab. It requires a thirteenth PTY to start, no navigation byte
 to reach any original PTY, and subsequent typed input to reach only the new PTY.
 Normal window closure must clean up every fixture child. `tab-overflow.json`
 records the sequence and process identities beside the raw PTY/runtime logs.
+Its schema-2 record also covers a 960×128 compact-rail phase: pointer clicks on
+the first tab, Next, Previous, and New Tab must route subsequent typed tokens
+to their exact expected PTYs. Existing-tab clicks must not create another tab.
+The fixture derives its row height from observed PTY cell metrics and fails if
+the geometry cannot exercise the compact layout.
+
+X11 uses its existing window-relative pointer adapter. Private Sway uses a
+small, bounded Wayland virtual-pointer client: its device-free seat cannot
+deliver usable clicks through the deprecated Sway cursor commands alone.
+The client requires headless/no-libinput fixture settings and Wayland/Sway
+sockets in the same private runtime; it never opens a host input device.
+Pure tests cover wire framing, fragmented replies, object IDs, failure cleanup,
+and rejection of non-fixture environments. Seat/tree snapshots retain the
+private compositor geometry before the pointer phase.
 
 This catches a reproduced focus regression: switching from a distant tab to an
 arrow reset the viewport to the active tab, removed that arrow, and abandoned
@@ -404,8 +418,10 @@ Use the command above with `--scenario tab-overflow` and a fresh artifact
 directory. Default X11 and the private Sway interaction CI command select it;
 that wiring is not a hosted or X11 execution result. Like `tab-placement`, this
 uses only synthetic local PTYs, without graphics clients or AI providers.
-It does not verify arrow activation, pointer/drag behavior, screenshots, IME,
-screen-reader announcements, or real-desktop appearance.
+It does not verify normal-height arrow activation, drag behavior, screenshots,
+IME, screen-reader announcements, or real-desktop appearance. Pure geometry
+tests cover disjoint control/tab bounds and center hit targets from sub-row
+windows through normal-height rails at multiple row sizes.
 
 ## Remaining automated promotion coverage
 

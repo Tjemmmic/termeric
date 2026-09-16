@@ -82,6 +82,30 @@ class TabPlacementTests(unittest.TestCase):
         self.assertIn("--scenario tab-overflow", block)
         self.assertIn("--require-clean", block)
 
+    def test_compact_points_use_observed_metrics_and_reject_noncompact_fixtures(self):
+        points = placement.compact_pointer_targets((5, 80, 720, 85))
+        self.assertEqual(points, {"tab": (20, 43), "previous": (36, 113),
+                                  "next": (110, 113), "new": (183, 113)})
+        self.assertEqual(placement.compact_pointer_targets((5, 80, 720, 5))["tab"], (20, 42))
+        for geometry in ((0, 80, 720, 85), (5, 80, 960, 85),
+                         (1, 80, 720, 100)):
+            with self.assertRaises(ValueError):
+                placement.compact_pointer_targets(geometry)
+
+    def test_pointer_adapter_is_backend_specific(self):
+        app = mock.Mock(env={"SWAYSOCK": "/private/sway"})
+        harness = mock.Mock(AcceptanceError=gui.AcceptanceError)
+        placement.native_click(harness, app, "x11", (36, 113))
+        app.click.assert_called_once_with(36, 113)
+        harness.run.assert_not_called()
+        with mock.patch.object(placement, "VirtualPointer") as pointer:
+            placement.native_click(harness, app, "wayland", (36, 113))
+            pointer.assert_called_once_with(app.env)
+            pointer.return_value.__enter__.return_value.click.assert_called_once_with(36, 113, 960, 128)
+        app.env = {}
+        with self.assertRaises(ValueError):
+            placement.native_click(harness, app, "wayland", (36, 113))
+
 
 if __name__ == "__main__":
     unittest.main()
