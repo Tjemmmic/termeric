@@ -377,6 +377,32 @@ validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
 
+On 2026-09-16, clean candidate `5a5e79d` completed the current schema-5
+600-second core lane with Vulkan/llvmpipe offscreen smoke. All 28 checks passed,
+and the independent validator accepted the source/executable identity, sealed
+log, reconstructed samples, inventories, workload, and outcomes. The local
+record and log are retained at
+`/tmp/termeric-core-soak-5a5e79d/results.json` and its sibling `scenario.log`.
+They were validated before this documentation-only follow-up; they are evidence
+for that exact candidate, not a claim that subsequent commits were measured.
+
+The run retained 1,200 samples and completed 6,913 workload iterations. Peak RSS
+was 51,748 KiB (50.5 MiB); first-to-last-quartile median RSS growth was 712 KiB,
+with zero thread and descriptor growth, four peak concurrent children, and no
+surviving observed children. Transcript backlog peaked at 10,590 bytes; all 68
+entries per iteration were accepted without drops and every queue drained to
+zero. The persistent detector completed 553,040 synthetic patches, reached
+64 retained patches and 3,822,686 owned bytes under pressure, and reconciled
+eviction throughout the run. The software-GPU smoke passed with no recognized
+validation/device errors.
+
+This supplies one green local ten-minute observation for the newer diff-history
+workload and launch-provenance contract. It does not promote the older failed
+record below, establish a throughput improvement over its different workload,
+or prove displayed/vendor-GPU, hosted scheduled-CI, real-desktop, or multi-day
+stability. The portability limitations above still apply; the `/tmp` bundle
+is local, not a published release artifact.
+
 On 2026-09-14, the unchanged `5eeded9` checkout completed a schema-3 600-second
 core scenario in `/tmp/termeric-core-soak-5eeded9-600s/results.json`: 1,199
 resource samples, 7,428 complete iterations, 45,828 KiB peak RSS, −64 KiB

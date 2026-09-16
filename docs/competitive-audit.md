@@ -8,6 +8,14 @@ Shell evidence reconciled 2026-09-15 against the implemented tests and the
 candidate-bound optional five-shell runner. This is a local evidence update,
 not a new audit of every upstream product or a native desktop acceptance claim.
 
+Resource evidence reconciled 2026-09-16: clean `5a5e79d` passes the current
+schema-5 ten-minute core soak and offscreen Vulkan/llvmpipe smoke, with all 28
+checks independently validated. Peak RSS was 50.5 MiB, quartile RSS growth
+712 KiB, and thread/descriptor growth zero. This closes one local evidence gap
+for sustained diff-history pressure; hosted history, displayed/vendor-GPU,
+real-desktop, and multi-day stability remain open. See
+[the exact record and limitations](resource-soak.md#evidence-and-limitations).
+
 ## Bottom line
 
 Termeric's terminal engine is already credible enough to compete on breadth:
