@@ -8122,6 +8122,95 @@ fn background_image_completions_are_generation_checked_and_fail_visibly() {
     );
 }
 
+#[test]
+fn background_image_completion_does_not_mark_a_newer_file_as_loaded() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("background.png");
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]))
+        .save(&path)
+        .unwrap();
+    let old_time = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+    std::fs::File::open(&path)
+        .unwrap()
+        .set_modified(old_time)
+        .unwrap();
+    let decoded = crate::renderer::load_background_image(&path).unwrap();
+    let old_stamp = decoded.source_stamp;
+    let mut config = Config::default();
+    config.window.background_image.path = Some(path.clone());
+    let mut app = App::new_headless(config).unwrap();
+    app.background_image_loading = true;
+
+    let replacement = directory.path().join("replacement.png");
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([40, 50, 60, 255]))
+        .save(&replacement)
+        .unwrap();
+    let new_time = old_time + Duration::from_secs(10);
+    std::fs::File::open(&replacement)
+        .unwrap()
+        .set_modified(new_time)
+        .unwrap();
+    std::fs::rename(replacement, &path).unwrap();
+    app.handle_background_image_loaded(0, path.clone(), Ok(decoded));
+    assert_eq!(app.last_background_image_stamp, Some(old_stamp));
+    assert!(app.poll_background_image());
+    assert_eq!(app.background_image_generation, 1);
+    assert!(
+        !app.poll_background_image(),
+        "one unchanged replacement needs only one reload"
+    );
+    let replacement = crate::renderer::load_background_image(&path).unwrap();
+    assert_eq!(&replacement.rgba[..4], &[40, 50, 60, 255]);
+    app.handle_background_image_loaded(1, path, Ok(replacement));
+    assert!(!app.poll_background_image());
+}
+
+#[cfg(unix)]
+#[test]
+fn background_image_same_time_replacements_coalesce_and_disabled_results_stay_stale() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("background.png");
+    image::RgbaImage::new(2, 2).save(&path).unwrap();
+    let old = crate::renderer::load_background_image(&path).unwrap();
+    let mut config = Config::default();
+    config.window.background_image.path = Some(path.clone());
+    let mut app = App::new_headless(config).unwrap();
+    app.background_image_loading = true;
+    for generation in 1..=2 {
+        let replacement = directory.path().join("replacement.png");
+        std::fs::copy(&path, &replacement).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::File::open(&replacement)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        assert!(app.poll_background_image());
+        assert_eq!(app.background_image_generation, generation);
+        assert!(app.background_image_loading);
+        assert!(app.background_image_pending);
+        assert!(!app.poll_background_image());
+    }
+    let newest = app.last_background_image_stamp;
+    app.handle_background_image_loaded(0, path.clone(), Ok(old));
+    assert_eq!(
+        app.last_background_image_stamp, newest,
+        "stale completion cannot retire the newest file version"
+    );
+    assert!(!app.background_image_pending);
+    // A headless fixture cannot start the coalesced worker, so complete the
+    // latest generation explicitly through the production event handler.
+    let latest = crate::renderer::load_background_image(&path).unwrap();
+    app.handle_background_image_loaded(2, path.clone(), Ok(latest.clone()));
+    assert!(!app.poll_background_image());
+    app.config.window.background_image.path = None;
+    app.sync_background_image(false);
+    app.handle_background_image_loaded(2, path, Ok(latest));
+    assert!(app.last_background_image_stamp.is_none());
+    assert!(app.background_image_path.is_none());
+    assert!(!app.poll_background_image());
+}
+
 #[cfg(unix)]
 #[test]
 fn config_reload_only_overrides_application_keyboard_type_when_profile_changes() {

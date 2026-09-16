@@ -71,11 +71,31 @@ unsupported, oversized, or unreadable replacement produces a bounded warning
 and retains the last known good GPU image. No path is read merely because it
 appears in terminal output.
 
+Each completion carries the version of the opened file it actually decoded,
+not a fresh timestamp lookup of the configured path. A replacement arriving
+during decode therefore remains pending for the next poll instead of being
+mistakenly marked as loaded. Unix polling compares device/inode, change time,
+modification time, and length, including replacements that preserve mtime and
+length. Other platforms currently compare modification time and length only.
+Configured symlinks remain allowed and follow their resolved target.
+
+Admission checks regular-file type and encoded size on the opened handle;
+reading remains byte-capped and rejects an observed source-version change.
+Unix opens are nonblocking so a substituted FIFO cannot wait for a writer in
+the single decoder worker. This does not put a deadline on ordinary filesystem
+metadata/read latency or establish a snapshot against unobservable concurrent
+writes. Failed loads retain the last good texture and do not retry unchanged
+bad sources on every poll.
+
 ## Evidence and remaining acceptance
 
 Hermetic tests cover typed configuration and Settings mapping, all four fit
 geometries, shifted content origins, static PNG decode, format rejection,
-animation-control detection, and encoded-size rejection. The existing opt-in
+animation-control detection, and encoded-size rejection. Deterministic
+file/event tests cover replacement between decode and completion, preserved-
+timestamp Unix replacement, coalesced generations, disabled/stale completions,
+opened-handle admission, symlink following, and Linux FIFO rejection/recovery.
+These tests do not establish native texture presentation. The existing opt-in
 headless GPU lane compiles and submits the shared image shader/pipeline without
 opening a native window; native presentation remains a separate gate.
 

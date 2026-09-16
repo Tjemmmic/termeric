@@ -37,7 +37,8 @@ pub mod types;
 pub use types::*;
 
 pub(crate) use background_image::{
-    DecodedBackgroundImage, load_background_image, resolve_background_image_path,
+    BackgroundImageStamp, DecodedBackgroundImage, load_background_image,
+    resolve_background_image_path,
 };
 pub use glyph_cache::GlyphCache;
 pub(crate) use glyph_cache::{MAX_FONT_COVERAGE_GRAPHEMES, MAX_FONT_COVERAGE_INPUT_BYTES};

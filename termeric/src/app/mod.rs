@@ -1010,7 +1010,7 @@ pub struct App {
     /// Configured path represented by the current generation.
     background_image_path: Option<PathBuf>,
     /// Last source-file revision observed by the hot-reload poller.
-    last_background_image_mtime: Option<std::time::SystemTime>,
+    last_background_image_stamp: Option<crate::renderer::BackgroundImageStamp>,
     /// Prevents repeated driver failures from creating a recovery spin loop.
     renderer_recovery: renderer_recovery::RendererRecoveryPolicy,
     /// Native screen-reader bridge, created before the window is shown.
@@ -1256,10 +1256,10 @@ impl App {
     ) -> Result<Self> {
         let default_font_size = config.font.size;
         let background_image_path = config.window.background_image.path.clone();
-        let last_background_image_mtime = background_image_path.as_deref().and_then(|path| {
-            std::fs::metadata(crate::renderer::resolve_background_image_path(path))
-                .and_then(|metadata| metadata.modified())
-                .ok()
+        let last_background_image_stamp = background_image_path.as_deref().and_then(|path| {
+            crate::renderer::BackgroundImageStamp::for_path(
+                &crate::renderer::resolve_background_image_path(path),
+            )
         });
         let cursor_blink_period = (config.cursor.blink_rate as f32 / 1000.0) * 2.0;
         let (theme, active_theme_path) =
@@ -1331,7 +1331,7 @@ impl App {
             background_image_loading: false,
             background_image_pending: false,
             background_image_path,
-            last_background_image_mtime,
+            last_background_image_stamp,
             renderer_recovery: renderer_recovery::RendererRecoveryPolicy::default(),
             accessibility_adapter: None,
             accessibility: accessibility::AccessibilityState::default(),

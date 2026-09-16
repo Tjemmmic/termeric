@@ -208,10 +208,10 @@ impl App {
             return;
         }
         self.background_image_path = policy.path.clone();
-        self.last_background_image_mtime = policy.path.as_deref().and_then(|path| {
-            std::fs::metadata(crate::renderer::resolve_background_image_path(path))
-                .and_then(|metadata| metadata.modified())
-                .ok()
+        self.last_background_image_stamp = policy.path.as_deref().and_then(|path| {
+            crate::renderer::BackgroundImageStamp::for_path(
+                &crate::renderer::resolve_background_image_path(path),
+            )
         });
         self.background_image_generation = self.background_image_generation.wrapping_add(1);
 
@@ -271,6 +271,9 @@ impl App {
         if generation == self.background_image_generation {
             match result {
                 Ok(decoded) => {
+                    // Bind completion to the version actually decoded. A
+                    // replacement during load remains visible to the poller.
+                    self.last_background_image_stamp = Some(decoded.source_stamp);
                     if let Some(renderer) = &mut self.renderer {
                         renderer.install_background_image(decoded);
                         renderer.set_background_image_layout(
@@ -278,9 +281,6 @@ impl App {
                             self.config.window.background_image.opacity,
                         );
                     }
-                    self.last_background_image_mtime = std::fs::metadata(&path)
-                        .and_then(|metadata| metadata.modified())
-                        .ok();
                     log::info!("Background image loaded: {}", path.display());
                     if let Some(window) = &self.window {
                         window.request_redraw();
@@ -302,6 +302,21 @@ impl App {
         {
             self.start_background_image_load();
         }
+    }
+
+    /// Observe replacement separately from completion: a completed decode may
+    /// describe an older inode/version than the path currently points to.
+    pub(super) fn poll_background_image(&mut self) -> bool {
+        let Some(path) = self.background_image_path.as_deref() else {
+            return false;
+        };
+        let resolved = crate::renderer::resolve_background_image_path(path);
+        let stamp = crate::renderer::BackgroundImageStamp::for_path(&resolved);
+        if stamp == self.last_background_image_stamp {
+            return false;
+        }
+        self.sync_background_image(true);
+        true
     }
 
     /// Poll the config file's mtime; if it changed since our last load,
@@ -355,17 +370,7 @@ impl App {
             log::info!("Third-party plugin registry hot-reloaded");
         }
 
-        if let Some(path) = self.background_image_path.clone() {
-            let resolved = crate::renderer::resolve_background_image_path(&path);
-            let mtime = std::fs::metadata(resolved)
-                .and_then(|metadata| metadata.modified())
-                .ok();
-            if mtime != self.last_background_image_mtime {
-                changed = true;
-                self.last_background_image_mtime = mtime;
-                self.sync_background_image(true);
-            }
-        }
+        changed |= self.poll_background_image();
 
         let Some(theme_path) = self.active_theme_path.clone() else {
             return changed;
