@@ -120,7 +120,8 @@ fences, leaked keys, and duplicates. This is native keyboard/PTY evidence, not
 IME composition, screen-reader, query-viewport pixels, or real-desktop evidence.
 
 Clean local commit `2f7399d` passed this expanded private-Sway interaction lane
-with GL software rendering and all three renderer-recovery injections enabled.
+with AMD/radeonsi OpenGL (`software=false` in the renderer diagnostics) and all
+three renderer-recovery injections enabled.
 `/tmp/termeric-native-word-2f7399d/results.json` records candidate eligibility,
 the schema-2 thirteen-case palette proof, and both artifact seals. Independent
 offline reconstruction passed after the run. This supplies native Ctrl word-edit
