@@ -537,6 +537,7 @@ pub struct Renderer {
     tab_bar_hover: Option<TabBarClick>,
     tab_bar_hover_progress: f32,
     tab_bar_keyboard_focus: Option<TabBarClick>,
+    tab_bar_viewport_anchor: tab_bar::TabBarViewportAnchor,
     tab_bar_position: TabBarPosition,
     // Git completion overlay state
     git_completions: Option<GitCompletionInfo>,
@@ -771,6 +772,7 @@ impl Renderer {
             tab_bar_hover: None,
             tab_bar_hover_progress: 0.0,
             tab_bar_keyboard_focus: None,
+            tab_bar_viewport_anchor: tab_bar::TabBarViewportAnchor::default(),
             tab_bar_position: TabBarPosition::Top,
             git_completions: None,
             info_overlay: None,
@@ -1044,6 +1046,7 @@ impl Renderer {
 
     pub fn set_tab_bar_keyboard_focus(&mut self, focus: Option<TabBarClick>) {
         self.tab_bar_keyboard_focus = focus;
+        self.tab_bar_viewport_anchor.set_focus(focus);
     }
 
     pub fn set_tab_bar_position(&mut self, position: TabBarPosition) {

@@ -326,6 +326,7 @@ jobs:
           --require-clean
           --scenario interaction
           --scenario tab-placement
+          --scenario tab-overflow
           --force-surface-loss
           --force-surface-outdated
           --force-device-loss

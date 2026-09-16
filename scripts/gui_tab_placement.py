@@ -149,3 +149,75 @@ def run_tab_placement_scenario(gui, binary: Path, run_dir: Path, env: dict,
     finally:
         app.stop_after_failure()
         app.finish()
+
+
+def overflow_navigation_keys(tab_count: int) -> tuple[str, ...]:
+    if not 2 <= tab_count <= 32:
+        raise ValueError("overflow fixture tab count must be between 2 and 32")
+    # Last close target -> Previous arrow -> NewTab. At the last viewport,
+    # Next is absent. Returning to the active first tab would remove Previous
+    # from the focus sequence and cause the second Down to abandon chrome.
+    return ("F6", "Home", *("Down",) * (tab_count * 2 - 1), "Down", "Down", "Return")
+
+
+def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
+                             backend: str) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    transcript = run_dir / "pty-transcript.jsonl"
+    program, arguments = gui.fixture_command(transcript, instance=174)
+    app = gui.AppProcess(binary, run_dir, backend, program, arguments, env)
+    count = 12
+
+    def starts():
+        return [int(row["pid"]) for row in gui.read_records(transcript)
+                if row.get("event") == "started"]
+
+    def chord(modifiers, key):
+        native_chord(app, backend, modifiers, key)
+
+    try:
+        app.wait_ready(backend)
+        gui.wait_until("overflow fixture startup", lambda: len(starts()) == 1)
+        original = starts()[0]
+        before_width = gui.latest_terminal_geometry(gui.read_records(transcript), original)[2]
+        config_path = Path(app.env["XDG_CONFIG_HOME"]) / "termeric/config.toml"
+        config_path.write_text(configuration_for_position(
+            config_path.read_text(encoding="utf-8"), "left"), encoding="utf-8")
+        app.renderer_resize(backend, 960, 240)
+        gui.wait_until("compact left rail geometry", lambda: (
+            gui.latest_terminal_geometry(gui.read_records(transcript), original)[2] < before_width
+            and gui.latest_terminal_geometry(gui.read_records(transcript), original)[3] <= 240))
+        # With the renderer's >=28px rail rows, twelve tabs cannot fit in this
+        # <=240px content-height fixture, even before reserving its controls.
+        for expected in range(2, count + 1):
+            chord(("ctrl", "shift"), "t")
+            gui.wait_until(f"overflow tab {expected}", lambda: len(starts()) == expected)
+        pids = starts()
+        for key in ("F6", "Home", "Return", "Escape"):
+            chord((), key)
+        native_text(app, backend, "OVERFLOW_ORIGINAL_174")
+        gui.wait_until("original tab selected", lambda: gui.pids_receiving_token(
+            gui.read_records(transcript), b"OVERFLOW_ORIGINAL_174") == {original})
+        before = gui.input_streams(gui.read_records(transcript))
+        for key in overflow_navigation_keys(count):
+            chord((), key)
+        gui.wait_until("overflow F6 traversal creates a tab", lambda: len(starts()) == count + 1)
+        after = gui.input_streams(gui.read_records(transcript))
+        if any(after.get(pid, b"") != before.get(pid, b"") for pid in pids):
+            raise gui.AcceptanceError("overflow F6 navigation leaked into an existing PTY")
+        added = starts()[-1]
+        native_text(app, backend, "OVERFLOW_CREATED_174")
+        gui.wait_until("overflow-created tab receives input", lambda: gui.pids_receiving_token(
+            gui.read_records(transcript), b"OVERFLOW_CREATED_174") == {added})
+        app.close_normally(backend)
+        gui.wait_until("overflow fixture child cleanup", lambda: all(
+            not Path(f"/proc/{pid}").exists() for pid in starts()))
+        gui.assert_no_runtime_errors(app)
+        (run_dir / "tab-overflow.json").write_text(json.dumps({
+            "schema": 1, "backend": backend, "original_pids": pids,
+            "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
+            "coverage": "overflow keyboard reachability; not screenshot, drag, or screen-reader acceptance",
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    finally:
+        app.stop_after_failure()
+        app.finish()

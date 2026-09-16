@@ -492,6 +492,11 @@ input APIs. CI selects the scenario for X11 and private Sway with clean-candidat
 provenance; this is not overflow/drag/IME/visual or hosted-result acceptance.
 See [the scenario boundaries](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
 
+The separate `tab-overflow` native scenario forces a twelve-tab left rail and
+checks keyboard traversal to New Tab without input leakage into old PTYs.
+Pure renderer tests also cover top/left viewport retention and focus reset.
+See [overflow coverage and exclusions](gui-acceptance.md#tab-overflow-keyboard-lane).
+
 The headless visual subset is deliberately requested from a fallback adapter
 first. The native lane uses `--force-surface-loss`,
 `--force-surface-outdated`, and `--force-device-loss`; each surface event enters

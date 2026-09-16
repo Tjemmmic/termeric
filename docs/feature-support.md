@@ -55,6 +55,13 @@ selection/new/close routing. Both native CI paths select it; X11 execution,
 hosted results, overflow, drag, IME, and visual acceptance are not inferred from
 that wiring. See [tab-placement acceptance](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
 
+Overflow keyboard focus now preserves its tab viewport while crossing chrome
+controls. A dedicated native regression checks last-close/Previous/New Tab
+traversal and prevents navigation bytes from leaking into existing PTYs.
+Both layout directions have pure coverage; native overflow visuals, arrow
+activation, drag, IME, and screen-reader acceptance remain separate checks.
+See [overflow lane boundaries](gui-acceptance.md#tab-overflow-keyboard-lane).
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |

@@ -10,6 +10,27 @@ const PREFERRED_VERTICAL_TAB_WIDTH: f32 = 220.0;
 const MIN_VERTICAL_TAB_WIDTH: f32 = 160.0;
 const MIN_TERMINAL_CONTENT_WIDTH: f32 = 160.0;
 
+#[derive(Debug, Default)]
+pub(super) struct TabBarViewportAnchor(Option<usize>);
+
+impl TabBarViewportAnchor {
+    pub(super) fn set_focus(&mut self, focus: Option<TabBarClick>) {
+        match focus {
+            Some(TabBarClick::Tab(index) | TabBarClick::CloseTab(index)) => self.0 = Some(index),
+            None => self.0 = None,
+            // Keep the last tab viewport while traversing chrome controls.
+            // Falling back to the active tab can remove the focused overflow
+            // arrow from both the layout and the keyboard focus sequence.
+            Some(_) => {}
+        }
+    }
+
+    fn resolve(&self, tabs: &[TabInfo]) -> usize {
+        self.0
+            .unwrap_or_else(|| tabs.iter().position(|tab| tab.is_active).unwrap_or(0))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct TabSlot {
     index: usize,
@@ -1271,10 +1292,7 @@ impl Renderer {
 
 impl Renderer {
     fn tab_bar_layout(&self, tabs: &[TabInfo], window_width: f32) -> TabBarLayout {
-        let anchor = match self.tab_bar_keyboard_focus {
-            Some(TabBarClick::Tab(index) | TabBarClick::CloseTab(index)) => index,
-            _ => tabs.iter().position(|tab| tab.is_active).unwrap_or(0),
-        };
+        let anchor = self.tab_bar_viewport_anchor.resolve(tabs);
         tab_bar_layout(tabs, window_width, self.tab_bar_height(), anchor)
     }
 
@@ -1283,10 +1301,7 @@ impl Renderer {
         tabs: &[TabInfo],
         window_height: f32,
     ) -> VerticalTabBarLayout {
-        let anchor = match self.tab_bar_keyboard_focus {
-            Some(TabBarClick::Tab(index) | TabBarClick::CloseTab(index)) => index,
-            _ => tabs.iter().position(|tab| tab.is_active).unwrap_or(0),
-        };
+        let anchor = self.tab_bar_viewport_anchor.resolve(tabs);
         vertical_tab_bar_layout(tabs, window_height, self.tab_bar_height(), anchor)
     }
 }
@@ -1358,6 +1373,51 @@ mod tests {
         assert!(layout.next_x.is_none());
         assert!(layout.tabs.iter().all(|slot| slot.width > MIN_TAB_WIDTH));
         assert!(layout.add_x <= 512.0);
+    }
+
+    #[test]
+    fn overflow_controls_keep_the_keyboard_viewport_when_active_tab_is_elsewhere() {
+        for active in [0, 19] {
+            let tabs = tabs(20, active);
+            for index in 0..20 {
+                let mut anchor = TabBarViewportAnchor::default();
+                anchor.set_focus(Some(TabBarClick::CloseTab(index)));
+                let horizontal = tab_bar_layout(&tabs, 640.0, 32.0, anchor.resolve(&tabs));
+                let vertical = vertical_tab_bar_layout(&tabs, 240.0, 32.0, anchor.resolve(&tabs));
+                for target in [TabBarClick::PreviousTab, TabBarClick::NextTab] {
+                    anchor.set_focus(Some(TabBarClick::CloseTab(index)));
+                    anchor.set_focus(Some(target));
+                    assert_eq!(
+                        tab_bar_layout(&tabs, 640.0, 32.0, anchor.resolve(&tabs)),
+                        horizontal,
+                        "horizontal active={active} keyboard={index} control={target:?}"
+                    );
+                    assert_eq!(
+                        vertical_tab_bar_layout(&tabs, 240.0, 32.0, anchor.resolve(&tabs)),
+                        vertical,
+                        "vertical active={active} keyboard={index} control={target:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn leaving_chrome_restores_active_tab_tracking_without_a_stale_anchor() {
+        let tabs = tabs(20, 0);
+        let mut anchor = TabBarViewportAnchor::default();
+        anchor.set_focus(Some(TabBarClick::NextTab));
+        assert_eq!(anchor.resolve(&tabs), 0);
+        anchor.set_focus(Some(TabBarClick::Tab(19)));
+        anchor.set_focus(Some(TabBarClick::Gear));
+        assert_eq!(anchor.resolve(&tabs), 19);
+        anchor.set_focus(None);
+        assert_eq!(anchor.resolve(&tabs), 0);
+        anchor.set_focus(Some(TabBarClick::Tab(7)));
+        assert_eq!(anchor.resolve(&tabs), 7);
+        let smaller = &tabs[..3];
+        let layout = vertical_tab_bar_layout(smaller, 160.0, 32.0, anchor.resolve(smaller));
+        assert!(layout.tabs.iter().any(|slot| slot.index == 2));
     }
 
     #[test]

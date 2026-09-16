@@ -54,3 +54,11 @@ identity, and F6 selection/new/close routing. It is selected by X11 and private
 Sway CI, but selection alone is not a hosted pass. Overflow visibility, dragging,
 IME, screen readers, and subjective alignment remain separate acceptance work.
 See [the native scenario](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
+
+Keyboard focus now retains the last tab viewport when moving onto overflow or
+toolbar controls. Previously, returning to the active tab's viewport could
+remove the focused arrow and send the next navigation key back to the terminal.
+Leaving chrome clears the retained anchor and restores active-tab tracking.
+Pure regressions cover top and left layouts; the separate
+[`tab-overflow` scenario](gui-acceptance.md#tab-overflow-keyboard-lane) checks
+native keyboard reachability and PTY isolation without claiming visual acceptance.

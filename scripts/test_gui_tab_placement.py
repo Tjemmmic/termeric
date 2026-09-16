@@ -62,6 +62,26 @@ class TabPlacementTests(unittest.TestCase):
         self.assertIn("--require-clean", block)
         self.assertEqual(workflow.count("python3 -m unittest scripts.test_gui_tab_placement"), 2)
 
+    def test_overflow_traversal_crosses_last_close_and_previous_to_new_tab(self):
+        for count in (2, 12, 32):
+            keys = placement.overflow_navigation_keys(count)
+            self.assertEqual(keys[:2], ("F6", "Home"))
+            self.assertEqual(keys[2:-1], ("Down",) * (count * 2 + 1))
+            self.assertEqual(keys[-1], "Return")
+        for count in (0, 1, 33):
+            with self.assertRaises(ValueError):
+                placement.overflow_navigation_keys(count)
+
+    def test_overflow_lane_is_selected_with_backend_local_tools(self):
+        self.assertEqual(gui.required_tools("wayland", ["tab-overflow"], False, True),
+                         ["sway", "swaymsg", "tic", "wtype"])
+        self.assertEqual(gui.required_tools("x11", ["tab-overflow"], False, False, True),
+                         ["openbox", "tic", "xdotool"])
+        workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
+        block = workflow.split("- name: Run Wayland keyboard, pane, and clipboard scenario", 1)[1].split("- name:", 1)[0]
+        self.assertIn("--scenario tab-overflow", block)
+        self.assertIn("--require-clean", block)
+
 
 if __name__ == "__main__":
     unittest.main()

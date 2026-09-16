@@ -385,6 +385,28 @@ clipboard helper, screenshot tool, or AI provider. Selecting it does not
 establish their acceptance. A passing geometry/routing result also does not
 prove visible overflow scrolling, pointer hit targets, or pixel alignment.
 
+## Tab-overflow keyboard lane
+
+The `tab-overflow` scenario creates twelve tabs in a compact left rail, selects
+the first tab, then traverses F6 focus through the last tab's close target,
+Previous, and New Tab. It requires a thirteenth PTY to start, no navigation bytes
+to reach any original PTY, and subsequent typed input to reach only the new PTY.
+Normal window closure must clean up every fixture child. `tab-overflow.json`
+records the sequence and process identities beside the raw PTY/runtime logs.
+
+This catches a reproduced focus regression: switching from a distant tab to an
+arrow reset the viewport to the active tab, removed that arrow, and abandoned
+chrome navigation. The shared layout now retains its last tab anchor through
+chrome controls and resets it when keyboard focus returns to the terminal.
+Pure tests cover both horizontal and vertical layouts and anchor reset/clamping.
+
+Use the command above with `--scenario tab-overflow` and a fresh artifact
+directory. Default X11 and the private Sway interaction CI command select it;
+that wiring is not a hosted or X11 execution result. Like `tab-placement`, this
+uses only synthetic local PTYs, without graphics clients or AI providers.
+It does not verify arrow activation, pointer/drag behavior, screenshots, IME,
+screen-reader announcements, or real-desktop appearance.
+
 ## Remaining automated promotion coverage
 
 Beyond the geometry/keyboard lane, vertical-tab promotion requires a native scenario with

@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.gui_candidate import GuiCandidate
-from scripts.gui_tab_placement import run_tab_placement_scenario
+from scripts.gui_tab_placement import run_tab_overflow_scenario, run_tab_placement_scenario
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
 BASELINES = ROOT / "termeric" / "tests" / "gui" / "baselines"
@@ -2120,7 +2120,7 @@ def required_tools(
         if start_window_manager:
             tools.append("openbox")
     else:
-        if set(scenarios) & {"fullscreen", "interaction", "tab-placement"}:
+        if set(scenarios) & {"fullscreen", "interaction", "tab-placement", "tab-overflow"}:
             tools.append("wtype")
         if "interaction" in scenarios:
             tools.extend(["wl-copy", "wl-paste"])
@@ -2153,6 +2153,7 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             "workspace",
             "interaction",
             "tab-placement",
+            "tab-overflow",
             "fullscreen",
             "cli",
             "domain",
@@ -2207,6 +2208,7 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
     scenarios = args.scenario or [
         "workspace",
         "tab-placement",
+        "tab-overflow",
         "fullscreen",
         "cli",
         "domain",
@@ -2217,16 +2219,16 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
     if args.backend == "x11":
         if "launch" in scenarios:
             raise AcceptanceError("the launch scenario is Wayland-only")
-        if set(scenarios) & {"fullscreen", "tab-placement"} and not args.start_window_manager:
-            raise AcceptanceError("X11 fullscreen/tab-placement requires --start-window-manager")
+        if set(scenarios) & {"fullscreen", "tab-placement", "tab-overflow"} and not args.start_window_manager:
+            raise AcceptanceError("X11 fullscreen/tab-placement/tab-overflow requires --start-window-manager")
         if args.start_weston or args.start_sway:
             raise AcceptanceError("Wayland compositor launchers require --backend wayland")
     else:
         scenarios = args.scenario or ["launch"]
-        invalid = sorted(set(scenarios) - {"launch", "interaction", "fullscreen", "tab-placement"})
+        invalid = sorted(set(scenarios) - {"launch", "interaction", "fullscreen", "tab-placement", "tab-overflow"})
         if invalid:
             raise AcceptanceError(
-                "Wayland supports only launch/interaction/fullscreen/tab-placement scenarios, got "
+                "Wayland supports only launch/interaction/fullscreen/tab-placement/tab-overflow scenarios, got "
                 + ", ".join(invalid)
             )
         if args.start_weston and args.start_sway:
@@ -2239,7 +2241,7 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             or args.force_device_loss
         ) and not args.start_sway:
             raise AcceptanceError("Wayland renderer-failure injection requires --start-sway")
-        sway_scenarios = sorted(set(scenarios) & {"interaction", "fullscreen", "tab-placement"})
+        sway_scenarios = sorted(set(scenarios) & {"interaction", "fullscreen", "tab-placement", "tab-overflow"})
         if sway_scenarios and not args.start_sway:
             raise AcceptanceError(
                 "Wayland " + ", ".join(sway_scenarios) + " requires --start-sway"
@@ -2359,6 +2361,11 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
                             sys.modules[__name__], scenario_binary, artifacts / scenario,
                             environment, "wayland",
                         )
+                    elif scenario == "tab-overflow":
+                        run_tab_overflow_scenario(
+                            sys.modules[__name__], scenario_binary, artifacts / scenario,
+                            environment, "wayland",
+                        )
                     else:
                         run_wayland_fullscreen_scenario(
                             scenario_binary, artifacts / scenario, environment
@@ -2376,6 +2383,10 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
                 try:
                     if scenario == "tab-placement":
                         run_tab_placement_scenario(
+                            sys.modules[__name__], scenario_binary, scenario_dir, environment, "x11",
+                        )
+                    elif scenario == "tab-overflow":
+                        run_tab_overflow_scenario(
                             sys.modules[__name__], scenario_binary, scenario_dir, environment, "x11",
                         )
                     else:
