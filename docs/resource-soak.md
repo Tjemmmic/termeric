@@ -377,6 +377,36 @@ validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
 
+On 2026-09-16, clean `bd70faa` completed a schema-6 600-second displayed run
+under private headless Sway with AMD/radeonsi OpenGL (`software=false`), requiring
+DRM memory on every sample. All 24 checks passed, and the independent validator
+accepted the manifest, source/executable identity, samples, transcript, and
+cleanup outcomes before this documentation-only follow-up. The local bundle is
+`/tmp/termeric-vendor-soak-bd70faa/results.json` and its sibling artifacts.
+
+All 877 samples supplied both total and resident process-attributed DRM memory;
+none were unavailable. Peak resident memory was 115,601,408 bytes (110.2 MiB),
+with 5,255,168 bytes (5.0 MiB) first-to-last-quartile median growth. The kernel
+driver was `amdgpu`; these totals cover the deduplicated clients and exported
+regions, including GTT and VRAM, not whole-device VRAM occupancy. Peak application
+RSS was 155,364 KiB (151.7 MiB), with 2,816 KiB (2.75 MiB) quartile growth and
+zero thread/descriptor growth. The workload completed 954 PTY progress records,
+218 output resizes, 218 pane-churn actions, and 613 accepted Kitty replacements.
+Peak concurrent fixture children was two; all 110 observed children were gone
+after normal native close. No recognized runtime/renderer error or driver
+failure was recorded.
+
+The separate required-memory 30-second probe at the same candidate also passed
+and validated, with 49/49 measured samples, in
+`/tmp/termeric-vendor-probe-bd70faa/results.json`. Its samples were not merged
+into the ten-minute record. This supplies one accepted local vendor-memory
+observation, not a signed/published release artifact, a controlled comparison
+with the software-renderer results below, broad driver qualification, or
+multi-day stability. Hosted scheduled history, real-desktop observation,
+other adapters/backends, native IME/accessibility, and visual quality still need
+their own evidence. Revalidate before changing the checkout or measured binary;
+the portability limits above apply.
+
 On 2026-09-16, clean `e446dfd` completed the current schema-6 600-second
 displayed-process lane under private headless Sway, using GL/llvmpipe and a
 pixman compositor. All 24 checks passed, and the independent native validator
@@ -400,9 +430,9 @@ Likewise, the quartile growth metric reduces sensitivity to warm-up and
 single-sample noise; it is not the first-to-last raw RSS difference.
 These broad regression rails do not establish an optimal memory footprint or
 a controlled improvement/regression relative to older, differently scoped
-records. This is one current-schema local displayed duration observation;
-hosted scheduled history, real-desktop/vendor-GPU behavior, visual quality,
-native IME/accessibility, and multi-day stability remain unverified.
+records. That software-renderer observation did not establish hosted scheduled
+history, real-desktop/vendor-GPU behavior, visual quality, native IME/accessibility,
+or multi-day stability; the separate AMD observation above has its own scope.
 
 On 2026-09-16, clean candidate `5a5e79d` completed the current schema-5
 600-second core lane with Vulkan/llvmpipe offscreen smoke. All 28 checks passed,

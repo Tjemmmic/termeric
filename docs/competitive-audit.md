@@ -119,7 +119,8 @@ These are release requirements, not optional competitive flourishes:
    This is the unfinished acceptance work in issues #17, #23, #26, #32,
    #33, and #35.
 2. **Accumulate stability and comparative evidence.** Retain the clean local
-   ten-minute displayed-Sway result and obtain green scheduled core/displayed
+   ten-minute displayed-Sway results, including `bd70faa`'s validated AMD/radeonsi
+   observation with 877/877 required DRM memory samples, and obtain green scheduled core/displayed
    resource-soak history, then run release-duration real-
    desktop/vendor-GPU observation, retain benchmark history by compatible
    machine/adapter context, record a same-host external-terminal comparison

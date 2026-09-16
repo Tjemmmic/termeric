@@ -213,10 +213,13 @@ The repository also configures a 30-second and scheduled ten-minute private-
 Sway displayed-process soak. It continuously renders real PTY output, resizes
 the compositor output, churns split panes with exact routing, samples the
 application PID, and checks normal native close plus complete child cleanup.
-Clean commit `a53d097` supplies the local ten-minute aggregate evidence described
-in [resource-soak.md](resource-soak.md), though it predates the schema-3
-diagnostic inventories; accepted scheduled-CI history, a long
-real-desktop observation, and vendor-GPU measurements remain open.
+Clean `bd70faa` supplies a validated schema-6 ten-minute AMD/radeonsi OpenGL
+observation with required DRM total/resident memory in all 877 samples, bounded
+RSS/GPU memory, and complete child cleanup. It supplements the local software-
+renderer observations and older `a53d097` aggregate record described in
+[resource-soak.md](resource-soak.md). Accepted scheduled-CI history, a longer
+real-desktop observation, other adapter/backend coverage, and multi-day
+stability remain open; one private-Sway run is not general driver qualification.
 
 ## Current Debian package-lifecycle gate
 
