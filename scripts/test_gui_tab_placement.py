@@ -1,0 +1,67 @@
+"""Pure tab-placement harness guards; native results stay a separate lane."""
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+from scripts import gui_acceptance as gui
+from scripts import gui_tab_placement as placement
+
+
+class TabPlacementTests(unittest.TestCase):
+    def test_fixture_configuration_changes_only_its_explicit_placement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.toml"
+            gui.write_config(path, "/fixture/program", ["literal argument"])
+            config = '# example: tab_bar_position = "top"\n' + path.read_text()
+            left = placement.configuration_for_position(config, "left")
+            self.assertEqual(left.splitlines()[0], config.splitlines()[0])
+            self.assertIn('\ntab_bar_position = "left"\n', left)
+            self.assertEqual(placement.configuration_for_position(left, "top"), config)
+
+    def test_missing_duplicate_and_invalid_configuration_is_rejected(self):
+        for config, position in (("", "left"), ('tab_bar_position = "top"\n' * 2, "left"),
+                                 ('tab_bar_position = "top"\ntab_bar_position = "left"', "top"),
+                                 ('tab_bar_position = "top"', "bottom")):
+            with self.subTest(config=config, position=position), self.assertRaises(ValueError):
+                placement.configuration_for_position(config, position)
+
+    def test_rail_requires_positive_character_and_pixel_width_changes_only(self):
+        top = (30, 100, 1000, 600)
+        self.assertTrue(placement.rail_reduced_width((30, 78, 780, 600), top))
+        for current in (top, (30, 100, 780, 600), (30, 78, 1000, 600),
+                        (29, 78, 780, 600), (30, 78, 780, 599),
+                        (0, 78, 780, 600), (30, 0, 780, 600), (30, 78, 0, 600),
+                        (30, 78, 780), (30, 110, 1100, 600)):
+            with self.subTest(current=current):
+                self.assertFalse(placement.rail_reduced_width(current, top))
+
+    def test_backend_adapters_use_existing_app_keyboard_and_text_apis(self):
+        app = mock.create_autospec(gui.AppProcess, instance=True)
+        placement.native_chord(app, "x11", ("ctrl", "shift"), "t")
+        placement.native_text(app, "x11", "TOKEN")
+        app.key.assert_called_once_with("ctrl+shift+t")
+        app.type.assert_called_once_with("TOKEN")
+        placement.native_chord(app, "wayland", (), "F6")
+        placement.native_text(app, "wayland", "TOKEN")
+        app.wayland_chord.assert_called_once_with((), "F6")
+        app.wayland_type.assert_called_once_with("TOKEN")
+        with self.assertRaises(ValueError):
+            placement.native_text(app, "invalid", "TOKEN")
+        with self.assertRaises(ValueError):
+            placement.native_chord(app, "invalid", (), "F6")
+
+    def test_native_tools_are_scenario_local_and_ci_selects_the_new_lane(self):
+        self.assertEqual(gui.required_tools("wayland", ["tab-placement"], False, True),
+                         ["sway", "swaymsg", "tic", "wtype"])
+        self.assertEqual(gui.required_tools("x11", ["tab-placement"], False, False, True),
+                         ["openbox", "tic", "xdotool"])
+        workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
+        block = workflow.split("- name: Run Wayland keyboard, pane, and clipboard scenario", 1)[1].split("- name:", 1)[0]
+        self.assertIn("--scenario tab-placement", block)
+        self.assertIn("--require-clean", block)
+        self.assertEqual(workflow.count("python3 -m unittest scripts.test_gui_tab_placement"), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

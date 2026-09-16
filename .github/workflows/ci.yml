@@ -52,6 +52,7 @@ jobs:
         run: |
           python3 -m unittest scripts.test_gui_acceptance
           python3 -m unittest scripts.test_gui_candidate
+          python3 -m unittest scripts.test_gui_tab_placement
           python3 -m unittest scripts.test_check_gui_visual
       - name: Prove native evidence-record contracts
         run: python3 -m unittest scripts.test_native_acceptance_record
@@ -280,6 +281,7 @@ jobs:
         run: |
           python3 -m unittest scripts/test_gui_acceptance.py
           python3 -m unittest scripts.test_gui_candidate
+          python3 -m unittest scripts.test_gui_tab_placement
           python3 -m unittest scripts.test_run_native_gui_soak
       - name: Run X11 interaction and visual scenarios
         run: >-
@@ -323,6 +325,7 @@ jobs:
           python3 scripts/gui_acceptance.py --backend wayland --start-sway
           --require-clean
           --scenario interaction
+          --scenario tab-placement
           --force-surface-loss
           --force-surface-outdated
           --force-device-loss

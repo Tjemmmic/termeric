@@ -47,3 +47,10 @@ offset is applied to:
 Render, pointer hit-test, keyboard-focus, and accessibility tab bounds all use
 the same visible-slot layout. Native X11/Wayland visual, drag, IME, and screen-
 reader acceptance for the left rail remains an operator release check.
+
+The automated `tab-placement` GUI scenario now checks live top/left/top reload,
+character/pixel geometry for an inactive tab and two split panes, original PTY
+identity, and F6 selection/new/close routing. It is selected by X11 and private
+Sway CI, but selection alone is not a hosted pass. Overflow visibility, dragging,
+IME, screen readers, and subjective alignment remain separate acceptance work.
+See [the native scenario](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).

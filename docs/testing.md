@@ -483,6 +483,15 @@ lost and outdated surfaces plus device loss, changes/restores the Sway output
 after each surface error, and requires renderer recovery before the PTY
 assertions. Real desktop permission and presentation policy remains manual.
 
+The native `tab-placement` scenario adds top/left/top hot-reload geometry for
+two tabs and a split pane, including the inactive tab, exact original PID
+retention, F6 tab selection/new/close, and final child cleanup. Its pure helper
+tests reject malformed or duplicate placement settings, accidental edits of
+commented examples, non-positive or height-changing geometry, and wrong native
+input APIs. CI selects the scenario for X11 and private Sway with clean-candidate
+provenance; this is not overflow/drag/IME/visual or hosted-result acceptance.
+See [the scenario boundaries](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
+
 The headless visual subset is deliberately requested from a fallback adapter
 first. The native lane uses `--force-surface-loss`,
 `--force-surface-outdated`, and `--force-device-loss`; each surface event enters

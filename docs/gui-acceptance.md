@@ -352,9 +352,42 @@ authenticated external-provider workflows. Whole-window golden screenshots
 are deliberately avoided because compositor decorations and rasterization are
 not a stable product contract.
 
-## Pending automated promotion coverage
+## Tab-placement geometry and keyboard lane
 
-Vertical-tab promotion additionally requires an automated native scenario with
+The `tab-placement` scenario now runs in the default X11 set and alongside the
+private-Sway interaction scenario in CI. It starts two tabs, splits the second,
+then changes only the disposable configuration's `tab_bar_position` through
+`top → left → top`. All three original PTYs, including the inactive tab, must
+lose columns and pixel width for the rail without changing rows/height, then
+recover their exact original geometry. Their fixture PIDs must remain intact.
+
+On the left rail, F6/Home/arrows/Enter/Escape select the two original tabs
+without leaking navigation bytes to the PTY. Additional F6 navigation creates
+and closes a third tab; unique typed tokens must reach only the intended
+original or newly created fixture PID. The same original tabs remain usable
+after top placement returns. Native close must terminate all fixture children.
+`tab-placement.json` retains top/left/restored geometry and observed input
+owners beside the PTY transcript and runtime logs.
+
+For an isolated Wayland reproduction after a clean build:
+
+```bash
+WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true WLR_RENDERER=pixman \
+python3 scripts/gui_acceptance.py --backend wayland --start-sway \
+  --require-clean --scenario tab-placement \
+  --binary target/debug/termeric \
+  --artifacts target/gui-acceptance/tab-placement-wayland
+```
+
+X11 uses `--backend x11 --start-window-manager --scenario tab-placement` inside
+the private Xvfb command above. The scenario needs no external graphics client,
+clipboard helper, screenshot tool, or AI provider. Selecting it does not
+establish their acceptance. A passing geometry/routing result also does not
+prove visible overflow scrolling, pointer hit targets, or pixel alignment.
+
+## Remaining automated promotion coverage
+
+Beyond the geometry/keyboard lane, vertical-tab promotion requires a native scenario with
 `tab_bar_position = "left"`: create enough tabs to overflow the rail, verify
 that the active tab remains visible, exercise previous/next/new/close and drag
 reordering with mouse and F6 keyboard navigation, then switch back to `top`.

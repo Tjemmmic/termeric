@@ -49,6 +49,12 @@ selected scenarios prevents a successful schema-4 result. Debug runs remain
 available without that guarantee. This strengthens evidence collection, not
 platform promotion; see [the provenance limits](gui-acceptance.md#clean-candidate-mode).
 
+An automated tab-placement scenario now checks top/left/top geometry across
+active/inactive tabs and split panes, original PTY retention, and F6
+selection/new/close routing. Both native CI paths select it; X11 execution,
+hosted results, overflow, drag, IME, and visual acceptance are not inferred from
+that wiring. See [tab-placement acceptance](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |
