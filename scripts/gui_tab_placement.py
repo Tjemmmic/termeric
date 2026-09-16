@@ -115,13 +115,15 @@ def native_interrupted_drag(gui, app, backend, start, end, surface, *, release_w
 
 
 @contextmanager
-def native_keyboard_lifetime(gui, app, backend):
+def native_keyboard_lifetime(gui, app, backend, *, duration_ms=30000):
     if backend != "wayland":
         yield
         return
     # A real desktop retains its keyboard while switching windows. Individual
     # wtype invocations disconnect theirs, generating unrelated focus losses.
-    keyboard = gui.subprocess.Popen(gui.wtype_command("-s", "30000"), env=app.env,
+    if not 1 <= duration_ms <= 600000:
+        raise ValueError("private keyboard lifetime must be bounded to ten minutes")
+    keyboard = gui.subprocess.Popen(gui.wtype_command("-s", str(duration_ms)), env=app.env,
                                     stdout=gui.subprocess.DEVNULL, stderr=gui.subprocess.DEVNULL)
     try:
         def focused():

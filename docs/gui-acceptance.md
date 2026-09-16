@@ -512,14 +512,42 @@ counts must remain unchanged so unrelated window blur cannot mask the bug.
 Live-domain acknowledgment/rollback has separate unit coverage, not native
 acceptance in this scenario.
 
-Background-image functional promotion likewise requires automated static PNG
-and JPEG cases with each fit and opacity extreme under top and left tabs.
-Resize, open search and plugin chrome, split panes, replace the source file,
-inject a malformed replacement, and force renderer recovery; the image must
-remain below terminal/application content, failed reload must preserve the last
-good texture, and memory must remain within the documented per-window bounds.
-The visual/contrast judgment remains a manual pass on one X11 and one Wayland
-compositor without invoking any provider integration.
+## Native background-image pixels
+
+Run the bounded private-Sway screenshot scenario independently:
+
+```bash
+env WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true WLR_RENDERER=pixman \
+  python3 scripts/gui_acceptance.py --backend wayland --start-sway \
+  --require-clean --scenario background \
+  --force-surface-loss --force-surface-outdated --force-device-loss \
+  --binary target/debug/termeric --artifacts target/gui-acceptance/background
+```
+
+It checks 32 static PNG/JPEG cases: four fits, opacity 0/1, and top/left tabs.
+An independent inverse-fit reference samples clear content pixels; an explicit
+terminal-cell background must remain above the image. The same native window
+then checks atomic replacement, malformed-source last-good retention, restored
+pattern, search geometry, a shared background across split panes, output
+resize/restore, requested simulated renderer recovery, and removal on disable.
+All child PTYs must exit. `background/background.json` records each frame's
+viewport and sample count, with adjacent PNG screenshots including the latest
+frame on pixel failure. This is sampled native composition evidence, not an
+all-pixel comparison (the separate offscreen GPU lane provides that).
+
+The capture helper implements v1 `wlr-screencopy` with bounded shared memory;
+no external screenshot tool is needed. It refuses non-private compositor
+settings, missing/duplicate outputs, unsupported formats, dimensions above
+4096, buffers above 64 MiB, malformed events, and a five-second deadline.
+It only connects to the harness runtime and never captures the user's desktop.
+The scenario requires private Sway and `wtype`, is not available on X11, and
+cannot use `--skip-visual-checks`. CI selects it alongside native interaction
+and tab scenarios; this does not itself establish an accepted hosted result.
+
+Plugin chrome, driver-memory bounds, physical GPU recovery, and equivalent X11
+presentation remain separate gates. Visual/contrast judgment and real desktop
+policy remain a manual pass on one X11 and one Wayland compositor without
+invoking any provider integration.
 
 Real X11/Wayland candidate results belong in the schema-versioned,
 artifact-hashed [native Linux acceptance record](native-linux-acceptance.md).

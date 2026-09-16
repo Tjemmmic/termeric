@@ -329,6 +329,7 @@ jobs:
           --scenario interaction
           --scenario tab-placement
           --scenario tab-overflow
+          --scenario background
           --force-surface-loss
           --force-surface-outdated
           --force-device-loss

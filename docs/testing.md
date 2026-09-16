@@ -491,6 +491,15 @@ lost and outdated surfaces plus device loss, changes/restores the Sway output
 after each surface error, and requires renderer recovery before the PTY
 assertions. Real desktop permission and presentation policy remains manual.
 
+The private-Sway `background` scenario adds compositor screenshots for 32
+PNG/JPEG fit/opacity/top-left-tab combinations, terminal-cell layering, and
+hot-reload/replacement/refusal/disable, search, split, resize, and requested
+simulated recovery. Independent pixel probes fail on missing or incorrect image
+colors; the existing offscreen GPU lane checks every pixel separately. Python
+tests exercise the native oracle and bounded screencopy wire parsing, admission,
+deadline, private-runtime refusal, and descriptor cleanup. No host screenshots
+or provider calls are used. See the [command and remaining gates](gui-acceptance.md#native-background-image-pixels).
+
 The native `tab-placement` scenario adds top/left/top hot-reload geometry for
 two tabs and a split pane, including the inactive tab, exact original PID
 retention, F6 tab selection/new/close, and final child cleanup. Its pure helper

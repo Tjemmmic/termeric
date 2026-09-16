@@ -399,6 +399,7 @@ def main() -> int:
     parser.add_argument("--soak-output", action="store_true")
     parser.add_argument("--skip-external-graphics", action="store_true")
     parser.add_argument("--scrollback-fixture", action="store_true")
+    parser.add_argument("--background-fixture", action="store_true")
     args = parser.parse_args()
 
     old_settings = termios.tcgetattr(sys.stdin.fileno())
@@ -436,7 +437,13 @@ def main() -> int:
         terminfo_dirs=os.environ.get("TERMINFO_DIRS"),
         cwd=os.getcwd(),
     )
-    render_fixture(args.instance)
+    if args.background_fixture:
+        # Keep background sample locations free of text while preserving an
+        # explicit cell background for native layer-order checks.
+        emit(b"\x1b[2J\x1b[H\x1b[?25l\x1b[5;5H\x1b[48;2;255;0;255m" + b" " * 20 + b"\x1b[0m")
+        emit(b"\x1b]2;Termeric GUI Acceptance\x07")
+    else:
+        render_fixture(args.instance)
     if args.scrollback_fixture:
         render_scrollback_fixture(os.getpid())
     if not args.skip_external_graphics:

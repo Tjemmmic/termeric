@@ -111,13 +111,22 @@ images, incorrect fits/opacity, foreground overwrite, and pixels outside the
 content area. The existing software/hardware smoke switches select this lane;
 see [GPU commands](testing.md#linux-software-renderer-smoke-lane).
 
-This is pipeline evidence, not a complete native UI/layer-order test, actual
-window/tab/search/plugin geometry dispatch, OS compositor or physical GPU
-recovery acceptance, or a measurement of driver allocator memory. Pipeline
-recreation is intentionally distinguished from a real device reset. Native
-presentation remains a separate gate.
+This is pipeline evidence, not a measurement of driver allocator memory or
+physical GPU recovery. Pipeline recreation is intentionally distinguished from
+a real device reset.
 
-Before release promotion, manually verify PNG and JPEG backgrounds on X11 and
+The separate private-Sway `background` scenario captures native compositor
+frames and compares sampled clear-content pixels against an independent fit
+reference. Its 32 PNG/JPEG cases cover every fit and opacity 0/1 under top and
+left tabs, with an explicit magenta terminal-cell background required above the
+image. Lifecycle checks cover hot reload, atomic replacement, malformed-source
+last-good retention, restoration, search, split panes, output resize, requested
+simulated surface/device recovery, and disable. Screenshots and per-frame sample
+counts are retained; these are sampled assertions, not all-pixel comparisons.
+See [native background command](gui-acceptance.md#native-background-image-pixels).
+CI selects this scenario, but configuration alone is not hosted-pass evidence.
+
+Before release promotion, manually verify PNG and JPEG backgrounds on real X11 and
 Wayland with top and left tabs, search, plugin chrome, split panes, resize,
 opacity extremes, each fit, file replacement, malformed replacement, and
 renderer recovery. Review text contrast with representative themes. Tiling,
