@@ -9,6 +9,12 @@ from scripts import gui_tab_placement as placement
 
 
 class TabPlacementTests(unittest.TestCase):
+    def test_native_click_uses_explicit_resized_surface(self):
+        app = mock.Mock(env={"SWAYSOCK": "private"})
+        with mock.patch.object(placement, "VirtualPointer") as factory:
+            placement.native_click(mock.Mock(), app, "wayland", (590, 680), (960, 720))
+        factory.return_value.__enter__.return_value.click.assert_called_once_with(590, 680, 960, 720)
+
     def test_fixture_configuration_changes_only_its_explicit_placement(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.toml"

@@ -518,6 +518,11 @@ a PTY, rejects unrelated focus loss, and checks original tab order after motion,
 release, and dismissal. It fails on the previous binary. Unit cases cover nine
 modal/panel types, unobscured drags, closing-animation interception, and preserved
 terminal-protocol button state. Other modal types lack native acceptance.
+Panel-ownership tests cover all four lower-priority panel/dropdown open/close
+lifecycles and overlapping ownership. The native lane separately dismisses
+Settings, Commands, and the session dropdown over an underlying split divider,
+then checks original focused-PTY input and unchanged pane character/pixel sizes.
+Workspace-panel and scrollbar-specific native acceptance remain separate.
 No-focus/non-modal lost-release, device unplug,
 native pinned/live-domain drags, and real-desktop acceptance
 are not inferred from these results. Terminal mouse-reporting policy is unchanged.

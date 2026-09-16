@@ -2,6 +2,50 @@ use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[test]
+fn pointer_panel_ownership_tracks_the_full_open_close_lifecycle() {
+    type PanelTransition = fn(&mut App);
+    let lifecycles: [(PanelTransition, PanelTransition); 4] = [
+        (
+            |app| app.settings_panel.toggle(),
+            |app| app.settings_panel.close(),
+        ),
+        (
+            |app| app.commands_panel.toggle(),
+            |app| app.commands_panel.close(),
+        ),
+        (
+            |app| app.session_panel.open_workspaces(),
+            |app| app.session_panel.close(),
+        ),
+        (
+            |app| app.session_dropdown_open = true,
+            |app| app.session_dropdown_open = false,
+        ),
+    ];
+    for (open, close) in lifecycles {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        assert!(!app.pointer_panel_owns_input());
+        open(&mut app);
+        assert!(app.pointer_panel_owns_input());
+        close(&mut app);
+        assert!(!app.pointer_panel_owns_input());
+        open(&mut app);
+        assert!(app.pointer_panel_owns_input());
+    }
+}
+
+#[test]
+fn closing_one_panel_does_not_release_another_panels_pointer_ownership() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.commands_panel.toggle();
+    app.settings_panel.toggle();
+    app.settings_panel.close();
+    assert!(app.pointer_panel_owns_input());
+    app.commands_panel.close();
+    assert!(!app.pointer_panel_owns_input());
+}
+
+#[test]
 fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
     let openers: [fn(&mut App); 9] = [
         |app| app.command_palette.open(),

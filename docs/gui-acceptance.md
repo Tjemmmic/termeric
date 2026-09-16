@@ -478,6 +478,14 @@ from masking modal-lifecycle bugs. The previous binary fails this regression;
 the fixed private Sway run passes. Other modal types, native live-domain gestures,
 and X11 execution are not promoted by this check.
 
+Schema 7 additionally resizes the existing split to 960×720 and opens Settings,
+Commands, and the session dropdown through F6 navigation. Each click at the
+background divider's lower end must dismiss the panel and return typing to the
+same focused PTY without changing either pane's geometry. The click helper uses
+the explicit resized surface rather than the compact fixture's dimensions.
+This checks divider-click priority, not every panel control, scrollbar path,
+subjective hover appearance, or native workspace-panel interaction.
+
 Background-image functional promotion likewise requires automated static PNG
 and JPEG cases with each fit and opacity extreme under top and left tabs.
 Resize, open search and plugin chrome, split panes, replace the source file,

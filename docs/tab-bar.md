@@ -63,6 +63,14 @@ Panel hover handling and application-owned terminal mouse reports retain their
 separate paths. Private Sway exercises palette takeover during a held tab drag
 with no focus loss; other modal types have unit rather than native acceptance.
 
+Settings, Commands, the workspace/session panel, and its dropdown own new
+pointer presses ahead of background scrollbars and pane dividers. Outside
+clicks dismiss the owning panel without starting a background gesture or
+changing pane focus. Divider hover cannot suppress panel hover, and the global
+Settings button still switches directly from another panel. The overflow lane
+checks outside-divider dismissal for Settings, Commands, and the session dropdown
+with unchanged pane geometry and exact focused-PTY input ownership.
+
 ## Shared geometry
 
 Rail width is part of the authoritative terminal geometry. The same physical

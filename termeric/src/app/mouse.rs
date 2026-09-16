@@ -3,6 +3,16 @@
 use super::*;
 
 impl App {
+    /// These surfaces are dispatched here, below the event-loop overlays but
+    /// above terminal scrollbars/dividers. Keep their ownership independent
+    /// of where the pointer lands (including outside-click dismissal).
+    pub(super) fn pointer_panel_owns_input(&self) -> bool {
+        self.settings_panel.is_active()
+            || self.commands_panel.is_open()
+            || self.session_panel.is_open()
+            || self.session_dropdown_open
+    }
+
     /// A modal takes native pointer ownership even if the physical button
     /// remains held. Do this before dispatch/dismissal and animation cleanup,
     /// not only on release (which the modal may consume).
@@ -15,10 +25,7 @@ impl App {
             || self.unicode_picker.is_active()
             || self.command_palette.is_active()
             || self.shortcuts_panel.is_active()
-            || self.settings_panel.is_active()
-            || self.commands_panel.is_open()
-            || self.session_panel.is_open()
-            || self.session_dropdown_open
+            || self.pointer_panel_owns_input()
             || self.harvest.as_ref().is_some_and(|harvest| {
                 harvest.sprout_menu.is_some() || harvest.cellar.is_expanded()
             })
@@ -122,16 +129,13 @@ impl App {
         let content_top = tab_bar_height + chrome_bar_height + search_bar_height;
         if state == ElementState::Pressed
             && button != MouseButton::Left
-            && (self.settings_panel.is_active()
-                || self.commands_panel.is_open()
-                || self.session_panel.is_open()
-                || self.session_dropdown_open)
+            && self.pointer_panel_owns_input()
         {
             return;
         }
         match state {
             ElementState::Pressed => {
-                if button == MouseButton::Left {
+                if button == MouseButton::Left && !self.pointer_panel_owns_input() {
                     // Check if click is on the scrollbar
                     if self.is_click_on_scrollbar(position.0, position.1) {
                         if self.focus_pane_at(position, content_top, padding) {
@@ -194,8 +198,10 @@ impl App {
                             }
                         }
                     }
-
-                    // Check for tab bar clicks (tabs, close buttons, + button, gear)
+                }
+                if button == MouseButton::Left {
+                    // Panel actions (and the global Settings button) own the
+                    // click before background tab/search/terminal handling.
                     if let Some(renderer) = &self.renderer {
                         let px = position.0 as f32;
                         let py = position.1 as f32;
@@ -787,7 +793,9 @@ impl App {
         }
 
         // Set resize cursor when hovering over pane dividers
-        if let Some(tabs) = &self.tabs {
+        if !self.pointer_panel_owns_input()
+            && let Some(tabs) = &self.tabs
+        {
             if let Some(tab) = tabs.active_tab() {
                 if let Some(ref pm) = tab.pane_manager {
                     let local_x = position.0 as f32 - content_left - padding;

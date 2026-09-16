@@ -82,6 +82,10 @@ Modal takeover also finishes native gestures before input dispatch or animation
 cleanup, preserving separate panel hover and terminal-protocol release paths.
 Private Sway verifies palette interruption without focus loss, PTY query leakage,
 or background tab reorder; other modal types have unit rather than native checks.
+New presses also respect Settings/Commands/session-panel/dropdown ownership
+before background scrollbar/divider hit tests. The native overflow lane checks
+outside-divider dismissal for Settings, Commands, and the session dropdown;
+workspace-panel and scrollbar-specific native acceptance are not inferred.
 No-focus/non-modal lost-release, device unplug, edge auto-scrolling,
 and native pinned/live-domain drag acceptance remain separate work.
 
