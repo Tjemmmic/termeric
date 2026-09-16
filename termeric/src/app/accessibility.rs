@@ -7804,6 +7804,8 @@ mod tests {
     fn info_overlay_keyboard_and_assistive_focus_share_the_same_owner_and_bounds() {
         use crate::ui::info_overlay::{InfoOverlayAction, InfoOverlayFocus};
         let mut app = App::new_headless(Config::default()).unwrap();
+        // Compare one settled phase, not two advancing Instant samples.
+        app.info_overlay.set_reduced_motion(true);
         let request = show_info_fixture(&mut app);
         app.accessibility_snapshot();
         app.info_overlay.cycle_focus(request, false);
@@ -7827,7 +7829,7 @@ mod tests {
                 .source_line_rect(1, app.info_overlay.scroll_offset(), 40)
                 .unwrap(),
         );
-        assert!((bounds.y0 - expected.y0).abs() < 0.05);
+        assert_eq!(bounds, expected);
         assert_eq!(
             app.info_overlay.activate_focused(request),
             InfoOverlayAction::Choose {
@@ -7871,20 +7873,10 @@ mod tests {
     #[test]
     fn info_overlay_is_one_scrollable_modal_tree_with_shared_geometry() {
         let mut app = App::new_headless(Config::default()).unwrap();
+        app.info_overlay.set_reduced_motion(true);
         let request = show_info_fixture(&mut app);
         let layout = app.info_accessibility_layout();
         let snapshot = app.accessibility_snapshot();
-        let assert_rect_close = |actual: Option<Rect>, expected: Rect| {
-            let actual = actual.unwrap();
-            for (actual, expected) in [
-                (actual.x0, expected.x0),
-                (actual.y0, expected.y0),
-                (actual.x1, expected.x1),
-                (actual.y1, expected.y1),
-            ] {
-                assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
-            }
-        };
         let node = |id| {
             &snapshot
                 .nodes
@@ -7926,9 +7918,12 @@ mod tests {
         assert_eq!(node(choice).role(), Role::Button);
         assert!(node(choice).supports_action(Action::Click));
         assert_eq!(snapshot.focus, dismiss);
-        assert_rect_close(node(copy).bounds(), info_rect(layout.copy_button));
-        assert_rect_close(node(dismiss).bounds(), info_rect(layout.continue_button));
-        assert_rect_close(node(content).bounds(), info_rect(layout.content));
+        assert_eq!(node(copy).bounds(), Some(info_rect(layout.copy_button)));
+        assert_eq!(
+            node(dismiss).bounds(),
+            Some(info_rect(layout.continue_button))
+        );
+        assert_eq!(node(content).bounds(), Some(info_rect(layout.content)));
 
         app.handle_accessibility_action(ActionRequest {
             action: Action::ScrollDown,
@@ -8029,6 +8024,7 @@ mod tests {
     #[test]
     fn info_overlay_input_is_editable_focused_and_uses_shared_row_geometry() {
         let mut app = App::new_headless(Config::default()).unwrap();
+        app.info_overlay.set_reduced_motion(true);
         let request = app.info_overlay.show_input(
             "Edit setting",
             vec!["Typed value".into(), String::new(), "Enter saves".into()],
@@ -8060,14 +8056,7 @@ mod tests {
             .source_line_rect(1, app.info_overlay.scroll_offset(), 3)
             .map(info_rect)
             .unwrap();
-        for (actual, expected) in [
-            (actual.x0, expected.x0),
-            (actual.y0, expected.y0),
-            (actual.x1, expected.x1),
-            (actual.y1, expected.y1),
-        ] {
-            assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
-        }
+        assert_eq!(actual, expected);
 
         app.handle_accessibility_action(ActionRequest {
             action: Action::SetValue,
@@ -8111,20 +8100,10 @@ mod tests {
     #[test]
     fn diff_review_is_one_scrollable_modal_tree_with_shared_geometry() {
         let mut app = App::new_headless(Config::default()).unwrap();
+        app.diff_review.set_reduced_motion(true);
         let request = show_diff_fixture(&mut app, 41);
         let layout = app.diff_accessibility_layout();
         let snapshot = app.accessibility_snapshot();
-        let assert_rect_close = |actual: Option<Rect>, expected: Rect| {
-            let actual = actual.unwrap();
-            for (actual, expected) in [
-                (actual.x0, expected.x0),
-                (actual.y0, expected.y0),
-                (actual.x1, expected.x1),
-                (actual.y1, expected.y1),
-            ] {
-                assert!((actual - expected).abs() < 0.05, "{actual} != {expected}");
-            }
-        };
         let node = |id| {
             &snapshot
                 .nodes
@@ -8156,9 +8135,9 @@ mod tests {
         assert!(node(content).supports_action(Action::ScrollDown));
         assert!(node(content).supports_action(Action::ScrollRight));
         assert_eq!(snapshot.focus, dismiss);
-        assert_rect_close(node(copy).bounds(), diff_rect(layout.copy_button));
-        assert_rect_close(node(dismiss).bounds(), diff_rect(layout.done_button));
-        assert_rect_close(node(content).bounds(), diff_rect(layout.content));
+        assert_eq!(node(copy).bounds(), Some(diff_rect(layout.copy_button)));
+        assert_eq!(node(dismiss).bounds(), Some(diff_rect(layout.done_button)));
+        assert_eq!(node(content).bounds(), Some(diff_rect(layout.content)));
 
         app.handle_accessibility_action(ActionRequest {
             action: Action::ScrollDown,

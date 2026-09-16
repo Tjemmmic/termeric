@@ -1150,6 +1150,59 @@ mod tests {
     }
 
     #[test]
+    fn explicit_animation_phases_keep_content_controls_and_hit_rows_aligned() {
+        let calculate =
+            |phase| InfoOverlayLayout::calculate(900.0, 500.0, 10.0, 20.0, phase, "Notice", 40, 80);
+        let settled = calculate(1.0);
+        // The same eased phase has the same geometry on opening and closing.
+        // These are explicit inputs, independent of scheduler/Instant timing.
+        for phase in [0.0, 0.125, 0.5, 0.875, 1.0, 0.875, 0.5, 0.125, 0.0] {
+            let layout = calculate(phase);
+            let translation = (1.0 - phase) * -30.0;
+            assert_eq!(layout.rows_that_fit, settled.rows_that_fit);
+            assert_eq!(layout.columns_that_fit, settled.columns_that_fit);
+            for (actual, expected) in [
+                (layout.card, settled.card),
+                (layout.content, settled.content),
+                (layout.copy_button, settled.copy_button),
+                (layout.continue_button, settled.continue_button),
+            ] {
+                assert_eq!(actual.x, expected.x);
+                assert_eq!(actual.width, expected.width);
+                assert_eq!(actual.height, expected.height);
+                assert!((actual.y - expected.y - translation).abs() < 0.001);
+                assert!(actual.contains(
+                    actual.x + actual.width / 2.0,
+                    actual.y + actual.height / 2.0
+                ));
+            }
+            for visible in 0..layout.rows_that_fit {
+                let row = layout.source_line_rect(5 + visible, 5, 40).unwrap();
+                assert_eq!(row.x, layout.content.x);
+                assert_eq!(
+                    row.y,
+                    layout.content.y + visible as f32 * layout.line_height
+                );
+                assert_eq!(
+                    layout.content_row_at(row.x + 1.0, row.y + row.height / 2.0, 5, 40),
+                    Some(5 + visible)
+                );
+            }
+            assert!(layout.source_line_rect(4, 5, 40).is_none());
+            assert!(
+                layout
+                    .source_line_rect(5 + layout.rows_that_fit, 5, 40)
+                    .is_none()
+            );
+            assert_eq!(
+                layout.content_row_at(layout.content.x - 1.0, layout.content.y, 5, 40),
+                None
+            );
+        }
+        assert!((calculate(0.0).card.y - settled.card.y + 30.0).abs() < 0.001);
+    }
+
+    #[test]
     fn input_is_request_scoped_bounded_and_utf8_cursor_safe() {
         let mut overlay = InfoOverlay::new();
         let request = overlay.show_input(

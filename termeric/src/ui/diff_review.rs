@@ -512,6 +512,43 @@ fn bounded_text(text: &str, limit: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_animation_phases_translate_content_and_controls_together() {
+        let calculate = |phase| {
+            super::DiffReviewLayout::calculate(
+                900.0,
+                500.0,
+                10.0,
+                20.0,
+                phase,
+                "fixture.rs",
+                40,
+                80,
+            )
+        };
+        let settled = calculate(1.0);
+        for phase in [0.0, 0.125, 0.5, 0.875, 1.0, 0.875, 0.5, 0.125, 0.0] {
+            let layout = calculate(phase);
+            let translation = (1.0 - phase) * -20.0;
+            assert_eq!(layout.rows_that_fit, settled.rows_that_fit);
+            assert_eq!(layout.columns_that_fit, settled.columns_that_fit);
+            for (actual, expected) in [
+                (layout.card, settled.card),
+                (layout.content, settled.content),
+                (layout.copy_button, settled.copy_button),
+                (layout.done_button, settled.done_button),
+            ] {
+                assert_eq!(actual.x, expected.x);
+                assert_eq!(actual.width, expected.width);
+                assert_eq!(actual.height, expected.height);
+                assert!((actual.y - expected.y - translation).abs() < 0.001);
+                assert!(actual.contains(
+                    actual.x + actual.width / 2.0,
+                    actual.y + actual.height / 2.0
+                ));
+            }
+        }
+    }
     use super::*;
     use crate::terminal::diff_detector::DiffHunk;
 

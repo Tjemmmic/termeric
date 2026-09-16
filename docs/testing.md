@@ -404,6 +404,16 @@ visible-only semantic content, scrolling actions, and rejection of replaced
 profile choices. Fixture choices are inert identifiers: tests never launch a
 plugin, apply a real AI profile, access the network, or consume provider tokens.
 
+Information-dialog and diff-review accessibility bounds are compared at a
+settled phase using the existing reduced-motion setting, with exact rectangle equality. Sampling
+two advancing `Instant`-based layouts made the previous subpixel-tolerance
+checks scheduler-dependent. Separate pure layout tests supply explicit opening
+and closing phases, including intermediate positions, and verify that card,
+content, footer controls, scrolled source rows, and pointer hit rows translate
+together. Neither sleeps nor wider position tolerances are used to stabilize
+the semantic comparisons. Exit-animation input blocking and immediate action
+revocation retain their separate normal-motion lifecycle tests.
+
 macOS and Windows run the same workspace build and unit-test commands in CI.
 Each runner also opts into the hermetic `native_pty_round_trip_when_requested`
 probe: the test executable relaunches itself through the platform-native PTY,
