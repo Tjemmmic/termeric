@@ -360,7 +360,10 @@ Shared palette query editing supports unmodified Left/Right/Home/End and
 whole-grapheme Backspace/Delete with insertion at the moved caret. Cursor-only
 edits preserve selection and pending Unicode searches, and busy domain stages
 remain read-only. Geometry, model, app routing, IME insertion, and semantic caret
-tests cover this behavior; native keyboard/IME acceptance remains deferred
+tests cover this behavior. The private-Sway interaction lane additionally
+requires seven real-keyboard query-editing cases with exact, fenced Unicode
+insertion into alternating local PTY owners. Native IME, visual clipping,
+screen-reader, and real-desktop acceptance remain deferred
 (see [input contract](accessibility-and-input.md)).
 
 Built-in plugin profile selection distinguishes **Automatic profile** from every

@@ -103,6 +103,20 @@ real PTY transcript and application/compositor logs. This proves the
 private-compositor technical path, not the
 permissions or presentation policy of a user's desktop.
 
+The Wayland interaction lane also requires seven palette query-editing cases,
+recorded in `interaction/palette-input.json`. Native keys repair a command
+palette filter to open the Unicode picker, then exercise Home/End, Left/Right,
+middle insertion/Delete, and Backspace over combining, ZWJ, and flag graphemes.
+Every case must insert exactly one U+2603 snowman into its selected pane, with
+no query text, editing escapes, or duplicate bytes in either pane. The cases
+alternate between two real fixture PTYs, join fragmented reads, and fence each
+owner after insertion before exact stream comparison. A persistent private
+keyboard and zero unrelated focus losses prevent focus teardown from masking
+input behavior. The temporary sibling must close and the original accept
+input afterward. Checker tests reject wrong owners, wrong scalars, missing
+fences, leaked keys, and duplicates. This is native keyboard/PTY evidence, not
+IME composition, screen-reader, query-viewport pixels, or real-desktop evidence.
+
 The same Wayland interaction scenario now records six held-button mouse cases
 in `interaction/mouse-ownership.json`: ordinary local-tab/local-pane drags,
 switch-before-release, and switch-before-motion. Ordinary drags require an exact

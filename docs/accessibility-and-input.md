@@ -40,6 +40,15 @@ without changing their read-only filter or a palette behind them. The semantic
 tree reports the moved UTF-8 caret. Word motion, Shift-selection, pointer caret
 placement, and semantic SetTextSelection are not implemented by this change.
 
+The private-Sway interaction lane now exercises seven real-keyboard palette
+editing cases and exact Unicode insertion, alternating between two real local
+PTY owners. It requires post-insertion fences, no modal-query leakage or
+duplicate insertion, no unrelated focus loss, and restoration of the original
+pane. Its `palette-input.json` sidecar records exact per-owner expected/actual
+bytes. This complements the model/geometry tests; it does not test native IME
+composition, visual clipping, Orca, or real-desktop policy. See the
+[native GUI contract](gui-acceptance.md).
+
 Native color fonts use the separate bounded RGBA glyph atlas described in
 [Glyph atlas lifetime](glyph-atlas.md). Extended grapheme width remains the
 terminal's Unicode width policy; color selection does not change cell width.
