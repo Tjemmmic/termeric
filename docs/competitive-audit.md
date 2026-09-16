@@ -4,6 +4,10 @@ Audited 2026-09-12 against the current working tree. This document is a
 planning comparison, not a release claim. Termeric's authoritative status and
 evidence boundaries remain in [feature-support.md](feature-support.md).
 
+Shell evidence reconciled 2026-09-15 against the implemented tests and the
+candidate-bound optional five-shell runner. This is a local evidence update,
+not a new audit of every upstream product or a native desktop acceptance claim.
+
 ## Bottom line
 
 Termeric's terminal engine is already credible enough to compete on breadth:
@@ -44,7 +48,7 @@ The practical position is therefore:
 | Search, navigation, and character entry | Cancellable full-history literal/regex search, filter mode, copy mode, configurable quick-select hints, prompt navigation, and a 256-result Unicode 17.0 canonical-name/CLDR 48 English annotation picker with exact scalar and fully-qualified emoji-sequence insertion | Alacritty exposes search, Vi mode, and regex hints; WezTerm exposes search, copy mode, QuickSelect, and character selection; kitty exposes searchable history, hints, and Unicode input | Strong: complete canonical-name discovery and natural English emoji search have explicit memory/latency, accessibility, and exact-destination boundaries; additional locales remain absent |
 | Multiplexing and remote work | Experimental daemon-owned PTYs, local/SSH domains, detach/reattach, topology mutation, GUI picker, bounded relays | WezTerm supports local Unix, SSH, and TLS domains plus an embedded SSH client; kitty provides SSH tooling and a powerful remote-control protocol | Promising but behind WezTerm in transport maturity and behind kitty in application automation |
 | Extensibility and automation | Fuzzy palette, custom commands, bounded declarative process profiles, and APIs v2-v32 for permissioned context/events, persistent handlers, current-window inventory/navigation/topology, namespaced commands, typed settings, presented-text reads, ordinary pane/tab lifecycle, cross-tab pane movement, guarded exact-pane input, same-tab layouts, command-scoped exact-window closure, process-wide read-only inventory, exact non-activating cross-window tab/pane navigation, bounded cross-window presented-text reads, guarded cross-window UTF-8 terminal input, exact cross-window ordinary tab/pane creation, exact cross-window ordinary-pane and ordinary-tab movement, same-window tab reorder, exact cross-window ordinary pane/tab closure, exact cross-window ordinary pane swap/balance/layout presets, result-gated closure of an exact non-final process-owned window, and exact native window-focus requests through authenticated control policy. The in-app manager supports fingerprint-bound local installation and updates, explicit permission-delta review and grant/enable gating, default-profile selection/reset, and typed settings; the authenticated GUI CLI additionally launches bounded exact argv/cwd/title plus bounded environment overlays with explicit variable removal/inheritance clearing and Linux stdin JSON ingestion that avoids literal values in CLI argv/history into an existing local tab or a fresh source-configured native window without implicit shell parsing, with a bounded initial-child completion ledger queryable after UI moves/cleanup, with client-side deadline-bound waiting, single-invocation launch `--wait`, non-selecting command-tab `--background`, and portable exit-code propagation, while the domain CLI owns daemon command launch. | kitty offers Python kittens, event watchers, and remote control; WezTerm exposes a large Lua configuration/action/event API; Konsole exposes desktop-oriented profiles/plugins | Gap narrowed again; direct command launch now covers existing tabs and fresh native windows with stable results and bounded environment overlays, while event subscription, hidden-window/overlay or detached launch modes, remote/catalog installation, replacement installs, Wayland application-driven focus, plugin-requested final process-window termination, live-domain pane layouts, raw output/raw-byte input, arbitrary layout trees, broader destructive actions, and render hooks remain absent |
-| Shell/developer workflows | Accepted OSC 7/133 for Bash/Zsh/Fish, acceptance-pending native Nushell wiring, opt-in Elvish module, Git status/completion/diff, transcripts, guarded plugin input, Harvest command history | kitty and Ghostty use shell integration for prompt navigation, cwd inheritance, command-output selection, and SSH helpers | Differentiated combination, but Nushell/Elvish PTY evidence, automatic Elvish setup, and real-provider/manual acceptance are incomplete |
+| Shell/developer workflows | Real-PTY OSC 7/133 evidence for Bash/Zsh/Fish and ordinary-directory Nushell/explicit-import Elvish, login/custom-rc Bash support, guarded startup-environment handling, Git status/completion/diff, transcripts, guarded plugin input, Harvest command history | kitty and Ghostty use shell integration for prompt navigation, cwd inheritance, command-output selection, and SSH helpers | Differentiated combination; optional candidate-bound five-shell evidence is available, but Nushell literal-percent cwd correctness, automatic Elvish setup, arbitrary user-configuration and real-provider/manual acceptance remain incomplete |
 | Accessibility and input | AccessKit semantics for terminal/chrome/modals plus IME/preedit routing and tests | Ghostty emphasizes native platform UI; mainstream projects vary in screen-reader coverage | Architecturally serious, but remains Partial until Orca/real IME and desktop bridge acceptance exists |
 | Performance/resources | Event-driven scheduler, incremental row cache, persistent GPU buffers, compact byte-bounded history, allocation/RSS/PSS/private-memory/latency/soak contracts, and a fail-closed external comparison runner | kitty, Ghostty, and Alacritty explicitly market performance; kitty publishes its own throughput tool | Optimized in several measured subsystems; displayed idle RSS now has a broad regression rail while context-bound PSS/private rows improve attribution. One local Termeric/Ghostty artifact permits startup and PTY-response comparison, while its pixel mismatch correctly rejects RSS/idle ranking. No clean release or vendor-GPU artifact supports a fastest/best claim |
 | Platforms/distribution | Linux developer preview; Debian and maintained Arch `termeric-git` artifact construction with guarded disposable lifecycle lanes; one exact Arch candidate passes locally in the pinned official CI container; macOS/Windows build/unit plus bounded native-PTY lifecycle CI | kitty supports Linux/macOS/BSD; WezTerm and Alacritty support Linux/macOS/Windows/BSD; Ghostty supports Linux/macOS; Konsole is mature in KDE/Linux distribution channels | Arch coverage and a real PTY/ConPTY smoke narrow the gap, but absent published repositories/AUR release, hosted runner history, broader native GUI/input/GPU/install/soak evidence, and adoption history remain major blockers |
@@ -261,12 +265,19 @@ awaiting evidence:
   preservation, remote clipboard,
   notification forwarding, and URL opening remain gaps. kitty still ships a
   substantially broader remote-file workflow.
-- **Broader shell integration.** Modern Nushell's native OSC 7/133 path is now
-  wired for unambiguous REPL launches, but its real-PTY acceptance is still
-  pending. Elvish now has a configuration-preserving module and deterministic
-  launch routing, but requires one explicit rc import and still lacks a
-  real-PTY acceptance result. Automatic Elvish setup without altering arbitrary
-  user configuration remains unsolved.
+- **Broader shell integration.** Nushell 0.115.1 now passes an isolated native
+  ordinary-directory PTY probe with preserved config, first-prompt cwd,
+  multiline command regions, and terminal-query replies. A supplemental report
+  fixes initially disabled OSC 7, but the native literal-percent cwd producer
+  bug remains an ignored known-failure regression. Elvish 0.21.0 now passes its
+  explicit-import PTY probe plus native launch-option/environment-handoff
+  checks; automatic setup without altering arbitrary user configuration remains
+  absent. Bash login/custom-rc and `allexport` isolation have native tests,
+  while arbitrary user startup code and older-version coverage remain limited.
+  The [optional five-shell runner](integration-acceptance.md#shell-and-harvest-contract)
+  seals exact selected tests and binary identities while retaining the Nushell
+  cwd limitation. Real desktop/operator acceptance and hosted five-shell history
+  are separate requirements, not outcomes inferred from these local probes.
 - **Deeper font and exhaustive character controls.** Termeric now provides a
   validated 16-family ordered fallback chain, complete-grapheme coverage
   selection, settings controls for that chain, line height, ligatures, and

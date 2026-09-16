@@ -10,16 +10,18 @@ from scripts import run_shell_acceptance as runner
 from scripts.integration_acceptance_record import create_template, file_sha256, validate_record
 
 
-def rows():
+def rows(extended=False):
     return {name: {"shell": name, "path": f"/usr/bin/{name}", "version": f"{name} 1.0",
                    "sha256": "a" * 64, "capability_replies": int(name == "fish")}
-            for name in runner.SHELLS}
+            for name in (runner.EXTENDED_SHELLS if extended else runner.SHELLS)}
 
 
-def test_output(entries=None):
-    return (f"test {runner.TEST} ... ok\n"
-            + "\n".join(runner.PREFIX + json.dumps(row) for row in (entries or rows()).values())
-            + "\ntest result: ok. 1 passed; 0 failed; 0 ignored; 10 filtered out\n")
+def test_output(entries=None, extended=False):
+    tests = runner.EXTENDED_TESTS if extended else (runner.TEST,)
+    entries = rows(extended) if entries is None else entries
+    return ("".join(f"test {test} ... ok\n" for test in tests)
+            + "\n".join(runner.PREFIX + json.dumps(row) for row in entries.values())
+            + f"\ntest result: ok. {len(tests)} passed; 0 failed; 0 ignored; 10 filtered out\n")
 
 
 class ShellAcceptanceTests(unittest.TestCase):
@@ -32,6 +34,35 @@ class ShellAcceptanceTests(unittest.TestCase):
 
     def test_exact_observations_preserve_zero_reply_count(self):
         self.assertEqual(runner.observations(test_output()), rows())
+
+    def test_extended_environment_requires_both_optional_shells_without_provider_opt_ins(self):
+        source = {name: "private" for name in runner.REMOVED_ENVIRONMENT}
+        source["TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE"] = "0"
+        source["TERMERIC_REQUIRE_ELVISH_ACCEPTANCE"] = "0"
+        self.assertEqual(runner.safe_environment(source, True), {
+            "TERMERIC_REQUIRE_SHELL_ACCEPTANCE": "1",
+            "TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE": "1",
+            "TERMERIC_REQUIRE_ELVISH_ACCEPTANCE": "1",
+        })
+
+    def test_extended_observations_require_all_exact_tests_and_all_five_shells(self):
+        output = test_output(extended=True)
+        self.assertEqual(runner.observations(output, True), rows(True))
+        malformed = [test_output(), output + output,
+                     output.replace("6 passed", "5 passed"),
+                     output.replace("0 ignored", "1 ignored"),
+                     test_output(rows(), True),
+                     output + f"test unexpected ... ok\n"]
+        malformed.extend(output.replace(f"test {name} ... ok\n", "")
+                         for name in runner.EXTENDED_TESTS)
+        malformed.extend(test_output({name: row for name, row in rows(True).items()
+                                      if name != missing}, True)
+                         for missing in runner.EXTENDED_SHELLS)
+        for text in malformed:
+            with self.subTest(text=text), self.assertRaises(runner.RecordError):
+                runner.observations(text, True)
+        with self.assertRaises(runner.RecordError):
+            runner.observations(output)  # extended coverage must be explicit
 
     def test_skipped_zero_failed_or_wrong_test_cannot_pass(self):
         for output in (
@@ -70,6 +101,25 @@ class ShellAcceptanceTests(unittest.TestCase):
         self.assertEqual(validate_record(Path("/tmp/record.json"), record,
                                         allow_incomplete=True, require_artifact_files=False), [])
 
+    def test_extended_fill_retains_nushell_bug_and_elvish_opt_in_without_other_promotions(self):
+        record = create_template("a" * 40, "operator")
+        before = copy.deepcopy(record)
+        runner.fill_shell_cases(record, rows(True), "b" * 64, True)
+        for case, previous in zip(record["cases"], before["cases"]):
+            if case["id"] == "shell.nushell":
+                self.assertEqual(case["disposition"], "accepted_limitation")
+                self.assertEqual(case["checks"]["native_osc7_working_directory"], "accepted_limitation")
+                self.assertEqual(list(case["checks"].values()).count("pass"), 3)
+                self.assertIn("literal-percent", case["notes"])
+            elif case["id"] == "shell.elvish":
+                self.assertEqual(case["disposition"], "pass")
+                self.assertEqual(len(case["checks"]), 6)
+                self.assertIn("explicitly imports", case["notes"])
+            elif not case["id"].startswith("shell."):
+                self.assertEqual(case, previous)
+        self.assertEqual(validate_record(Path("/tmp/record.json"), record,
+                                        allow_incomplete=True, require_artifact_files=False), [])
+
     @unittest.skipUnless(sys.platform == "linux", "Linux process-group runner")
     def test_bounded_command_success_failure_timeout_and_overflow_retain_logs(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -91,7 +141,8 @@ class ShellAcceptanceTests(unittest.TestCase):
                 run("print('changed')", "pass")
             self.assertEqual((path / "pass").read_text(), "ok\n")
 
-    def pipeline(self, root, *, output=None, proof_ok=True, final_dirty=False, test_failure=False):
+    def pipeline(self, root, *, output=None, proof_ok=True, final_dirty=False, test_failure=False,
+                 extended=False, observation_output=None):
         root = Path(root)
         output = output or root / "evidence"
         binary = root / "test-binary"
@@ -108,10 +159,14 @@ class ShellAcceptanceTests(unittest.TestCase):
             self.assertEqual(env["TERMERIC_REQUIRE_SHELL_ACCEPTANCE"], "1")
             if command[0] == "cargo":
                 return "build fixture"
-            self.assertEqual(command, ["/proc/123/fd/4", runner.TEST, "--exact", "--show-output", "--test-threads=1"])
+            tests = runner.EXTENDED_TESTS if extended else (runner.TEST,)
+            self.assertEqual(command, ["/proc/123/fd/4", *tests, "--exact", "--show-output", "--test-threads=1"])
+            if extended:
+                self.assertEqual(env["TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE"], "1")
+                self.assertEqual(env["TERMERIC_REQUIRE_ELVISH_ACCEPTANCE"], "1")
             if test_failure:
                 raise runner.RecordError("fixture failed")
-            return test_output()
+            return test_output(extended=extended) if observation_output is None else observation_output
 
         with mock.patch.object(runner, "source_identity", side_effect=[initial, {**initial, "worktree_dirty": final_dirty}]), \
              mock.patch.object(runner, "run_logged", side_effect=logged), \
@@ -119,7 +174,7 @@ class ShellAcceptanceTests(unittest.TestCase):
              mock.patch.object(runner, "PinnedExecutable", return_value=pinned), \
              mock.patch.object(runner, "provenance_checks", return_value=[{"passed": proof_ok}]), \
              mock.patch.object(runner, "file_sha256", side_effect=lambda path: "a" * 64 if str(path).startswith("/usr/bin/") else file_sha256(path)):
-            runner.run(output, "operator")
+            runner.run(output, "operator", extended)
         return output
 
     @unittest.skipUnless(sys.platform == "linux", "Linux provenance")
@@ -130,6 +185,28 @@ class ShellAcceptanceTests(unittest.TestCase):
             self.assertEqual(record["candidate"]["sha"], "a" * 40)
             self.assertEqual(sum(case["disposition"] == "unrecorded" for case in record["cases"]), 9)
             self.assertTrue((output / "artifacts/shell-result.json").is_file())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux provenance")
+    def test_extended_pipeline_seals_exact_selection_and_keeps_other_cases_unrecorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = self.pipeline(directory, extended=True)
+            record = json.loads((output / "record.json").read_text())
+            self.assertEqual(sum(case["disposition"] == "unrecorded" for case in record["cases"]), 7)
+            evidence = json.loads((output / "artifacts/shell-result.json").read_text())
+            self.assertEqual(evidence["schema"], 2)
+            self.assertEqual(evidence["tests"], list(runner.EXTENDED_TESTS))
+            self.assertEqual(set(evidence["shells"]), set(runner.EXTENDED_SHELLS))
+            self.assertEqual(evidence["candidate_sha"], record["candidate"]["sha"])
+            self.assertEqual(validate_record(output / "record.json", record, allow_incomplete=True), [])
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux provenance")
+    def test_extended_incomplete_or_malformed_observations_never_publish(self):
+        for observation_output in (test_output(), test_output(extended=True).replace("6 passed", "0 passed")):
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(runner.RecordError):
+                    self.pipeline(directory, extended=True, observation_output=observation_output)
+                self.assertFalse((Path(directory) / "evidence/record.json").exists())
+                self.assertTrue((Path(directory) / "evidence/artifacts/shell-provenance.json").is_file())
 
     @unittest.skipUnless(sys.platform == "linux", "Linux provenance")
     def test_drift_or_test_failure_retains_diagnostics_without_publishing_record(self):

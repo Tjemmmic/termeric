@@ -109,6 +109,13 @@ pass on Bash 5.3.15; explicit user prompt exports remain explicit and are not a
 guarantee of clean nested-shell composition. See
 [Bash environment boundaries](osc-integration.md#bash-launch-and-custom-rc-handling).
 
+The optional `run_shell_acceptance.py --include-extended-shells` lane now seals
+candidate-bound Bash/Zsh/Fish/Nushell/Elvish observations together with exact
+selected test results. Nushell's native cwd check remains an accepted limitation
+for the known literal-percent bug, and Elvish coverage requires an explicit rc
+import. It does not promote provider, desktop, or hosted-CI acceptance; see
+[five-shell evidence](integration-acceptance.md#shell-and-harvest-contract).
+
 Zsh forwards user `.zshenv`, login `.zprofile`, and `.zshrc` at file scope,
 restoring each effective `ZDOTDIR` before user code and preserving subsequent
 directory/export changes. Recovery tests, four directory-handoff comparisons,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record the required Linux Bash/Zsh/Fish real-PTY acceptance subset."""
+"""Record Linux shell acceptance; optionally include Nushell and opt-in Elvish."""
 from __future__ import annotations
 
 import argparse
@@ -28,6 +28,15 @@ from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_
 TEST = "terminal::shell_integration::tests::supported_shells_preserve_user_rc_and_emit_multiline_exit_regions"
 PREFIX = "TERMERIC_SHELL_ACCEPTANCE="
 SHELLS = {"bash": "Bash", "zsh": "Zsh", "fish": "Fish"}
+EXTENDED_SHELLS = {**SHELLS, "nushell": "Nushell", "elvish": "Elvish"}
+EXTENDED_TESTS = (
+    TEST,
+    "terminal::shell_integration::tests::nushell_native_integration_preserves_user_config_and_emits_regions_when_available",
+    "terminal::shell_integration::tests::elvish_module_preserves_user_config_and_emits_regions_when_available",
+    "terminal::shell_integration::nushell_launch_tests::nushell_non_repl_and_unknown_launches_are_preserved_without_side_effects",
+    "terminal::shell_integration::elvish_launch_tests::elvish_non_repl_and_invalid_launches_have_no_integration_side_effects",
+    "terminal::shell_integration::elvish_environment_tests::elvish_module_restores_only_unchanged_transport_and_cleans_child_environment",
+)
 MAX_LOG_BYTES = 8 * 1024 * 1024
 REMOVED_ENVIRONMENT = (
     "TERMERIC_REAL_CODEX_CONTRACT", "OPENAI_API_KEY", "CODEX_API_KEY",
@@ -36,9 +45,12 @@ REMOVED_ENVIRONMENT = (
 )
 
 
-def safe_environment(source: dict[str, str]) -> dict[str, str]:
+def safe_environment(source: dict[str, str], extended: bool = False) -> dict[str, str]:
     result = {key: value for key, value in source.items() if key not in REMOVED_ENVIRONMENT}
     result["TERMERIC_REQUIRE_SHELL_ACCEPTANCE"] = "1"
+    if extended:
+        result["TERMERIC_REQUIRE_NUSHELL_ACCEPTANCE"] = "1"
+        result["TERMERIC_REQUIRE_ELVISH_ACCEPTANCE"] = "1"
     return result
 
 
@@ -84,11 +96,17 @@ def run_logged(command: list[str], path: Path, environment: dict[str, str], time
             process.stdout.close()
 
 
-def observations(output: str) -> dict[str, dict]:
-    if not re.search(rf"^test {re.escape(TEST)} \.\.\. ok$", output, re.MULTILINE):
-        raise RecordError("exact shell test did not pass")
-    if not re.search(r"^test result: ok\. 1 passed; 0 failed; 0 ignored;", output, re.MULTILINE):
-        raise RecordError("expected exactly one passing, non-ignored shell test")
+def observations(output: str, extended: bool = False) -> dict[str, dict]:
+    tests = EXTENDED_TESTS if extended else (TEST,)
+    shells = EXTENDED_SHELLS if extended else SHELLS
+    passed = re.findall(r"^test (.+) \.\.\. ok$", output, re.MULTILINE)
+    if sorted(passed) != sorted(tests):
+        raise RecordError("exact shell tests did not pass, or unexpected tests ran")
+    summaries = re.findall(r"^test result: (.+)$", output, re.MULTILINE)
+    if len(summaries) != 1 or not summaries[0].startswith(
+        f"ok. {len(tests)} passed; 0 failed; 0 ignored;"
+    ):
+        raise RecordError("expected exactly the selected passing, non-ignored shell tests")
     result = {}
     for line in output.splitlines():
         if not line.startswith(PREFIX):
@@ -100,7 +118,7 @@ def observations(output: str) -> dict[str, dict]:
         if not isinstance(row, dict) or set(row) != {"shell", "path", "version", "sha256", "capability_replies"}:
             raise RecordError("invalid shell observation fields")
         name = row["shell"]
-        if not isinstance(name, str) or name not in SHELLS or name in result:
+        if not isinstance(name, str) or name not in shells or name in result:
             raise RecordError("unexpected or duplicate shell observation")
         if (not isinstance(row["path"], str) or not Path(row["path"]).is_absolute()
             or not isinstance(row["version"], str) or not row["version"].strip()
@@ -109,31 +127,50 @@ def observations(output: str) -> dict[str, dict]:
             or type(row["capability_replies"]) is not int or not 0 <= row["capability_replies"] <= 10000):
             raise RecordError("invalid shell observation values")
         result[name] = row
-    if set(result) != set(SHELLS):
+    if set(result) != set(shells):
         raise RecordError("missing required shell observations")
     return result
 
 
-def fill_shell_cases(record: dict, rows: dict[str, dict], binary_digest: str) -> None:
+def fill_shell_cases(record: dict, rows: dict[str, dict], binary_digest: str,
+                     extended: bool = False) -> None:
+    shells = EXTENDED_SHELLS if extended else SHELLS
     for case in record["cases"]:
         name = case["id"].removeprefix("shell.")
-        if case["id"] != f"shell.{name}" or name not in SHELLS:
+        if case["id"] != f"shell.{name}" or name not in shells:
             continue
         row = rows[name]
         case["environment"] = {
-            "platform": platform.platform(), "shell": SHELLS[name],
+            "platform": platform.platform(), "shell": shells[name],
             "shell_path": row["path"], "shell_version": row["version"],
             "test_binary_sha256": binary_digest,
         }
         case["checks"] = {check: "pass" for check in CASE_DEFINITIONS[case["id"]].checks}
-        if not row["capability_replies"]:
+        if "capability_replies_return_to_origin" in case["checks"] and not row["capability_replies"]:
             case["checks"]["capability_replies_return_to_origin"] = "accepted_limitation"
+        if name == "nushell":
+            # The ordinary-directory fixture cannot establish percent-path
+            # correctness. Keep this limitation until its known-failure test
+            # is fixed and explicitly added to the selected evidence lane.
+            case["checks"]["native_osc7_working_directory"] = "accepted_limitation"
         case["disposition"] = disposition_for_checks(case["checks"])
         case["notes"] = (
             "Isolated real PTY, synthetic rc and commands; no provider or native GUI. "
             f"Observed {row['capability_replies']} replies written to the originating PTY. "
             "A zero count is explicitly an unexercised reply-path limitation, not a pass."
         )
+        if name == "nushell":
+            case["notes"] += (
+                " Ordinary-directory cwd only: Nushell 0.115.1 native literal-percent paths "
+                "remain a known failure; the ignored percent regression is not selected. "
+                "This lane does not establish arbitrary configuration or all directory names."
+            )
+        elif name == "elvish":
+            case["notes"] += (
+                " Synthetic rc explicitly imports the module; automatic setup is not claimed. "
+                "Separate exact tests cover special-mode pass-through and ten environment "
+                "handoff/child-cleanup cases. No arbitrary user configuration is accepted."
+            )
         case["artifacts"] = [
             {"path": f"artifacts/{filename}", "description": description, "sha256": "0" * 64}
             for filename, description in (
@@ -144,7 +181,7 @@ def fill_shell_cases(record: dict, rows: dict[str, dict], binary_digest: str) ->
         ]
 
 
-def run(output: Path, operator: str) -> None:
+def run(output: Path, operator: str, extended: bool = False) -> None:
     if sys.platform != "linux":
         raise RecordError("shell evidence runner requires Linux executable-fd provenance")
     if not operator.strip():
@@ -159,12 +196,13 @@ def run(output: Path, operator: str) -> None:
     output.mkdir(parents=True)
     artifacts = output / "artifacts"
     artifacts.mkdir()
-    environment = safe_environment(dict(os.environ))
+    environment = safe_environment(dict(os.environ), extended)
+    tests = EXTENDED_TESTS if extended else (TEST,)
     build_command = ["cargo", "test", "-p", "termeric", "--locked", "--no-run", "--message-format=json"]
     build = run_logged(build_command, artifacts / "shell-build.log", environment, 900)
     binary = test_binary_from_cargo_messages(build)
     with PinnedExecutable(ROOT, binary, initial) as pinned:
-        command = [str(pinned.launch("scenario")), TEST, "--exact", "--show-output", "--test-threads=1"]
+        command = [str(pinned.launch("scenario")), *tests, "--exact", "--show-output", "--test-threads=1"]
         try:
             result = run_logged(command, artifacts / "shell-test.log", environment, 60)
         finally:
@@ -172,20 +210,20 @@ def run(output: Path, operator: str) -> None:
             atomic_write_json(artifacts / "shell-provenance.json", proof)
         if not all(check["passed"] for check in provenance_checks(proof, ["scenario"])):
             raise RecordError("source or test executable changed; see shell-provenance.json")
-        rows = observations(result)
+        rows = observations(result, extended)
         for row in rows.values():
             if file_sha256(Path(row["path"])) != row["sha256"]:
                 raise RecordError("shell executable changed after its probe")
         digest = pinned.file_evidence["sha256"]
     evidence = {
-        "schema": 1, "test": TEST, "candidate_sha": initial["commit"],
+        "schema": 2, "tests": list(tests), "candidate_sha": initial["commit"],
         "test_binary_sha256": digest, "shells": rows, "provenance": proof,
         "removed_environment": list(REMOVED_ENVIRONMENT),
         "build_command": build_command, "test_command": command,
     }
     atomic_write_json(artifacts / "shell-result.json", evidence)
     record = create_template(initial["commit"], operator)
-    fill_shell_cases(record, rows, digest)
+    fill_shell_cases(record, rows, digest, extended)
     path = output / "record.json"
     # Seal in memory first: no record is published before checks and hashes agree.
     for case in record["cases"]:
@@ -203,14 +241,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="new evidence directory")
     parser.add_argument("--operator", required=True)
+    parser.add_argument("--include-extended-shells", action="store_true",
+                        help="also require Nushell and Elvish; retain known cwd/setup limitations")
     args = parser.parse_args()
     try:
-        run(args.output, args.operator)
+        run(args.output, args.operator, args.include_extended_shells)
     except (OSError, ValueError, RecordError, subprocess.SubprocessError) as error:
         print(f"Shell acceptance failed: {error}", file=sys.stderr)
         return 1
     print(f"Recorded partial shell acceptance: {args.output / 'record.json'}")
-    print("Only required Bash/Zsh/Fish checks recorded; all other integration cases remain unrecorded.")
+    print("Selected shell checks recorded with explicit limitations; provider and desktop cases remain unrecorded.")
     return 0
 
 

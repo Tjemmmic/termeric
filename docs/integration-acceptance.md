@@ -229,6 +229,36 @@ rows remain unrecorded. CI uploads this partial record separately. A green
 candidate-bound three-shell artifact is still required; historical prose passes
 and a default workspace suite that skips missing shells are not substitutes.
 
+To additionally record the implemented Nushell and opt-in Elvish paths, install
+both shells and request the extended lane explicitly:
+
+```bash
+python3 scripts/run_shell_acceptance.py \
+  --include-extended-shells \
+  --output target/five-shell-acceptance \
+  --operator "Local five-shell acceptance"
+python3 scripts/integration_acceptance_record.py validate \
+  target/five-shell-acceptance/record.json --allow-incomplete
+```
+
+This runs six exact, non-ignored tests in the same pinned test executable: the
+three-shell fixture, the Nushell and Elvish ordinary-directory PTYs, each added
+shell's non-REPL/special-mode pass-through test, and Elvish's ten-case native
+environment-handoff/child-cleanup test. Both added binaries are required;
+missing observations, any missing test, or extra/ignored/failed tests prevent
+publication. The same 60-second scenario deadline and 8-MiB log ceiling apply.
+`artifacts/shell-result.json` schema 2 records the exact `tests` list in place
+of the former single `test` field; the integration record schema stays at 1.
+
+The extended record fills all five shell cases, but does **not** claim five
+unqualified passes: Nushell's `native_osc7_working_directory` is always
+`accepted_limitation` because this lane does not establish literal-percent
+correctness. Its known-failure regression remains ignored, not silently fixed
+or selected here. Elvish's checks cover an explicit synthetic rc import, not
+automatic integration or arbitrary user configuration. Provider, Harvest, and
+desktop cases remain unrecorded. The default CI lane still requires only
+Bash/Zsh/Fish; extended local evidence does not imply hosted five-shell history.
+
 Run the required three-shell lane with:
 
 ```bash

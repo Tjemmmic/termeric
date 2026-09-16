@@ -226,12 +226,20 @@ The export tests require Bash when `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1`;
 the new cases were verified on Bash 5.3.15, not every older Bash release or
 arbitrary explicitly exported user prompt configuration.
 
-`scripts/run_shell_acceptance.py` runs only the required Bash/Zsh/Fish real-PTY
-fixture and writes a sealed partial integration record. Its pure and private
+`scripts/run_shell_acceptance.py` defaults to the required Bash/Zsh/Fish real-PTY
+fixture and writes a sealed partial integration record. Opt-in
+`--include-extended-shells` requires Nushell and Elvish, selects six exact tests
+including special-mode and environment-handoff coverage, and records their
+existing ordinary-directory/explicit-import boundaries. Nushell's native cwd
+check stays an accepted limitation because literal-percent correctness remains
+unproven. Its pure and private
 process tests cover zero/ignored/wrong-test refusal, exact observation shape,
 missing/duplicate shells, unexercised reply-path limitations, unchanged unrelated
 rows, bounded output, timeouts, nonzero exits, no-overwrite behavior, dirty source
-and source/binary drift refusal. The shared executable-provenance tests cover
+and source/binary drift refusal. Extended-lane tests additionally reject missing
+exact test results or shell identities, enforce both required-shell flags, and
+prove partial publication never promotes the known Nushell gap or unrelated
+provider/desktop cases. The shared executable-provenance tests cover
 pathname replacement while the launched descriptor remains pinned. CI installs
 the three shells and uploads the runner's artifact separately from fake-provider
 evidence. No provider or native GUI test is selected. See the exact command and
