@@ -67,8 +67,13 @@ rejected previews, including when another control is pending. Lost release
 without a focus transition, modal takeover, or geometry change, device unplug,
 and native pinned/live-domain drag acceptance remain separate. The native
 overflow lane checks stationary forward/reverse overflow-control holds through
-the hidden range on a normal-height left rail; top/compact traversal has shared
-logic and hit-test coverage, not equivalent native traversal evidence.
+the hidden range on the normal left rail, compact left rail, and top strip.
+Normal/top controls stop at the first/last visible viewport; compact controls
+continue to the first/last tab. Exact PTY markers check the selected owner before
+keyboard reselection, the resulting tab indices, and restored sibling order.
+The fixture rejects unrelated window focus loss during these checks. This is
+private-compositor input evidence, not subjective visual or screen-reader
+acceptance, and does not establish X11 or hosted CI results merely by selection.
 
 Modal takeover is reconciled before native/user-event dispatch, before animation
 cleanup, and after queued PTY work. A release consumed by the modal cannot leave

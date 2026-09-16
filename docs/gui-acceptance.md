@@ -512,12 +512,21 @@ counts must remain unchanged so unrelated window blur cannot mask the bug.
 Live-domain acknowledgment/rollback has separate unit coverage, not native
 acceptance in this scenario.
 
-Schema 11 adds stationary four-second holds over the normal left rail's Next
-and Previous controls. Exact PTY markers must show the original dragged tab
-at the far end and then in the first viewport; a final visible-slot drag restores
-the starting order after the Previous control disappears.
-This proves timer-driven hidden-range traversal without extra pointer motion;
-it does not establish top/compact-rail or pinned/live-domain native traversal.
+Schema 12 checks stationary four-second Next/Previous holds in three layouts:
+the normal left rail, compact left rail, and top strip. Fixture geometry derives
+from the observed cell metrics and rejects out-of-range rows/tab counts rather
+than silently skipping a case. Each transition waits for configuration reload
+and matching PTY geometry. Normal/top arrows disappear when the hidden range is
+exhausted; compact arrows remain until the first/last active index. Exact PTY
+markers assert these stopping indices, the selected owner immediately after
+each hold (before reselection), and restored sibling order. Any final visible
+slot move uses a normal drag. Unrelated focus loss fails the case. The artifact
+retains each layout's surface, points, and expected indices.
+
+These checks establish timer-driven hidden-range traversal without extra pointer
+motion in the private compositor used for the run. They do not establish
+pinned/live-domain native traversal, arbitrary edge zones, visual quality, or
+an unrun X11/hosted CI environment.
 
 ## Native background-image pixels
 

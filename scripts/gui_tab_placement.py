@@ -67,6 +67,40 @@ def compact_pointer_targets(geometry: tuple[int, ...]) -> dict[str, tuple[int, i
             "new": (183, control_y)}
 
 
+def overflow_drag_layout(name: str, row_height: int, tab_count: int) -> dict:
+    """Scale-1 fixture geometry and independent tab-order checkpoints.
+
+    Top/normal controls disappear at the first/last visible viewport. Compact
+    controls instead follow the active index, all the way to the end tabs.
+    """
+    if not 28 <= row_height <= 42 or not 8 <= tab_count <= 16:
+        raise ValueError("overflow drag fixture metrics exceed its bounded hold")
+    if name == "top":
+        width, height, position = 480, 240, "top"
+        viewport_width = width - 6 * row_height
+        visible = viewport_width // 80
+        slot_width = viewport_width / visible
+        point = lambda offset: (math.floor(row_height + offset * slot_width + 20), row_height // 2)
+        previous, next_ = (row_height // 2, row_height // 2), (math.floor(width - 4.5 * row_height), row_height // 2)
+    elif name in ("normal", "compact"):
+        width, height, position = 960, row_height * 6 if name == "normal" else 128, "left"
+        visible = 2 if name == "normal" else (height - 2 * row_height) // row_height
+        first_y = row_height * (2 if name == "normal" else 1)
+        point = lambda offset: (20, math.floor(first_y + (offset + 0.5) * row_height))
+        if name == "normal":
+            previous, next_ = (20, math.floor(1.5 * row_height)), (20, math.floor(4.5 * row_height))
+        else:
+            previous, next_ = (36, math.floor(height - row_height / 2)), (110, math.floor(height - row_height / 2))
+    else:
+        raise ValueError("unknown overflow drag layout")
+    forward = tab_count - 1 if name == "compact" else tab_count - visible + visible // 2
+    reverse = 0 if name == "compact" else visible // 2
+    return {"name": name, "position": position, "surface": (width, height),
+            "visible": visible, "forward_index": forward, "reverse_index": reverse,
+            "start": point(0), "forward_start": point(forward - (tab_count - visible)),
+            "reverse_start": point(reverse), "previous": previous, "next": next_}
+
+
 def native_click(gui, app, backend, point, surface=(960, 128)):
     if backend == "x11":
         app.click(*point)
@@ -463,21 +497,48 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         native_drag(gui, app, backend, destination, source, (960, drag_height))
         select_and_check(0, "DRAG_RESTORED_FIRST_174", original)
         select_and_check(1, "DRAG_RESTORED_SECOND_174", pids[1])
-        # Hold on the existing overflow controls without further motion. The
-        # original tab must cross the hidden range, not select sibling PTYs.
-        with native_keyboard_lifetime(gui, app, backend):
-            select_and_check(0, "OVERFLOW_DRAG_START_174", original)
-            native_drag(gui, app, backend, source, (20, math.floor(row_height * 4.5)),
-                        (960, drag_height), hold_seconds=4)
-            select_and_check(count + 1, "OVERFLOW_DRAG_LAST_174", original)
-            native_drag(gui, app, backend, destination, (20, math.floor(row_height * 1.5)),
-                        (960, drag_height), hold_seconds=4)
-            # Previous disappears when the first viewport is visible. Finish
-            # the final visible-slot move normally; no hidden control remains.
-            select_and_check(1, "OVERFLOW_DRAG_FIRST_VIEWPORT_174", original)
-            native_drag(gui, app, backend, destination, source, (960, drag_height))
-            select_and_check(0, "OVERFLOW_DRAG_RESTORED_174", original)
-            select_and_check(1, "OVERFLOW_DRAG_SIBLING_174", pids[1])
+        def set_drag_layout(layout):
+            before = app.log_count("Config hot-reloaded")
+            config_path.write_text(configuration_for_position(config_path.read_text(), layout["position"]))
+            gui.wait_until("drag placement reload", lambda: app.log_count("Config hot-reloaded") > before)
+            width, height = layout["surface"]
+            app.renderer_resize(backend, width, height)
+            cell_width = compact_geometry[2] / compact_geometry[1]
+            cell_height = compact_geometry[3] / compact_geometry[0]
+            expected_width = width - (220 if layout["position"] == "left" else 0) - 16
+            expected_height = height - row_height - 16
+            def sized():
+                geometry = gui.latest_terminal_geometry(gui.read_records(transcript), original)
+                return (expected_width - cell_width < geometry[2] <= expected_width
+                        and expected_height - cell_height < geometry[3] <= expected_height)
+            gui.wait_until("drag layout PTY geometry", sized)
+
+        # Hold without further motion in every distinct layout. Observe exact
+        # ownership immediately after each hold, before keyboard reselection.
+        overflow_layouts = []
+        for name in ("normal", "compact", "top"):
+            layout = overflow_drag_layout(name, row_height, count + 2)
+            set_drag_layout(layout)
+            prefix = f"OVERFLOW_{name.upper()}"
+            with native_keyboard_lifetime(gui, app, backend, duration_ms=60000):
+                losses = app.log_count("Window focus changed: false")
+                select_and_check(0, f"{prefix}_START_174", original)
+                native_drag(gui, app, backend, layout["start"], layout["next"],
+                            layout["surface"], hold_seconds=4)
+                assert_focus_input(f"{prefix}_HELD_OWNER_174", original)
+                select_and_check(layout["forward_index"], f"{prefix}_LAST_VIEWPORT_174", original)
+                native_drag(gui, app, backend, layout["forward_start"], layout["previous"],
+                            layout["surface"], hold_seconds=4)
+                assert_focus_input(f"{prefix}_REVERSE_OWNER_174", original)
+                select_and_check(layout["reverse_index"], f"{prefix}_FIRST_VIEWPORT_174", original)
+                if layout["reverse_index"]:
+                    native_drag(gui, app, backend, layout["reverse_start"], layout["start"], layout["surface"])
+                select_and_check(0, f"{prefix}_RESTORED_174", original)
+                select_and_check(1, f"{prefix}_SIBLING_174", pids[1])
+                if app.log_count("Window focus changed: false") != losses:
+                    raise gui.AcceptanceError(f"{name} overflow traversal had unrelated focus loss")
+            overflow_layouts.append(layout)
+        set_drag_layout(overflow_layouts[0])
         # Holding tab zero must never start moving tab one after Ctrl+Tab.
         native_drag(gui, app, backend, source, (40, source[1]), (960, drag_height),
                     during_drag=lambda: chord(("ctrl",), "Tab"))
@@ -595,12 +656,13 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 11, "backend": backend, "original_pids": pids,
+            "schema": 12, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
             "pointer_focus_input_owners": focus_owners, "focus_split_pid": split_pid,
             "drag_input_owners": drag_owners, "drag_surface": [960, drag_height],
+            "overflow_drag_layouts": overflow_layouts, "overflow_drag_focus_losses": 0,
             "drag_focus_transitions": focus_transitions,
             "drag_held_focus_transitions": held_focus_transitions,
             "modal_drag_focus_losses": 0,
@@ -615,7 +677,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             "panel_background_divider_point": [590, 680],
             "panel_geometry": panel_geometry,
             "drag_points": {"source": source, "destination": destination},
-            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, held-control overflow traversal, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar/divider isolation; not screenshot, arbitrary lost-release, or screen-reader acceptance",
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, normal/compact/top held-control traversal with exact ownership, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar/divider isolation; not screenshot, arbitrary lost-release, pinned/live-domain traversal, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

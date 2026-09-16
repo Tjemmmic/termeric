@@ -70,8 +70,11 @@ controls, with deadline-driven 400-ms initial/200-ms repeat dwell. Each move
 revalidates the source, pinned/closing/domain boundaries, visibility, and pending
 domain authority. Leaving or reversing controls resets dwell; interruptions
 clear it, and blocked boundaries retain no timer. Native coverage checks
-stationary forward/reverse traversal on a normal-height left rail; top/compact
-layouts and native pinned/live-domain traversal remain separate acceptance.
+stationary forward/reverse traversal on normal/compact left rails and the top
+strip, with exact owner checks before reselection, layout-specific stopping
+indices, restored sibling order, and no unrelated focus loss. Native
+pinned/live-domain traversal, X11 execution, and visual acceptance remain
+separate checks.
 
 Normal left clicks now exit F6 chrome focus after hit testing, avoiding swallowed
 typing and preserving the displayed keyboard-scrolled tab target. The native

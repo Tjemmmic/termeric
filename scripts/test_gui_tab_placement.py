@@ -9,6 +9,32 @@ from scripts import gui_tab_placement as placement
 
 
 class TabPlacementTests(unittest.TestCase):
+    def test_drag_layout_checkpoints_distinguish_viewport_and_active_index_controls(self):
+        for row_height in (28, 29, 32, 40, 42):
+            for count in (8, 14, 16):
+                for name in ("normal", "compact", "top"):
+                    layout = placement.overflow_drag_layout(name, row_height, count)
+                    with self.subTest(name=name, row_height=row_height, count=count):
+                        self.assertGreater(layout["forward_index"], layout["visible"])
+                        self.assertLess(layout["forward_index"], count)
+                        self.assertEqual(layout["reverse_index"], 0 if name == "compact" else layout["visible"] // 2)
+                        for key in ("start", "forward_start", "reverse_start", "previous", "next"):
+                            x, y = layout[key]
+                            self.assertTrue(0 <= x < layout["surface"][0])
+                            self.assertTrue(0 <= y < layout["surface"][1])
+        top = placement.overflow_drag_layout("top", 29, 14)
+        self.assertEqual((top["visible"], top["forward_index"], top["reverse_index"]), (3, 12, 1))
+        compact = placement.overflow_drag_layout("compact", 29, 14)
+        self.assertEqual((compact["visible"], compact["forward_index"], compact["reverse_index"]), (2, 13, 0))
+        self.assertEqual(compact["previous"], (36, 113))
+        self.assertEqual(compact["next"], (110, 113))
+
+    def test_drag_layout_rejects_unbounded_or_unavailable_fixtures(self):
+        for name, row, count in (("unknown", 29, 14), ("top", 27, 14), ("top", 43, 14),
+                                 ("normal", 29, 7), ("compact", 29, 17)):
+            with self.assertRaises(ValueError):
+                placement.overflow_drag_layout(name, row, count)
+
     def test_native_click_uses_explicit_resized_surface(self):
         app = mock.Mock(env={"SWAYSOCK": "private"})
         with mock.patch.object(placement, "VirtualPointer") as factory:

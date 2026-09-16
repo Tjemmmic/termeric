@@ -511,9 +511,12 @@ provenance; this is not overflow/drag/IME/visual or hosted-result acceptance.
 Tab overflow drag-through has deterministic timestamp tests for initial/repeat
 dwell, reversal, leaving controls, late-event no-catch-up, and no timer at a
 boundary. Owner/closing/pinned/domain/focus/occlusion/modal refusal and single
-live-preview finalization use local PTYs only. Schema-11 native overflow adds
-stationary forward/reverse holds across hidden tabs in the normal left rail;
-other native traversal layouts and real live-domain behavior remain deferred.
+live-preview finalization use local PTYs only. Schema-12 native overflow checks
+stationary forward/reverse holds across hidden tabs in normal/compact left rails
+and the top strip, with immediate owner checks, exact stopping indices, restored
+sibling order, and no unrelated focus loss. Pure fixture tests distinguish
+active-index controls from viewport controls across bounded font/tab metrics.
+Native pinned/live-domain traversal and unrun platforms remain deferred.
 See [the scenario boundaries](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
 
 The separate `tab-overflow` native scenario forces a twelve-tab left rail and
