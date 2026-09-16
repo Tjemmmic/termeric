@@ -41,6 +41,16 @@ keyboard tab shortcuts still work. Controls use the available rail height and
 disappear when no space remains below the toolbar. Normal-height rails retain
 their separate control rows.
 
+Tab dragging remains bound to the tab selected at button-down. Motion cannot
+reorder a different tab after a keyboard selection change or source closure;
+the original open tab must still be selected. Returning to it while holding
+the button permits its drag to continue, and normal release ends the gesture.
+Pinned boundaries and the existing live-domain preview/acknowledgment rules
+are retained. Native overflow tests check forward/reverse local reordering and
+held-button Ctrl+Tab isolation using exact PTY identities. Lost-release/window-
+focus transitions, edge auto-scrolling, and native pinned/live-domain drag
+acceptance remain separate work.
+
 ## Shared geometry
 
 Rail width is part of the authoritative terminal geometry. The same physical

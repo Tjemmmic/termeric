@@ -504,6 +504,11 @@ It also checks that F6 followed by terminal, distant-tab, or split-pane clicks
 restores exact PTY input ownership without an extra Escape. Unit coverage
 preserves non-primary/release behavior and already-terminal text-field focus
 and IME preedit state; real IME and screen-reader acceptance remain separate.
+The drag phase then checks forward/reverse local tab reorder and Ctrl+Tab
+while holding a drag, using stable PTY identities. Unit coverage rejects a
+changed, missing, closed, or closing source and preserves the pinned boundary.
+Native lost-release/window-focus and pinned/live-domain drag acceptance are
+not inferred from these results.
 See [overflow coverage and exclusions](gui-acceptance.md#tab-overflow-keyboard-lane).
 
 The headless visual subset is deliberately requested from a fallback adapter

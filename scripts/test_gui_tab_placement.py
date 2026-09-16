@@ -114,6 +114,31 @@ class TabPlacementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             placement.native_click(harness, app, "wayland", (36, 113))
 
+    def test_wayland_drag_holds_device_and_releases_on_callback_failure(self):
+        app, harness = mock.Mock(env={}), mock.Mock()
+        with mock.patch.object(placement, "VirtualPointer") as factory:
+            pointer = factory.return_value.__enter__.return_value
+            callback = mock.Mock()
+            placement.native_drag(harness, app, "wayland", (20, 72), (20, 101), (960, 174), callback)
+            self.assertEqual(pointer.method_calls, [mock.call.move(20, 72, 960, 174),
+                mock.call.set_left_button(True), mock.call.move(20, 101, 960, 174),
+                mock.call.set_left_button(False)])
+            callback.assert_called_once_with()
+            pointer.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, "fixture error"):
+                placement.native_drag(harness, app, "wayland", (20, 72), (20, 101), (960, 174),
+                                      mock.Mock(side_effect=RuntimeError("fixture error")))
+            self.assertEqual(pointer.set_left_button.call_args_list, [mock.call(True), mock.call(False)])
+
+    def test_x11_drag_releases_button_on_callback_failure(self):
+        app, harness = mock.Mock(window_id="fixture"), mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "fixture error"):
+            placement.native_drag(harness, app, "x11", (20, 72), (20, 101), (960, 174),
+                                  mock.Mock(side_effect=RuntimeError("fixture error")))
+        self.assertEqual(app.xdo.call_args_list, [
+            mock.call("mousemove", "--window", "fixture", "20", "72"),
+            mock.call("mousedown", "1"), mock.call("mouseup", "1")])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -688,7 +688,7 @@ impl App {
                         .is_some_and(|(domain, _)| domain == live.domain_id)
                 });
                 if allowed {
-                    let _ = tabs.move_active_to(target);
+                    let _ = tabs.move_dragged_tab_to(drag.tab_id, target);
                 }
             }
         }

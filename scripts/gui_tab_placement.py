@@ -79,6 +79,35 @@ def native_click(gui, app, backend, point):
         raise ValueError("compact pointer fixture requires X11 or private Sway")
 
 
+def native_drag(gui, app, backend, start, end, surface, during_drag=None):
+    if backend == "wayland":
+        with VirtualPointer(app.env) as pointer:
+            pointer.move(*start, *surface)
+            pointer.set_left_button(True)
+            try:
+                gui.time.sleep(0.12)
+                if during_drag is not None:
+                    during_drag()
+                pointer.move(*end, *surface)
+                gui.time.sleep(0.12)
+            finally:
+                pointer.set_left_button(False)
+    elif backend == "x11":
+        app.activate()
+        app.xdo("mousemove", "--window", app.window_id, *(str(value) for value in start))
+        app.xdo("mousedown", "1")
+        try:
+            gui.time.sleep(0.12)
+            if during_drag is not None:
+                during_drag()
+            app.xdo("mousemove", "--window", app.window_id, *(str(value) for value in end))
+            gui.time.sleep(0.12)
+        finally:
+            app.xdo("mouseup", "1")
+    else:
+        raise ValueError("unsupported drag fixture backend")
+
+
 def run_tab_placement_scenario(gui, binary: Path, run_dir: Path, env: dict,
                               backend: str) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -313,17 +342,54 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
                 chord((), key)
             native_click(gui, app, backend, point)
             assert_focus_input(token, owner)
+
+        # A six-row rail has exactly two normal-height visible tab slots.
+        # Resize from the compact fixture so slot metrics are font-derived.
+        row_height = compact_row_height(compact_geometry)
+        drag_height = row_height * 6
+        old_height = gui.latest_terminal_geometry(gui.read_records(transcript), original)[3]
+        app.renderer_resize(backend, 960, drag_height)
+        gui.wait_until("drag rail resize", lambda: gui.latest_terminal_geometry(
+            gui.read_records(transcript), original)[3] > old_height)
+        source = (20, math.floor(row_height * 2.5))
+        destination = (20, math.floor(row_height * 3.5))
+        drag_owners = {}
+
+        def select_and_check(index, token, owner):
+            for key in ("F6", "Home", *("Down",) * (index * 2), "Return", "Escape"):
+                chord((), key)
+            native_text(app, backend, token)
+            gui.wait_until(token, lambda: gui.pids_receiving_token(
+                gui.read_records(transcript), token.encode()) == {owner})
+            drag_owners[token] = owner
+
+        select_and_check(0, "DRAG_INITIAL_174", original)
+        native_drag(gui, app, backend, source, destination, (960, drag_height))
+        select_and_check(0, "DRAG_FORWARD_FIRST_174", pids[1])
+        select_and_check(1, "DRAG_FORWARD_SECOND_174", original)
+        native_drag(gui, app, backend, destination, source, (960, drag_height))
+        select_and_check(0, "DRAG_RESTORED_FIRST_174", original)
+        select_and_check(1, "DRAG_RESTORED_SECOND_174", pids[1])
+        # Holding tab zero must never start moving tab one after Ctrl+Tab.
+        native_drag(gui, app, backend, source, (40, source[1]), (960, drag_height),
+                    during_drag=lambda: chord(("ctrl",), "Tab"))
+        select_and_check(0, "DRAG_OWNER_FIRST_174", original)
+        select_and_check(1, "DRAG_OWNER_SECOND_174", pids[1])
+        if len(starts()) != count + 3:
+            raise gui.AcceptanceError("tab dragging unexpectedly created another PTY")
         app.close_normally(backend)
         gui.wait_until("overflow fixture child cleanup", lambda: all(
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 3, "backend": backend, "original_pids": pids,
+            "schema": 4, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
             "pointer_focus_input_owners": focus_owners, "focus_split_pid": split_pid,
-            "coverage": "overflow keyboard, compact pointer, and F6-to-pointer tab/pane focus routing; not screenshot, drag, or screen-reader acceptance",
+            "drag_input_owners": drag_owners, "drag_surface": [960, drag_height],
+            "drag_points": {"source": source, "destination": destination},
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, and drag ownership routing; not screenshot, lost-release, edge-autoscroll, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

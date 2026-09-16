@@ -71,6 +71,12 @@ overflow lane checks terminal, distant-tab, and split-pane input ownership;
 unit checks protect release/non-primary behavior and existing text-field focus.
 This does not promote screen-reader, IME, or unrun platform acceptance.
 
+Tab drag motion now verifies the original selected/open tab identity before
+reordering, so a held drag cannot move a newly selected tab. The overflow lane
+checks forward/reverse local reorder and held-button Ctrl+Tab using exact PTY
+owners. Lost-release/window-focus cleanup, edge auto-scrolling, and native
+pinned/live-domain drag acceptance remain separate work.
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |

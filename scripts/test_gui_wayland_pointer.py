@@ -83,6 +83,25 @@ class WaylandPointerTests(unittest.TestCase):
                 pointer.VirtualPointer(ENV)
             self.assertTrue(sock.closed)
 
+    def test_drag_keeps_one_device_through_motion_and_button_release(self):
+        registry = pointer.wire_message(2, 0, struct.pack("=I", 42)
+            + pointer.wire_string(pointer.MANAGER) + struct.pack("=I", 2))
+        sock = FragmentedSocket(registry + b"".join(done(i) for i in (3, 6, 7, 8, 9, 10)))
+        with mock.patch.object(pointer.socket, "socket", return_value=sock), mock.patch.object(pointer.time, "sleep"):
+            with pointer.VirtualPointer(ENV) as client:
+                client.move(20, 72, 960, 174)
+                client.set_left_button(True)
+                client.move(20, 101, 960, 174)
+                client.set_left_button(False)
+                with self.assertRaises(ValueError):
+                    client.set_left_button(2)
+        pointer_events = [(struct.unpack_from("=I", data, 4)[0] & 65535, data[8:])
+                          for data in sock.sent if struct.unpack_from("=I", data)[0] == 5]
+        self.assertEqual([opcode for opcode, _ in pointer_events], [1, 4, 2, 4, 1, 4, 2, 4])
+        self.assertEqual([struct.unpack_from("=II", payload, 4) for opcode, payload in pointer_events if opcode == 2],
+                         [(272, 1), (272, 0)])
+        self.assertTrue(sock.closed)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -900,6 +900,20 @@ impl TabManager {
         true
     }
 
+    /// A pointer drag stays bound to the tab selected at button-down. Keyboard
+    /// selection changes or source closure must not transfer it to another tab.
+    /// Pinned boundaries remain enforced; the caller checks live-domain target
+    /// membership before permitting a preview move.
+    pub(crate) fn move_dragged_tab_to(&mut self, tab_id: usize, target: usize) -> bool {
+        if self
+            .active_tab()
+            .is_none_or(|tab| tab.id != tab_id || tab.closed || tab.is_closing())
+        {
+            return false;
+        }
+        self.move_active_to(target)
+    }
+
     /// Move one exact local tab to a final visual index without changing which
     /// tab is selected. Pinned and unpinned tabs cannot cross their boundary.
     pub(crate) fn move_tab_by_id_to(
@@ -2991,6 +3005,50 @@ mod tests {
             manager.iter().map(|(_, tab)| tab.id).collect::<Vec<_>>(),
             vec![1, 2, 0]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tab_drag_reorder_requires_the_original_selected_owner() {
+        let mut manager = TabManager::new(80, 24, ShellConfig::default(), 1_000, 8 * 1024 * 1024);
+        for _ in 0..3 {
+            manager
+                .new_tab_with_command(
+                    "/bin/sh",
+                    &["-c".into(), "sleep 1".into()],
+                    None,
+                    None,
+                    None,
+                    HashMap::new(),
+                )
+                .unwrap();
+        }
+        let dragged = manager.active_tab_id().unwrap();
+        let original: Vec<_> = manager.iter().map(|(_, tab)| tab.id).collect();
+        manager.switch_to(0);
+        assert!(!manager.move_dragged_tab_to(dragged, 1));
+        assert_eq!(
+            manager.iter().map(|(_, tab)| tab.id).collect::<Vec<_>>(),
+            original
+        );
+        assert_eq!(manager.active_tab_id(), Some(original[0]));
+        manager.switch_to(2);
+        assert!(manager.move_dragged_tab_to(dragged, 1));
+        assert_eq!(manager.active_tab_id(), Some(dragged));
+        assert_eq!(
+            manager.iter().map(|(_, tab)| tab.id).collect::<Vec<_>>(),
+            vec![original[0], dragged, original[1]]
+        );
+        manager.switch_to(0);
+        assert!(manager.toggle_pin_active());
+        manager.switch_to(1);
+        assert!(!manager.move_dragged_tab_to(dragged, 0));
+        assert!(!manager.move_dragged_tab_to(usize::MAX, 2));
+        manager.tab_mut_by_id(dragged).unwrap().closed = true;
+        assert!(!manager.move_dragged_tab_to(dragged, 2));
+        manager.tab_mut_by_id(dragged).unwrap().closed = false;
+        manager.tab_mut_by_id(dragged).unwrap().start_closing();
+        assert!(!manager.move_dragged_tab_to(dragged, 2));
     }
 
     #[cfg(unix)]

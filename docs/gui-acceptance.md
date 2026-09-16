@@ -408,6 +408,16 @@ and the rail's one- or two-tab capacity; resetting the viewport before hit
 testing must fail this check. `pointer_focus_input_owners` and `focus_split_pid`
 retain the observations, and normal shutdown must reap the extra split child.
 
+Schema 4 adds a six-row-high overflowing rail with two visible tab slots.
+Forward and reverse pointer drags must swap and restore the first two PTY
+identities, as observed by subsequent indexed keyboard selection and typed
+tokens. A drag holding tab zero then switching to tab one with Ctrl+Tab must
+leave their order unchanged: motion cannot transfer the gesture to the new
+selection. `drag_input_owners`, `drag_points`, and `drag_surface` retain this
+evidence. No drag may spawn another PTY. The Wayland helper holds one virtual
+pointer connection across press/move/release; both backend adapters release
+their button in a `finally` block if an intervening fixture action fails.
+
 X11 uses its existing window-relative pointer adapter. Private Sway uses a
 small, bounded Wayland virtual-pointer client: its device-free seat cannot
 deliver usable clicks through the deprecated Sway cursor commands alone.
@@ -427,7 +437,8 @@ Use the command above with `--scenario tab-overflow` and a fresh artifact
 directory. Default X11 and the private Sway interaction CI command select it;
 that wiring is not a hosted or X11 execution result. Like `tab-placement`, this
 uses only synthetic local PTYs, without graphics clients or AI providers.
-It does not verify normal-height arrow activation, drag behavior, screenshots,
+It does not verify normal-height arrow activation, lost-release/focus-loss drag
+cleanup, edge auto-scrolling, pinned/live-domain native drags, screenshots,
 IME, screen-reader announcements, or real-desktop appearance. Pure geometry
 tests cover disjoint control/tab bounds and center hit targets from sub-row
 windows through normal-height rails at multiple row sizes.
@@ -444,6 +455,12 @@ mouse reporting, and the accessibility tab-list bounds stay inside the shifted
 content viewport. These functional checks must cover private X11 and Wayland
 compositors before promotion; subjective alignment and real-compositor quality
 remain manual. They do not exercise any authenticated provider workflow.
+
+Drag lifecycle coverage must also include releasing outside the application
+or switching away from the window while holding a tab, then returning and
+moving the pointer without a button pressed. Tabs must not continue moving;
+live-domain previews must be reconciled without leaving unacknowledged local
+topology changes. The ordinary drag/selection-change lane does not prove this.
 
 Background-image functional promotion likewise requires automated static PNG
 and JPEG cases with each fit and opacity extreme under top and left tabs.

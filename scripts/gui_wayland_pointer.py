@@ -1,6 +1,6 @@
 """Minimal v1 wlr virtual-pointer client for the private headless GUI fixture.
 
-Only registry discovery, sync, absolute motion, and left clicks are implemented.
+Only registry discovery, sync, absolute motion, and left-button input are implemented.
 No generated bindings, input-device access, or external helper is required.
 Wire requests follow wayland.xml and wlr-virtual-pointer-unstable-v1.xml.
 """
@@ -95,7 +95,7 @@ class VirtualPointer:
                 if payload[8:8 + length] == MANAGER:
                     self.manager_name = name
 
-    def click(self, x, y, width, height):
+    def move(self, x, y, width, height):
         if not (0 <= x < width and 0 <= y < height):
             raise ValueError("pointer point is outside the fixture surface")
         timestamp = int(time.monotonic() * 1000) & 0xffffffff
@@ -104,6 +104,18 @@ class VirtualPointer:
         self.roundtrip()
         # Let the app bind wl_pointer after the seat gains its first device.
         time.sleep(0.08)
+
+    def set_left_button(self, pressed: bool):
+        if type(pressed) is not bool:
+            raise ValueError("left-button state must be a boolean")
+        timestamp = int(time.monotonic() * 1000) & 0xffffffff
+        self.send(5, 2, timestamp, 272, int(pressed))
+        self.send(5, 4)
+        self.roundtrip()
+
+    def click(self, x, y, width, height):
+        self.move(x, y, width, height)
+        timestamp = int(time.monotonic() * 1000) & 0xffffffff
         for state in (1, 0):
             self.send(5, 2, timestamp, 272, state)  # BTN_LEFT, pressed/released
             self.send(5, 4)
