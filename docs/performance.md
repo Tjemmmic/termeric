@@ -274,6 +274,19 @@ row lengths; its deliberately long rows force byte pressure with few entries.
 Run it through the release suite above with `--skip-displayed` to keep manual
 desktop checks deferred.
 
+Font-family span construction now resolves identical adjacent **complete
+graphemes** once per call and allocates family-name ownership only at an
+actual span boundary. Previously it repeated font coverage lookup and created
+a temporary family-name string for every grapheme, even when all names were
+immediately merged into one span. The shortcut retains only the last borrowed
+grapheme/name during the call; it adds no persistent cache or resource budget.
+Range overrides and ordered fallback still require complete grapheme coverage.
+Tests compare the former uncached routing algorithm across combining marks,
+Arabic, emoji sequences, default ignorables, missing faces, and range policies;
+separate resolver-call tests cover repeated and alternating input. The pressure
+workload above measures the resulting rebuild cost without changing its input,
+font fingerprint, cache limits, or correctness assertions.
+
 The scale ratio uses deterministic owned-byte estimates rather than RSS deltas.
 Allocators commonly retain freed pages between the five samples in one process,
 so later RSS deltas can be zero; p95 RSS remains the external peak safety rail.

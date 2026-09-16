@@ -89,6 +89,12 @@ against a test-only fully retained reference; see
 [pressure measurement boundaries](performance.md#shaped-run-byte-pressure-cost).
 Native eviction-heavy frame performance remains a separate measurement concern.
 
+On a shaping miss, adjacent identical graphemes share their transient font
+coverage resolution and family-name strings are owned only per coalesced span.
+This avoids per-grapheme temporary name allocation without retaining another
+lookup cache or changing fallback/range policy. Whole-grapheme routing is
+compared against the prior per-grapheme reference in deterministic tests.
+
 Deterministic tests independently recount every stored capacity, exercise both
 limits, verify replacement/retain/clear accounting, and check that oversized
 bypass preserves the caller's complete run. The GPU stress lane forces tiny

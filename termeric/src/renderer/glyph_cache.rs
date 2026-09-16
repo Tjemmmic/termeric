@@ -1041,6 +1041,7 @@ impl GlyphCache {
             &self.configured_range_overrides,
             &text,
         )
+        .map(str::to_owned)
         .or_else(|| {
             first_configured_family_with_coverage(
                 &mut self.font_system,
@@ -2261,13 +2262,14 @@ fn configured_family_covers(
     })
 }
 
-fn range_override_family_with_coverage(
+fn range_override_family_with_coverage<'a>(
     font_system: &mut FontSystem,
-    rules: &[ConfiguredRangeOverride],
+    rules: &'a [ConfiguredRangeOverride],
     grapheme: &str,
-) -> Option<String> {
+) -> Option<&'a str> {
     let rule = matching_range_override(rules, grapheme)?;
-    configured_family_covers(font_system, &rule.family, grapheme).then(|| rule.family.name.clone())
+    configured_family_covers(font_system, &rule.family, grapheme)
+        .then_some(rule.family.name.as_str())
 }
 
 fn matching_range_override<'a>(
@@ -2507,21 +2509,38 @@ fn configured_family_spans(
     text: &str,
     default_family: &str,
 ) -> Vec<(Range<usize>, String)> {
-    let mut spans: Vec<(Range<usize>, String)> = Vec::new();
-    for (start, grapheme) in text.grapheme_indices(true) {
-        let end = start + grapheme.len();
-        let family = range_override_family_with_coverage(font_system, range_overrides, grapheme)
+    coalesced_family_spans(text, |grapheme| {
+        range_override_family_with_coverage(font_system, range_overrides, grapheme)
             .or_else(|| {
                 first_configured_family_with_coverage(font_system, families, grapheme)
-                    .map(|index| families[index].name.clone())
+                    .map(|index| families[index].name.as_str())
             })
-            .unwrap_or_else(|| default_family.to_string());
+            .unwrap_or(default_family)
+    })
+}
+
+/// Family/range policy is immutable during one call. Reuse only the previous
+/// complete grapheme's resolution, and allocate a name only when a new span
+/// starts. No borrowed text or family name survives this call.
+fn coalesced_family_spans<'a>(
+    text: &str,
+    mut resolve: impl FnMut(&str) -> &'a str,
+) -> Vec<(Range<usize>, String)> {
+    let mut spans: Vec<(Range<usize>, String)> = Vec::new();
+    let mut previous_grapheme = None;
+    for (start, grapheme) in text.grapheme_indices(true) {
+        let end = start + grapheme.len();
+        let family = match previous_grapheme {
+            Some((previous, family)) if previous == grapheme => family,
+            _ => resolve(grapheme),
+        };
+        previous_grapheme = Some((grapheme, family));
         if let Some((range, previous)) = spans.last_mut()
-            && previous == &family
+            && previous == family
         {
             range.end = end;
         } else {
-            spans.push((start..end, family));
+            spans.push((start..end, family.to_owned()));
         }
     }
     spans
@@ -3003,6 +3022,133 @@ mod tests {
     }
 
     #[test]
+    fn family_span_coalescing_resolves_only_adjacent_identical_graphemes() {
+        for text in [
+            String::new(),
+            "W".repeat(10_000),
+            "abcabc".into(),
+            "e\u{301}e\u{301}éé👩\u{200d}💻👩\u{200d}💻a".into(),
+            "\u{FE0F}\u{FE0F}شَشَ\r\n\r\n".into(),
+        ] {
+            let mut resolutions = Vec::new();
+            let spans = coalesced_family_spans(&text, |grapheme| {
+                resolutions.push(grapheme.to_owned());
+                "one family"
+            });
+            let mut expected = text.graphemes(true).collect::<Vec<_>>();
+            expected.dedup();
+            assert_eq!(resolutions, expected);
+            if text.is_empty() {
+                assert!(spans.is_empty());
+            } else {
+                assert_eq!(spans, vec![(0..text.len(), "one family".into())]);
+            }
+        }
+
+        let spans = coalesced_family_spans("aaaشَشَbbشَ", |grapheme| {
+            if grapheme.starts_with('ش') {
+                "Arabic"
+            } else {
+                "Latin"
+            }
+        });
+        assert_eq!(
+            spans,
+            vec![
+                (0..3, "Latin".into()),
+                (3..11, "Arabic".into()),
+                (11..13, "Latin".into()),
+                (13..17, "Arabic".into()),
+            ]
+        );
+        // Resolutions are local, so a subsequent font policy takes effect.
+        assert_eq!(
+            coalesced_family_spans("aaa", |_| "changed"),
+            vec![(0..3, "changed".into())]
+        );
+    }
+
+    #[test]
+    fn coalesced_font_routing_matches_uncached_reference_for_complete_graphemes() {
+        let mut database = cosmic_text::fontdb::Database::new();
+        for name in ["FiraMono-Medium.ttf", "NotoSansArabic.ttf"] {
+            database.load_font_data(deterministic_test_font_data_named(name));
+        }
+        let mut fonts = FontSystem::new_with_locale_and_db("en-US".into(), database);
+        let families =
+            collect_configured_families(&fonts, "Fira Mono", &["Noto Sans Arabic".into()]);
+        let rules = collect_configured_range_overrides(
+            &fonts,
+            &[
+                FontRangeOverride {
+                    start: 0x30,
+                    end: 0x39,
+                    family: "Noto Sans Arabic".into(),
+                },
+                // Incomplete override must fall through to the global Arabic face.
+                FontRangeOverride {
+                    start: 0x600,
+                    end: 0x6ff,
+                    family: "Fira Mono".into(),
+                },
+                FontRangeOverride {
+                    start: 0xe000,
+                    end: 0xf8ff,
+                    family: "Missing".into(),
+                },
+            ],
+        );
+        for configured in [families.as_slice(), &[]] {
+            for overrides in [rules.as_slice(), &[]] {
+                for text in [
+                    "",
+                    "WWWW001122",
+                    "abcشَشَabc",
+                    "e\u{301}e\u{301}éé",
+                    "👩\u{200d}💻👩\u{200d}💻",
+                    "\u{FE0F}\u{FE0F}ش",
+                    "\u{E000}\u{E000}x",
+                    "\r\n\r\n",
+                ] {
+                    // Former per-grapheme owned-name algorithm, intentionally
+                    // independent of the new coalescer/memoization helper.
+                    let mut expected: Vec<(Range<usize>, String)> = Vec::new();
+                    for (start, grapheme) in text.grapheme_indices(true) {
+                        let family =
+                            range_override_family_with_coverage(&mut fonts, overrides, grapheme)
+                                .map(str::to_owned)
+                                .or_else(|| {
+                                    first_configured_family_with_coverage(
+                                        &mut fonts, configured, grapheme,
+                                    )
+                                    .map(|index| configured[index].name.clone())
+                                })
+                                .unwrap_or_else(|| "Fira Mono".to_owned());
+                        let end = start + grapheme.len();
+                        if let Some((range, previous)) = expected.last_mut()
+                            && previous == &family
+                        {
+                            range.end = end;
+                        } else {
+                            expected.push((start..end, family));
+                        }
+                    }
+                    assert_eq!(
+                        configured_family_spans(
+                            &mut fonts,
+                            configured,
+                            overrides,
+                            text,
+                            "Fira Mono"
+                        ),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn configured_fallback_order_selects_complete_grapheme_coverage() {
         let sources = [
             cosmic_text::fontdb::Source::Binary(Arc::new(deterministic_test_font_data_named(
@@ -3069,11 +3215,11 @@ mod tests {
 
         assert_eq!(
             range_override_family_with_coverage(&mut font_system, &rules, "0"),
-            Some("Noto Sans Arabic".into())
+            Some("Noto Sans Arabic")
         );
         assert_eq!(
             range_override_family_with_coverage(&mut font_system, &rules, "\u{FE0F}ش"),
-            Some("Noto Sans Arabic".into()),
+            Some("Noto Sans Arabic"),
             "default-ignorable selectors must not own range lookup"
         );
         assert_eq!(
