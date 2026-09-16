@@ -140,6 +140,27 @@ reuse the bounded shaping caches and glyph atlases. Ordinary cells retain the
 existing allocation-free descriptor default and text fast path; native
 scaled-font quality is intentionally not inferred from these resource checks.
 
+Search and palette query viewports no longer allocate a full-query grapheme
+index during painting, IME placement, or pointer hit testing. They locate the
+caret with forward iteration, walk backward over the visible prefix, and scan
+the visible suffix without retaining an index. The isolated
+[`query_viewport` regression](../termeric/tests/query_viewport.rs) compares every
+geometry field against the frozen indexed implementation at every scalar caret
+across ASCII, combining/ZWJ, regional-indicator, Indic, and zero-width fixtures.
+Its thread-local allocator probe counts successful allocation/reallocation
+requests only inside the measured region, excluding fixture and harness setup.
+The local 4,096-byte ASCII fixture's former implementation requested 196,512
+cumulative bytes in 11 calls per evaluation; the 3,328-byte mixed fixture
+requested 49,056 bytes in 9 calls. The new implementation made zero allocation
+requests across 100 viewport-plus-pointer evaluations for each fixture.
+These are allocation-traffic results, not peak heap, RSS, or latency claims;
+the query string and caller snapshots still have their existing storage costs.
+This deterministic regression is separate from the 72-metric benchmark report:
+
+```bash
+cargo test -p termeric --test query_viewport --locked --offline -- --nocapture
+```
+
 The synthetic key-to-submit metric intentionally excludes OS keyboard delivery,
 shell scheduling, surface presentation, and compositor latency. The separate
 `latency.displayed_key_event_to_present` metric starts inside the native Winit

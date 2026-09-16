@@ -414,6 +414,13 @@ see [profile behavior and limits](plugin-panes.md).
 
 ## Performance and resource evidence
 
+Search/palette query viewport calculation and pointer mapping now use
+allocation-free grapheme iteration instead of collecting a full-query index.
+Differential geometry tests and an isolated allocator regression pass, including
+zero allocation requests across 100 evaluations of each long-query fixture.
+This measures temporary allocation traffic, not whole-app RSS or native latency
+(see [performance evidence](performance.md)).
+
 Shaped-run retention now has independent 8 MiB persistent and 1 MiB frame-local
 retry budgets, plus a 4,096-entry ceiling on each. Accounting covers owned
 key/string/feature/glyph capacities; bucket overhead and transient/font-system
