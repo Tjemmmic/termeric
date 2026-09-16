@@ -4,5 +4,5 @@
 
 mod input_viewport;
 pub mod palette;
-pub use input_viewport::PaletteInputViewport;
+pub use crate::ui::text_input_viewport::TextInputViewport as PaletteInputViewport;
 pub use palette::{CommandPalette, PaletteInfo, PaletteLayout, PaletteResult};

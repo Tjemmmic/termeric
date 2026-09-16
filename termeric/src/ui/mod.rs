@@ -19,5 +19,6 @@ pub mod info_overlay;
 pub mod settings;
 pub mod shortcuts_panel;
 pub mod text_input;
+pub mod text_input_viewport;
 pub mod toast;
 pub mod unicode_picker;

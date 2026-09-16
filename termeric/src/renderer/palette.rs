@@ -34,37 +34,54 @@ pub(crate) fn headless_palette_input_smoke(
             "ASCII query ".repeat(20),
             "界e\u{301}👩\u{200d}💻 ASCII ".repeat(15),
         ] {
-            let view = layout.input_viewport(&query, query.len()).unwrap();
-            let clip = TextClip {
-                left: view.text_x,
-                top: view.text_y,
-                right: view.right,
-                bottom: view.text_y + 24.0,
-            };
-            text.push_ui_run(
-                &query[view.text_range],
-                view.text_x,
-                view.text_y,
-                [1.0; 4],
+            let terminal = termeric_core::Terminal::new(80, 24);
+            let mut search = crate::terminal::search::Search::new();
+            search.start();
+            assert!(search.set_query(&query, terminal.grid()));
+            let info = search.build_info(query.len());
+            let search_layout = crate::terminal::search::SearchBarLayout::calculate(
+                &info,
+                160.0,
+                width.max(800.0),
+                32.0,
                 10.0,
-                clip,
+                24.0,
             );
-            let queued = text.take_queued_since(0);
-            anyhow::ensure!(queued.len() == 1 && queued[0].clip == Some(clip));
-            let batch = TextPipeline::build_batch(queued, queue, &mut glyphs);
-            anyhow::ensure!(
-                !batch.vertices.is_empty(),
-                "palette query produced no glyph geometry"
-            );
-            anyhow::ensure!(
-                batch.vertices.iter().all(|vertex| {
-                    vertex.position[0] >= clip.left
-                        && vertex.position[0] <= clip.right
-                        && vertex.position[1] >= clip.top
-                        && vertex.position[1] <= clip.bottom
-                }),
-                "palette query glyph escaped its input field"
-            );
+            for view in [
+                layout.input_viewport(&query, query.len()).unwrap(),
+                search_layout.input_viewport(&info, 10.0).unwrap(),
+            ] {
+                let clip = TextClip {
+                    left: view.text_x,
+                    top: view.text_y,
+                    right: view.right,
+                    bottom: view.text_y + 24.0,
+                };
+                text.push_ui_run(
+                    &query[view.text_range],
+                    view.text_x,
+                    view.text_y,
+                    [1.0; 4],
+                    10.0,
+                    clip,
+                );
+                let queued = text.take_queued_since(0);
+                anyhow::ensure!(queued.len() == 1 && queued[0].clip == Some(clip));
+                let batch = TextPipeline::build_batch(queued, queue, &mut glyphs);
+                anyhow::ensure!(
+                    !batch.vertices.is_empty(),
+                    "query field produced no glyph geometry"
+                );
+                anyhow::ensure!(
+                    batch.vertices.iter().all(|vertex| {
+                        vertex.position[0] >= clip.left
+                            && vertex.position[0] <= clip.right
+                            && vertex.position[1] >= clip.top
+                            && vertex.position[1] <= clip.bottom
+                    }),
+                    "query glyph escaped its input field"
+                );
+            }
         }
     }
     Ok(())

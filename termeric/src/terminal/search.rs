@@ -878,6 +878,22 @@ pub struct SearchBarLayout {
 }
 
 impl SearchBarLayout {
+    /// The painted query and native IME share one grapheme-safe caret viewport.
+    pub fn input_viewport(
+        &self,
+        info: &SearchBarInfo,
+        cell_width: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        crate::ui::text_input_viewport::TextInputViewport::calculate(
+            &info.query,
+            info.cursor_pos,
+            self.input.x + cell_width * 1.3,
+            self.text_y,
+            self.input.x + self.input.width,
+            cell_width,
+        )
+    }
+
     pub fn calculate(
         info: &SearchBarInfo,
         bar_x: f32,

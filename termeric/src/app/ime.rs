@@ -208,6 +208,31 @@ impl App {
         .input_viewport(&info.input, info.cursor)
     }
 
+    /// Match commit_ime_text's destination priority: a retained search must
+    /// not steal candidate geometry from a higher-priority text surface.
+    fn search_owns_ime_text(&self) -> bool {
+        self.search.is_active()
+            && self.accepts_ime_text()
+            && !self.info_overlay.is_active()
+            && !self.command_palette.is_active()
+            && !self.unicode_picker.is_active()
+            && self.tab_rename.is_none()
+            && !self.shortcuts_panel.is_active()
+            && !self.settings_panel.is_active()
+            && !self.session_panel.is_open()
+            && !self.commands_panel.is_open()
+    }
+
+    fn search_ime_viewport(
+        &self,
+        layout: &crate::terminal::search::SearchBarLayout,
+        cell_width: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        self.search_owns_ime_text()
+            .then(|| self.search.build_info(self.search_cursor_pos))
+            .and_then(|info| layout.input_viewport(&info, cell_width))
+    }
+
     /// Keep the native candidate window and preedit decoration on the focused
     /// input's shared geometry, not the terminal cursor behind a palette.
     pub(super) fn ime_preedit_render_info(
@@ -290,13 +315,41 @@ impl App {
                 max_width: view.right - view.cursor_x,
             });
         }
+        if self.search_owns_ime_text() {
+            let info = self.search.build_info(self.search_cursor_pos);
+            let layout = renderer.search_bar_layout(&info, renderer.window_size().0 as f32);
+            // A collapsed query has no visible caret; do not fall back to a
+            // terminal position or overlap the neighboring search controls.
+            let view = self.search_ime_viewport(&layout, renderer.cell_width())?;
+            if let Some(window) = &self.window {
+                window.set_ime_cursor_area(
+                    winit::dpi::PhysicalPosition::new(
+                        view.cursor_x.round() as i32,
+                        view.text_y.round() as i32,
+                    ),
+                    winit::dpi::PhysicalSize::new(
+                        renderer.cell_width().ceil().max(1.0) as u32,
+                        renderer.cell_height().ceil().max(1.0) as u32,
+                    ),
+                );
+            }
+            let preedit = self.ime.preedit()?;
+            return Some(crate::renderer::ImePreeditRenderInfo {
+                text: preedit.text.clone(),
+                cursor: preedit.cursor,
+                x: view.cursor_x,
+                y: view.text_y,
+                max_width: view.right - view.cursor_x,
+            });
+        }
         let terminal = self.active_terminal()?;
         let cursor = terminal.grid().cursor();
-        let search_height = if self.search.is_active() || self.search.has_results() {
-            renderer.cell_height() + 16.0
-        } else {
-            0.0
-        };
+        let search_height =
+            if self.search.is_active() || self.search.has_results() || self.search.is_searching() {
+                renderer.cell_height() + 16.0
+            } else {
+                0.0
+            };
         let content_top = renderer.tab_bar_height() + renderer.chrome_bar_height() + search_height;
         let content_left = renderer.tab_bar_width();
         let focused_pane = panes.iter().find(|pane| pane.is_focused);
@@ -344,6 +397,141 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_ime_caret_uses_query_columns_and_shared_shifted_scaled_layout() {
+        use crate::terminal::search::SearchBarLayout;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let terminal = termeric_core::Terminal::new(80, 24);
+        app.search.start();
+        for query in [
+            "界e\u{301}👩\u{200d}💻".to_string(),
+            "界e\u{301}👩\u{200d}💻".repeat(80),
+        ] {
+            assert!(app.search.set_query(&query, terminal.grid()));
+            for (left, width, top, cell) in [
+                (0.0, 800.0, 30.0, 8.0),
+                (160.0, 640.0, 54.0, 10.0),
+                (240.0, 1100.0, 80.0, 16.0),
+            ] {
+                for cursor in [0, "界".len(), query.len()] {
+                    app.search_cursor_pos = cursor;
+                    let info = app.search.build_info(cursor);
+                    let layout =
+                        SearchBarLayout::calculate(&info, left, width, top, cell, cell * 2.0);
+                    let view = app.search_ime_viewport(&layout, cell).unwrap();
+                    assert_eq!(view, layout.input_viewport(&info, cell).unwrap());
+                    assert_eq!(view.text_y, top + 8.0);
+                    assert!(view.cursor_x + cell <= layout.input.x + layout.input.width + 0.001);
+                    assert!(view.text_range.end <= query.len());
+                    if cursor == query.len() {
+                        assert_eq!(view.text_range.end, query.len());
+                    }
+                    if cursor == "界".len() {
+                        assert_eq!(view.cursor_x, view.text_x + 2.0 * cell);
+                    }
+                    if query.chars().count() == 6 && cursor == query.len() {
+                        assert_eq!(view.cursor_x, view.text_x + 5.0 * cell);
+                    }
+                }
+            }
+        }
+        let info = app.search.build_info(app.search_cursor_pos);
+        let collapsed = SearchBarLayout::calculate(&info, 0.0, 100.0, 30.0, 10.0, 20.0);
+        assert!(app.search_ime_viewport(&collapsed, 10.0).is_none());
+    }
+
+    #[test]
+    fn retained_search_does_not_steal_ime_geometry_from_modal_or_text_owners() {
+        let openers: [fn(&mut App); 9] = [
+            |app| app.command_palette.open(),
+            |app| app.unicode_picker.open(),
+            |app| app.settings_panel.toggle(),
+            |app| app.shortcuts_panel.open(),
+            |app| app.commands_panel.toggle(),
+            |app| app.session_panel.open_workspaces(),
+            |app| {
+                app.info_overlay.show("Notice", vec![]);
+            },
+            |app| app.domain_picker.open(&app.config.domains),
+            |app| {
+                app.tab_rename = Some(TabRenameState {
+                    tab_id: 0,
+                    original: None,
+                    input: String::new(),
+                    max_chars: 80,
+                })
+            },
+        ];
+        for open in openers {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.search.start();
+            assert!(app.search_owns_ime_text());
+            open(&mut app);
+            assert!(!app.search_owns_ime_text());
+        }
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.search.start();
+        app.search.confirm();
+        assert!(!app.search_owns_ime_text());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn search_ime_commit_inserts_at_query_caret_without_leaking_into_pty() {
+        let mut tabs = TabManager::new(
+            80,
+            24,
+            crate::config::ShellConfig::default(),
+            100,
+            1024 * 1024,
+        );
+        tabs.new_tab_with_command("/bin/sh", &[
+            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
+        ], None, Some("search-ime"), None, Default::default()).unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            app.process_pty_events();
+            if app
+                .active_terminal()
+                .unwrap()
+                .rows_text(0, 23)
+                .contains("READY")
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        app.search.start();
+        assert!(
+            app.with_search_and_active_grid(|search, grid| search.set_query("a界b", grid))
+                .unwrap()
+        );
+        app.search_cursor_pos = 1;
+        app.handle_ime_event(Ime::Preedit("日本".into(), None));
+        assert_eq!(app.search.query(), "a界b");
+        app.handle_ime_event(Ime::Commit("日本".into()));
+        assert_eq!(app.search.query(), "a日本界b");
+        assert_eq!(app.search_cursor_pos, "a日本".len());
+        app.search.cancel();
+        app.write_to_pty(b"Z");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            app.process_pty_events();
+            let text = app.active_terminal().unwrap().rows_text(0, 23);
+            if text.contains("5a") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "query input leaked before the Z fence: {text}"
+            );
+            std::thread::yield_now();
+        }
+    }
 
     #[test]
     fn palette_ime_geometry_tracks_the_visible_query_without_a_terminal() {

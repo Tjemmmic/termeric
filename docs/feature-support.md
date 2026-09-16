@@ -370,6 +370,13 @@ GUI scenario. Native IME, visual clipping,
 screen-reader, and real-desktop acceptance remain deferred
 (see [input contract](accessibility-and-input.md)).
 
+Active terminal search shares whole-grapheme horizontal scrolling between its
+painted query/caret and IME candidate/preedit geometry, including rail/chrome
+offsets and scaled cells. Geometry and raw-PTY routing tests pass, and the
+software-GPU smoke checks shaped query clipping. This leaves search editing
+semantics unchanged and does not claim native IME or visual acceptance
+(see [input contract](accessibility-and-input.md)).
+
 Built-in plugin profile selection distinguishes **Automatic profile** from every
 explicit name, including `default`. Selection/restart prefer a matching owner in
 the active tab; delayed choices retain the original identity. Exact references

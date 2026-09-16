@@ -27,8 +27,20 @@ no complete grapheme instead of painting outside its owner. Automated geometry,
 limit, and routing tests cover these paths. The opt-in software-GPU smoke also
 shapes mixed-script long queries and verifies every generated glyph vertex
 stays inside the shared input clip; native IME and screen-reader
-acceptance remain deferred. Other text surfaces retain their existing candidate
-placement behavior and are not covered by this palette-specific correction.
+acceptance remain deferred.
+
+Active terminal search now uses the same whole-grapheme viewport algorithm for
+query painting, its caret, and native IME candidate/preedit placement. Its shared
+search layout includes the vertical tab rail, chrome, and scaled cell metrics;
+glyphs and preedit stay within the query field rather than overlapping controls.
+Higher-priority text surfaces retain ownership, and a collapsed query field does
+not fall back to the terminal cursor. The full bounded query and UTF-8 caret stay
+in the model and semantic tree; this does not change search's existing editing
+semantics. Geometry tests cover narrow, shifted, scaled, and mixed-script fields;
+a raw-PTY test verifies search composition/commit does not leak into the child.
+The software-GPU smoke checks shaped search glyphs against their field clip too.
+Native IME and visual acceptance remain deferred. Other text surfaces retain
+their existing candidate placement behavior.
 
 Unmodified Left/Right and Home/End now move the palette query caret; Delete
 removes the following grapheme and Backspace removes the preceding one.

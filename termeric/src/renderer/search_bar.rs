@@ -3,6 +3,8 @@
 use super::types::*;
 use super::{Renderer, adjust_alpha};
 use crate::terminal::search::{SearchBarInfo, SearchBarLayout, SearchBarRect};
+use crate::ui::text_input_viewport::TextInputViewport;
+use unicode_segmentation::UnicodeSegmentation;
 
 impl Renderer {
     pub(super) fn build_search_bar(
@@ -39,68 +41,77 @@ impl Renderer {
         let prompt_color = self.ui.search_indicator;
         self.text_pipeline
             .push_char('/', layout.input.x, layout.text_y, prompt_color);
-        let query_x = layout.input.x + self.cell_width * 1.3;
-        let query_width = (layout.input.x + layout.input.width - query_x).max(0.0);
-        let max_chars = (query_width / self.cell_width).floor() as usize;
-        let cursor_char = info
-            .query
-            .get(..info.cursor_pos.min(info.query.len()))
-            .filter(|_| {
-                info.query
-                    .is_char_boundary(info.cursor_pos.min(info.query.len()))
-            })
-            .map(str::chars)
-            .map(Iterator::count)
-            .unwrap_or_else(|| info.query.chars().count());
-        let first_char = cursor_char.saturating_sub(max_chars.saturating_sub(1));
-        let mut drawn = 0;
-        if info.is_active && info.query.is_empty() && max_chars > 0 {
-            self.draw_search_text(
-                &"Type to search".chars().take(max_chars).collect::<String>(),
-                query_x,
-                layout.text_y,
-                adjust_alpha(self.ui.search_text, 0.4),
+        if let Some(view) = layout.input_viewport(info, self.cell_width) {
+            let clip = super::text::TextClip {
+                left: view.text_x,
+                top: layout.input.y,
+                right: view.right,
+                bottom: layout.input.y + layout.input.height,
+            };
+            let visible = &info.query[view.text_range.clone()];
+            self.text_pipeline.push_ui_run(
+                visible,
+                view.text_x,
+                view.text_y,
+                self.ui.search_text,
+                self.cell_width,
+                clip,
             );
-        }
-        for (index, character) in info.query.chars().enumerate().skip(first_char) {
-            if drawn >= max_chars {
-                break;
-            }
-            let x = query_x + drawn as f32 * self.cell_width;
-            if info.is_active && index == cursor_char {
+            if info.is_active {
                 self.rect_pipeline.push_rect(
-                    x,
-                    layout.text_y,
+                    view.cursor_x,
+                    view.text_y,
                     2.0,
                     self.cell_height,
                     adjust_alpha(self.ui.cursor, 0.8),
                 );
+                if info.query.is_empty() {
+                    let hint = "Type to search";
+                    if let Some(hint_view) = TextInputViewport::calculate(
+                        hint,
+                        0,
+                        view.text_x,
+                        view.text_y,
+                        view.right,
+                        self.cell_width,
+                    ) {
+                        self.text_pipeline.push_ui_run(
+                            &hint[hint_view.text_range],
+                            view.text_x,
+                            view.text_y,
+                            adjust_alpha(self.ui.search_text, 0.4),
+                            self.cell_width,
+                            clip,
+                        );
+                    }
+                }
             }
-            self.text_pipeline
-                .push_char(character, x, layout.text_y, self.ui.search_text);
-            drawn += 1;
-        }
-        if info.is_active && cursor_char >= info.query.chars().count() && drawn < max_chars {
-            self.rect_pipeline.push_rect(
-                query_x + drawn as f32 * self.cell_width,
-                layout.text_y,
-                2.0,
-                self.cell_height,
-                adjust_alpha(self.ui.cursor, 0.8),
-            );
-        }
-        if let Some(error) = &info.regex_error
-            && drawn.saturating_add(2) < max_chars
-        {
-            let error = format!(" Error: {error}");
-            for character in error.chars().take(max_chars - drawn) {
-                self.text_pipeline.push_char(
-                    character,
-                    query_x + drawn as f32 * self.cell_width,
-                    layout.text_y,
-                    self.ui.search_error,
-                );
-                drawn += 1;
+            let drawn: usize = visible
+                .graphemes(true)
+                .map(termeric_core::unicode::grapheme_width)
+                .sum();
+            if let Some(error) = &info.regex_error
+                && drawn.saturating_add(2) < view.columns
+            {
+                let error = format!(" Error: {error}");
+                let x = view.text_x + drawn as f32 * self.cell_width;
+                if let Some(error_view) = TextInputViewport::calculate(
+                    &error,
+                    0,
+                    x,
+                    view.text_y,
+                    view.right,
+                    self.cell_width,
+                ) {
+                    self.text_pipeline.push_ui_run(
+                        &error[error_view.text_range],
+                        x,
+                        view.text_y,
+                        self.ui.search_error,
+                        self.cell_width,
+                        clip,
+                    );
+                }
             }
         }
 
@@ -219,6 +230,46 @@ mod tests {
             regex_error: None,
             cursor_pos: 6,
             is_active: true,
+        }
+    }
+
+    #[test]
+    fn search_query_viewport_preserves_whole_graphemes_and_reserves_the_caret() {
+        let mut info = info();
+        info.query = "界e\u{301}👩\u{200d}💻ab".repeat(80);
+        for width in [100.0, 450.0, 800.0, 1400.0] {
+            let layout = SearchBarLayout::calculate(&info, 120.0, width, 55.0, 9.5, 20.0);
+            for cursor in info
+                .query
+                .char_indices()
+                .map(|(byte, _)| byte)
+                .chain([info.query.len()])
+            {
+                info.cursor_pos = cursor;
+                let Some(view) = layout.input_viewport(&info, 9.5) else {
+                    assert!(layout.input.width < 9.5 * 2.3);
+                    continue;
+                };
+                assert!(view.cursor_x >= view.text_x);
+                assert!(view.cursor_x + 9.5 <= view.right + 0.001);
+                let visible = &info.query[view.text_range.clone()];
+                assert!(
+                    visible
+                        .graphemes(true)
+                        .map(termeric_core::unicode::grapheme_width)
+                        .sum::<usize>()
+                        <= view.columns
+                );
+                for boundary in [view.text_range.start, view.text_range.end] {
+                    assert!(
+                        boundary == info.query.len()
+                            || info
+                                .query
+                                .grapheme_indices(true)
+                                .any(|(byte, _)| byte == boundary)
+                    );
+                }
+            }
         }
     }
 
