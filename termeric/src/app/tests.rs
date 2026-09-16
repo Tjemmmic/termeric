@@ -6551,6 +6551,34 @@ fn occluded_and_surface_lost_windows_suspend_presentation_only_deadlines() {
 }
 
 #[test]
+fn unicode_worker_completion_polls_only_while_pending_even_when_occluded() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.poll_idle_sources(Instant::now());
+    app.redraw_scheduler.begin_frame();
+    app.window_occluded = true;
+    let now = Instant::now();
+    app.last_config_check = now;
+    app.unicode_picker.open();
+    app.unicode_picker.accessibility_set_filter("snowman");
+    assert_eq!(
+        app.next_idle_deadline(now),
+        Some(now + Duration::from_millis(16))
+    );
+    let limit = now + Duration::from_secs(5);
+    while app.unicode_picker.search_pending() {
+        app.poll_idle_sources(Instant::now());
+        assert!(Instant::now() < limit);
+        std::thread::yield_now();
+    }
+    assert!(app.redraw_scheduler.has_pending());
+    assert!(!app.unicode_picker.build_info().entries.is_empty());
+    let now = Instant::now();
+    app.last_config_check = now;
+    app.poll_idle_sources(now);
+    assert!(app.next_idle_deadline(now).unwrap() >= now + Duration::from_millis(500));
+}
+
+#[test]
 fn surface_loss_has_one_deferred_recovery_deadline_instead_of_indefinite_pause() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.poll_idle_sources(Instant::now());

@@ -52,7 +52,22 @@ flags, and ZWJ sequences. Unicode Emoji 17.0 maps CLDR's selector-free keys to
 exact fully-qualified insertion bytes. Exact `U+XXXX`, `0xXXXX`, and four-to-
 six-digit bare hexadecimal queries address any valid non-control Unicode scalar.
 
-The canonical-name index is built once after the picker opens and retains
+Named queries run on a lazy background worker, including first-use index
+construction and CLDR validation. Opening the curated catalog and entering an
+exact scalar do not wait for that worker. Each picker admits one in-flight scan
+and one replaceable latest query; rapid edits coalesce rather than growing a
+queue. Keyboard and accessibility queries share a 256-scalar limit. Editing
+immediately retires executable results and exposes a non-actionable, accessible
+“Searching characters…” status. Generation checks reject stale completions,
+including across close/reopen; Enter cannot accept an old row while waiting.
+Closing never joins a worker on the UI thread: an existing scan finishes and is
+drained, without starting a second concurrent scan on reopen. Idle workers are
+dropped on close. A disconnected worker clears pending state and reports an
+unavailable status; editing retries. The app polls completions at 16 ms intervals
+only while a scan is outstanding, including while occluded, and requests a
+redraw for an accepted result. Scans are not interrupted mid-query.
+
+The canonical-name index is built once on the first named query and retains
 5,226,122 bytes in its compact name/offset representation on Unicode 17.0.
 Construction preallocates and hard-caps the backing name bytes at 4,000,000 and
 the fixed-size record table at 160,000 entries, avoiding growth overshoot.
@@ -63,7 +78,12 @@ accessibility tree. The deterministic query rail covers five broad and
 algorithmic queries under a 250 ms aggregate ceiling (29.2 ms median across five
 isolated runs on the September 2026 development host). It warms the canonical
 index first; first-use CLDR validation, if needed, remains inside the timing.
-This is a regression guard, not a universal hardware latency guarantee.
+This measures query completion work, not keyboard dispatch or presentation
+latency, and is a regression guard rather than a universal hardware guarantee.
+Deterministically blocked-worker tests cover coalescing, stale-action refusal,
+immediate exact/curated results, close/reopen, failure recovery, and query bounds;
+app tests cover pending-only scheduling and accessible progress. Native picker
+responsiveness and screen-reader acceptance remain deferred.
 
 Name scoring classifies each term's strongest whole-token, prefix, or substring
 match in one pass instead of repeating up to three searches. The weakest term

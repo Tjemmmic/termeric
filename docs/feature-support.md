@@ -349,6 +349,13 @@ and prefers its working directory, not a focused shell sibling's. Local fixtures
 cover exact bytes, refusal, cancellation and replay; native/provider acceptance
 remains deferred ([#119](https://github.com/Tjemmmic/termeric/issues/119)).
 
+Named Unicode-picker queries, including cold index construction, now run off the
+UI thread with one in-flight scan and one replaceable latest query. Edits retire
+old actions immediately, and generation checks prevent stale completion across
+close/reopen. Exact scalar and curated entries remain synchronous. Automated
+blocked-worker, idle-scheduling, and accessible-status tests cover this lifecycle;
+native responsiveness acceptance remains deferred (see [Unicode policy](unicode-support.md)).
+
 Built-in plugin profile selection distinguishes **Automatic profile** from every
 explicit name, including `default`. Selection/restart prefer a matching owner in
 the active tab; delayed choices retain the original identity. Exact references

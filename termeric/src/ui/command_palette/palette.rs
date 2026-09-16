@@ -159,6 +159,8 @@ impl PaletteLayout {
 /// Display snapshot for the renderer
 #[derive(Debug, Clone)]
 pub struct PaletteInfo {
+    /// Optional non-actionable progress/error text in place of the result count.
+    pub status: Option<&'static str>,
     /// Current search input
     pub input: String,
     /// Cursor position in input
@@ -545,6 +547,7 @@ impl CommandPalette {
             .collect();
 
         PaletteInfo {
+            status: None,
             input: self.input.text().to_string(),
             cursor: self.input.cursor(),
             entries,

@@ -332,7 +332,9 @@ impl Renderer {
                 format!("{}s", info.item_noun)
             }
         };
-        let footer_text = if info.total_entries < info.total_count {
+        let footer_text = if let Some(status) = info.status {
+            status.to_string()
+        } else if info.total_entries < info.total_count {
             format!(
                 "{} of {} {}",
                 info.total_entries,
@@ -345,13 +347,21 @@ impl Renderer {
         let footer_color = adjust_alpha(self.ui.palette_footer, anim);
         let footer_text_y = footer_y + (footer_height - cell_height) / 2.0;
         let footer_text_x = panel_x + padding;
-        for (i, c) in footer_text.chars().enumerate() {
+        let footer_capacity =
+            ((panel_width - padding * 2.0) / (cell_width * 0.85)).max(0.0) as usize;
+        for (i, c) in footer_text.chars().take(footer_capacity).enumerate() {
             self.text_pipeline.push_char(
                 c,
                 footer_text_x + i as f32 * cell_width * 0.85,
                 footer_text_y,
                 footer_color,
             );
+        }
+
+        // Pending/error status owns the footer; selection hints would overlap
+        // it and advertise actions that are unavailable while there are no rows.
+        if info.status.is_some() {
+            return;
         }
 
         // Hint on right side of footer

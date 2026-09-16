@@ -1,14 +1,18 @@
 //! Bounded Unicode character selection built on the shared palette component.
 
 mod annotations;
+#[cfg(test)]
+mod async_tests;
+mod search_worker;
 
 use self::annotations::{Annotation, CLDR_LOCALE, CLDR_VERSION};
 use crate::ui::command_palette::palette::{CommandSource, RegisteredCommand};
 use crate::ui::command_palette::{CommandPalette, PaletteInfo, PaletteLayout, PaletteResult};
+use search_worker::{Request, SearchWorker};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 use std::mem::size_of;
-use std::sync::{Once, OnceLock};
+use std::sync::{OnceLock, mpsc::TryRecvError};
 
 const UNICODE_DATA_VERSION: &str = "17.0";
 const UNICODE_SEARCH_RESULT_LIMIT: usize = 256;
@@ -18,7 +22,6 @@ const UNICODE_NAME_BYTES_CAPACITY: usize = 4_000_000;
 const UNICODE_RECORD_CAPACITY: usize = 160_000;
 
 static UNICODE_NAME_INDEX: OnceLock<UnicodeNameIndex> = OnceLock::new();
-static UNICODE_PREWARM: Once = Once::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicodePickerSelection {
@@ -37,6 +40,13 @@ struct CuratedCharacter {
 pub struct UnicodePicker {
     palette: CommandPalette,
     actions: Vec<UnicodePickerSelection>,
+    worker: Option<SearchWorker>,
+    in_flight: bool,
+    pending: Option<Request>,
+    generation: u64,
+    search_session: bool,
+    query_pending: bool,
+    search_failed: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -108,16 +118,29 @@ impl UnicodePicker {
         Self {
             palette,
             actions: Vec::new(),
+            worker: None,
+            in_flight: false,
+            pending: None,
+            generation: 0,
+            search_session: false,
+            query_pending: false,
+            search_failed: false,
         }
     }
 
     pub fn open(&mut self) {
+        self.invalidate_search();
+        self.search_session = true;
         self.rebuild_registry();
         self.palette.open();
-        prewarm_unicode_name_index();
     }
 
     pub fn close(&mut self) {
+        self.invalidate_search();
+        self.search_session = false;
+        if !self.in_flight {
+            self.worker = None;
+        }
         self.palette.close();
         self.actions.clear();
     }
@@ -135,7 +158,15 @@ impl UnicodePicker {
     }
 
     pub fn build_info(&self) -> PaletteInfo {
-        self.palette.build_info()
+        let mut info = self.palette.build_info();
+        info.status = if self.query_pending {
+            Some("Searching characters…")
+        } else if self.search_failed {
+            Some("Character search unavailable; edit to retry")
+        } else {
+            None
+        };
+        info
     }
 
     pub fn command_ids(&self) -> impl Iterator<Item = &str> {
@@ -163,17 +194,26 @@ impl UnicodePicker {
     }
 
     pub fn handle_char(&mut self, character: char) {
+        if !self.search_session
+            || character.is_control()
+            || self.palette.build_info().input.chars().count() >= 256
+        {
+            return;
+        }
         self.palette.handle_char(character);
         self.refresh_dynamic_entry();
     }
 
     pub fn handle_backspace(&mut self) {
+        if !self.search_session {
+            return;
+        }
         self.palette.handle_backspace();
         self.refresh_dynamic_entry();
     }
 
     pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
-        if !self.palette.accessibility_set_input(value) {
+        if !self.search_session || !self.palette.accessibility_set_input(value) {
             return false;
         }
         self.refresh_dynamic_entry();
@@ -185,6 +225,9 @@ impl UnicodePicker {
     }
 
     pub fn activate(&mut self) -> Option<UnicodePickerSelection> {
+        if self.query_pending {
+            return None;
+        }
         let result = self.palette.execute();
         self.resolve(result)
     }
@@ -205,6 +248,7 @@ impl UnicodePicker {
     }
 
     fn refresh_dynamic_entry(&mut self) {
+        self.invalidate_search();
         let input = self.palette.build_info().input;
         if looks_like_scalar_query(&input) {
             if let Some(character) = parse_scalar_query(&input) {
@@ -289,13 +333,115 @@ impl UnicodePicker {
     }
 
     fn rebuild_search_registry(&mut self, query: &str) {
-        let results = search_unicode_characters(query);
+        self.actions.clear();
+        self.palette.replace_ranked_results(Vec::new());
+        self.query_pending = true;
+        self.pending = Some(Request {
+            generation: self.generation,
+            query: query.to_owned(),
+        });
+        self.dispatch_search();
+    }
+
+    fn install_search_results(&mut self, results: Vec<RankedCharacter>) {
         self.actions = results
             .iter()
             .map(|result| result.selection.clone())
             .collect();
         self.palette
             .replace_ranked_results(results.into_iter().map(|result| result.command).collect());
+    }
+
+    fn invalidate_search(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending = None;
+        self.query_pending = false;
+        self.search_failed = false;
+    }
+
+    fn fail_search(&mut self) {
+        self.search_failed = self.query_pending;
+        self.query_pending = false;
+        self.pending = None;
+        self.in_flight = false;
+        self.worker = None;
+    }
+
+    fn dispatch_search(&mut self) {
+        if self.in_flight || self.pending.is_none() {
+            return;
+        }
+        if self.worker.is_none() {
+            match SearchWorker::new() {
+                Ok(worker) => self.worker = Some(worker),
+                Err(error) => {
+                    log::warn!("Could not start Unicode search worker: {error}");
+                    self.fail_search();
+                    return;
+                }
+            }
+        }
+        let request = self.pending.take().unwrap();
+        if self
+            .worker
+            .as_ref()
+            .unwrap()
+            .requests
+            .try_send(request)
+            .is_err()
+        {
+            self.fail_search();
+        } else {
+            self.in_flight = true;
+        }
+    }
+
+    pub fn search_pending(&self) -> bool {
+        self.in_flight
+    }
+
+    /// Poll without waiting; stale generations cannot restore executable rows.
+    pub fn poll_search(&mut self) -> bool {
+        if !self.in_flight {
+            return false;
+        }
+        let result = self.worker.as_ref().unwrap().completions.try_recv();
+        let mut changed = false;
+        match result {
+            Ok(completion) => {
+                self.in_flight = false;
+                if self.search_session && completion.generation == self.generation {
+                    self.query_pending = false;
+                    self.install_search_results(completion.results);
+                    changed = true;
+                }
+                self.dispatch_search();
+                changed |= self.search_failed;
+                if !self.search_session {
+                    self.worker = None;
+                }
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                changed = self.query_pending;
+                self.fail_search();
+            }
+        }
+        changed
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_search_for_test(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while self.search_pending() {
+            self.poll_search();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Unicode search did not finish"
+            );
+            std::thread::yield_now();
+        }
+        assert!(!self.search_failed);
     }
 
     fn resolve(&mut self, result: PaletteResult) -> Option<UnicodePickerSelection> {
@@ -311,15 +457,6 @@ impl UnicodePicker {
         }
         selection
     }
-}
-
-fn prewarm_unicode_name_index() {
-    UNICODE_PREWARM.call_once(|| {
-        std::thread::spawn(|| {
-            UNICODE_NAME_INDEX.get_or_init(UnicodeNameIndex::build);
-            annotations::index();
-        });
-    });
 }
 
 fn unicode_name_index() -> &'static UnicodeNameIndex {
@@ -1559,6 +1696,7 @@ mod tests {
 
     fn filter(picker: &mut UnicodePicker, value: &str) -> PaletteInfo {
         assert!(picker.accessibility_set_filter(value));
+        picker.finish_search_for_test();
         picker.build_info()
     }
 

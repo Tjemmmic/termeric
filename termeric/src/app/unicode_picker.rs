@@ -180,6 +180,7 @@ mod tests {
             app.unicode_picker
                 .accessibility_set_filter("woman judge medium dark skin tone")
         );
+        app.unicode_picker.finish_search_for_test();
         let info = app.unicode_picker.build_info();
         let entry = info
             .entries

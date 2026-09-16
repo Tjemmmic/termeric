@@ -185,6 +185,12 @@ of owned candidate/action/command storage. These are broad regression limits;
 the exact source, zero-copy format, normalization, and insertion semantics are
 documented in [cldr-annotations.md](cldr-annotations.md).
 
+Named picker searches now execute on a bounded background worker, with one
+in-flight scan and one coalesced latest query. These existing timing rails still
+measure synchronous search work (worker completion cost), not keyboard dispatch
+or end-to-end presentation. Blocked-worker lifecycle tests prove that edits do
+not wait for scan completion; they are not a native input-latency measurement.
+
 Unicode name scoring has an opt-in paired microbenchmark and complete-catalog
 ranking comparisons against its former three-pass implementation. The new
 single-pass classification reduces repeated scans without another retained

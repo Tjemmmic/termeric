@@ -3077,6 +3077,10 @@ impl App {
     }
 
     fn poll_idle_sources(&mut self, now: Instant) {
+        if self.unicode_picker.poll_search() {
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::Search);
+        }
         self.poll_tab_drag_scroll(now);
         self.poll_session_export();
         if self.surface_lost
@@ -3181,6 +3185,9 @@ impl App {
             self.last_config_check + Self::CONFIG_POLL_INTERVAL,
             self.git_watcher.next_poll_deadline(),
         ];
+        if self.unicode_picker.search_pending() {
+            deadlines.push(now + Duration::from_millis(16));
+        }
         if !self.presentation_suspended() {
             if let Some(dwell) = &self.tab_drag_scroll {
                 deadlines.push(dwell.deadline);

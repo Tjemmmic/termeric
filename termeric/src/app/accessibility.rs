@@ -3634,7 +3634,7 @@ impl App {
         let mut dialog_children = vec![UNICODE_INPUT, UNICODE_LIST];
         if visible_entries.is_empty() {
             let mut empty = Node::new(Role::Status);
-            empty.set_label("No matching Unicode character");
+            empty.set_label(info.status.unwrap_or("No matching Unicode character"));
             empty.set_live(Live::Polite);
             nodes.push((UNICODE_EMPTY, empty));
             dialog_children.push(UNICODE_EMPTY);
@@ -7659,6 +7659,12 @@ mod tests {
             target_node: UNICODE_INPUT,
             data: Some(ActionData::Value("snowman".into())),
         });
+        let pending = app.accessibility_snapshot();
+        assert!(pending.nodes.iter().any(|(id, node)| {
+            *id == UNICODE_EMPTY && node.label() == Some("Searching characters…")
+        }));
+        assert!(!app.accessibility.unicode_commands.contains_key(&stale));
+        app.unicode_picker.finish_search_for_test();
         let snapshot = app.accessibility_snapshot();
         let info = app.unicode_picker.build_info();
         assert!(info.total_count <= 256);
@@ -7685,6 +7691,7 @@ mod tests {
             app.unicode_picker
                 .accessibility_set_filter("flag united states")
         );
+        app.unicode_picker.finish_search_for_test();
         let snapshot = app.accessibility_snapshot();
         let command = "unicode-picker.cldr.1f1fa-1f1f8";
         let node_id = *app.accessibility.unicode_nodes.get(command).unwrap();
@@ -7702,6 +7709,7 @@ mod tests {
         }));
 
         assert!(app.unicode_picker.accessibility_set_filter("party pinata"));
+        app.unicode_picker.finish_search_for_test();
         app.accessibility_snapshot();
         assert!(!app.accessibility.unicode_nodes.contains_key(command));
     }
