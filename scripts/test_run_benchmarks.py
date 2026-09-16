@@ -59,6 +59,31 @@ def comparable_report(value: float) -> dict:
 
 
 class BenchmarkBudgetTests(unittest.TestCase):
+    def test_shaping_pressure_contract_and_deterministic_budgets(self):
+        contract = load_metric_contract()
+        rows = [row for row in contract["metric"] if ".shaping_pressure." in row["name"]]
+        self.assertEqual(len(rows), 6)
+        for row in rows:
+            self.assertEqual(row["producer"], "application")
+            self.assertEqual(row["samples"], 5)
+            self.assertTrue(row["context_required"])
+            self.assertTrue(row["allow_skipped"])
+        with (Path(__file__).parents[1] / "benchmarks" / "budgets.toml").open("rb") as stream:
+            budgets = tomllib.load(stream)
+        selected = [row for row in budgets["metric_budget"] if ".shaping_pressure." in row["metric"]]
+        self.assertEqual({row["metric"]: row["max"] for row in selected}, {
+            "memory.shaping_pressure.retained_bytes": 8388608.0,
+            "renderer.shaping_pressure.rasterizations": 0.0,
+        })
+        for budget in selected:
+            for value, passes in [(budget["max"], True), (budget["max"] + 1, False)]:
+                sampled = {"metrics": [{
+                    "name": budget["metric"], "samples": [value] * 5,
+                    "statistics": summarize([value] * 5),
+                }]}
+                self.assertEqual(evaluate_budgets(sampled, {"metric_budget": [budget]})[0]["passed"], passes)
+            self.assertFalse(evaluate_budgets({"metrics": []}, {"metric_budget": [budget]})[0]["passed"])
+
     def test_streaming_diff_budgets_reject_regressions_and_missing_evidence(self):
         with (Path(__file__).parents[1] / "benchmarks" / "budgets.toml").open("rb") as stream:
             checked_in = tomllib.load(stream)

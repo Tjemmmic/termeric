@@ -1,5 +1,53 @@
 schema_version = 1
 
+[[metric]]
+name = "renderer.shaping_pressure.rebuild"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.shaping_pressure.retained_reference"
+unit = "ms"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "memory.shaping_pressure.retained_bytes"
+unit = "bytes"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "memory.shaping_pressure.reference_bytes"
+unit = "bytes"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.shaping_pressure.evictions"
+unit = "entries"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
+[[metric]]
+name = "renderer.shaping_pressure.rasterizations"
+unit = "glyphs"
+producer = "application"
+samples = 5
+allow_skipped = true
+context_required = true
+
 # Every release-benchmark producer invocation must emit exactly one row for
 # every metric assigned to it. Unavailable renderer/display measurements retain
 # an empty row whose workload starts with `skipped:`; absence is never a skip.

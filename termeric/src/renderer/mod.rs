@@ -2390,6 +2390,7 @@ pub(crate) struct HeadlessRendererBenchmark {
     pub row_cache_steady_allocations: Vec<f64>,
     pub ligature_code_ms: Vec<f64>,
     pub ligature_cache_hit_percent: Vec<f64>,
+    pub shaping_pressure: glyph_cache::pressure_benchmark::PressureBenchmark,
 }
 
 #[cfg(test)]
@@ -4185,6 +4186,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
     let hit_percent = hits as f64 / (hits + misses) as f64 * 100.0;
     assert!(hit_percent >= 99.0);
     let ligature_cache_hit_percent = vec![hit_percent; SAMPLES];
+    let shaping_pressure = glyph_cache::pressure_benchmark::measure(&device, &queue)?;
 
     Ok(Some(HeadlessRendererBenchmark {
         adapter: adapter_name,
@@ -4203,6 +4205,7 @@ pub(crate) fn benchmark_headless_renderer() -> Result<Option<HeadlessRendererBen
         row_cache_steady_allocations,
         ligature_code_ms,
         ligature_cache_hit_percent,
+        shaping_pressure,
     }))
 }
 

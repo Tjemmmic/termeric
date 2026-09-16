@@ -963,6 +963,50 @@ fn release_benchmark_suite() {
                 "shaping-cache hit rate for unchanged code-heavy row runs",
                 Some(&result.adapter),
             );
+            let pressure_context = format!(
+                "{}; fixture=shaping-pressure-v1; font_sha256={}",
+                result.adapter, result.shaping_pressure.font_sha256,
+            );
+            for (name, unit, samples, workload) in [
+                (
+                    "renderer.shaping_pressure.rebuild",
+                    "ms",
+                    result.shaping_pressure.pressure_ms,
+                    "128 unique 2048-glyph Fira Mono runs; warmed atlas; production 8 MiB cache churn",
+                ),
+                (
+                    "renderer.shaping_pressure.retained_reference",
+                    "ms",
+                    result.shaping_pressure.reference_ms,
+                    "identical 128 unique 2048-glyph Fira Mono runs; warmed atlas; test-only 64 MiB retained cache",
+                ),
+                (
+                    "memory.shaping_pressure.retained_bytes",
+                    "bytes",
+                    result.shaping_pressure.pressure_bytes,
+                    "owned run-cache bytes after the production 8 MiB pressure pass; not peak or RSS",
+                ),
+                (
+                    "memory.shaping_pressure.reference_bytes",
+                    "bytes",
+                    result.shaping_pressure.reference_bytes,
+                    "owned run-cache bytes after the test-only 64 MiB retained-reference pass; not peak or RSS",
+                ),
+                (
+                    "renderer.shaping_pressure.evictions",
+                    "entries",
+                    result.shaping_pressure.pressure_evictions,
+                    "capacity-evicted run entries during the production 8 MiB pressure pass",
+                ),
+                (
+                    "renderer.shaping_pressure.rasterizations",
+                    "glyphs",
+                    result.shaping_pressure.pressure_rasterizations,
+                    "physical glyph rasterizations during the production pressure pass with warmed atlas",
+                ),
+            ] {
+                emit_benchmark(name, unit, samples, workload, Some(&pressure_context));
+            }
         }
         None => {
             for (name, unit) in [
@@ -981,6 +1025,12 @@ fn release_benchmark_suite() {
                 ("renderer.row_cache.steady_allocations", "allocations"),
                 ("renderer.ligature.code_run_build", "ms"),
                 ("renderer.ligature.shaping_cache_hit_rate", "percent"),
+                ("renderer.shaping_pressure.rebuild", "ms"),
+                ("renderer.shaping_pressure.retained_reference", "ms"),
+                ("memory.shaping_pressure.retained_bytes", "bytes"),
+                ("memory.shaping_pressure.reference_bytes", "bytes"),
+                ("renderer.shaping_pressure.evictions", "entries"),
+                ("renderer.shaping_pressure.rasterizations", "glyphs"),
             ] {
                 emit_benchmark(
                     name,

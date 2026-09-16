@@ -18,6 +18,9 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use wgpu::*;
 
+#[cfg(test)]
+pub(crate) mod pressure_benchmark;
+
 /// Size of each glyph-atlas page. Mask storage is capped at 8 MiB and color
 /// glyph storage at 16 MiB.
 const ATLAS_SIZE: u32 = 1024;

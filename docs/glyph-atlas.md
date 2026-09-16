@@ -84,7 +84,10 @@ reserved capacities cannot corrupt accounting. Trace diagnostics expose retained
 bytes, entry counts, bypasses, hits/misses, and capacity evictions. This closes a
 retention gap in the previous count-only persistent cache and unbounded retry
 cache; it does not establish a total renderer RSS cap or a speed improvement.
-Eviction-heavy performance remains a separate measurement concern.
+The release suite now includes a paired real-shaping byte-pressure workload
+against a test-only fully retained reference; see
+[pressure measurement boundaries](performance.md#shaped-run-byte-pressure-cost).
+Native eviction-heavy frame performance remains a separate measurement concern.
 
 Deterministic tests independently recount every stored capacity, exercise both
 limits, verify replacement/retain/clear accounting, and check that oversized

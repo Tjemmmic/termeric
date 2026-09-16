@@ -242,6 +242,38 @@ bound; it is not a target for normal persistence loss. See
 [background-io.md](background-io.md) for queue limits, Git cancellation
 generations, flush policy, and failure semantics.
 
+### Shaped-run byte-pressure cost
+
+Six `shaping_pressure` metrics compare identical sets of 128 distinct,
+2,048-glyph ASCII runs in Fira Mono. The production 8 MiB run cache must evict
+under this working set; a **test-only** 64 MiB reference retains all runs.
+The reference is not an application setting or a recommendation to raise the
+production limit. Both use the real shaping/cache path and an already-warmed
+physical glyph atlas, isolating run-cache churn from glyph rasterization.
+
+One unrecorded pair precedes five measured pairs, with alternating order.
+Each case clears the run cache and prefills the identical input outside timing.
+Timing covers one further pass including shaping/cache lookup, run cloning,
+and returned-vector allocation; fixture/font setup, diagnostics, exact
+per-glyph geometry comparisons, and returned-output destruction are excluded.
+Every pass must return all glyphs with identical atlas entries and offsets.
+Assertions require all reference hits, all pressure misses, real byte-driven
+evictions below the entry-count limit, no bypass/deferred runs, and no new
+physical rasterizations or atlas evictions.
+
+The six rows report pressure/reference milliseconds and final owned cache
+bytes, plus pressure-evicted entries and physical rasterizations. Deterministic
+rails enforce the production 8 MiB ceiling and zero rerasterizations; timing
+is diagnostic until repeated comparable-host data justifies a useful rail.
+Owned bytes exclude map bucket overhead and transient/caller/font-system
+allocations, so neither row measures peak heap or RSS. GPU adapter identity,
+fixture revision, and font SHA-256 are retained as comparison context; absence
+of an adapter produces explicit skipped rows. This workload does not
+measure atlas eviction, native frame latency, mixed fonts, or typical terminal
+row lengths; its deliberately long rows force byte pressure with few entries.
+Run it through the release suite above with `--skip-displayed` to keep manual
+desktop checks deferred.
+
 The scale ratio uses deterministic owned-byte estimates rather than RSS deltas.
 Allocators commonly retain freed pages between the five samples in one process,
 so later RSS deltas can be zero; p95 RSS remains the external peak safety rail.

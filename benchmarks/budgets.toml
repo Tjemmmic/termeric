@@ -247,6 +247,20 @@ name = "deterministic core parser repeatability"
 metric = "core.parser.plain_4mib"
 max_coefficient_of_variation = 0.35
 
+[[metric_budget]]
+name = "production shaped-run owned-byte ceiling under pressure"
+metric = "memory.shaping_pressure.retained_bytes"
+statistic = "max"
+max = 8388608.0
+allow_skipped = true
+
+[[metric_budget]]
+name = "shaping pressure must reuse warmed physical glyphs"
+metric = "renderer.shaping_pressure.rasterizations"
+statistic = "max"
+max = 0.0
+allow_skipped = true
+
 [[variation_budget]]
 name = "deterministic pane-layout repeatability"
 metric = "interaction.pane_layout.8"
