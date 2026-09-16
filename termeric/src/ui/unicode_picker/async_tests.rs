@@ -28,6 +28,45 @@ fn poll_until(picker: &mut UnicodePicker, condition: impl Fn(&UnicodePicker) -> 
 }
 
 #[test]
+fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query() {
+    use crate::ui::text_input::TextInputEdit;
+    let (mut picker, observed, release) = controlled_picker();
+    picker.accessibility_set_filter("snowman");
+    observed.recv_timeout(Duration::from_secs(5)).unwrap();
+    let generation = picker.generation;
+    picker.edit_input(TextInputEdit::Home);
+    picker.handle_backspace();
+    picker.edit_input(TextInputEdit::End);
+    picker.edit_input(TextInputEdit::Delete);
+    picker.edit_input(TextInputEdit::Left);
+    picker.edit_input(TextInputEdit::Right);
+    assert_eq!(picker.generation, generation);
+    assert!(picker.pending.is_none());
+    release.send(()).unwrap();
+    picker.finish_search_for_test();
+    let ids: Vec<_> = picker.actions.iter().map(|a| a.id.clone()).collect();
+    picker.edit_input(TextInputEdit::Home);
+    assert_eq!(
+        picker
+            .actions
+            .iter()
+            .map(|a| a.id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert!(!picker.search_pending());
+    picker.edit_input(TextInputEdit::Delete);
+    assert!(picker.actions.is_empty());
+    assert_ne!(picker.generation, generation);
+    assert_eq!(
+        observed.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "nowman"
+    );
+    release.send(()).unwrap();
+    picker.finish_search_for_test();
+}
+
+#[test]
 fn blocked_search_coalesces_edits_and_retires_actions_without_waiting() {
     let (mut picker, observed, release) = controlled_picker();
     let stale = picker.actions[0].id.clone();

@@ -30,6 +30,16 @@ stays inside the shared input clip; native IME and screen-reader
 acceptance remain deferred. Other text surfaces retain their existing candidate
 placement behavior and are not covered by this palette-specific correction.
 
+Unmodified Left/Right and Home/End now move the palette query caret; Delete
+removes the following grapheme and Backspace removes the preceding one.
+Combining sequences, flags, and ZWJ emoji are edited whole. Typing and accepted
+IME commits insert at that caret. Cursor-only and no-op edits preserve result
+selection and do not restart Unicode worker searches; actual query changes
+retire old results as usual. Busy domain stages consume navigation/deletion
+without changing their read-only filter or a palette behind them. The semantic
+tree reports the moved UTF-8 caret. Word motion, Shift-selection, pointer caret
+placement, and semantic SetTextSelection are not implemented by this change.
+
 Native color fonts use the separate bounded RGBA glyph atlas described in
 [Glyph atlas lifetime](glyph-atlas.md). Extended grapheme width remains the
 terminal's Unicode width policy; color selection does not change cell width.

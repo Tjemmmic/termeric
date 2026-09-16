@@ -356,6 +356,13 @@ close/reopen. Exact scalar and curated entries remain synchronous. Automated
 blocked-worker, idle-scheduling, and accessible-status tests cover this lifecycle;
 native responsiveness acceptance remains deferred (see [Unicode policy](unicode-support.md)).
 
+Shared palette query editing supports unmodified Left/Right/Home/End and
+whole-grapheme Backspace/Delete with insertion at the moved caret. Cursor-only
+edits preserve selection and pending Unicode searches, and busy domain stages
+remain read-only. Geometry, model, app routing, IME insertion, and semantic caret
+tests cover this behavior; native keyboard/IME acceptance remains deferred
+(see [input contract](accessibility-and-input.md)).
+
 Built-in plugin profile selection distinguishes **Automatic profile** from every
 explicit name, including `default`. Selection/restart prefer a matching owner in
 the active tab; delayed choices retain the original identity. Exact references

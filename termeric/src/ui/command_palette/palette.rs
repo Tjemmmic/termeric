@@ -6,7 +6,7 @@
 use sublime_fuzzy::FuzzySearch;
 
 use super::super::animation::OverlayAnimation;
-use super::super::text_input::TextInput;
+use super::super::text_input::{TextInput, TextInputEdit};
 use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 
 const MAX_QUERY_CHARACTERS: usize = 256;
@@ -403,11 +403,18 @@ impl CommandPalette {
 
     /// Handle backspace
     pub fn handle_backspace(&mut self) {
-        if self.input.backspace() {
+        self.edit_input(TextInputEdit::Backspace);
+    }
+
+    /// Cursor-only edits preserve both filtered results and row selection.
+    pub fn edit_input(&mut self, edit: TextInputEdit) -> bool {
+        if self.input.edit_grapheme(edit) {
             self.selected = 0;
             self.scroll_offset = 0;
             self.update_entries();
+            return true;
         }
+        false
     }
 
     /// Move selection up
@@ -1251,6 +1258,32 @@ impl CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caret_only_edits_preserve_results_and_selected_row() {
+        let mut palette = test_palette();
+        palette.open();
+        palette.accessibility_set_input("tab");
+        palette.select_next();
+        let before = palette.build_info();
+        for edit in [
+            TextInputEdit::Left,
+            TextInputEdit::Right,
+            TextInputEdit::Home,
+            TextInputEdit::End,
+            TextInputEdit::Delete,
+            TextInputEdit::Home,
+            TextInputEdit::Backspace,
+        ] {
+            assert!(!palette.edit_input(edit));
+            let after = palette.build_info();
+            assert_eq!(before.selected, after.selected);
+            assert_eq!(
+                before.entries.iter().map(|e| &e.id).collect::<Vec<_>>(),
+                after.entries.iter().map(|e| &e.id).collect::<Vec<_>>()
+            );
+        }
+    }
 
     #[test]
     fn palette_query_bounds_are_identical_for_typed_and_semantic_input() {

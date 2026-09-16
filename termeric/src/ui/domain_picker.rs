@@ -211,6 +211,12 @@ impl DomainPicker {
         }
     }
 
+    pub fn edit_input(&mut self, edit: crate::ui::text_input::TextInputEdit) {
+        if self.is_active() && self.can_filter() {
+            self.palette.edit_input(edit);
+        }
+    }
+
     pub fn handle_char(&mut self, character: char) {
         if self.can_filter() {
             self.palette.handle_char(character);

@@ -4,6 +4,19 @@
 //! previously duplicated across CommandPalette, CommandMode, CommandsPanel,
 //! and Search.
 
+use unicode_segmentation::UnicodeSegmentation;
+
+/// Whole-grapheme editing for single-line fields that opt into it.
+#[derive(Debug, Clone, Copy)]
+pub enum TextInputEdit {
+    Left,
+    Right,
+    Home,
+    End,
+    Backspace,
+    Delete,
+}
+
 /// A single-line text input buffer with cursor tracking.
 pub struct TextInput {
     buffer: String,
@@ -56,6 +69,61 @@ impl TextInput {
     pub fn insert_char(&mut self, c: char) {
         self.buffer.insert(self.cursor, c);
         self.cursor += c.len_utf8();
+    }
+
+    /// Apply a whole-grapheme edit. Returns true only if text changed; moving
+    /// the caret must not invalidate search results. Existing scalar-based
+    /// methods remain unchanged for other consumers.
+    pub fn edit_grapheme(&mut self, edit: TextInputEdit) -> bool {
+        let previous = || {
+            self.buffer
+                .grapheme_indices(true)
+                .map(|(offset, _)| offset)
+                .take_while(|offset| *offset < self.cursor)
+                .last()
+                .unwrap_or(0)
+        };
+        let next = || {
+            self.buffer
+                .grapheme_indices(true)
+                .map(|(offset, _)| offset)
+                .find(|offset| *offset > self.cursor)
+                .unwrap_or(self.buffer.len())
+        };
+        match edit {
+            TextInputEdit::Left => self.cursor = previous(),
+            TextInputEdit::Right => self.cursor = next(),
+            TextInputEdit::Home => self.cursor = 0,
+            TextInputEdit::End => self.cursor = self.buffer.len(),
+            TextInputEdit::Backspace | TextInputEdit::Delete => {
+                if matches!(edit, TextInputEdit::Backspace) && self.cursor == 0
+                    || matches!(edit, TextInputEdit::Delete) && self.cursor == self.buffer.len()
+                {
+                    return false;
+                }
+                let at_boundary = self.cursor == self.buffer.len()
+                    || self
+                        .buffer
+                        .grapheme_indices(true)
+                        .any(|(offset, _)| offset == self.cursor);
+                // An insertion can join a following combining mark. If the
+                // caret is now inside that cluster, delete the whole cluster.
+                let start = if matches!(edit, TextInputEdit::Backspace) || !at_boundary {
+                    previous()
+                } else {
+                    self.cursor
+                };
+                let end = if matches!(edit, TextInputEdit::Backspace) && at_boundary {
+                    self.cursor
+                } else {
+                    next()
+                };
+                self.buffer.drain(start..end);
+                self.cursor = start;
+                return true;
+            }
+        }
+        false
     }
 
     /// Delete the character before the cursor (backspace).
@@ -181,6 +249,50 @@ impl std::fmt::Display for TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grapheme_edits_traverse_and_remove_combining_emoji_and_flags_whole() {
+        let value = "ae\u{301}👩\u{200d}💻🇺🇸z";
+        let boundaries: Vec<_> = value
+            .grapheme_indices(true)
+            .map(|(offset, _)| offset)
+            .chain([value.len()])
+            .collect();
+        let mut input = TextInput::from(value);
+        assert!(!input.edit_grapheme(TextInputEdit::Home));
+        for boundary in boundaries.iter().skip(1) {
+            assert!(!input.edit_grapheme(TextInputEdit::Right));
+            assert_eq!(input.cursor(), *boundary);
+        }
+        for boundary in boundaries.iter().rev().skip(1) {
+            assert!(!input.edit_grapheme(TextInputEdit::Left));
+            assert_eq!(input.cursor(), *boundary);
+        }
+        assert!(!input.edit_grapheme(TextInputEdit::Backspace));
+        for boundary in boundaries.iter().skip(1) {
+            assert!(input.edit_grapheme(TextInputEdit::Delete));
+            assert_eq!(input.text(), &value[*boundary..]);
+        }
+        assert!(!input.edit_grapheme(TextInputEdit::Delete));
+        input.replace(value);
+        for boundary in boundaries.iter().rev().skip(1) {
+            assert!(input.edit_grapheme(TextInputEdit::Backspace));
+            assert_eq!(input.text(), &value[..*boundary]);
+        }
+    }
+
+    #[test]
+    fn edits_repair_a_caret_inside_a_newly_joined_grapheme() {
+        for edit in [TextInputEdit::Backspace, TextInputEdit::Delete] {
+            let mut input = TextInput::from("\u{301}x");
+            input.cursor_home();
+            input.insert_char('e');
+            assert_eq!(input.cursor(), 1);
+            assert!(input.edit_grapheme(edit));
+            assert_eq!(input.text(), "x");
+            assert_eq!(input.cursor(), 0);
+        }
+    }
 
     #[test]
     fn test_empty() {

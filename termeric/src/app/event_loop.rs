@@ -753,6 +753,11 @@ impl ApplicationHandler<AppEvent> for App {
 
                 // The live-domain picker reuses palette interaction and
                 // geometry but owns a separate staged discovery state.
+                if event.state == winit::event::ElementState::Pressed
+                    && self.handle_palette_edit_key(&event.logical_key)
+                {
+                    return;
+                }
                 if self.domain_picker.is_active() {
                     if event.state == winit::event::ElementState::Pressed {
                         use winit::keyboard::{Key, NamedKey};

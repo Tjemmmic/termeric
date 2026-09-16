@@ -12,6 +12,7 @@ mod font_range_editor;
 mod ime;
 mod kitty_file_transfer;
 mod mouse;
+mod palette_input;
 mod plugin_actions;
 mod plugin_launch;
 mod plugin_panes;

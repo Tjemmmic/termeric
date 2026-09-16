@@ -7643,6 +7643,46 @@ mod tests {
     }
 
     #[test]
+    fn palette_editing_publishes_the_moved_utf8_caret_to_accessibility() {
+        use crate::ui::text_input::TextInputEdit;
+        for unicode in [false, true] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            if unicode {
+                app.unicode_picker.open();
+                app.unicode_picker.accessibility_set_filter("a界e\u{301}z");
+                app.unicode_picker.edit_input(TextInputEdit::Home);
+                app.unicode_picker.edit_input(TextInputEdit::Right);
+                app.unicode_picker.edit_input(TextInputEdit::Right);
+                app.unicode_picker.edit_input(TextInputEdit::Right);
+            } else {
+                app.command_palette.open();
+                app.command_palette.accessibility_set_input("a界e\u{301}z");
+                app.command_palette.edit_input(TextInputEdit::Home);
+                app.command_palette.edit_input(TextInputEdit::Right);
+                app.command_palette.edit_input(TextInputEdit::Right);
+                app.command_palette.edit_input(TextInputEdit::Right);
+            }
+            let snapshot = app.accessibility_snapshot();
+            let id = if unicode {
+                UNICODE_INPUT
+            } else {
+                PALETTE_INPUT
+            };
+            let (_, input) = snapshot
+                .nodes
+                .iter()
+                .find(|(node_id, _)| *node_id == id)
+                .unwrap();
+            let selection = input.text_selection().unwrap();
+            assert_eq!(selection.anchor.character_index, 4);
+            assert_eq!(selection.focus.character_index, 4);
+            assert_eq!(input.value(), Some("a界e\u{301}z"));
+            app.unicode_picker.close();
+            app.unicode_picker.finish_search_for_test();
+        }
+    }
+
+    #[test]
     fn unicode_name_search_keeps_the_semantic_registry_bounded() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.unicode_picker.open();

@@ -201,11 +201,16 @@ impl UnicodePicker {
     }
 
     pub fn handle_backspace(&mut self) {
+        self.edit_input(crate::ui::text_input::TextInputEdit::Backspace);
+    }
+
+    pub fn edit_input(&mut self, edit: crate::ui::text_input::TextInputEdit) {
         if !self.search_session {
             return;
         }
-        self.palette.handle_backspace();
-        self.refresh_dynamic_entry();
+        if self.palette.edit_input(edit) {
+            self.refresh_dynamic_entry();
+        }
     }
 
     pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
