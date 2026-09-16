@@ -1220,7 +1220,18 @@ mod tests {
         assert!(search.advance_rows(terminal.grid(), 10));
         let progress = format!("{:?}", search.pending_search);
         let mut cursor = 0;
-        for edit in [Home, Backspace, Right, Left, End, Delete] {
+        for edit in [
+            Home,
+            Backspace,
+            BackspaceWord,
+            Right,
+            Left,
+            WordRight,
+            WordLeft,
+            End,
+            Delete,
+            DeleteWord,
+        ] {
             cursor = search.edit_query(cursor, edit, terminal.grid()).unwrap();
             assert_eq!(format!("{:?}", search.pending_search), progress);
             assert_eq!(search.query(), "needle");
@@ -1229,7 +1240,18 @@ mod tests {
         search.next();
         let selected = search.current_match_index();
         let matches = search.matches.clone();
-        for edit in [End, Delete, Home, Backspace, Right, Left] {
+        for edit in [
+            End,
+            Delete,
+            DeleteWord,
+            Home,
+            Backspace,
+            BackspaceWord,
+            Right,
+            Left,
+            WordRight,
+            WordLeft,
+        ] {
             cursor = search.edit_query(cursor, edit, terminal.grid()).unwrap();
             assert!(!search.is_searching());
             assert_eq!(search.current_match_index(), selected);
@@ -1257,18 +1279,31 @@ mod tests {
         }
         assert!(search.set_query("界", terminal.grid()));
         for cursor in [1, 2, 4, usize::MAX] {
-            for edit in [Home, End, Left, Right, Backspace, Delete] {
+            for edit in [
+                Home,
+                End,
+                Left,
+                Right,
+                Backspace,
+                Delete,
+                WordLeft,
+                WordRight,
+                BackspaceWord,
+                DeleteWord,
+            ] {
                 assert_eq!(search.edit_query(cursor, edit, terminal.grid()), None);
                 assert_eq!(search.query(), "界");
             }
         }
         search.toggle_regex(terminal.grid());
-        assert!(search.set_query("[a", terminal.grid()));
-        assert!(search.regex_error.is_some());
-        assert_eq!(search.edit_query(0, Delete, terminal.grid()), Some(0));
-        assert_eq!(search.query(), "a");
-        assert!(search.regex_error.is_none());
-        assert!(search.is_searching());
+        for edit in [Delete, DeleteWord] {
+            assert!(search.set_query("[a", terminal.grid()));
+            assert!(search.regex_error.is_some());
+            assert_eq!(search.edit_query(0, edit, terminal.grid()), Some(0));
+            assert_eq!(search.query(), "a");
+            assert!(search.regex_error.is_none());
+            assert!(search.is_searching());
+        }
     }
 
     #[test]

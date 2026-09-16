@@ -15,6 +15,10 @@ pub enum TextInputEdit {
     End,
     Backspace,
     Delete,
+    WordLeft,
+    WordRight,
+    BackspaceWord,
+    DeleteWord,
 }
 
 /// A single-line text input buffer with cursor tracking.
@@ -197,6 +201,30 @@ pub(crate) fn edit_grapheme(buffer: &mut String, cursor: &mut usize, edit: TextI
         TextInputEdit::Right => *cursor = next(),
         TextInputEdit::Home => *cursor = 0,
         TextInputEdit::End => *cursor = buffer.len(),
+        TextInputEdit::WordLeft
+        | TextInputEdit::WordRight
+        | TextInputEdit::BackspaceWord
+        | TextInputEdit::DeleteWord => {
+            let backwards = matches!(edit, TextInputEdit::WordLeft | TextInputEdit::BackspaceWord);
+            let target = word_boundary(buffer, *cursor, backwards);
+            if matches!(edit, TextInputEdit::WordLeft | TextInputEdit::WordRight) {
+                *cursor = target;
+                return false;
+            }
+            // Expand either deletion edge to an extended-grapheme boundary,
+            // including carets inside clusters joined by a recent insertion.
+            let (start, end) = if backwards {
+                (target, grapheme_boundary(buffer, *cursor, false))
+            } else {
+                (grapheme_boundary(buffer, *cursor, true), target)
+            };
+            if start == end {
+                return false;
+            }
+            buffer.drain(start..end);
+            *cursor = start;
+            return true;
+        }
         TextInputEdit::Backspace | TextInputEdit::Delete => {
             if matches!(edit, TextInputEdit::Backspace) && *cursor == 0
                 || matches!(edit, TextInputEdit::Delete) && *cursor == buffer.len()
@@ -225,6 +253,45 @@ pub(crate) fn edit_grapheme(buffer: &mut String, cursor: &mut usize, edit: TextI
         }
     }
     false
+}
+
+/// Unicode word-boundary segments (including punctuation/emoji), with
+/// neighboring whitespace skipped. Work is linear in the bounded input;
+/// there is no secondary string or boundary-index allocation.
+fn word_boundary(text: &str, cursor: usize, backwards: bool) -> usize {
+    let mut segments = text
+        .split_word_bound_indices()
+        .filter(|(_, segment)| !segment.chars().all(char::is_whitespace));
+    let boundary = if backwards {
+        segments
+            .map(|(start, _)| start)
+            .take_while(|start| *start < cursor)
+            .last()
+            .unwrap_or(0)
+    } else {
+        segments
+            .find(|(start, segment)| start + segment.len() > cursor)
+            .map(|(start, segment)| start + segment.len())
+            .unwrap_or(text.len())
+    };
+    grapheme_boundary(text, boundary, backwards)
+}
+
+fn grapheme_boundary(text: &str, cursor: usize, backwards: bool) -> usize {
+    let mut boundaries = text
+        .grapheme_indices(true)
+        .map(|(offset, _)| offset)
+        .chain([text.len()]);
+    if backwards {
+        boundaries
+            .take_while(|offset| *offset <= cursor)
+            .last()
+            .unwrap_or(0)
+    } else {
+        boundaries
+            .find(|offset| *offset >= cursor)
+            .unwrap_or(text.len())
+    }
 }
 
 #[cfg(test)]
@@ -257,6 +324,65 @@ impl std::fmt::Display for TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_edits_skip_whitespace_and_keep_punctuation_and_emoji_segments() {
+        use TextInputEdit::*;
+        let value = "one  two,👩\u{200d}💻";
+        let mut input = TextInput::from(value);
+        input.cursor_home();
+        for cursor in [3, 8, 9, value.len(), value.len()] {
+            assert!(!input.edit_grapheme(WordRight));
+            assert_eq!(input.cursor(), cursor);
+            assert_eq!(input.text(), value);
+        }
+        for cursor in [9, 8, 5, 0, 0] {
+            assert!(!input.edit_grapheme(WordLeft));
+            assert_eq!(input.cursor(), cursor);
+        }
+        assert!(!input.edit_grapheme(BackspaceWord));
+        assert!(input.edit_grapheme(DeleteWord));
+        assert_eq!(input.text(), "  two,👩\u{200d}💻");
+        assert!(input.edit_grapheme(DeleteWord));
+        assert_eq!(input.text(), ",👩\u{200d}💻");
+        input.cursor_end();
+        assert!(!input.edit_grapheme(DeleteWord));
+        assert!(input.edit_grapheme(BackspaceWord));
+        assert_eq!(input.text(), ",");
+        assert!(input.edit_grapheme(BackspaceWord));
+        assert_eq!(input.text(), "");
+        assert!(!input.edit_grapheme(DeleteWord));
+    }
+
+    #[test]
+    fn word_deletion_expands_joined_graphemes_and_rejects_invalid_byte_cursors() {
+        use TextInputEdit::*;
+        for cluster in ["e\u{301}", "👩\u{200d}💻", "🇺🇸"] {
+            for edit in [BackspaceWord, DeleteWord] {
+                let mut text = format!("{cluster} tail");
+                let mut cursor = cluster.chars().next().unwrap().len_utf8();
+                assert!(edit_grapheme(&mut text, &mut cursor, edit));
+                assert_eq!(text, " tail");
+                assert_eq!(cursor, 0);
+            }
+        }
+        for edit in [WordLeft, WordRight, BackspaceWord, DeleteWord] {
+            for invalid in [1, 2, 99, usize::MAX] {
+                let mut text = "界".to_owned();
+                let mut cursor = invalid;
+                assert!(!edit_grapheme(&mut text, &mut cursor, edit));
+                assert_eq!((text.as_str(), cursor), ("界", invalid));
+            }
+        }
+        for (edit, expected, position) in
+            [(BackspaceWord, "pha beta", 0), (DeleteWord, "al beta", 2)]
+        {
+            let mut text = "alpha beta".to_owned();
+            let mut cursor = 2;
+            assert!(edit_grapheme(&mut text, &mut cursor, edit));
+            assert_eq!((text.as_str(), cursor), (expected, position));
+        }
+    }
 
     #[test]
     fn grapheme_edits_traverse_and_remove_combining_emoji_and_flags_whole() {

@@ -63,9 +63,17 @@ the byte caret inside a newly joined cluster, movement reaches its boundary and
 deletion removes that entire cluster. Caret-only and no-op edits retain pending
 scan progress, completed results, and the selected match; text changes restart
 the search and recompile regex as needed. Accepted editing keys clear stale IME
-composition. Modified editing keys are consumed without changing the query:
-word motion and selection are not implemented. Local model and raw-PTY tests
-cover these rules, but native keyboard/IME acceptance remains deferred.
+composition. Ctrl+Left/Right moves to the preceding segment start or following
+segment end using Unicode word boundaries, skipping adjacent whitespace;
+non-word segments such as standalone punctuation and emoji are navigable too.
+Ctrl+Backspace/Delete removes
+that span, expanding deletion edges to whole graphemes even when the caret is
+inside a newly joined cluster. The implementation scans only the bounded query
+and retains no word index. These bindings apply to active terminal search;
+other query fields keep their existing bindings. Selection, Ctrl+Home/End, and
+other modified editing keys remain consumed without editing; AltGraph never
+becomes a Ctrl word-edit command. Local model and raw-PTY tests cover these
+rules, but native keyboard/IME acceptance remains deferred.
 
 Unmodified Left/Right and Home/End now move the palette query caret; Delete
 removes the following grapheme and Backspace removes the preceding one.

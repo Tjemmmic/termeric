@@ -375,8 +375,10 @@ painted query/caret and IME candidate/preedit geometry, including rail/chrome
 offsets and scaled cells. Geometry and raw-PTY routing tests pass, and the
 software-GPU smoke checks shaped query clipping. Search also supports
 whole-grapheme Left/Right and Backspace/Delete, plus Home/End; caret-only edits
-preserve scan progress and selected results. Modified editing keys are consumed
-without editing (word motion/selection remain absent). Model and raw-PTY tests
+preserve scan progress and selected results. Ctrl+Left/Right and
+Ctrl+Backspace/Delete add Unicode word-segment movement/deletion, skip adjacent
+whitespace, and preserve whole graphemes. Selection and other modified editing
+keys remain consumed without editing. Model and raw-PTY tests
 cover query edits and IME insertion without child-input leakage. This does not
 claim native keyboard, IME, or visual acceptance
 (see [input contract](accessibility-and-input.md)).

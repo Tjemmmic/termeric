@@ -15,11 +15,24 @@ impl App {
             Key::Named(NamedKey::Delete) => TextInputEdit::Delete,
             _ => return false,
         };
-        // Selection and word editing are not implemented. Consume these keys
-        // without performing an unrelated plain edit or leaking into the PTY.
-        if !self.modifiers.is_empty() {
+        if self.alt_graph_active {
             return true;
         }
+        let edit = if self.modifiers == ModifiersState::CONTROL {
+            match edit {
+                TextInputEdit::Left => TextInputEdit::WordLeft,
+                TextInputEdit::Right => TextInputEdit::WordRight,
+                TextInputEdit::Backspace => TextInputEdit::BackspaceWord,
+                TextInputEdit::Delete => TextInputEdit::DeleteWord,
+                _ => return true,
+            }
+        } else if !self.modifiers.is_empty() {
+            // Selection and other modified edits remain unsupported. Do not
+            // reinterpret them as plain edits or leak them into the PTY.
+            return true;
+        } else {
+            edit
+        };
         let cursor = self.search_cursor_pos;
         if let Some(Some(cursor)) =
             self.with_search_and_active_grid(|search, grid| search.edit_query(cursor, edit, grid))
@@ -97,10 +110,11 @@ mod tests {
         assert_eq!(app.search.query(), "ae\u{301}Qz");
         assert_eq!(app.search_cursor_pos, "ae\u{301}Q".len());
         for modifier in [
-            ModifiersState::CONTROL,
             ModifiersState::ALT,
             ModifiersState::SHIFT,
             ModifiersState::SUPER,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ModifiersState::CONTROL | ModifiersState::ALT,
         ] {
             app.modifiers = modifier;
             for key in [
@@ -115,6 +129,34 @@ mod tests {
                 assert_eq!(app.search.query(), "ae\u{301}Qz");
                 assert_eq!(app.search_cursor_pos, "ae\u{301}Q".len());
             }
+        }
+        app.modifiers = ModifiersState::CONTROL;
+        app.alt_graph_active = true;
+        assert!(app.handle_search_key(&Key::Named(NamedKey::Backspace)));
+        assert_eq!(app.search.query(), "ae\u{301}Qz");
+        app.alt_graph_active = false;
+        app.with_search_and_active_grid(|search, grid| {
+            search.set_query("one  e\u{301} 👩\u{200d}💻 tail", grid)
+        });
+        app.search_cursor_pos = app.search.query().len();
+        app.modifiers = ModifiersState::CONTROL;
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        assert!(app.handle_search_key(&Key::Named(NamedKey::ArrowLeft)));
+        assert_eq!(app.search_cursor_pos, "one  e\u{301} 👩\u{200d}💻 ".len());
+        assert!(app.ime.preedit().is_none());
+        assert!(app.handle_search_key(&Key::Named(NamedKey::Backspace)));
+        assert_eq!(app.search.query(), "one  e\u{301} tail");
+        assert!(app.handle_search_key(&Key::Named(NamedKey::Delete)));
+        assert_eq!(app.search.query(), "one  e\u{301} ");
+        assert!(app.handle_search_key(&Key::Named(NamedKey::ArrowLeft)));
+        assert_eq!(app.search_cursor_pos, 5);
+        assert!(app.handle_search_key(&Key::Named(NamedKey::Backspace)));
+        assert_eq!(app.search.query(), "e\u{301} ");
+        assert!(app.handle_search_key(&Key::Named(NamedKey::ArrowRight)));
+        assert_eq!(app.search_cursor_pos, "e\u{301}".len());
+        for key in [NamedKey::Home, NamedKey::End] {
+            assert!(app.handle_search_key(&Key::Named(key)));
+            assert_eq!(app.search_cursor_pos, "e\u{301}".len());
         }
         app.modifiers = ModifiersState::empty();
         assert!(app.redraw_scheduler.has_pending());
