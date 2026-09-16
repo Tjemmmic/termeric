@@ -266,6 +266,19 @@ Arbitrary startup-environment/option combinations and older Bash runtime
 versions are not established by these new tests. The separate existing Bash
 prompt-array/version fallback tests remain in place.
 
+Hook installation temporarily disables `allexport` (`set -a`) and restores it
+before returning to the user. This prevents function definitions and prompt
+composition from accidentally exporting private hooks or previously unexported
+`PROMPT_COMMAND`/`PS0`. Existing explicit export attributes on user prompt
+variables remain intact; their values still include the installed integration,
+so explicitly exporting prompts is not a promise of clean nested-shell prompt
+composition. Private function export attributes inherited from older wrappers
+are removed, inherited command-seen state is discarded, and subsequent prompt
+updates keep that state unexported even if the user enables `set -a` later.
+Eight isolated child-environment cases and scalar/array real-PTY comparisons
+cover these boundaries on Bash 5.3.15. This does not prevent user code from
+explicitly exporting private names or reassigning prompt variables later.
+
 ### Bash login-shell integration
 
 Recognized interactive `--login`, `-l`, grouped `-il`, and `+l` launches now

@@ -94,13 +94,15 @@ second_hook() {{
         "Bash prompt fixture timed out"
     );
     assert_eq!(std::fs::read_to_string(home.join(".bashrc")).unwrap(), rc);
-    if prompt_command.contains("set -u") {
-        assert!(
-            std::fs::read_to_string(home.join("options"))
-                .unwrap()
-                .contains('u'),
-            "integration must not disable the user's nounset option"
-        );
+    for (setting, flag) in [("set -u", 'u'), ("set -a", 'a')] {
+        if prompt_command.contains(setting) {
+            assert!(
+                std::fs::read_to_string(home.join("options"))
+                    .unwrap()
+                    .contains(flag),
+                "integration must not disable the user's {setting} option"
+            );
+        }
     }
     let hooks = match std::fs::read_to_string(home.join("hooks")) {
         Ok(hooks) => hooks,
@@ -179,6 +181,16 @@ fn bash_nounset_preserves_scalar_prompt_hooks() {
 #[test]
 fn bash_nounset_preserves_array_prompt_hooks() {
     assert_prompt_preserved("PROMPT_COMMAND=('first_hook' 'second_hook')\nset -u");
+}
+
+#[test]
+fn bash_allexport_preserves_scalar_prompt_hooks_and_nounset() {
+    assert_prompt_preserved("PROMPT_COMMAND='first_hook; second_hook'\nset -a\nset -u");
+}
+
+#[test]
+fn bash_allexport_preserves_array_prompt_hooks() {
+    assert_prompt_preserved("PROMPT_COMMAND=('first_hook' 'second_hook')\nset -a");
 }
 
 #[test]

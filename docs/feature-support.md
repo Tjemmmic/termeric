@@ -101,6 +101,14 @@ variants pass on Bash 5.3.15; custom system-profile layouts, arbitrary user code
 and older runtimes remain outside that evidence. See
 [Bash login integration](osc-integration.md#bash-login-shell-integration).
 
+Bash hook setup preserves `allexport` without accidentally exporting private
+functions or previously unexported prompt variables. Prompt tracking remains
+shell-local when `set -a` is enabled later, and inherited stale private state is
+discarded. Eight child-environment cases and scalar/array real-PTY comparisons
+pass on Bash 5.3.15; explicit user prompt exports remain explicit and are not a
+guarantee of clean nested-shell composition. See
+[Bash environment boundaries](osc-integration.md#bash-launch-and-custom-rc-handling).
+
 Zsh forwards user `.zshenv`, login `.zprofile`, and `.zshrc` at file scope,
 restoring each effective `ZDOTDIR` before user code and preserving subsequent
 directory/export changes. Recovery tests, four directory-handoff comparisons,

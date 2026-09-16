@@ -29,7 +29,12 @@ fi
 unset __termeric_user_rc
 "#;
 
-const BASH_HOOKS: &str = r#"__termeric_before_prompt() {
+const BASH_HOOKS: &str = r#"# Installation must not automatically export private functions or turn the
+# user's unexported prompt variables into child-shell configuration.
+builtin declare +x __termeric_allexport=$-
+builtin set +a
+builtin unset __termeric_seen_command
+__termeric_before_prompt() {
     local __termeric_status=$?
     if [ -n "${__termeric_seen_command-}" ]; then
         printf '\033]133;D;%s\007' "$__termeric_status"
@@ -67,8 +72,13 @@ __termeric_after_prompt() {
     fi
     printf '\033]133;A\007\033]133;B\007'
     __termeric_seen_command=1
+    # The user may enable allexport after installation, too. This flag belongs
+    # only to this shell, never to a child shell's first prompt.
+    builtin export -n __termeric_seen_command
     return "$__termeric_status"
 }
+# Also retire export attributes on functions inherited from an older wrapper.
+builtin export -nf __termeric_before_prompt __termeric_after_prompt
 # Let Bash execute each original command, rather than evaluating it inside a
 # wrapper whose conditionals overwrite $? and whose local scope changes it.
 if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )) &&
@@ -80,6 +90,12 @@ else
     PROMPT_COMMAND=$'__termeric_before_prompt\n'"${PROMPT_COMMAND-}"$'\n__termeric_after_prompt'
 fi
 PS0="${PS0-}"$'\033]133;C\007'
+if [[ $__termeric_allexport == *a* ]]; then
+    builtin unset __termeric_allexport
+    builtin set -a
+else
+    builtin unset __termeric_allexport
+fi
 "#;
 
 fn bash_rc() -> String {
@@ -633,6 +649,9 @@ fn write_integration_file(
 
 #[cfg(test)]
 mod bash_prompt_tests;
+
+#[cfg(test)]
+mod bash_export_tests;
 
 #[cfg(test)]
 mod bash_launch_tests;

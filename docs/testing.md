@@ -213,6 +213,19 @@ user's `set -u` option remains enabled through the final submitted command.
 These tests skip explicitly if Bash 5.1+ is unavailable; they do not promote missing
 shells or the required three-shell acceptance record to passed.
 
+`bash_export_tests` runs eight local Bash subprocess cases with isolated
+environments and no startup files. Unset, scalar, sparse-array, and explicitly
+exported prompt variables are tested with `allexport` enabled before or after
+hook installation. A real child Bash checks private variables/functions are
+absent, user prompt export choices are retained, and subsequent user assignments
+still export. Synthetic stale inherited hooks/state must not leak onward or
+emit a spurious initial completion. Two additional `bash_prompt_tests` real-PTY
+comparisons cover scalar/array hooks under `set -a`, including scalar `set -u`,
+with native hook order/status, PS0 expansion, and success/failure regions.
+The export tests require Bash when `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1`;
+the new cases were verified on Bash 5.3.15, not every older Bash release or
+arbitrary explicitly exported user prompt configuration.
+
 `scripts/run_shell_acceptance.py` runs only the required Bash/Zsh/Fish real-PTY
 fixture and writes a sealed partial integration record. Its pure and private
 process tests cover zero/ignored/wrong-test refusal, exact observation shape,
