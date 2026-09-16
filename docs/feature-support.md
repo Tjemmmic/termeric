@@ -382,6 +382,11 @@ Historical clean local `2f7399d` passed the private-Sway lane and independent
 thirteen-case reconstruction, providing native command/Unicode word-edit
 delivery evidence without promoting domain/search, pointer, or native IME
 acceptance (see [native GUI evidence](gui-acceptance.md)).
+Clean local `e19272f` subsequently passed all seventeen cases under private
+Sway with AMD/radeonsi OpenGL, including the four pointer cases; independent
+transcript reconstruction and artifact seals passed. Native command/Unicode
+query pointer delivery is therefore verified within that fixture, while
+domain/search pointer, native IME, and visual acceptance remain deferred.
 
 Active terminal search shares whole-grapheme horizontal scrolling between its
 painted query/caret and IME candidate/preedit geometry, including rail/chrome

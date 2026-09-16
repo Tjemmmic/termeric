@@ -132,6 +132,14 @@ offline reconstruction passed after the run. This supplies native Ctrl word-edit
 delivery evidence for the command/Unicode palette path; it does not promote
 domain/search editing, pointer placement, native IME, or vendor-GPU acceptance.
 
+Clean local commit `e19272f` passed the seventeen-case interaction lane with
+AMD/radeonsi OpenGL (`software=false`) and all three renderer-recovery injections.
+`/tmp/termeric-native-pointer-e19272f/results.json` records candidate eligibility
+and the schema-3 palette proof. Independent offline reconstruction validated
+all seventeen cases and both artifact seals. This adds native command/Unicode
+query pointer evidence, including horizontal scrolling; it does not establish
+domain/search pointer routing, IME composition, or pixel-perfect presentation.
+
 The same Wayland interaction scenario now records six held-button mouse cases
 in `interaction/mouse-ownership.json`: ordinary local-tab/local-pane drags,
 switch-before-release, and switch-before-motion. Ordinary drags require an exact
