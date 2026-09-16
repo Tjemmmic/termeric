@@ -680,9 +680,10 @@ struct TabRenameState {
     max_chars: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct DividerDrag {
     tab_id: usize,
+    domain: Option<(String, u32)>,
     target: crate::panes::DividerTarget,
     last_ratio_millis: u16,
 }

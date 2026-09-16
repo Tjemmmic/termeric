@@ -90,6 +90,13 @@ does not restart the drag. Synthetic topology/local PTY tests verify cached
 ratios, pane routes, and unrelated-domain isolation without promoting native
 live-domain acceptance.
 
+Divider gestures also capture their local/remote ownership at button-down.
+Motion and finalization require the original open tab and exact domain/remote-tab
+identity; detachment, rebinding, or closure cannot redirect a captured split
+resize to another owner. Synthetic regressions cover motion and release-only
+rebinding, closed sources, and a local drag acquiring remote metadata. These
+checks do not establish native live-domain drag acceptance.
+
 Normal left clicks now exit F6 chrome focus after hit testing, avoiding swallowed
 typing and preserving the displayed keyboard-scrolled tab target. The native
 overflow lane checks terminal, distant-tab, and split-pane input ownership;

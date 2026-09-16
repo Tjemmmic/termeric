@@ -4625,11 +4625,15 @@ mod workspace_control_tests {
                 .resize(800.0, 480.0, 10.0, 20.0);
             app.divider_dragging = Some(DividerDrag {
                 tab_id: dragged_tab,
+                domain: Some(("domain-topology".into(), 20)),
                 target: crate::panes::DividerTarget::Domain(55),
                 last_ratio_millis: 500,
             });
             app.apply_divider_drag_position(60.0, 320.0);
-            assert_ne!(app.divider_dragging.unwrap().last_ratio_millis, 500);
+            assert_ne!(
+                app.divider_dragging.as_ref().unwrap().last_ratio_millis,
+                500
+            );
             app.pending_live_domain_controls.insert(pending.clone());
             app.tabs.as_mut().unwrap().next_tab();
             if refresh {

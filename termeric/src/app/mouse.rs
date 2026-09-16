@@ -2,11 +2,28 @@
 
 use super::*;
 
+impl DividerDrag {
+    fn owns_tab(&self, tab: &crate::tabs::Tab) -> bool {
+        tab.id == self.tab_id
+            && !tab.closed
+            && !tab.is_closing()
+            && match (&self.domain, tab.live_domain_tab_route(), self.target) {
+                (None, None, crate::panes::DividerTarget::Local(_)) => true,
+                (
+                    Some((domain, remote_tab)),
+                    Some((current_domain, current_tab)),
+                    crate::panes::DividerTarget::Domain(_),
+                ) => domain == current_domain && *remote_tab == current_tab,
+                _ => false,
+            }
+    }
+}
+
 impl App {
     /// A divider belongs to a tab, not its focused pane. Switching panes in
     /// that tab may continue the drag; hiding/closing its tab must finish it.
     pub(super) fn reconcile_divider_drag(&mut self) {
-        let Some(drag) = self.divider_dragging else {
+        let Some(drag) = self.divider_dragging.as_ref() else {
             return;
         };
         let valid = self
@@ -14,9 +31,7 @@ impl App {
             .as_ref()
             .and_then(TabManager::active_tab)
             .is_some_and(|tab| {
-                tab.id == drag.tab_id
-                    && !tab.closed
-                    && !tab.is_closing()
+                drag.owns_tab(tab)
                     && tab.live_domain_tab_route().is_none_or(|(domain, _)| {
                         !self
                             .pending_live_domain_controls
@@ -39,7 +54,7 @@ impl App {
 
     pub(super) fn apply_divider_drag_position(&mut self, x: f32, y: f32) {
         self.reconcile_divider_drag();
-        let Some(drag) = self.divider_dragging else {
+        let Some(drag) = self.divider_dragging.as_ref() else {
             return;
         };
         let ratio = self
@@ -140,25 +155,23 @@ impl App {
         self.tab_drag_scroll = None;
         let _ = self.mouse_state.handle_release(MouseButton::Left);
         let mut controls = Vec::new();
-        if let Some(DividerDrag {
-            tab_id,
-            target: crate::panes::DividerTarget::Domain(remote_split_id),
-            last_ratio_millis,
-        }) = divider_drag
-        {
-            let domain_id = self.tabs.as_ref().and_then(|tabs| {
-                tabs.iter().find_map(|(_, tab)| {
-                    (tab.id == tab_id)
-                        .then(|| tab.live_domain_tab_route())
-                        .flatten()
-                        .map(|(domain, _)| domain.to_string())
-                })
-            });
-            if let Some(domain_id) = domain_id {
+        if let Some(drag) = divider_drag {
+            // Never commit a captured split ID through a replacement route.
+            // Hidden geometry may still finalize, but its owner must be intact.
+            let owner_valid = self
+                .tabs
+                .as_ref()
+                .is_some_and(|tabs| tabs.iter().any(|(_, tab)| drag.owns_tab(tab)));
+            if let (
+                true,
+                Some((domain_id, _)),
+                crate::panes::DividerTarget::Domain(remote_split_id),
+            ) = (owner_valid, drag.domain, drag.target)
+            {
                 controls.push(LiveDomainControl::ResizeSplit {
                     domain_id,
                     remote_split_id,
-                    ratio_millis: last_ratio_millis,
+                    ratio_millis: drag.last_ratio_millis,
                 });
             }
         }
@@ -282,6 +295,11 @@ impl App {
                                     } else {
                                         self.divider_dragging = Some(DividerDrag {
                                             tab_id: tab.id,
+                                            domain: tab.live_domain_tab_route().map(
+                                                |(domain, remote_tab)| {
+                                                    (domain.to_owned(), remote_tab)
+                                                },
+                                            ),
                                             target: divider.target,
                                             last_ratio_millis: divider.ratio_millis,
                                         });

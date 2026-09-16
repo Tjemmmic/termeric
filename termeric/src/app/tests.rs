@@ -400,6 +400,7 @@ fn divider_owner_fixture() -> App {
     let divider = panes.get_dividers()[0];
     app.divider_dragging = Some(DividerDrag {
         tab_id: tab.id,
+        domain: None,
         target: divider.target,
         last_ratio_millis: divider.ratio_millis,
     });
@@ -457,6 +458,7 @@ fn domain_divider_pending_fixture() -> App {
         .resize(800.0, 480.0, 10.0, 20.0);
     let drag = DividerDrag {
         tab_id: tab.id,
+        domain: Some(("divider-pending".into(), 10)),
         target: crate::panes::DividerTarget::Domain(44),
         last_ratio_millis: 500,
     };
@@ -475,7 +477,7 @@ fn divider_drag_pending_request_interrupts_preview_and_preserves_earlier_authori
     for refresh in [false, true] {
         let mut app = domain_divider_pending_fixture();
         app.apply_divider_drag_position(600.0, 200.0);
-        assert!(app.divider_dragging.unwrap().last_ratio_millis > 500);
+        assert!(app.divider_dragging.as_ref().unwrap().last_ratio_millis > 500);
         let routes = app
             .tabs
             .as_ref()
@@ -541,9 +543,102 @@ fn divider_drag_unrelated_domain_requests_do_not_block_preview() {
         };
         app.pending_live_domain_controls.insert(pending.clone());
         app.apply_divider_drag_position(600.0, 200.0);
-        assert!(app.divider_dragging.unwrap().last_ratio_millis > 500);
+        assert!(app.divider_dragging.as_ref().unwrap().last_ratio_millis > 500);
         assert!(app.pending_live_domain_controls.contains(&pending));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn divider_drag_cannot_follow_a_rebound_remote_owner() {
+    for change in ["domain", "remote-tab", "detached"] {
+        for release_only in [false, true] {
+            let mut app = domain_divider_pending_fixture();
+            app.apply_divider_drag_position(600.0, 200.0);
+            let ratio = app.divider_dragging.as_ref().unwrap().last_ratio_millis;
+            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+            match change {
+                "domain" => {
+                    tab.live_domain.as_mut().unwrap().domain_id = "replacement-domain".into()
+                }
+                "remote-tab" => tab.live_domain.as_mut().unwrap().tab_id = 99,
+                "detached" => tab.live_domain = None,
+                _ => unreachable!(),
+            }
+            if !release_only {
+                app.apply_divider_drag_position(700.0, 200.0);
+                assert!(app.divider_dragging.is_none(), "{change}");
+                assert_eq!(
+                    app.tabs
+                        .as_ref()
+                        .unwrap()
+                        .active_tab()
+                        .unwrap()
+                        .pane_manager
+                        .as_ref()
+                        .unwrap()
+                        .get_dividers()[0]
+                        .ratio_millis,
+                    ratio
+                );
+            }
+            assert!(
+                app.take_native_drag_controls().is_empty(),
+                "must not address a rebound remote owner: {change}"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn divider_drag_finalization_refuses_closed_remote_sources() {
+    for closing in [false, true] {
+        let mut app = domain_divider_pending_fixture();
+        app.apply_divider_drag_position(600.0, 200.0);
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        if closing {
+            tab.start_closing();
+        } else {
+            tab.closed = true;
+        }
+        assert!(app.take_native_drag_controls().is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn local_divider_drag_cannot_acquire_a_remote_owner() {
+    let mut app = divider_owner_fixture();
+    app.apply_divider_drag_position(600.0, 200.0);
+    let ratio = app.divider_dragging.as_ref().unwrap().last_ratio_millis;
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "replacement-domain".into(),
+        tab_id: 99,
+        pane_ids: HashMap::new(),
+    });
+    app.apply_divider_drag_position(700.0, 200.0);
+    assert!(app.divider_dragging.is_none());
+    assert_eq!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .get_dividers()[0]
+            .ratio_millis,
+        ratio
+    );
+    assert!(app.take_native_drag_controls().is_empty());
+    assert!(app.pending_live_domain_controls.is_empty());
 }
 
 #[cfg(unix)]
@@ -566,9 +661,9 @@ fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
         "zoom",
     ] {
         let mut app = divider_owner_fixture();
-        let tab_id = app.divider_dragging.unwrap().tab_id;
+        let tab_id = app.divider_dragging.as_ref().unwrap().tab_id;
         app.apply_divider_drag_position(480.0, 240.0);
-        let preview_ratio = app.divider_dragging.unwrap().last_ratio_millis;
+        let preview_ratio = app.divider_dragging.as_ref().unwrap().last_ratio_millis;
         assert!(preview_ratio > 500);
         match transition {
             "tab" => app.tabs.as_mut().unwrap().switch_to(1),
@@ -650,7 +745,7 @@ fn divider_drag_survives_pane_focus_within_its_selected_tab() {
     panes.focus(other);
     app.refresh_focused_terminal_surfaces();
     app.apply_divider_drag_position(480.0, 240.0);
-    let preview_ratio = app.divider_dragging.unwrap().last_ratio_millis;
+    let preview_ratio = app.divider_dragging.as_ref().unwrap().last_ratio_millis;
     assert!(preview_ratio > 500);
     app.finish_native_pointer_gesture();
     app.apply_divider_drag_position(640.0, 240.0);
@@ -783,6 +878,7 @@ fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
         });
         app.divider_dragging = Some(DividerDrag {
             tab_id: 42,
+            domain: None,
             target: crate::panes::DividerTarget::Local(7),
             last_ratio_millis: 500,
         });
@@ -879,6 +975,7 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
         });
         app.divider_dragging = Some(DividerDrag {
             tab_id: 42,
+            domain: None,
             target: crate::panes::DividerTarget::Local(7),
             last_ratio_millis: 500,
         });
@@ -941,6 +1038,7 @@ fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event(
     });
     app.divider_dragging = Some(DividerDrag {
         tab_id: 42,
+        domain: None,
         target: crate::panes::DividerTarget::Local(7),
         last_ratio_millis: 500,
     });
@@ -1003,6 +1101,7 @@ fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
     app.tabs = Some(tabs);
     app.divider_dragging = Some(DividerDrag {
         tab_id: ids[1],
+        domain: Some(("b".into(), 99)),
         target: crate::panes::DividerTarget::Domain(88),
         last_ratio_millis: 650,
     });
