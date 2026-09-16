@@ -610,7 +610,7 @@ impl App {
         }
     }
 
-    fn file_drop_input_blocked(&self) -> bool {
+    pub(super) fn file_drop_input_blocked(&self) -> bool {
         self.guardrail.is_active()
             || self.info_overlay.is_active()
             || self.diff_review.is_active()

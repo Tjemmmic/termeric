@@ -223,6 +223,10 @@ impl DomainPicker {
         }
     }
 
+    pub fn insert_query_text(&mut self, text: &str) -> bool {
+        self.is_active() && self.can_filter() && self.palette.insert_query_text(text)
+    }
+
     pub fn activate(&mut self) -> Option<DomainPickerCommand> {
         let result = self.palette.execute();
         self.resolve_palette_result(result)

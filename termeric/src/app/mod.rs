@@ -18,6 +18,7 @@ mod plugin_launch;
 mod plugin_panes;
 mod plugin_profiles;
 mod plugin_restart;
+mod query_paste;
 mod redraw_scheduler;
 mod renderer_recovery;
 mod runtime_plugins;
@@ -3995,6 +3996,9 @@ impl App {
 
     /// Paste from clipboard
     fn paste_clipboard(&mut self) {
+        if self.clipboard_paste_blocked() {
+            return;
+        }
         let text = match self.clipboard.as_mut().map(|c| c.get_text()) {
             Some(Ok(text)) => text,
             Some(Err(e)) => {
@@ -4007,7 +4011,7 @@ impl App {
                 return;
             }
         };
-        self.write_paste_text(&text);
+        self.paste_clipboard_payload(&text);
     }
 
     fn write_paste_text(&mut self, text: &str) -> bool {

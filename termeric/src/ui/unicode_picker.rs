@@ -200,6 +200,14 @@ impl UnicodePicker {
         self.refresh_dynamic_entry();
     }
 
+    pub fn insert_query_text(&mut self, text: &str) -> bool {
+        if !self.search_session || !self.palette.insert_query_text(text) {
+            return false;
+        }
+        self.refresh_dynamic_entry();
+        true
+    }
+
     pub fn handle_backspace(&mut self) {
         self.edit_input(crate::ui::text_input::TextInputEdit::Backspace);
     }

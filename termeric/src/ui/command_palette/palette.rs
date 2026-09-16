@@ -389,6 +389,27 @@ impl CommandPalette {
         self.animation.set_reduced_motion(reduced_motion);
     }
 
+    /// Insert one bounded single-line query paste atomically, refreshing
+    /// results only once. Rejection preserves the cursor and selected result.
+    pub fn insert_query_text(&mut self, text: &str) -> bool {
+        if text.is_empty()
+            || text.len() > MAX_QUERY_CHARACTERS * 4
+            || text
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+            || self.input.text().chars().count() + text.chars().count() > MAX_QUERY_CHARACTERS
+        {
+            return false;
+        }
+        for character in text.chars() {
+            self.input.insert_char(character);
+        }
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.update_entries();
+        true
+    }
+
     /// Handle a character input
     pub fn handle_char(&mut self, c: char) -> bool {
         if c.is_control() || self.input.text().chars().count() >= MAX_QUERY_CHARACTERS {

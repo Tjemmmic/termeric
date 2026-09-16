@@ -285,6 +285,14 @@ impl ApplicationHandler<AppEvent> for App {
                     self.alt_graph_active = event.state == winit::event::ElementState::Pressed;
                 }
 
+                // Query paste respects modal ownership and the configured
+                // chord before query handlers consume its character key.
+                if event.state == winit::event::ElementState::Pressed
+                    && self.handle_query_paste_key(&event.logical_key)
+                {
+                    return;
+                }
+
                 // Handle guardrail confirmation (highest priority)
                 if self.guardrail.is_active() {
                     if event.state == winit::event::ElementState::Pressed {

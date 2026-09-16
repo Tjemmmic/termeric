@@ -41,6 +41,21 @@ The software-GPU smoke checks shaped search glyphs against their field clip too.
 Native IME and visual acceptance remain deferred. Other text surfaces retain
 their existing candidate placement behavior.
 
+The configured Paste shortcut now inserts clipboard text at the caret of the
+focused command/Unicode/domain palette or terminal-search query. Query handlers
+recognize that binding before consuming its character key; rebinding and
+disabling it use the normal shortcut registry. Pasted text is accepted atomically
+only if it is single-line, contains no controls or Unicode line/paragraph
+separators, and fits the existing limit (256 scalars for palettes, 4 KiB for
+search). Invalid or oversized pastes leave the query unchanged. Palette results
+refresh once per paste; accepted pastes clear stale IME composition.
+Higher-priority dialogs block background query pastes, and busy domain stages
+remain read-only. Unsupported modal paste destinations do not fall back to the
+terminal. Ordinary terminal pastes retain bracketed-paste framing, read-only
+checks, broadcast policy, and guardrails. Local routing and raw-PTY tests cover
+query insertion/refusal and child isolation; real clipboard/compositor
+acceptance for these query destinations remains deferred.
+
 Search query editing uses unmodified Left/Right to cross whole graphemes,
 Home/End to reach either end, and Backspace/Delete to remove whole graphemes.
 This includes combining sequences, ZWJ emoji, and flags. If an insertion leaves

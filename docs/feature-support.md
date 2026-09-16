@@ -381,6 +381,13 @@ cover query edits and IME insertion without child-input leakage. This does not
 claim native keyboard, IME, or visual acceptance
 (see [input contract](accessibility-and-input.md)).
 
+The configurable Paste shortcut now reaches command, Unicode, domain, and
+terminal-search query fields at their byte caret. Query pastes reject controls,
+multiline text, and over-limit input atomically; higher-priority or read-only
+surfaces cannot redirect them to a background query or shell. Local routing and
+raw-PTY isolation tests pass. Native clipboard acceptance for these fields is
+still deferred (see [input contract](accessibility-and-input.md)).
+
 Built-in plugin profile selection distinguishes **Automatic profile** from every
 explicit name, including `default`. Selection/restart prefer a matching owner in
 the active tab; delayed choices retain the original identity. Exact references
