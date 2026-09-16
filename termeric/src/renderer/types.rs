@@ -3,6 +3,15 @@
 //! Info structs, click result enums, and constants used by both the renderer
 //! and the application layer to pass rendering data.
 
+/// CPU raster work and retained image payload, separate from GPU atlas bytes.
+/// Font-system and scaler scratch allocations are not included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RasterizerMetrics {
+    pub rasterizations: u64,
+    pub retained_images: usize,
+    pub retained_image_bytes: usize,
+}
+
 /// Global paint phases for SGR slow and rapid blink. Terminal content remains
 /// unchanged; only foreground paint is gated by these values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

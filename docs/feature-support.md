@@ -397,6 +397,14 @@ see [profile behavior and limits](plugin-panes.md).
 
 ## Performance and resource evidence
 
+Glyph rasterization no longer keeps an unbounded duplicate CPU bitmap map
+behind the bounded GPU atlas. A deterministic 282-key fixture verifies identical
+pixels and placement with zero retained CPU image payload (343,899 bytes in
+the old cached path); software-GPU stress covers normal/deferred hits, pressure,
+resize, and color glyph retention. Scaler/font/shaping memory is separate, and
+evicted glyphs may need rerasterizing. This does not claim a measured process
+RSS or throughput improvement; see [raster lifetime](glyph-atlas.md).
+
 Clean `5a5e79d` now has an independently validated schema-5 600-second local core
 soak plus offscreen Vulkan/llvmpipe smoke: all 28 checks passed, with 50.5 MiB
 peak RSS, 712 KiB quartile RSS growth, zero thread/descriptor growth, and complete

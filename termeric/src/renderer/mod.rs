@@ -1279,6 +1279,10 @@ impl Renderer {
         self.terminal_row_cache.finish_frame();
         log::trace!("Terminal row cache: {:?}", self.row_cache_metrics());
         log::trace!("Glyph atlas: {:?}", self.glyph_cache.atlas_metrics());
+        log::trace!(
+            "Glyph rasterizer: {:?}",
+            self.glyph_cache.rasterizer_metrics()
+        );
         log::trace!("GPU upload buffers: {:?}", self.buffer_stats());
 
         {
@@ -2927,6 +2931,8 @@ pub(crate) fn headless_color_emoji_render_smoke(device: &Device, queue: &Queue) 
     let metrics = glyph_cache.atlas_metrics();
     anyhow::ensure!(metrics.color_pages >= 1 && metrics.max_color_pages == 4);
     anyhow::ensure!(metrics.capacity_bytes == 24 * 1024 * 1024);
+    anyhow::ensure!(glyph_cache.rasterizer_metrics().retained_images == 0);
+    anyhow::ensure!(glyph_cache.rasterizer_metrics().retained_image_bytes == 0);
     Ok(())
 }
 
@@ -3002,6 +3008,7 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
     anyhow::ensure!(pressure_run.glyphs.len() == 1);
     let after_shaped_pressure = glyph_cache.atlas_metrics();
     anyhow::ensure!(after_shaped_pressure.allocation_failures > failures_before_probe);
+    let shaped_rasterizations = glyph_cache.rasterizer_metrics().rasterizations;
     let _ = glyph_cache
         .shape_run_styled("é", glyph_cache::FontStyle::default(), queue)
         .ok_or_else(|| anyhow::anyhow!("deferred shaped glyph should remain renderable"))?;
@@ -3010,11 +3017,13 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
             == after_shaped_pressure.allocation_failures,
         "same-frame shaped pressure rerasterized a known deferred glyph"
     );
+    anyhow::ensure!(glyph_cache.rasterizer_metrics().rasterizations == shaped_rasterizations);
 
     let _ = glyph_cache
         .get_or_insert_styled('ñ', glyph_cache::FontStyle::default(), queue)
         .ok_or_else(|| anyhow::anyhow!("pressure scalar should remain renderable"))?;
     let after_scalar_pressure = glyph_cache.atlas_metrics();
+    let scalar_rasterizations = glyph_cache.rasterizer_metrics().rasterizations;
     anyhow::ensure!(
         after_scalar_pressure.allocation_failures > after_shaped_pressure.allocation_failures
     );
@@ -3026,6 +3035,7 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
             == after_scalar_pressure.allocation_failures,
         "same-frame scalar pressure rerasterized a known deferred glyph"
     );
+    anyhow::ensure!(glyph_cache.rasterizer_metrics().rasterizations == scalar_rasterizations);
 
     let evictions_before_retry = after_scalar_pressure.evictions;
     glyph_cache.begin_frame();
@@ -3059,6 +3069,30 @@ pub(crate) fn headless_glyph_atlas_stress_smoke(device: &Device, queue: &Queue) 
         )
         .ok_or_else(|| anyhow::anyhow!("resized styled glyph should remain renderable"))?;
     anyhow::ensure!(regular.width > 0 && bold.width > 0);
+    let before_hits = glyph_cache.rasterizer_metrics();
+    let again = glyph_cache.get_or_insert_styled('W', glyph_cache::FontStyle::default(), queue);
+    anyhow::ensure!(again == Some(regular));
+    anyhow::ensure!(glyph_cache.rasterizer_metrics() == before_hits);
+    anyhow::ensure!(before_hits.retained_images == 0 && before_hits.retained_image_bytes == 0);
+    let shaped = glyph_cache.shape_run_styled("W", glyph_cache::FontStyle::default(), queue);
+    anyhow::ensure!(shaped.is_some());
+    let before_shaped_hit = glyph_cache.rasterizer_metrics();
+    let shaped_again = glyph_cache.shape_run_styled("W", glyph_cache::FontStyle::default(), queue);
+    anyhow::ensure!(shaped_again.is_some());
+    anyhow::ensure!(glyph_cache.rasterizer_metrics() == before_shaped_hit);
+    glyph_cache.clear(queue);
+    glyph_cache.begin_frame();
+    let shared = glyph_cache
+        .shape_run_styled("W", glyph_cache::FontStyle::default(), queue)
+        .ok_or_else(|| anyhow::anyhow!("cross-path glyph should shape"))?;
+    anyhow::ensure!(shared.glyphs.len() == 1);
+    let before_cross_path = glyph_cache.rasterizer_metrics();
+    let scalar = glyph_cache.get_or_insert_styled('W', glyph_cache::FontStyle::default(), queue);
+    anyhow::ensure!(scalar == Some(shared.glyphs[0].entry));
+    anyhow::ensure!(
+        glyph_cache.rasterizer_metrics() == before_cross_path,
+        "scalar alias rerasterized an existing shaped atlas entry"
+    );
 
     let mut text = TextPipeline::new(device, FORMAT, &glyph_cache)?;
     text.resize(queue, 64, 64);

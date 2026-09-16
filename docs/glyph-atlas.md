@@ -67,6 +67,28 @@ construction.
 
 ## Diagnostics and verification
 
+The production rasterizer now uses Swash's uncached-image path while retaining
+its scaler context. Previously, every uploaded image also stayed in Swash's
+unbounded CPU image map, including rasters whose atlas pages were evicted or
+whose font sizes had been replaced. Scalar and shaped atlas hits still bypass
+rasterization; scalar aliases check the shaped atlas before rasterizing, and
+same-frame deferred pressure hits also remain suppressed. A
+glyph revisited after eviction may now need rerasterizing instead of retrieving
+a duplicate CPU bitmap. This trades that cold-path work for eliminating
+persistent duplicate pixel payloads, without changing atlas limits or pixels.
+
+Trace logging separately reports rasterization calls, retained CPU image count,
+and owned image-buffer capacity. Count and bytes remain zero after scalar,
+shaped, color, pressure, and resize workloads. They do **not** count transient
+images, font data, shaping caches, scaler scratch space, driver allocations, or
+total process RSS. The deterministic Fira Mono fixture compares 282 glyph/size
+keys at 24/48/96 pixels: old cached and new uncached paths produce identical
+content, placement, and pixels; the old map retains 343,899 image-payload bytes
+on the pinned dependency fixture, versus zero in the new rasterizer. This is
+an owned-buffer observation, not an application RSS reduction or throughput
+claim. The earlier ten-minute displayed baseline predates this change; broader
+real-desktop impact and eviction-heavy performance still need measurement.
+
 Trace logging reports mask and color page counts, maximum pages, combined byte
 capacity, occupied pixels, hits, misses, page evictions, and allocation failures.
 Allocation failures are observable even though the replacement glyph prevents
@@ -81,7 +103,9 @@ scalar under exhaustion, verifies same-frame pressure misses do not rerasterize,
 requires both scalar and shaped lookups to retry after frame pins are released,
 changes font size, and submits through the real texture-array shader. It also
 loads Noto Color Emoji, requires a real color entry, compiles/uploads the
-dual-texture path, and verifies the 24 MiB cap. Run it with:
+dual-texture path, and verifies the 24 MiB cap. It additionally checks that CPU
+image retention stays zero and atlas/deferred cache hits do not increase the
+rasterization counter. Run it with:
 
 ```bash
 TERMERIC_GPU_SMOKE=1 WGPU_BACKEND=vulkan cargo test -p termeric \
