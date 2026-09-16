@@ -3939,6 +3939,7 @@ impl App {
         if !focused {
             self.alt_graph_active = false;
             self.terminal_mouse_button = None;
+            self.finish_native_pointer_gesture();
         }
         if self.window_focused == focused {
             return;

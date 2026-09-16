@@ -437,8 +437,9 @@ Use the command above with `--scenario tab-overflow` and a fresh artifact
 directory. Default X11 and the private Sway interaction CI command select it;
 that wiring is not a hosted or X11 execution result. Like `tab-placement`, this
 uses only synthetic local PTYs, without graphics clients or AI providers.
-It does not verify normal-height arrow activation, lost-release/focus-loss drag
-cleanup, edge auto-scrolling, pinned/live-domain native drags, screenshots,
+It does not verify normal-height arrow activation, lost release without a focus
+transition, device unplug, modal interruption, edge auto-scrolling,
+pinned/live-domain native drags, screenshots,
 IME, screen-reader announcements, or real-desktop appearance. Pure geometry
 tests cover disjoint control/tab bounds and center hit targets from sub-row
 windows through normal-height rails at multiple row sizes.
@@ -456,11 +457,18 @@ content viewport. These functional checks must cover private X11 and Wayland
 compositors before promotion; subjective alignment and real-compositor quality
 remain manual. They do not exercise any authenticated provider workflow.
 
-Drag lifecycle coverage must also include releasing outside the application
-or switching away from the window while holding a tab, then returning and
-moving the pointer without a button pressed. Tabs must not continue moving;
-live-domain previews must be reconciled without leaving unacknowledged local
-topology changes. The ordinary drag/selection-change lane does not prove this.
+The overflow lane now switches to an empty private workspace while holding a
+tab, then returns and moves the pointer both after releasing elsewhere and
+while still held. It retains a private virtual keyboard during the gesture so
+short-lived key injection cannot introduce unrelated device-removal focus
+events. Schema-5 `tab-overflow.json` records observed loss/regain counts for
+both cases and exact PTY routing checks. The held-return test fails on the
+previous binary and passes after native gesture cleanup; Sway still delivers
+the hidden release, so that case alone does not prove missing-release handling.
+The X11 adapter is unit tested but native X11 execution remains pending.
+Live-domain preview reconciliation is unit tested separately, not promoted to
+native drag acceptance. Real-desktop and the excluded lifecycle cases above
+remain deferred checks.
 
 Background-image functional promotion likewise requires automated static PNG
 and JPEG cases with each fit and opacity extreme under top and left tabs.

@@ -2,6 +2,122 @@ use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[test]
+fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.mouse_pressed = true;
+    app.scrollbar_dragging = true;
+    app.divider_dragging = Some(DividerDrag {
+        tab_id: 42,
+        target: crate::panes::DividerTarget::Local(7),
+        last_ratio_millis: 500,
+    });
+    app.tab_dragging = Some(TabDrag {
+        tab_id: 42,
+        live: None,
+    });
+    app.mouse_state.handle_press(
+        MouseButton::Left,
+        termeric_core::Point::new(0, 0),
+        ModifiersState::empty(),
+    );
+    app.mouse_state.handle_move(termeric_core::Point::new(0, 5));
+    app.handle_window_focus_change(false);
+    assert!(!app.mouse_pressed);
+    assert!(!app.scrollbar_dragging);
+    assert!(app.divider_dragging.is_none());
+    assert!(app.tab_dragging.is_none());
+    let selection = app.mouse_state.current_selection().unwrap();
+    assert!(!selection.active);
+    assert_eq!(selection.end, termeric_core::Point::new(0, 5));
+    app.mouse_pressed = true;
+    app.tab_dragging = Some(TabDrag {
+        tab_id: 42,
+        live: None,
+    });
+    app.handle_window_focus_change(false);
+    assert!(!app.mouse_pressed);
+    assert!(app.tab_dragging.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn finishing_native_drags_extracts_exact_live_domain_controls_once() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let mut tabs = TabManager::new(
+        80,
+        24,
+        crate::config::ShellConfig::default(),
+        1_000,
+        8 * 1024 * 1024,
+    );
+    for (domain, remote) in [("a", 10), ("b", 99), ("a", 20)] {
+        tabs.new_tab_with_command(
+            "/bin/sh",
+            &["-c".into(), "sleep 2".into()],
+            None,
+            None,
+            None,
+            HashMap::new(),
+        )
+        .unwrap();
+        tabs.active_tab_mut().unwrap().live_domain = Some(crate::tabs::LiveDomainTab {
+            domain_id: domain.into(),
+            tab_id: remote,
+            pane_ids: HashMap::new(),
+        });
+    }
+    let ids: Vec<_> = tabs.iter().map(|(_, tab)| tab.id).collect();
+    app.tabs = Some(tabs);
+    app.divider_dragging = Some(DividerDrag {
+        tab_id: ids[1],
+        target: crate::panes::DividerTarget::Domain(88),
+        last_ratio_millis: 650,
+    });
+    app.tab_dragging = Some(TabDrag {
+        tab_id: ids[2],
+        live: Some(LiveDomainTabDrag {
+            domain_id: "a".into(),
+            remote_tab_id: 20,
+            initial_index: 0,
+        }),
+    });
+    assert_eq!(
+        app.take_native_drag_controls(),
+        vec![
+            LiveDomainControl::ResizeSplit {
+                domain_id: "b".into(),
+                remote_split_id: 88,
+                ratio_millis: 650
+            },
+            LiveDomainControl::MoveTab {
+                domain_id: "a".into(),
+                remote_tab_id: 20,
+                index: 1
+            },
+        ]
+    );
+    assert!(app.take_native_drag_controls().is_empty());
+    app.tab_dragging = Some(TabDrag {
+        tab_id: ids[2],
+        live: Some(LiveDomainTabDrag {
+            domain_id: "a".into(),
+            remote_tab_id: 20,
+            initial_index: 1,
+        }),
+    });
+    assert!(app.take_native_drag_controls().is_empty());
+    app.tab_dragging = Some(TabDrag {
+        tab_id: usize::MAX,
+        live: Some(LiveDomainTabDrag {
+            domain_id: "a".into(),
+            remote_tab_id: 20,
+            initial_index: 0,
+        }),
+    });
+    assert!(app.take_native_drag_controls().is_empty());
+}
+
+#[test]
 fn clipboard_base64_preserves_full_groups_and_every_padding_case() {
     for (input, expected) in [
         ("", ""),

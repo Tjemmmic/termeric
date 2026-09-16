@@ -1920,6 +1920,7 @@ impl App {
             .iter()
             .any(|pending| pending.domain_id() == control.domain_id())
         {
+            self.restore_live_domain_preview(&control);
             return Err("Another change for this live domain is already pending".into());
         }
         let inserted = self.pending_live_domain_controls.insert(control.clone());
@@ -4137,6 +4138,41 @@ mod workspace_control_tests {
             remote_tab_id: 10,
             local_tab_id,
         };
+        // A control can become pending after a drag starts. Focus loss must
+        // restore its rejected preview without canceling the earlier request.
+        app.live_domain_relay_command = Some(crate::domain::DomainRelayCommand::local("/bin/true"));
+        app.live_domain_topologies
+            .insert(snapshot.id.clone(), (&snapshot).into());
+        let dragged_id = app.tabs.as_ref().unwrap().active_tab().unwrap().id;
+        assert!(app.tabs.as_mut().unwrap().move_active_to(0));
+        app.tab_dragging = Some(TabDrag {
+            tab_id: dragged_id,
+            live: Some(LiveDomainTabDrag {
+                domain_id: snapshot.id.clone(),
+                remote_tab_id: 20,
+                initial_index: 1,
+            }),
+        });
+        app.pending_live_domain_controls.insert(close.clone());
+        app.handle_window_focus_change(false);
+        assert!(app.tab_dragging.is_none());
+        assert_eq!(app.pending_live_domain_controls.len(), 1);
+        assert!(app.pending_live_domain_controls.contains(&close));
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|(_, tab)| tab.live_domain_tab_route().unwrap().1)
+                .collect::<Vec<_>>(),
+            vec![10, 20]
+        );
+        assert!(
+            app.toasts
+                .iter()
+                .any(|toast| toast.message.contains("already pending"))
+        );
+        app.pending_live_domain_controls.remove(&close);
         assert_eq!(
             close.request(),
             crate::domain::protocol::Request::CloseTab {

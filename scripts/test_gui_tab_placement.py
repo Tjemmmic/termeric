@@ -139,6 +139,68 @@ class TabPlacementTests(unittest.TestCase):
             mock.call("mousemove", "--window", "fixture", "20", "72"),
             mock.call("mousedown", "1"), mock.call("mouseup", "1")])
 
+    def test_interrupted_drag_retains_keyboard_and_cleans_it_up_on_failure(self):
+        app = mock.Mock(env={"fixture": "private"})
+        app.log_path.read_text.return_value = "Window focus changed: false\nWindow focus changed: true"
+        keyboard = mock.Mock()
+        keyboard.poll.return_value = None
+        harness = mock.Mock(subprocess=gui.subprocess, wtype_command=gui.wtype_command)
+        harness.wait_until.side_effect = lambda _, predicate: self.assertTrue(predicate())
+        with mock.patch.object(gui.subprocess, "Popen", return_value=keyboard) as launch, \
+                mock.patch.object(placement, "_native_interrupted_drag", side_effect=RuntimeError("fixture error")):
+            with self.assertRaisesRegex(RuntimeError, "fixture error"):
+                placement.native_interrupted_drag(harness, app, "wayland", (20, 72), (20, 101), (960, 174))
+            self.assertEqual(launch.call_args.args[0], gui.wtype_command("-s", "30000"))
+            keyboard.terminate.assert_called_once_with()
+            keyboard.wait.assert_called_once_with(timeout=5)
+
+    def test_interrupted_wayland_drag_observes_both_focus_transitions(self):
+        counts = {"Window focus changed: false": 0, "Window focus changed: true": 0}
+        app = mock.Mock(env={})
+        app.log_count.side_effect = lambda name: counts[name]
+        harness = mock.Mock()
+        def switch(command, **_):
+            name = "Window focus changed: false" if command[-1] == "2" else "Window focus changed: true"
+            counts[name] += 1
+        harness.run.side_effect = switch
+        harness.wait_until.side_effect = lambda _, predicate: self.assertTrue(predicate())
+        with mock.patch.object(placement, "VirtualPointer") as factory:
+            result = placement._native_interrupted_drag(harness, app, "wayland", (20, 72), (20, 101), (960, 174))
+            self.assertEqual(result, {"focus_lost": 1, "focus_regained": 1})
+            self.assertEqual(factory.return_value.__enter__.return_value.method_calls, [
+                mock.call.move(20, 72, 960, 174), mock.call.set_left_button(True),
+                mock.call.set_left_button(False), mock.call.move(20, 101, 960, 174)])
+        self.assertEqual(harness.run.call_args_list, [
+            mock.call(["swaymsg", "workspace", "number", "2"], env=app.env),
+            mock.call(["swaymsg", "workspace", "number", "1"], env=app.env)])
+
+    def test_interrupted_x11_drag_restores_window_even_if_release_fails(self):
+        app, harness = mock.Mock(window_id="fixture"), mock.Mock()
+        app.log_count.return_value = 0
+        def fail_release(*args):
+            if args[0] == "mouseup":
+                raise RuntimeError("release error")
+        app.xdo.side_effect = fail_release
+        with self.assertRaisesRegex(RuntimeError, "release error"):
+            placement._native_interrupted_drag(harness, app, "x11", (20, 72), (20, 101), (960, 174))
+        self.assertIn(mock.call("windowmap", "--sync", "fixture"), app.xdo.call_args_list)
+        self.assertEqual(app.activate.call_count, 2)
+
+    def test_held_drag_returns_and_moves_before_releasing(self):
+        app, harness = mock.Mock(env={}), mock.Mock()
+        app.log_count.return_value = 0
+        events = mock.Mock()
+        harness.run.side_effect = lambda command, **_: events.workspace(command[-1])
+        with mock.patch.object(placement, "VirtualPointer") as factory:
+            pointer = factory.return_value.__enter__.return_value
+            events.attach_mock(pointer, "pointer")
+            placement._native_interrupted_drag(harness, app, "wayland", (20, 72), (20, 101),
+                                               (960, 174), release_while_hidden=False)
+        self.assertEqual(events.mock_calls, [
+            mock.call.pointer.move(20, 72, 960, 174), mock.call.pointer.set_left_button(True),
+            mock.call.workspace("2"), mock.call.workspace("1"),
+            mock.call.pointer.move(20, 101, 960, 174), mock.call.pointer.set_left_button(False)])
+
 
 if __name__ == "__main__":
     unittest.main()

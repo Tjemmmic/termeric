@@ -3,6 +3,76 @@
 use super::*;
 
 impl App {
+    /// End native gestures at their last preview, even if no release reaches
+    /// this window. Live-domain changes use the normal acknowledgment/rollback
+    /// path; dropping their drag state alone would orphan a local preview.
+    pub(super) fn finish_native_pointer_gesture(&mut self) {
+        for control in self.take_native_drag_controls() {
+            self.queue_live_domain_control(control);
+        }
+    }
+
+    pub(super) fn take_native_drag_controls(&mut self) -> Vec<LiveDomainControl> {
+        self.mouse_pressed = false;
+        self.scrollbar_dragging = false;
+        let divider_drag = self.divider_dragging.take();
+        let tab_drag = self.tab_dragging.take();
+        let _ = self.mouse_state.handle_release(MouseButton::Left);
+        let mut controls = Vec::new();
+        if let Some(DividerDrag {
+            tab_id,
+            target: crate::panes::DividerTarget::Domain(remote_split_id),
+            last_ratio_millis,
+        }) = divider_drag
+        {
+            let domain_id = self.tabs.as_ref().and_then(|tabs| {
+                tabs.iter().find_map(|(_, tab)| {
+                    (tab.id == tab_id)
+                        .then(|| tab.live_domain_tab_route())
+                        .flatten()
+                        .map(|(domain, _)| domain.to_string())
+                })
+            });
+            if let Some(domain_id) = domain_id {
+                controls.push(LiveDomainControl::ResizeSplit {
+                    domain_id,
+                    remote_split_id,
+                    ratio_millis: last_ratio_millis,
+                });
+            }
+        }
+        if let Some(TabDrag {
+            tab_id,
+            live:
+                Some(LiveDomainTabDrag {
+                    domain_id,
+                    remote_tab_id,
+                    initial_index,
+                }),
+        }) = tab_drag
+        {
+            let index = self.tabs.as_ref().and_then(|tabs| {
+                tabs.iter()
+                    .filter(|(_, tab)| {
+                        tab.live_domain_tab_route()
+                            .is_some_and(|(domain, _)| domain == domain_id)
+                    })
+                    .position(|(_, tab)| tab.id == tab_id)
+                    .and_then(|index| u16::try_from(index).ok())
+            });
+            if let Some(index) = index
+                && index != initial_index
+            {
+                controls.push(LiveDomainControl::MoveTab {
+                    domain_id,
+                    remote_tab_id,
+                    index,
+                });
+            }
+        }
+        controls
+    }
+
     /// Handle mouse input
     pub(super) fn handle_mouse_input(
         &mut self,
@@ -552,66 +622,10 @@ impl App {
                     return;
                 }
                 if button == MouseButton::Left {
-                    self.mouse_pressed = false;
-                    self.scrollbar_dragging = false;
-                    let divider_drag = self.divider_dragging.take();
-                    let tab_drag = self.tab_dragging.take();
-                    if let Some(DividerDrag {
-                        tab_id,
-                        target: crate::panes::DividerTarget::Domain(remote_split_id),
-                        last_ratio_millis,
-                    }) = divider_drag
-                    {
-                        let domain_id = self.tabs.as_ref().and_then(|tabs| {
-                            tabs.iter().find_map(|(_, tab)| {
-                                (tab.id == tab_id)
-                                    .then(|| tab.live_domain_tab_route())
-                                    .flatten()
-                                    .map(|(domain, _)| domain.to_string())
-                            })
-                        });
-                        if let Some(domain_id) = domain_id {
-                            self.queue_live_domain_control(LiveDomainControl::ResizeSplit {
-                                domain_id,
-                                remote_split_id,
-                                ratio_millis: last_ratio_millis,
-                            });
-                        }
-                    }
-                    if let Some(TabDrag {
-                        tab_id,
-                        live:
-                            Some(LiveDomainTabDrag {
-                                domain_id,
-                                remote_tab_id,
-                                initial_index,
-                            }),
-                    }) = tab_drag
-                    {
-                        let index = self.tabs.as_ref().and_then(|tabs| {
-                            tabs.iter()
-                                .filter(|(_, tab)| {
-                                    tab.live_domain_tab_route()
-                                        .is_some_and(|(domain, _)| domain == domain_id)
-                                })
-                                .position(|(_, tab)| tab.id == tab_id)
-                                .and_then(|index| u16::try_from(index).ok())
-                        });
-                        if let Some(index) = index
-                            && index != initial_index
-                        {
-                            self.queue_live_domain_control(LiveDomainControl::MoveTab {
-                                domain_id,
-                                remote_tab_id,
-                                index,
-                            });
-                        }
-                    }
+                    self.finish_native_pointer_gesture();
                 }
-                // Finalize selection on release
-                let _ = self.mouse_state.handle_release(button);
-                // Clear active selection state (but keep the selection visible)
-                // The selection in terminal remains, but mouse_state no longer tracks it
+                // Primary-gesture cleanup finishes native selection while
+                // retaining the selected text. Other buttons do not own it.
             }
         }
 

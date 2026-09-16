@@ -507,8 +507,14 @@ and IME preedit state; real IME and screen-reader acceptance remain separate.
 The drag phase then checks forward/reverse local tab reorder and Ctrl+Tab
 while holding a drag, using stable PTY identities. Unit coverage rejects a
 changed, missing, closed, or closing source and preserves the pinned boundary.
-Native lost-release/window-focus and pinned/live-domain drag acceptance are
-not inferred from these results.
+The private Sway lane additionally observes focus loss/regain while releasing
+elsewhere and while returning still held, then verifies unchanged PTY ordering.
+The held-return case fails on the previous binary and passes with cleanup.
+Unit tests finish native tab/divider/scrollbar/selection state without release,
+extract original live-domain controls once, and restore rejected previews while
+preserving an earlier pending control. No-focus lost-release, device unplug,
+modal interruption, native pinned/live-domain drags, and real-desktop acceptance
+are not inferred from these results. Terminal mouse-reporting policy is unchanged.
 See [overflow coverage and exclusions](gui-acceptance.md#tab-overflow-keyboard-lane).
 
 The headless visual subset is deliberately requested from a fallback adapter

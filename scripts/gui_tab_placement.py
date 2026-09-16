@@ -108,6 +108,82 @@ def native_drag(gui, app, backend, start, end, surface, during_drag=None):
         raise ValueError("unsupported drag fixture backend")
 
 
+def native_interrupted_drag(gui, app, backend, start, end, surface, *, release_while_hidden=True):
+    if backend != "wayland":
+        return _native_interrupted_drag(gui, app, backend, start, end, surface, release_while_hidden=release_while_hidden)
+    # A real desktop retains its keyboard while switching windows. Individual
+    # wtype invocations disconnect theirs, generating unrelated focus losses.
+    keyboard = gui.subprocess.Popen(gui.wtype_command("-s", "30000"), env=app.env,
+                                    stdout=gui.subprocess.DEVNULL, stderr=gui.subprocess.DEVNULL)
+    try:
+        def focused():
+            log = app.log_path.read_text(encoding="utf-8", errors="replace")
+            return (keyboard.poll() is None and log.rfind("Window focus changed: true")
+                    > log.rfind("Window focus changed: false"))
+        gui.wait_until("persistent private keyboard focus", focused)
+        return _native_interrupted_drag(gui, app, backend, start, end, surface, release_while_hidden=release_while_hidden)
+    finally:
+        keyboard.terminate()
+        try:
+            keyboard.wait(timeout=5)
+        except gui.subprocess.TimeoutExpired:
+            keyboard.kill()
+            keyboard.wait(timeout=5)
+
+
+def _native_interrupted_drag(gui, app, backend, start, end, surface, *, release_while_hidden=True):
+    lost = app.log_count("Window focus changed: false")
+    gained = app.log_count("Window focus changed: true")
+
+    def hide():
+        if backend == "wayland":
+            gui.run(["swaymsg", "workspace", "number", "2"], env=app.env)
+        else:
+            app.xdo("windowminimize", "--sync", app.window_id)
+        gui.wait_until("drag window loses focus", lambda: app.log_count("Window focus changed: false") > lost)
+
+    def show():
+        if backend == "wayland":
+            gui.run(["swaymsg", "workspace", "number", "1"], env=app.env)
+        else:
+            app.xdo("windowmap", "--sync", app.window_id)
+            app.activate()
+        gui.wait_until("drag window regains focus", lambda: app.log_count("Window focus changed: true") > gained)
+
+    def interrupt(release, move):
+        try:
+            try:
+                gui.time.sleep(0.12)
+                hide()
+            finally:
+                try:
+                    if release_while_hidden:
+                        release()
+                finally:
+                    show()
+            move()
+            gui.time.sleep(0.12)
+        finally:
+            if not release_while_hidden:
+                release()
+
+    if backend == "wayland":
+        with VirtualPointer(app.env) as pointer:
+            pointer.move(*start, *surface)
+            pointer.set_left_button(True)
+            interrupt(lambda: pointer.set_left_button(False), lambda: pointer.move(*end, *surface))
+    elif backend == "x11":
+        app.activate()
+        app.xdo("mousemove", "--window", app.window_id, *(str(value) for value in start))
+        app.xdo("mousedown", "1")
+        interrupt(lambda: app.xdo("mouseup", "1"),
+                  lambda: app.xdo("mousemove", "--window", app.window_id, *(str(value) for value in end)))
+    else:
+        raise ValueError("unsupported interrupted-drag backend")
+    return {"focus_lost": app.log_count("Window focus changed: false") - lost,
+            "focus_regained": app.log_count("Window focus changed: true") - gained}
+
+
 def run_tab_placement_scenario(gui, binary: Path, run_dir: Path, env: dict,
                               backend: str) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -375,6 +451,13 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
                     during_drag=lambda: chord(("ctrl",), "Tab"))
         select_and_check(0, "DRAG_OWNER_FIRST_174", original)
         select_and_check(1, "DRAG_OWNER_SECOND_174", pids[1])
+        focus_transitions = native_interrupted_drag(gui, app, backend, source, destination, (960, drag_height))
+        select_and_check(0, "DRAG_BLUR_FIRST_174", original)
+        select_and_check(1, "DRAG_BLUR_SECOND_174", pids[1])
+        held_focus_transitions = native_interrupted_drag(
+            gui, app, backend, source, destination, (960, drag_height), release_while_hidden=False)
+        select_and_check(0, "DRAG_HELD_RETURN_FIRST_174", original)
+        select_and_check(1, "DRAG_HELD_RETURN_SECOND_174", pids[1])
         if len(starts()) != count + 3:
             raise gui.AcceptanceError("tab dragging unexpectedly created another PTY")
         app.close_normally(backend)
@@ -382,14 +465,16 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 4, "backend": backend, "original_pids": pids,
+            "schema": 5, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
             "pointer_focus_input_owners": focus_owners, "focus_split_pid": split_pid,
             "drag_input_owners": drag_owners, "drag_surface": [960, drag_height],
+            "drag_focus_transitions": focus_transitions,
+            "drag_held_focus_transitions": held_focus_transitions,
             "drag_points": {"source": source, "destination": destination},
-            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, and drag ownership routing; not screenshot, lost-release, edge-autoscroll, or screen-reader acceptance",
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, and window-focus interruption routing; not screenshot, no-focus lost-release, edge-autoscroll, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

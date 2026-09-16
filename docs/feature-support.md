@@ -74,8 +74,12 @@ This does not promote screen-reader, IME, or unrun platform acceptance.
 Tab drag motion now verifies the original selected/open tab identity before
 reordering, so a held drag cannot move a newly selected tab. The overflow lane
 checks forward/reverse local reorder and held-button Ctrl+Tab using exact PTY
-owners. Lost-release/window-focus cleanup, edge auto-scrolling, and native
-pinned/live-domain drag acceptance remain separate work.
+owners. Window focus loss now finishes native tab/divider/scrollbar/selection
+gestures at their last preview, with one-time live-domain finalization and
+rejected-preview rollback. Private Sway tests observe loss/regain for release
+while hidden and return while still held; the latter reproduces the old bug.
+No-focus lost-release, device unplug, modal interruption, edge auto-scrolling,
+and native pinned/live-domain drag acceptance remain separate work.
 
 ## Terminal compatibility
 
