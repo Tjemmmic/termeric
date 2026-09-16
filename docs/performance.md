@@ -157,7 +157,7 @@ requested 49,056 bytes in 9 calls. The new implementation made zero allocation
 requests across 100 viewport-plus-pointer evaluations for each fixture.
 These are allocation-traffic results, not peak heap, RSS, or latency claims;
 the query string and caller snapshots still have their existing storage costs.
-This deterministic regression is separate from the 72-metric benchmark report:
+This deterministic regression is separate from the 73-metric benchmark report:
 
 ```bash
 cargo test -p termeric --test query_viewport --locked --offline -- --nocapture
@@ -242,7 +242,12 @@ candidate-copy/cleanup regressions that a scale ratio alone would hide. See
 measured memory/CPU tradeoff.
 
 The Unicode picker has separate 25 ms p95 annotation-validation and 75 ms p95
-warm keyword-query rails. Its immutable CLDR binary must remain at or below
+warm keyword-query rails. Its required `latency.unicode_picker_exhaustive_batch`
+row additionally enforces a 250 ms **maximum** for each of five complete batches
+of `letter`, `black`, `arabic letter`, `mathematical symbol`, and `cjk unified`.
+The canonical-name and annotation indexes are warmed before those batches;
+annotation validation retains its separate rail. A single oversized batch,
+missing metric, or attempted skip fails. Its immutable CLDR binary must remain at or below
 768 KiB, and each final deduplicated result set must remain at or below 1 MiB
 of owned candidate/action/command storage. These are broad regression limits;
 the exact source, zero-copy format, normalization, and insertion semantics are
@@ -260,9 +265,15 @@ single-pass classification reduces repeated scans without another retained
 cache; index/result ceilings and latency rails are unchanged. See the
 [Unicode search measurements](unicode-support.md) for the command and locally
 observed results. Run timing checks without simultaneous software-rendered GUI
-workloads: a prior concurrent run exceeded the 250 ms five-query rail, while
-the unchanged standalone run passed. Retain such failed artifacts rather than
-loosening limits or treating a rerun as proof of performance under contention.
+workloads: concurrent runs exceeded the former correctness-suite 250 ms check,
+while unchanged standalone runs passed. Wall-clock enforcement now runs in the
+existing serial release performance lane, with the same five-name-query ceiling
+checked against the worst of five samples. Ordinary tests retain exact catalog
+size, index/result byte ceilings, nonempty results, and the 256-result bound;
+they no longer interpret unrelated test-thread scheduling as search work.
+This separation does not make performance runs immune to host contention.
+Retain failed artifacts rather than loosening limits or treating a rerun as
+proof of performance under contention.
 
 Displayed idle RSS has a deliberately broad 512 MiB p95 rail. The row may be
 explicitly skipped with the whole display probe, but a present oversized sample

@@ -734,6 +734,7 @@ fn ranked_results_owned_bytes(results: &Vec<RankedCharacter>) -> usize {
 pub(crate) struct UnicodePickerBenchmark {
     pub annotation_validation_ms: Vec<f64>,
     pub keyword_query_ms: Vec<f64>,
+    pub exhaustive_batch_ms: Vec<f64>,
     pub annotation_static_bytes: Vec<f64>,
     pub result_owned_bytes: Vec<f64>,
 }
@@ -752,6 +753,15 @@ pub(crate) fn benchmark_unicode_picker() -> UnicodePickerBenchmark {
 
     unicode_name_index();
     annotations::index();
+    // Keep wall-clock enforcement in the serial release benchmark lane, not
+    // the concurrently scheduled correctness suite. Every sample performs the
+    // same five-name-query workload and deterministic result checks.
+    let mut exhaustive_batch_ms = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let started = std::time::Instant::now();
+        check_exhaustive_query_batch();
+        exhaustive_batch_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+    }
     let mut keyword_query_ms = Vec::with_capacity(5);
     let mut result_owned_bytes = Vec::with_capacity(5);
     for (query, expected) in [
@@ -777,8 +787,32 @@ pub(crate) fn benchmark_unicode_picker() -> UnicodePickerBenchmark {
     UnicodePickerBenchmark {
         annotation_validation_ms,
         keyword_query_ms,
+        exhaustive_batch_ms,
         annotation_static_bytes,
         result_owned_bytes,
+    }
+}
+
+#[cfg(test)]
+fn check_exhaustive_query_batch() {
+    for query in [
+        "letter",
+        "black",
+        "arabic letter",
+        "mathematical symbol",
+        "cjk unified",
+    ] {
+        let results = search_unicode_characters(query);
+        assert!(!results.is_empty(), "{query}");
+        assert!(results.len() <= UNICODE_SEARCH_RESULT_LIMIT, "{query}");
+        assert!(
+            ranked_results_owned_bytes(&results) <= UNICODE_RESULT_MEMORY_BUDGET,
+            "{query}"
+        );
+        if query == "letter" {
+            assert_eq!(results.len(), UNICODE_SEARCH_RESULT_LIMIT);
+        }
+        std::hint::black_box(results);
     }
 }
 
@@ -1542,7 +1576,7 @@ const CURATED_CHARACTERS: &[CuratedCharacter] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     // Keep the former scorer as an independent ranking/measurement oracle.
     // This code is test-only and does not add another production search path.
@@ -1766,39 +1800,12 @@ mod tests {
     }
 
     #[test]
-    fn exhaustive_search_has_explicit_result_memory_and_latency_bounds() {
+    fn exhaustive_search_has_explicit_result_and_memory_bounds() {
         let index = unicode_name_index();
         assert_eq!(index.records.len(), 153_626);
         assert!(index.retained_bytes() <= UNICODE_SEARCH_MEMORY_BUDGET);
 
-        let started = Instant::now();
-        for query in [
-            "letter",
-            "black",
-            "arabic letter",
-            "mathematical symbol",
-            "cjk unified",
-        ] {
-            let query_started = Instant::now();
-            let results = search_unicode_characters(query);
-            assert!(!results.is_empty(), "{query}");
-            assert!(results.len() <= UNICODE_SEARCH_RESULT_LIMIT, "{query}");
-            if query == "letter" {
-                assert_eq!(results.len(), UNICODE_SEARCH_RESULT_LIMIT);
-            }
-            eprintln!("unicode-query {query:?} took {:?}", query_started.elapsed());
-        }
-        assert!(
-            started.elapsed() < Duration::from_millis(250),
-            "five warm bounded queries took {:?}",
-            started.elapsed()
-        );
-        eprintln!(
-            "unicode-index records={} retained_bytes={} five_queries={:?}",
-            index.records.len(),
-            index.retained_bytes(),
-            started.elapsed()
-        );
+        check_exhaustive_query_batch();
     }
 
     #[test]

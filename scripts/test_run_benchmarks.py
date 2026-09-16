@@ -64,6 +64,26 @@ def comparable_report(value: float) -> dict:
 
 
 class BenchmarkBudgetTests(unittest.TestCase):
+    def test_exhaustive_unicode_budget_checks_every_sample_and_cannot_skip(self):
+        name = "latency.unicode_picker_exhaustive_batch"
+        contract = load_metric_contract()
+        entries = [row for row in contract["metric"] if row["name"] == name]
+        self.assertEqual(entries, [{"name": name, "unit": "ms", "producer": "application", "samples": 5}])
+        with (Path(__file__).parents[1] / "benchmarks/budgets.toml").open("rb") as stream:
+            budgets = tomllib.load(stream)
+        selected = [row for row in budgets["metric_budget"] if row["metric"] == name]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["statistic"], "max")
+        self.assertEqual(selected[0]["max"], 250.0)
+        for values, passes in [([250.0] * 5, True), ([1.0] * 4 + [251.0], False)]:
+            row = {"name": name, "unit": "ms", "workload": "fixed exhaustive batch", "samples": values,
+                   "statistics": summarize(values)}
+            self.assertEqual(evaluate_budgets({"metrics": [row]}, {"metric_budget": selected})[0]["passed"], passes)
+        self.assertFalse(evaluate_budgets({"metrics": []}, {"metric_budget": selected})[0]["passed"])
+        skipped = {"name": name, "unit": "ms", "workload": "skipped: unavailable", "samples": [], "statistics": {}}
+        self.assertFalse(evaluate_budgets({"metrics": [skipped]}, {"metric_budget": selected})[0]["passed"])
+        self.assertTrue(validate_metric_batch([skipped], {"metric": entries}, "application"))
+
     def test_shaping_pressure_contract_and_deterministic_budgets(self):
         contract = load_metric_contract()
         rows = [row for row in contract["metric"] if ".shaping_pressure." in row["name"]]

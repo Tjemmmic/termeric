@@ -593,6 +593,13 @@ fn release_benchmark_suite() {
 
     let unicode_picker = benchmark_unicode_picker();
     emit_benchmark(
+        "latency.unicode_picker_exhaustive_batch",
+        "ms",
+        unicode_picker.exhaustive_batch_ms,
+        "v1; one warm Unicode 17 / CLDR 48 batch: letter, black, arabic letter, mathematical symbol, cjk unified; bounded results and owned-byte checks",
+        None,
+    );
+    emit_benchmark(
         "latency.unicode_annotation_index_validation",
         "ms",
         unicode_picker.annotation_validation_ms,

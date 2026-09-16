@@ -66,6 +66,12 @@ statistic = "p95"
 max = 25.0
 
 [[metric_budget]]
+name = "five warm Unicode name queries retain their 250 ms ceiling"
+metric = "latency.unicode_picker_exhaustive_batch"
+statistic = "max"
+max = 250.0
+
+[[metric_budget]]
 name = "warm Unicode picker CLDR keyword query rail"
 metric = "latency.unicode_picker_keyword_query"
 statistic = "p95"

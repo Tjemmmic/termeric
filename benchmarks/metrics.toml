@@ -1,6 +1,12 @@
 schema_version = 1
 
 [[metric]]
+name = "latency.unicode_picker_exhaustive_batch"
+unit = "ms"
+producer = "application"
+samples = 5
+
+[[metric]]
 name = "renderer.shaping_pressure.rebuild"
 unit = "ms"
 producer = "application"

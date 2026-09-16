@@ -74,10 +74,15 @@ the fixed-size record table at 160,000 entries, avoiding growth overshoot.
 Queries scan that immutable index without reconstructing Unicode names and keep
 only the best 256 scalar candidates; after curated results are merged and
 deduplicated, no more than 256 executable rows enter the shared palette or its
-accessibility tree. The deterministic query rail covers five broad and
-algorithmic queries under a 250 ms aggregate ceiling (29.2 ms median across five
-isolated runs on the September 2026 development host). It warms the canonical
-index first; first-use CLDR validation, if needed, remains inside the timing.
+accessibility tree. Ordinary tests check catalog size, index/result memory,
+and those result bounds without a wall-clock deadline in the parallel suite.
+The serial release benchmark enforces a 250 ms maximum per five-query batch
+(`letter`, `black`, `arabic letter`, `mathematical symbol`, `cjk unified`) across
+five samples. Both indexes are explicitly warm; CLDR validation retains its
+separate 25 ms p95 rail. Missing or skipped batch evidence fails. The historical
+29.2 ms median across five isolated September 2026 development-host runs used
+the former correctness-test timing, which could include first-use CLDR
+validation; it is not a baseline for the new workload row.
 This measures query completion work, not keyboard dispatch or presentation
 latency, and is a regression guard rather than a universal hardware guarantee.
 Deterministically blocked-worker tests cover coalescing, stale-action refusal,
