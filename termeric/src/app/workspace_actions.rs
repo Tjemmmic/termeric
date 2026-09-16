@@ -4605,7 +4605,6 @@ mod workspace_control_tests {
             remote_split_id: 55,
             ratio_millis: 600,
         };
-        app.pending_live_domain_controls.insert(pending.clone());
         for refresh in [true, false] {
             let source_index = app
                 .tabs
@@ -4631,6 +4630,7 @@ mod workspace_control_tests {
             });
             app.apply_divider_drag_position(60.0, 320.0);
             assert_ne!(app.divider_dragging.unwrap().last_ratio_millis, 500);
+            app.pending_live_domain_controls.insert(pending.clone());
             app.tabs.as_mut().unwrap().next_tab();
             if refresh {
                 app.refresh_focused_terminal_surfaces();
@@ -4654,8 +4654,8 @@ mod workspace_control_tests {
                     .ratio_millis,
                 500
             );
+            app.pending_live_domain_controls.remove(&pending);
         }
-        app.pending_live_domain_controls.remove(&pending);
 
         let mut revision_five = revision_four.clone();
         let moved = revision_five.workspace.tabs[0]

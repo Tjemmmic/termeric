@@ -408,6 +408,145 @@ fn divider_owner_fixture() -> App {
 }
 
 #[cfg(unix)]
+fn domain_divider_pending_fixture() -> App {
+    use crate::domain::model::{DomainSnapshot, LivePane, LivePaneLayout, LiveTab, LiveWorkspace};
+    let snapshot = DomainSnapshot {
+        id: "divider-pending".into(),
+        name: "divider pending fixture".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        workspace: LiveWorkspace {
+            id: "divider-workspace".into(),
+            name: "fixture".into(),
+            active_tab: 10,
+            tabs: vec![LiveTab {
+                id: 10,
+                title: "fixture".into(),
+                user_title: None,
+                pinned: false,
+                focused_pane: 100,
+                layout: LivePaneLayout::Split {
+                    split_id: 44,
+                    direction: crate::domain::model::SplitDirection::Vertical,
+                    ratio_millis: 500,
+                    first: Box::new(LivePaneLayout::Pane { pane: 100 }),
+                    second: Box::new(LivePaneLayout::Pane { pane: 101 }),
+                },
+                panes: [100, 101]
+                    .into_iter()
+                    .map(|id| LivePane {
+                        id,
+                        title: "fixture pane".into(),
+                        working_directory: None,
+                        command: vec!["fixture".into()],
+                        cols: 40,
+                        rows: 24,
+                        closed: false,
+                        attachments: 0,
+                    })
+                    .collect(),
+            }],
+        },
+    };
+    let relay = crate::domain::DomainRelayCommand::local("/bin/true");
+    let mut tabs = TabManager::new(80, 24, ShellConfig::default(), 100, 1024 * 1024);
+    tabs.attach_domain(&snapshot, &relay).unwrap();
+    let tab = tabs.active_tab_mut().unwrap();
+    tab.pane_manager
+        .as_mut()
+        .unwrap()
+        .resize(800.0, 480.0, 10.0, 20.0);
+    let drag = DividerDrag {
+        tab_id: tab.id,
+        target: crate::panes::DividerTarget::Domain(44),
+        last_ratio_millis: 500,
+    };
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.tabs = Some(tabs);
+    app.divider_dragging = Some(drag);
+    app.live_domain_relay_command = Some(relay);
+    app.live_domain_topologies
+        .insert(snapshot.id.clone(), (&snapshot).into());
+    app
+}
+
+#[cfg(unix)]
+#[test]
+fn divider_drag_pending_request_interrupts_preview_and_preserves_earlier_authority() {
+    for refresh in [false, true] {
+        let mut app = domain_divider_pending_fixture();
+        app.apply_divider_drag_position(600.0, 200.0);
+        assert!(app.divider_dragging.unwrap().last_ratio_millis > 500);
+        let routes = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .live_domain
+            .as_ref()
+            .unwrap()
+            .pane_ids
+            .clone();
+        let pending = LiveDomainControl::ResizeSplit {
+            domain_id: "divider-pending".into(),
+            remote_split_id: 44,
+            ratio_millis: 600,
+        };
+        app.pending_live_domain_controls.insert(pending.clone());
+        if refresh {
+            app.refresh_focused_terminal_surfaces();
+        } else {
+            app.apply_divider_drag_position(700.0, 200.0);
+        }
+        assert!(
+            app.divider_dragging.is_none(),
+            "pending request must stop further previews"
+        );
+        let source = app.tabs.as_ref().unwrap().active_tab().unwrap();
+        assert_eq!(
+            source.pane_manager.as_ref().unwrap().get_dividers()[0].ratio_millis,
+            500
+        );
+        assert_eq!(source.live_domain.as_ref().unwrap().pane_ids, routes);
+        assert_eq!(app.pending_live_domain_controls.len(), 1);
+        assert!(app.pending_live_domain_controls.contains(&pending));
+        assert!(app.take_native_drag_controls().is_empty());
+        app.pending_live_domain_controls.remove(&pending);
+        app.apply_divider_drag_position(700.0, 200.0);
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .get_dividers()[0]
+                .ratio_millis,
+            500,
+            "completing an earlier request must not revive the interrupted drag"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn divider_drag_unrelated_domain_requests_do_not_block_preview() {
+    for mut app in [domain_divider_pending_fixture(), divider_owner_fixture()] {
+        let pending = LiveDomainControl::ResizeSplit {
+            domain_id: "unrelated-domain".into(),
+            remote_split_id: 44,
+            ratio_millis: 600,
+        };
+        app.pending_live_domain_controls.insert(pending.clone());
+        app.apply_divider_drag_position(600.0, 200.0);
+        assert!(app.divider_dragging.unwrap().last_ratio_millis > 500);
+        assert!(app.pending_live_domain_controls.contains(&pending));
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn divider_drag_finishes_when_keyboard_changes_tabs() {
     let mut app = divider_owner_fixture();

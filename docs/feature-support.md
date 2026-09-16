@@ -83,6 +83,13 @@ emit a move for a detached/replaced/closed remote owner. Local PTY regressions
 cover these cases plus allowed pinned-group movement and unrelated-domain
 requests; real native live-domain dragging remains unclaimed.
 
+Divider dragging now rechecks pending same-domain requests at focus refresh and
+each resize, not only button-down. An intervening request finishes the gesture
+through existing rollback while preserving that earlier request; clearing it
+does not restart the drag. Synthetic topology/local PTY tests verify cached
+ratios, pane routes, and unrelated-domain isolation without promoting native
+live-domain acceptance.
+
 Normal left clicks now exit F6 chrome focus after hit testing, avoiding swallowed
 typing and preserving the displayed keyboard-scrolled tab target. The native
 overflow lane checks terminal, distant-tab, and split-pane input ownership;

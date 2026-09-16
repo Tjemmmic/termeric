@@ -129,6 +129,15 @@ request. Local native coverage checks a real positive resize followed by a
 held-button tab switch with unchanged source and destination PTY geometry.
 Native live-domain acceptance remains separate.
 
+A same-domain request becoming pending after divider button-down also finishes
+the gesture before another preview can resize panes. Focus-surface refresh and
+the resize boundary both enforce this. The existing control rejection path
+restores the cached authoritative ratio and preserves the earlier request;
+clearing that request does not revive the old drag. Requests for other domains
+do not block local or unrelated live divider previews. Synthetic topology/local
+PTY tests cover rollback, route preservation, and one-time finalization; this
+does not establish real native live-domain dragging.
+
 ## Shared geometry
 
 Rail width is part of the authoritative terminal geometry. The same physical

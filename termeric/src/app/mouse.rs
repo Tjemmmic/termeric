@@ -17,6 +17,12 @@ impl App {
                 tab.id == drag.tab_id
                     && !tab.closed
                     && !tab.is_closing()
+                    && tab.live_domain_tab_route().is_none_or(|(domain, _)| {
+                        !self
+                            .pending_live_domain_controls
+                            .iter()
+                            .any(|pending| pending.domain_id() == domain)
+                    })
                     && tab.pane_manager.as_ref().is_some_and(|panes| {
                         panes
                             .get_dividers()

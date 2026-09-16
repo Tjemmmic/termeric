@@ -528,6 +528,13 @@ The native pointer-only path also exposed an over-broad keyboard-focus gate
 during this change. A dedicated regression now permits new direct pointer
 drags without a keyboard seat while refusing autonomous repeat and preserving
 focus-loss cleanup; normal native pointer reordering must continue to pass.
+Divider pending-request regressions use synthetic domain topology and local
+relay fixtures. Both focus refresh and direct resize must stop a gesture when
+same-domain authority becomes pending, restore the cached ratio, preserve pane
+routes and the earlier request, and refuse later movement after that request is
+cleared. Positive local/other-domain cases remain movable. The existing topology
+interruption test now installs its pending request after a valid initial
+preview, matching a reachable drag lifecycle rather than bypassing admission.
 See [the scenario boundaries](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
 
 The separate `tab-overflow` native scenario forces a twelve-tab left rail and

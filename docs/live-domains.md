@@ -103,6 +103,13 @@ ambiguous when several ancestors share an orientation. The GUI previews the
 exact selected divider, commits its final 100-900 thousandths ratio on release,
 and rolls back to the latest authoritative snapshot if the daemon rejects a
 stale target.
+Divider previews also recheck the one-pending-request rule after button-down.
+A newly pending same-domain request finishes the drag through the existing
+rejection/rollback path before another resize, without removing the earlier
+request or reviving the drag when it clears. Other-domain requests do not block
+it. Synthetic topology and local relay fixtures cover refresh/mutation entry
+points, cached-ratio restoration, stable pane routes, and one-time cleanup;
+native live-domain drag acceptance remains separate.
 Explicit tab titles outrank focused-pane OSC titles in the daemon. Clearing an
 override reveals the newest title already parsed from that pane. A pinned tab
 moves to the end of the domain's pinned prefix; unpinning moves it to the start
