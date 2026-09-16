@@ -100,8 +100,8 @@ class GuiCandidateTests(unittest.TestCase):
         self.assertEqual(proof["candidate_sha"], "a" * 40)
         self.assertEqual(record["binary_sha256"], proof["provenance"]["binary_initial"]["sha256"])
         self.assertIn("GUI acceptance passed", stdout)
-        self.assertEqual(proof["interaction_palette"]["schema"], 2)
-        self.assertEqual(proof["interaction_palette"]["case_count"], 13)
+        self.assertEqual(proof["interaction_palette"]["schema"], 3)
+        self.assertEqual(proof["interaction_palette"]["case_count"], 17)
         self.assertEqual(len(proof["interaction_palette"]["artifacts"]), 2)
 
     def test_missing_or_invalid_palette_artifacts_prevent_candidate_promotion(self):

@@ -1,7 +1,10 @@
 """Native palette editing, fenced against exact local PTY owners."""
 import json
+import math
 
-from scripts.gui_tab_placement import native_keyboard_lifetime
+from scripts.gui_tab_placement import native_click, native_keyboard_lifetime
+
+SURFACE = (1024, 768)
 
 
 CASES = (
@@ -24,7 +27,36 @@ CASES = (
     ("word-backspace-combining", "U+2603 e\u0301", (("ctrl", "BackSpace"),)),
     ("word-backspace-zwj", "U+2603 👩\u200d💻", (("ctrl", "BackSpace"),)),
     ("word-backspace-flag", "U+2603 🇺🇸", (("ctrl", "BackSpace"),)),
+    ("pointer-middle", "U+26X3", (("click", 4.0), ("key", "Delete"), ("text", "0"))),
+    ("pointer-wide", "U+界2603", (("click", 2.25), ("key", "Delete"))),
+    ("pointer-combining", "U+e\u03012603", (("click", 2.75), ("key", "BackSpace"))),
+    ("pointer-scrolled", "x" * 200 + "U+26X3", (("click-tail", 2.0),
+        ("key", "Delete"), ("text", "0"), ("key", "Home"),
+        ("ctrl", "Delete"), ("text", "U"), ("key", "End"))),
 )
+
+
+def palette_pointer_point(geometry, column, *, from_tail=False):
+    """Independent settled scale-1 PaletteLayout math using real PTY cells."""
+    rows, cols, width, height = geometry
+    if min(rows, cols, width, height) <= 0 or not math.isfinite(column) or column < 0:
+        raise ValueError("invalid native palette pointer geometry")
+    cell_width, cell_height = width / cols, height / rows
+    panel_width = min(max(cell_width * 55, 450), SURFACE[0] * 0.65)
+    panel_x = (SURFACE[0] - panel_width) / 2
+    padding = cell_width * 1.5
+    text_x = panel_x + padding + cell_width * 2.2
+    right = panel_x + panel_width - padding - cell_width * 0.8
+    columns = math.floor((right - text_x) / cell_width)
+    if from_tail:
+        column = columns - 1 - column
+    if not 0 <= column < columns:
+        raise ValueError("native palette click is outside the visible query")
+    point = (math.floor(text_x + column * cell_width),
+             math.floor(SURFACE[1] * 0.12 + padding + cell_height))
+    if not (0 <= point[0] < SURFACE[0] and 0 <= point[1] < SURFACE[1]):
+        raise ValueError("native palette click is outside the fixture")
+    return point
 
 
 def apply_edit(app, kind, value):
@@ -60,10 +92,11 @@ def run_palette_input_checks(gui, app, transcript, original_pid):
         gui.wait_until(value, lambda: gui.pids_receiving_token(records(), value.encode()) == {owner})
 
     report = {
-        "schema": 2, "backend": "wayland", "cases": [],
+        "schema": 3, "backend": "wayland", "cases": [],
         "coverage": "private Sway native query editing and exact local-pane bytes; not native IME, screen-reader, or visual acceptance",
     }
     try:
+        app.renderer_resize("wayland", *SURFACE)
         with native_keyboard_lifetime(gui, app, "wayland", duration_ms=180000):
             old = started()
             app.wayland_chord(("alt", "shift"), "Right")
@@ -85,16 +118,31 @@ def run_palette_input_checks(gui, app, transcript, original_pid):
                 token(f"PALETTE_BEGIN_{name}", owner)
                 before = gui.input_streams(records())
                 lost = app.log_count("Window focus changed: false")
+
+                def click(column, from_tail=False):
+                    # The query click uses settled geometry, not a guessed
+                    # intermediate animation position or host font name.
+                    gui.time.sleep(0.2)
+                    geometry = gui.latest_terminal_geometry(records(), owner)
+                    point = palette_pointer_point(geometry, column, from_tail=from_tail)
+                    native_click(gui, app, "wayland", point, SURFACE)
+
                 app.wayland_chord(("ctrl", "shift"), "p")
                 app.wayland_type("junk unicode")
-                app.wayland_chord((), "Home")
+                if name.startswith("pointer-"):
+                    click(0)
+                else:
+                    app.wayland_chord((), "Home")
                 app.wayland_chord(("ctrl",), "Delete")
                 app.wayland_chord((), "Delete")
                 app.wayland_chord((), "End")
                 app.wayland_chord((), "Return")
                 app.wayland_type(query)
                 for kind, value in edits:
-                    apply_edit(app, kind, value)
+                    if kind in ("click", "click-tail"):
+                        click(value, kind == "click-tail")
+                    else:
+                        apply_edit(app, kind, value)
                 app.wayland_chord((), "Return")
                 fences = {pid: f"PALETTE_END_{name}_{pid}".encode() for pid in (owner, other)}
                 # Each pane's post-selection fence drains fragmented writes

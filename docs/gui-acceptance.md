@@ -103,12 +103,16 @@ real PTY transcript and application/compositor logs. This proves the
 private-compositor technical path, not the
 permissions or presentation policy of a user's desktop.
 
-The Wayland interaction lane now requires thirteen palette query-editing cases,
-recorded in schema-2 `interaction/palette-input.json`. Native Ctrl+Delete repairs
+The Wayland interaction lane now requires seventeen palette query-editing cases,
+recorded in schema-3 `interaction/palette-input.json`. Native Ctrl+Delete repairs
 a command palette filter to open the Unicode picker, then cases exercise
 Home/End, Left/Right, middle insertion/Delete, and Backspace over combining,
 ZWJ, and flag graphemes. Six additional cases exercise Ctrl+Left/Right,
 Ctrl+Delete, and Ctrl+Backspace over combining, ZWJ, and flag sequences.
+Four pointer cases exercise middle insertion, wide and combining graphemes,
+and a horizontally scrolled query. These also require clicking the command
+filter before editing it. Click coordinates use observed PTY cell metrics and
+settled palette geometry on the private 1024×768 surface.
 Every case must insert exactly one U+2603 snowman into its selected pane, with
 no query text, editing escapes, or duplicate bytes in either pane. The cases
 alternate between two real fixture PTYs, join fragmented reads, and fence each
@@ -119,7 +123,7 @@ input afterward. Checker tests reject wrong owners, wrong scalars, missing
 fences, leaked keys, and duplicates. This is native keyboard/PTY evidence, not
 IME composition, screen-reader, query-viewport pixels, or real-desktop evidence.
 
-Clean local commit `2f7399d` passed this expanded private-Sway interaction lane
+Historical clean local commit `2f7399d` passed the thirteen-case private-Sway lane
 with AMD/radeonsi OpenGL (`software=false` in the renderer diagnostics) and all
 three renderer-recovery injections enabled.
 `/tmp/termeric-native-word-2f7399d/results.json` records candidate eligibility,
@@ -281,7 +285,7 @@ debugging runs retain schema 3 and may use dirty source. A failure before any
 scenario result is available retains provenance without fabricating results.
 
 For Wayland `interaction`, candidate eligibility additionally requires the
-thirteen palette cases to be independently reconstructed from
+seventeen palette cases to be independently reconstructed from
 `interaction/pty-transcript.jsonl`. The verifier requires exactly the ordered
 case set, two started alternating owners, unique ordered begin/end markers,
 exact U+2603 insertion plus per-owner fences, zero reported unrelated focus
@@ -291,8 +295,9 @@ and `interaction/palette-input.json` (at most 64 KiB) with lengths and SHA-256
 digests in `candidate.interaction_palette`. Missing, changed-during-read,
 non-regular, symlinked, malformed, or inconsistent artifacts fail publication
 and retain a diagnostic in `interaction_palette_error`.
-The embedded palette proof and sidecar both use schema 2; schema-1 seven-case
-records remain historical and cannot satisfy the expanded word-edit contract.
+The embedded palette proof and sidecar both use schema 3; schema-1 seven-case
+and schema-2 thirteen-case records remain historical and cannot satisfy the
+expanded pointer-edit contract.
 
 Re-check those two seals and the palette semantics offline:
 

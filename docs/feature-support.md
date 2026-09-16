@@ -364,21 +364,21 @@ Local dispatch and blocked-worker regressions cover these bindings, but
 real-desktop Ctrl word-edit acceptance is deferred. Primary query clicks place the caret at
 the nearest visible whole-grapheme boundary using shared animated/scrolled
 geometry; busy domain filters stay read-only. Geometry and model/worker tests
-cover pointer placement, but native pointer/IME acceptance is deferred.
+cover pointer placement; native domain/search pointer and IME acceptance is deferred.
 Cursor-only
 edits preserve selection and pending Unicode searches, and busy domain stages
 remain read-only. Geometry, model, app routing, IME insertion, and semantic caret
 tests cover this behavior. The private-Sway interaction lane additionally
-requires thirteen real-keyboard query-editing cases (seven unmodified and six
-Ctrl word-edit cases) with exact, fenced Unicode
+requires seventeen native query-editing cases (seven unmodified, six
+Ctrl word-edit, and four command/Unicode pointer cases) with exact, fenced Unicode
 insertion into alternating local PTY owners. Schema-5 clean-candidate GUI records
 independently reconstruct these cases from the PTY transcript and seal it plus
-the schema-2 sidecar; an offline checker rejects changed artifacts, historical
-seven-case sidecars, and older unsealed records. This is a palette-specific
+the schema-3 sidecar; an offline checker rejects changed artifacts, historical
+seven/thirteen-case sidecars, and older unsealed records. This is a palette-specific
 evidence check, not a validator for every GUI scenario. Native IME, visual clipping,
 screen-reader, and real-desktop acceptance remain deferred
 (see [input contract](accessibility-and-input.md)).
-Clean local `2f7399d` passes the expanded private-Sway lane and independent
+Historical clean local `2f7399d` passed the private-Sway lane and independent
 thirteen-case reconstruction, providing native command/Unicode word-edit
 delivery evidence without promoting domain/search, pointer, or native IME
 acceptance (see [native GUI evidence](gui-acceptance.md)).

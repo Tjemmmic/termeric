@@ -101,26 +101,28 @@ uses the same animated input rectangle, cell widths, and horizontally scrolled
 text range as painting; blank padding selects the visible edge, not hidden text.
 Caret placement preserves results and pending worker searches, and busy domain
 stages reject it. Primary palette clicks clear stale IME preedit. Geometry and
-model/worker regressions cover placement; native pointer/IME acceptance remains
-deferred. Drag/Shift-selection and semantic SetTextSelection remain
+model/worker regressions cover placement; the native pointer lane below covers
+command/Unicode queries only. Native IME acceptance remains deferred.
+Drag/Shift-selection and semantic SetTextSelection remain
 unimplemented.
 
-The private-Sway interaction lane now requires thirteen real-keyboard palette
+The private-Sway interaction lane now requires seventeen native palette
 editing cases and exact Unicode insertion, alternating between two real local
 PTY owners. It requires post-insertion fences, no modal-query leakage or
 duplicate insertion, no unrelated focus loss, and restoration of the original
 pane. Its `palette-input.json` sidecar records exact per-owner expected/actual
-bytes. The schema-2 sidecar adds six Ctrl word-edit cases to the seven
+bytes. The schema-3 sidecar adds six Ctrl word-edit cases to the seven
 unmodified-edit cases and requires command-palette Ctrl+Delete during setup.
-This lane does not test pointer caret placement.
+Four further cases require pointer caret placement in command and Unicode
+queries: middle insertion, wide/combining graphemes, and horizontal scrolling.
 It complements the model/geometry tests; it does not test native IME
 composition, visual clipping, Orca, or real-desktop policy. See the
 [native GUI contract](gui-acceptance.md).
 
-Current strict GUI publication independently reconstructs these thirteen cases
+Current strict GUI publication independently reconstructs these seventeen cases
 from the transcript and seals both files. The offline palette evidence checker
 repeats that reconstruction and verifies both hashes, so missing/changed
-artifacts or historical seven-case schema-1 sidecars cannot stand in for the
+artifacts or historical schema-1/schema-2 sidecars cannot stand in for the
 current acceptance contract.
 
 Native color fonts use the separate bounded RGBA glyph atlas described in

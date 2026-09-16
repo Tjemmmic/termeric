@@ -13,7 +13,7 @@ from scripts.gui_palette_evidence import CASE_NAMES, collect_palette_evidence, r
 
 def fixture():
     records = [{"event": "started", "pid": pid} for pid in (7, 8)]
-    report = {"schema": 2, "backend": "wayland", "cases": []}
+    report = {"schema": 3, "backend": "wayland", "cases": []}
 
     def append(pid, data):
         # Every byte is a separate input record, including UTF-8 and fences.
@@ -46,7 +46,8 @@ def write_fixture(root):
 class PaletteEvidenceTests(unittest.TestCase):
     def test_old_or_incomplete_word_edit_coverage_cannot_be_promoted(self):
         report, records = fixture()
-        for schema, cases in [(1, report["cases"]), (2, report["cases"][:7])]:
+        for schema, cases in [(1, report["cases"]), (2, report["cases"]),
+                              (3, report["cases"][:7]), (3, report["cases"][:13])]:
             with self.assertRaises(ValueError):
                 reconstruct({**report, "schema": schema, "cases": cases}, records)
 

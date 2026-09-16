@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, call
 
 from scripts.gui_acceptance import input_streams
-from scripts.gui_palette_input import CASES, apply_edit, verify_palette_delivery
+from scripts.gui_palette_input import CASES, apply_edit, palette_pointer_point, verify_palette_delivery
 
 
 class PaletteInputTests(unittest.TestCase):
@@ -40,8 +40,21 @@ class PaletteInputTests(unittest.TestCase):
             "combining-backspace", "zwj-backspace", "flag-backspace",
             "word-left", "word-right", "word-delete", "word-backspace-combining",
             "word-backspace-zwj", "word-backspace-flag",
+            "pointer-middle", "pointer-wide", "pointer-combining", "pointer-scrolled",
         ])
-        self.assertTrue(all(query.startswith("U+") and edits for _, query, edits in CASES))
+        self.assertTrue(all("U+" in query and edits for _, query, edits in CASES))
+
+    def test_pointer_targets_use_real_cell_metrics_and_scrolled_caret(self):
+        geometry = (42, 126, 1008, 714)  # 8x17 physical-pixel cells
+        self.assertEqual(palette_pointer_point(geometry, 0), (316, 121))
+        self.assertEqual(palette_pointer_point(geometry, 4), (348, 121))
+        self.assertEqual(palette_pointer_point(geometry, 2.25), (334, 121))
+        self.assertEqual(palette_pointer_point(geometry, 2.75), (338, 121))
+        self.assertEqual(palette_pointer_point(geometry, 2, from_tail=True), (692, 121))
+        for shape, column in [((0, 126, 1008, 714), 0), (geometry, -1),
+                              (geometry, float("nan")), (geometry, 1000)]:
+            with self.assertRaises(ValueError):
+                palette_pointer_point(shape, column)
 
     def test_ctrl_edits_use_native_modifiers_not_typed_escape_sequences(self):
         app = Mock()
