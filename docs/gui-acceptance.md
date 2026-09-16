@@ -119,6 +119,14 @@ input afterward. Checker tests reject wrong owners, wrong scalars, missing
 fences, leaked keys, and duplicates. This is native keyboard/PTY evidence, not
 IME composition, screen-reader, query-viewport pixels, or real-desktop evidence.
 
+Clean local commit `2f7399d` passed this expanded private-Sway interaction lane
+with GL software rendering and all three renderer-recovery injections enabled.
+`/tmp/termeric-native-word-2f7399d/results.json` records candidate eligibility,
+the schema-2 thirteen-case palette proof, and both artifact seals. Independent
+offline reconstruction passed after the run. This supplies native Ctrl word-edit
+delivery evidence for the command/Unicode palette path; it does not promote
+domain/search editing, pointer placement, native IME, or vendor-GPU acceptance.
+
 The same Wayland interaction scenario now records six held-button mouse cases
 in `interaction/mouse-ownership.json`: ordinary local-tab/local-pane drags,
 switch-before-release, and switch-before-motion. Ordinary drags require an exact

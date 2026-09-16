@@ -378,6 +378,10 @@ seven-case sidecars, and older unsealed records. This is a palette-specific
 evidence check, not a validator for every GUI scenario. Native IME, visual clipping,
 screen-reader, and real-desktop acceptance remain deferred
 (see [input contract](accessibility-and-input.md)).
+Clean local `2f7399d` passes the expanded private-Sway lane and independent
+thirteen-case reconstruction, providing native command/Unicode word-edit
+delivery evidence without promoting domain/search, pointer, or native IME
+acceptance (see [native GUI evidence](gui-acceptance.md)).
 
 Active terminal search shares whole-grapheme horizontal scrolling between its
 painted query/caret and IME candidate/preedit geometry, including rail/chrome
