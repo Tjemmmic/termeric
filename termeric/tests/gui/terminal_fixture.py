@@ -488,8 +488,11 @@ def main() -> int:
                 emit(b"\x1b[?1000h\x1b[?1006h\x1b[?1004h\x1b[?2004h")
                 write_record(args.transcript, "modes_enabled")
             if b"\x1bOR" in data:  # F3: restore ordinary selection input.
-                emit(b"\x1b[?1000l\x1b[?1006l\x1b[?1004l\x1b[?2004l")
+                emit(b"\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[?2004l")
                 write_record(args.transcript, "modes_disabled")
+            if b"\x1b[18~" in data:  # F7: isolated held-button mouse routing.
+                emit(b"\x1b[?1002h\x1b[?1006h")
+                write_record(args.transcript, "drag_modes_enabled")
             if b"\x1bOS" in data:  # F4: exercise native desktop bridges.
                 emit(b"\x07")
                 emit(b"\x1b]777;notify;Termeric;Desktop integration acceptance\x1b\\")
@@ -497,7 +500,7 @@ def main() -> int:
                 emit(b"\x1b]52;c;?\x1b\\")
                 write_record(args.transcript, "desktop_integrations_requested")
     finally:
-        emit(b"\x1b[?1000l\x1b[?1006l\x1b[?1004l\x1b[?2004l")
+        emit(b"\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[?2004l")
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, old_settings)
         write_record(args.transcript, "stopped")
     return 0

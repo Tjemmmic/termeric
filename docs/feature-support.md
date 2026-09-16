@@ -141,8 +141,11 @@ Application mouse reporting also retains the stable terminal that received its
 press. Motion/release and focus refresh cancel stale ownership instead of
 forwarding held-button state to a newly selected tab or pane. Raw-PTY tests
 verify exact destination bytes, closure and no-revival behavior, modifier-safe
-release, and preserved unheld hover; native held-button focus-switch acceptance
-remains deferred.
+release, and preserved unheld hover. The private-Sway interaction lane additionally
+checks six ordinary/interrupted native drags across local tabs and panes, with
+exact PID-scoped SGR reports, post-release input fences, and no unrelated focus
+loss. Its pre-fix negative control detects replacement-tab release leakage.
+X11, live-domain, and real-desktop held-button acceptance remain deferred.
 
 Window occlusion and explicit quick-access hiding now finalize native gestures
 and clear application mouse capture without waiting for a separate focus-loss

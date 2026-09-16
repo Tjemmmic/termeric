@@ -102,6 +102,19 @@ those PTY checks. It records the
 real PTY transcript and application/compositor logs. This proves the
 private-compositor technical path, not the
 permissions or presentation policy of a user's desktop.
+
+The same Wayland interaction scenario now records six held-button mouse cases
+in `interaction/mouse-ownership.json`: ordinary local-tab/local-pane drags,
+switch-before-release, and switch-before-motion. Ordinary drags require an exact
+press/motion/release sequence at the original PTY; interrupted drags must not
+deliver reports to the replacement owner. The oracle joins fragmented reads,
+uses post-release per-owner input fences, and rejects malformed reports,
+missing ordinary-drag events, or unrelated native focus loss. It keeps the
+private keyboard attached during the matrix and verifies the original terminal
+still accepts input after each temporary sibling closes. A pre-fix `5f64bdb`
+negative control fails specifically on replacement-tab release leakage. This
+does not establish X11, live-domain, or real-desktop held-button behavior.
+
 The schema-3 `results.json` binds every run to the tested binary's SHA-256
 digest, UTC time, compositor launcher, scenario outcomes, and exact lost-
 surface, outdated-surface, and device-loss injection flags.

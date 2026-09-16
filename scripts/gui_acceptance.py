@@ -38,6 +38,7 @@ if str(ROOT) not in sys.path:
 from scripts.gui_candidate import GuiCandidate
 from scripts.gui_tab_placement import run_tab_overflow_scenario, run_tab_placement_scenario
 from scripts.gui_background import run_background_scenario
+from scripts.gui_mouse_routing import run_mouse_ownership_checks
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
 BASELINES = ROOT / "termeric" / "tests" / "gui" / "baselines"
@@ -1666,6 +1667,8 @@ def run_wayland_interaction_scenario(
             )
             == {original_pid},
         )
+
+        run_mouse_ownership_checks(sys.modules[__name__], app, transcript, original_pid)
 
         app.wayland_chord(("alt",), "F4")
         try:

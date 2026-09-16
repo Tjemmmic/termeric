@@ -80,10 +80,18 @@ focused split pane and proves ordering and duplicate-focus suppression.
 Additional raw-PTY captures verify tab/pane-switch isolation at the actual
 mouse-report write paths, release-only transitions, closed-source cancellation,
 no revival after focus returns, modifier changes, and ordinary hover reports.
-Native compositor acceptance of held-button tab/pane switching remains deferred.
+The private-Sway interaction lane also exercises six native held-button cases:
+ordinary drags, a focus switch before release, and a focus switch before motion,
+each across local tabs and panes. `interaction/mouse-ownership.json` records the
+exact source/destination PIDs and parsed SGR reports. A persistent virtual
+keyboard and a no-focus-loss assertion prevent accidental cancellation from
+masking the bug; post-release input fences and per-PTY stream assembly prevent
+split reads from hiding leaked reports. The pre-fix `5f64bdb` binary fails the
+replacement-tab release check while the fixed build passes. X11 held-button
+switches, live domains, and real-desktop event policy remain separate acceptance.
 
 Native X11 automation now drives mouse, paste, Vim, less, and tmux through the
-real application window; the private Wayland lane proves launch, first render,
-PTY lifecycle, and orderly close. See
+real application window; the private Wayland interaction lane adds keyboard,
+clipboard/paste, pane routing, and the ownership checks above. See
 [`gui-acceptance.md`](gui-acceptance.md). Real-compositor policy and subjective
 interaction quality remain manual.
