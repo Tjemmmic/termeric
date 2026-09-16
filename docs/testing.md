@@ -523,6 +523,13 @@ lifecycles and overlapping ownership. The native lane separately dismisses
 Settings, Commands, and the session dropdown over an underlying split divider,
 then checks original focused-PTY input and unchanged pane character/pixel sizes.
 Workspace-panel and scrollbar-specific native acceptance remain separate.
+Resize interruption is checked with a held tab, an observed PTY width increase
+and restoration, no unrelated focus loss, and exact original tab/PTY owners.
+Unit tests exercise resize, scale, and direct geometry synchronization without
+a release, preserving selected text and terminal-protocol button state while
+ending native gestures. The cached live-domain preview rollback test exercises
+all three geometry paths with another request still pending. Real monitor-scale
+transitions and native live-domain resizing are not inferred from this evidence.
 No-focus/non-modal lost-release, device unplug,
 native pinned/live-domain drags, and real-desktop acceptance
 are not inferred from these results. Terminal mouse-reporting policy is unchanged.

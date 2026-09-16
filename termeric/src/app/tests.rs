@@ -2,6 +2,47 @@ use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[test]
+fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
+    let changes: [fn(&mut App); 3] = [
+        |app| app.handle_resize(960, 720),
+        |app| app.handle_scale_factor_change(1.5, winit::dpi::PhysicalSize::new(1440, 1080)),
+        |app| app.sync_terminal_geometry(960, 720),
+    ];
+    for change in changes {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.mouse_pressed = true;
+        app.scrollbar_dragging = true;
+        app.tab_dragging = Some(TabDrag {
+            tab_id: 42,
+            live: None,
+        });
+        app.divider_dragging = Some(DividerDrag {
+            tab_id: 42,
+            target: crate::panes::DividerTarget::Local(7),
+            last_ratio_millis: 500,
+        });
+        app.terminal_mouse_button = Some(MouseReportButton::Left);
+        app.mouse_state.handle_press(
+            MouseButton::Left,
+            termeric_core::Point::new(0, 0),
+            ModifiersState::empty(),
+        );
+        app.mouse_state.handle_move(termeric_core::Point::new(0, 5));
+        change(&mut app);
+        assert!(!app.mouse_pressed);
+        assert!(!app.scrollbar_dragging);
+        assert!(app.tab_dragging.is_none());
+        assert!(app.divider_dragging.is_none());
+        let selection = app.mouse_state.current_selection().unwrap();
+        assert!(!selection.active);
+        assert_eq!(selection.end, termeric_core::Point::new(0, 5));
+        assert_eq!(app.terminal_mouse_button, Some(MouseReportButton::Left));
+        change(&mut app);
+        assert!(app.take_native_drag_controls().is_empty());
+    }
+}
+
+#[test]
 fn pointer_panel_ownership_tracks_the_full_open_close_lifecycle() {
     type PanelTransition = fn(&mut App);
     let lifecycles: [(PanelTransition, PanelTransition); 4] = [

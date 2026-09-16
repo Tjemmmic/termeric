@@ -486,6 +486,14 @@ the explicit resized surface rather than the compact fixture's dimensions.
 This checks divider-click priority, not every panel control, scrollbar path,
 subjective hover appearance, or native workspace-panel interaction.
 
+Schema 8 adds width changes from 960 to 1040 and back while holding a tab drag.
+The fixture waits for PTY geometry before moving the pointer using the new
+surface dimensions, rejects any unrelated focus loss, and checks original tab
+order after release. This reproduces the old retained-tab-drag bug. The shared
+geometry-sync finalizer additionally has unit coverage for scale changes and
+live-domain preview rollback; the native lane does not establish physical
+monitor-scale or live-domain divider acceptance.
+
 Background-image functional promotion likewise requires automated static PNG
 and JPEG cases with each fit and opacity extreme under top and left tabs.
 Resize, open search and plugin chrome, split panes, replace the source file,

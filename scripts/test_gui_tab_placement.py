@@ -145,6 +145,18 @@ class TabPlacementTests(unittest.TestCase):
             mock.call("mousemove", "--window", "fixture", "20", "72"),
             mock.call("mousedown", "1"), mock.call("mouseup", "1")])
 
+    def test_wayland_drag_uses_resized_surface_only_after_callback(self):
+        app, harness, events = mock.Mock(env={}), mock.Mock(), mock.Mock()
+        with mock.patch.object(placement, "VirtualPointer") as factory:
+            pointer = factory.return_value.__enter__.return_value
+            events.attach_mock(pointer, "pointer")
+            placement.native_drag(harness, app, "wayland", (20, 72), (20, 101), (960, 174),
+                                  events.resize, end_surface=(1040, 174))
+        self.assertEqual(events.mock_calls, [
+            mock.call.pointer.move(20, 72, 960, 174), mock.call.pointer.set_left_button(True),
+            mock.call.resize(), mock.call.pointer.move(20, 101, 1040, 174),
+            mock.call.pointer.set_left_button(False)])
+
     def test_interrupted_drag_retains_keyboard_and_cleans_it_up_on_failure(self):
         app = mock.Mock(env={"fixture": "private"})
         app.log_path.read_text.return_value = "Window focus changed: false\nWindow focus changed: true"

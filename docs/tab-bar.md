@@ -44,8 +44,9 @@ their separate control rows.
 Tab dragging remains bound to the tab selected at button-down. Motion cannot
 reorder a different tab after a keyboard selection change or source closure;
 the original open tab must still be selected. Returning to it while holding
-the button permits its drag to continue until release, window focus loss, or
-modal takeover. These interruptions finish tab/divider/scrollbar and native selection gestures at
+the button permits its drag to continue until release, window focus loss,
+modal takeover, or terminal-geometry synchronization. These interruptions
+finish tab/divider/scrollbar and native selection gestures at
 their last preview; returning while still holding the button cannot resume them.
 Pinned boundaries and the existing live-domain preview/acknowledgment rules
 are retained. Native overflow tests check forward/reverse local reordering and
@@ -53,7 +54,7 @@ held-button Ctrl+Tab isolation using exact PTY identities. Private Sway also
 checks release while hidden and return while still held, with observed focus
 transitions. Live-domain finalization extracts each control once and restores
 rejected previews, including when another control is pending. Lost release
-without a focus transition or modal takeover, device unplug, edge
+without a focus transition, modal takeover, or geometry change, device unplug, edge
 auto-scrolling, and native pinned/live-domain drag acceptance remain separate.
 
 Modal takeover is reconciled before native/user-event dispatch, before animation
@@ -70,6 +71,14 @@ changing pane focus. Divider hover cannot suppress panel hover, and the global
 Settings button still switches directly from another panel. The overflow lane
 checks outside-divider dismissal for Settings, Commands, and the session dropdown
 with unchanged pane geometry and exact focused-PTY input ownership.
+
+Window resize, display-scale changes, and font/configuration paths share native
+gesture finalization in terminal-geometry synchronization. Tab drags cannot
+resume against changed hit targets, and live-domain divider previews are sent
+through the normal acknowledgment/rollback path rather than silently discarded.
+The native overflow lane holds a tab through a width change, rejects unrelated
+focus loss, then verifies unchanged tab order and restored PTY width. Physical
+monitor-scale transitions and native live-domain resizing remain separate checks.
 
 ## Shared geometry
 

@@ -80,7 +80,7 @@ def native_click(gui, app, backend, point, surface=(960, 128)):
         raise ValueError("compact pointer fixture requires X11 or private Sway")
 
 
-def native_drag(gui, app, backend, start, end, surface, during_drag=None):
+def native_drag(gui, app, backend, start, end, surface, during_drag=None, *, end_surface=None):
     if backend == "wayland":
         with VirtualPointer(app.env) as pointer:
             pointer.move(*start, *surface)
@@ -89,7 +89,7 @@ def native_drag(gui, app, backend, start, end, surface, during_drag=None):
                 gui.time.sleep(0.12)
                 if during_drag is not None:
                     during_drag()
-                pointer.move(*end, *surface)
+                pointer.move(*end, *(end_surface or surface))
                 gui.time.sleep(0.12)
             finally:
                 pointer.set_left_button(False)
@@ -482,6 +482,22 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
                 raise gui.AcceptanceError("modal drag query leaked into a PTY")
         select_and_check(0, "DRAG_MODAL_FIRST_174", original)
         select_and_check(1, "DRAG_MODAL_SECOND_174", pids[1])
+        with native_keyboard_lifetime(gui, app, backend):
+            lost_before_resize = app.log_count("Window focus changed: false")
+            old_width = gui.latest_terminal_geometry(gui.read_records(transcript), original)[2]
+            def resize_during_drag():
+                app.renderer_resize(backend, 1040, drag_height)
+                gui.wait_until("held drag PTY resize", lambda: gui.latest_terminal_geometry(
+                    gui.read_records(transcript), original)[2] > old_width)
+            native_drag(gui, app, backend, source, destination, (960, drag_height),
+                        during_drag=resize_during_drag, end_surface=(1040, drag_height))
+            if app.log_count("Window focus changed: false") != lost_before_resize:
+                raise gui.AcceptanceError("resize drag was interrupted by unrelated focus loss")
+            app.renderer_resize(backend, 960, drag_height)
+            gui.wait_until("held drag geometry restored", lambda: gui.latest_terminal_geometry(
+                gui.read_records(transcript), original)[2] == old_width)
+        select_and_check(0, "DRAG_RESIZE_FIRST_174", original)
+        select_and_check(1, "DRAG_RESIZE_SECOND_174", pids[1])
         # Keep the original split active. A click outside an open panel, but
         # directly on its background divider, must dismiss the panel rather
         # than begin resizing. Only the existing focused PTY receives typing.
@@ -512,7 +528,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 7, "backend": backend, "original_pids": pids,
+            "schema": 8, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
@@ -521,11 +537,13 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             "drag_focus_transitions": focus_transitions,
             "drag_held_focus_transitions": held_focus_transitions,
             "modal_drag_focus_losses": 0,
+            "resize_drag_focus_losses": 0,
+            "resize_drag_widths": [960, 1040, 960],
             "panel_dismiss_input_owners": panel_owners,
             "panel_background_divider_point": [590, 680],
             "panel_geometry": panel_geometry,
             "drag_points": {"source": source, "destination": destination},
-            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus and palette interruption, panel outside-divider dismissal routing; not screenshot, no-focus/non-modal lost-release, edge-autoscroll, or screen-reader acceptance",
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal routing; not screenshot, arbitrary lost-release, edge-autoscroll, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

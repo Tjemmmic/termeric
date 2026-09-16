@@ -1874,11 +1874,6 @@ impl App {
 
     /// Handle window resize
     fn handle_resize(&mut self, width: u32, height: u32) {
-        // An in-flight divider drag would leave stale hit-test rects after
-        // the geometry changes — cancel it so the next click starts fresh.
-        self.divider_dragging = None;
-        // Same idea for the scrollbar drag (the scrollbar extents move).
-        self.scrollbar_dragging = false;
         // Resize renderer
         if let Some(renderer) = &mut self.renderer {
             renderer.resize(width, height);
@@ -1902,6 +1897,11 @@ impl App {
     /// runs even when rows/columns are unchanged so scale/font pixel changes
     /// reach the kernel; Tab and Pane deduplicate exact four-field repeats.
     fn sync_terminal_geometry(&mut self, width: u32, height: u32) {
+        // Every geometry entry point (resize, scale, font/configuration, and
+        // topology) invalidates native drag coordinates. Finalize the last
+        // preview through the normal domain acknowledgment/rollback path
+        // instead of silently dropping a live-domain divider change.
+        self.finish_native_pointer_gesture();
         let Some(renderer) = &self.renderer else {
             return;
         };

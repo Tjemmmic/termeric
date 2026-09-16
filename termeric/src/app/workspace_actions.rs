@@ -4138,35 +4138,43 @@ mod workspace_control_tests {
             remote_tab_id: 10,
             local_tab_id,
         };
-        // A control can become pending after a drag starts. Focus loss must
+        // A control can become pending after a drag starts. Interruption must
         // restore its rejected preview without canceling the earlier request.
         app.live_domain_relay_command = Some(crate::domain::DomainRelayCommand::local("/bin/true"));
         app.live_domain_topologies
             .insert(snapshot.id.clone(), (&snapshot).into());
         let dragged_id = app.tabs.as_ref().unwrap().active_tab().unwrap().id;
-        assert!(app.tabs.as_mut().unwrap().move_active_to(0));
-        app.tab_dragging = Some(TabDrag {
-            tab_id: dragged_id,
-            live: Some(LiveDomainTabDrag {
-                domain_id: snapshot.id.clone(),
-                remote_tab_id: 20,
-                initial_index: 1,
-            }),
-        });
         app.pending_live_domain_controls.insert(close.clone());
-        app.handle_window_focus_change(false);
-        assert!(app.tab_dragging.is_none());
-        assert_eq!(app.pending_live_domain_controls.len(), 1);
-        assert!(app.pending_live_domain_controls.contains(&close));
-        assert_eq!(
-            app.tabs
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|(_, tab)| tab.live_domain_tab_route().unwrap().1)
-                .collect::<Vec<_>>(),
-            vec![10, 20]
-        );
+        let interruptions: [fn(&mut App); 4] = [
+            |app| app.handle_window_focus_change(false),
+            |app| app.handle_resize(960, 720),
+            |app| app.handle_scale_factor_change(1.5, winit::dpi::PhysicalSize::new(1440, 1080)),
+            |app| app.sync_terminal_geometry(960, 720),
+        ];
+        for interrupt in interruptions {
+            assert!(app.tabs.as_mut().unwrap().move_active_to(0));
+            app.tab_dragging = Some(TabDrag {
+                tab_id: dragged_id,
+                live: Some(LiveDomainTabDrag {
+                    domain_id: snapshot.id.clone(),
+                    remote_tab_id: 20,
+                    initial_index: 1,
+                }),
+            });
+            interrupt(&mut app);
+            assert!(app.tab_dragging.is_none());
+            assert_eq!(app.pending_live_domain_controls.len(), 1);
+            assert!(app.pending_live_domain_controls.contains(&close));
+            assert_eq!(
+                app.tabs
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|(_, tab)| tab.live_domain_tab_route().unwrap().1)
+                    .collect::<Vec<_>>(),
+                vec![10, 20]
+            );
+        }
         assert!(
             app.toasts
                 .iter()

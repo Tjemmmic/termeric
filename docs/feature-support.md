@@ -86,6 +86,12 @@ New presses also respect Settings/Commands/session-panel/dropdown ownership
 before background scrollbar/divider hit tests. The native overflow lane checks
 outside-divider dismissal for Settings, Commands, and the session dropdown;
 workspace-panel and scrollbar-specific native acceptance are not inferred.
+Geometry synchronization now finalizes native gestures across window resize,
+scale, and font/configuration paths, preserving live-domain acknowledgment and
+rollback. The private Sway lane verifies a held-tab width change without focus
+loss or unintended reorder; unit checks cover scale/direct-sync cleanup and
+rejected-preview restoration. Native monitor-scale and live-domain resize
+acceptance remain separate.
 No-focus/non-modal lost-release, device unplug, edge auto-scrolling,
 and native pinned/live-domain drag acceptance remain separate work.
 
