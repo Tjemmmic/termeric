@@ -230,14 +230,14 @@ replace real user-configuration or desktop acceptance.
 
 ### Bash launch and custom-rc handling
 
-Termeric integrates recognized interactive **non-login** Bash launches.
-Commands/scripts, login/POSIX/no-rc modes, debugger/restricted/privileged modes,
+Termeric uses an rc wrapper for recognized interactive **non-login** Bash launches.
+Commands/scripts, POSIX/no-rc modes, debugger/restricted/privileged modes,
 and unknown argument forms keep their exact program, argv, and environment
 without generating an rc file. Presence of `POSIXLY_CORRECT` (even empty), or
 `posix` in effective `SHELLOPTS`, also leaves the launch untouched: these modes
 do not use normal `.bashrc` startup. They report integration unavailable,
-not a successful hook installation. Login-shell integration remains missing;
-login shells themselves continue to run with native startup behavior.
+not a successful hook installation. Recognized login shells use the separate
+[login bootstrap](#bash-login-shell-integration) described below.
 
 The classifier preserves Bash's long-options-before-short-options rule,
 recognized grouped flags, separate `-o`/`-O` values, interactive/stdin mode,
@@ -265,6 +265,40 @@ stdin parameters, first-prompt cwd, and multiline success/failure regions.
 Arbitrary startup-environment/option combinations and older Bash runtime
 versions are not established by these new tests. The separate existing Bash
 prompt-array/version fallback tests remain in place.
+
+### Bash login-shell integration
+
+Recognized interactive `--login`, `-l`, grouped `-il`, and `+l` launches now
+receive OSC 7/133 integration. Bash treats `+l` as a login request, not a way
+to undo `-l`. Command/script, explicit POSIX, no-rc, restricted/privileged,
+and unknown modes retain their original launch; `--noprofile` is supported.
+
+The generated bootstrap uses Bash's POSIX `ENV` startup entry point, then
+restores ordinary Bash mode **before** loading `/etc/profile` and the first
+readable regular user profile in `.bash_profile`, `.bash_login`, `.profile`
+order. These files run at file scope, not inside a helper function. Login
+identity and native `.bash_logout` behavior remain intact. `--noprofile`
+suppresses profile loading, and login `--rcfile` arguments remain natively
+ignored rather than redirecting `.bashrc` startup.
+
+The broad temporary-POSIX approach is also used by
+[kitty](https://raw.githubusercontent.com/kovidgoyal/kitty/master/shell-integration/bash/kitty.bash)
+and [Ghostty](https://raw.githubusercontent.com/ghostty-org/ghostty/main/src/shell-integration/bash/ghostty.bash).
+Termeric keeps its existing prompt/cwd hooks shared between both startup paths.
+Its bootstrap restores `ENV` presence/value, native history defaults/export
+state, and inherited `inherit_errexit` state. Transport metadata is removed
+before profiles run. Parameter indirection keeps generated paths containing
+dollar signs or command-substitution syntax literal. Re-preparing the same
+unconsumed login launch retains one bootstrap and the original `ENV`; manual
+unprepared sourcing does not rerun login startup.
+
+Eighteen isolated Bash 5.3.15 startup comparisons cover profile priority and
+fallback, no-profile mode, logout, file-scope declarations, `ENV`, history,
+inherited errexit behavior, and punctuation-bearing paths. Three
+environment-cleared real-PTY variants require the first cwd report and complete
+multiline success/failure regions. Startup uses the host's standard
+`/etc/profile` layout; custom-compiled system-profile paths, arbitrary rc code,
+older runtimes, and native desktop acceptance are not proven by these cases.
 
 ### Zsh configuration-directory handoff
 

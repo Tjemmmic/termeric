@@ -1,8 +1,10 @@
-//! Eligibility and custom-rc routing for normal interactive, non-login Bash.
+//! Eligibility and custom-rc routing for recognized interactive Bash launches.
 use super::{Context, Path, Result, effective_env, upsert_env};
 
 pub(super) struct InteractiveLaunch {
     rcfile_arg: Option<usize>,
+    pub(super) login: bool,
+    pub(super) no_profile: bool,
 }
 
 pub(super) fn classify(args: &[String]) -> Option<InteractiveLaunch> {
@@ -10,11 +12,18 @@ pub(super) fn classify(args: &[String]) -> Option<InteractiveLaunch> {
     let mut stdin = false;
     let mut short_options = false;
     let mut rcfile_arg = None;
+    let mut login = false;
+    let mut no_profile = false;
     let mut args = args.iter().enumerate();
     while let Some((_, arg)) = args.next() {
         if matches!(arg.as_str(), "-" | "--") {
-            return (interactive && (args.next().is_none() || stdin))
-                .then_some(InteractiveLaunch { rcfile_arg });
+            return (interactive && (args.next().is_none() || stdin)).then_some(
+                InteractiveLaunch {
+                    rcfile_arg,
+                    login,
+                    no_profile,
+                },
+            );
         }
         if arg.starts_with("--") {
             // Bash requires its long options before all short options.
@@ -23,8 +32,10 @@ pub(super) fn classify(args: &[String]) -> Option<InteractiveLaunch> {
             }
             match arg.as_str() {
                 "--rcfile" | "--init-file" => rcfile_arg = Some(args.next()?.0),
-                "--noprofile" | "--noediting" | "--verbose" => {}
-                // Login/POSIX/no-rc modes do not read our generated rc.
+                "--noprofile" => no_profile = true,
+                "--login" => login = true,
+                "--noediting" | "--verbose" => {}
+                // POSIX/no-rc modes do not use our ordinary startup path.
                 // Unknown/debug/restricted modes keep their native launch.
                 _ => return None,
             }
@@ -32,7 +43,11 @@ pub(super) fn classify(args: &[String]) -> Option<InteractiveLaunch> {
         }
         let enabled = arg.starts_with('-');
         let Some(short) = arg.strip_prefix(['-', '+']) else {
-            return (interactive && stdin).then_some(InteractiveLaunch { rcfile_arg });
+            return (interactive && stdin).then_some(InteractiveLaunch {
+                rcfile_arg,
+                login,
+                no_profile,
+            });
         };
         if short.is_empty() {
             return None;
@@ -43,6 +58,8 @@ pub(super) fn classify(args: &[String]) -> Option<InteractiveLaunch> {
             match flag {
                 'i' => interactive = enabled,
                 's' => stdin = enabled,
+                // Both -l and +l request login mode; +l does not undo -l.
+                'l' => login = true,
                 'a' | 'b' | 'f' | 'h' | 'k' | 'm' | 'u' | 'v' | 'x' | 'B' | 'C' | 'E' | 'H'
                 | 'P' | 'T' => {}
                 'o' | 'O' if flags.as_str().is_empty() => {
@@ -93,7 +110,11 @@ pub(super) fn classify(args: &[String]) -> Option<InteractiveLaunch> {
             }
         }
     }
-    interactive.then_some(InteractiveLaunch { rcfile_arg })
+    interactive.then_some(InteractiveLaunch {
+        rcfile_arg,
+        login,
+        no_profile,
+    })
 }
 
 pub(super) fn configure(

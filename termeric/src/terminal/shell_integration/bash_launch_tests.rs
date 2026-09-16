@@ -164,8 +164,6 @@ fn bash_non_rc_launches_are_preserved_without_generating_files() {
         &["login"],
         &["--", "-i"],
         &["--norc"],
-        &["--login"],
-        &["-il"],
         &["--posix"],
         &["--help"],
         &["--version"],
@@ -223,7 +221,7 @@ fn bash_custom_rc_replaces_only_the_last_rc_value() {
             assert_eq!(&launch.args[index], original);
         }
     }
-    assert_eq!(std::fs::read_to_string(&launch.args[3]).unwrap(), BASH_RC);
+    assert_eq!(std::fs::read_to_string(&launch.args[3]).unwrap(), bash_rc());
     assert!(
         launch
             .env

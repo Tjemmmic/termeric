@@ -89,6 +89,22 @@ Real-Bash tests self-skip when unavailable unless
 `TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. See
 [the launch boundary](osc-integration.md#bash-launch-and-custom-rc-handling).
 
+`bash_login_tests` adds routing/re-preparation and unprepared-source guards,
+fifteen native startup comparisons for profile selection/logout/ENV, and three
+more for history/export and inherited `inherit_errexit` state. Generated paths
+containing command-substitution punctuation must remain literal. The baseline
+and bootstrap must produce identical captured startup output and native
+non-PTY diagnostics, without changing user files.
+`bash_login_profiles_preserve_first_cwd_and_multiline_command_regions` adds
+three real-PTY cases for long/grouped/plus login flags and all three user-profile
+fallbacks. Login PTYs clear inherited environment and supply their temporary
+home, configuration, PATH, and history settings before launch preparation;
+the host's standard system profile still runs. First-prompt cwd, non-POSIX login
+identity, private-marker removal, and complete command regions are required.
+Tests require only the local Bash binary and self-skip if absent unless
+`TERMERIC_REQUIRE_SHELL_ACCEPTANCE=1` is set. See
+[the login evidence boundary](osc-integration.md#bash-login-shell-integration).
+
 `fish_launch_tests` checks unchanged command/script, no-config/no-execute,
 utility, and unrecognized launches, plus exact option-value boundaries and
 insertion after user startup commands. Six native startup comparisons cover

@@ -6,7 +6,8 @@ fn report(path: impl AsRef<OsStr>) -> Option<Vec<u8>> {
     let program = super::tests::executable_on_path("bash")?;
     let home = tempfile::tempdir().unwrap();
     let script = format!(
-        "{BASH_RC}\nPWD=$TEST_DIRECTORY\n__termeric_after_prompt\n[[ $LC_ALL == POSIX ]]\n"
+        "{}\nPWD=$TEST_DIRECTORY\n__termeric_after_prompt\n[[ $LC_ALL == POSIX ]]\n",
+        bash_rc()
     );
     let output = Command::new(program)
         .args(["--noprofile", "--norc", "-c", &script])

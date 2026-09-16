@@ -90,9 +90,16 @@ without integration. See [Fish launch handling](osc-integration.md#fish-launch-a
 Bash now supports explicit custom `--rcfile`/`--init-file` paths with native
 last-option file selection and no PATH-search fallback. Routing, reentry,
 seven native startup comparisons, and four PTY variants cover this behavior.
-Login/POSIX/no-rc and unrecognized modes run untouched without integration;
-login-shell integration remains missing. See
+POSIX/no-rc and unrecognized modes run untouched without integration. See
 [Bash launch handling](osc-integration.md#bash-launch-and-custom-rc-handling).
+
+Recognized interactive Bash login launches now use a guarded startup bootstrap
+that restores ordinary Bash mode and environment before user profiles, preserves
+login/logout identity and file-scope declarations, and installs the shared
+OSC 7/133 hooks. Eighteen native startup comparisons and three isolated PTY
+variants pass on Bash 5.3.15; custom system-profile layouts, arbitrary user code,
+and older runtimes remain outside that evidence. See
+[Bash login integration](osc-integration.md#bash-login-shell-integration).
 
 Zsh forwards user `.zshenv`, login `.zprofile`, and `.zshrc` at file scope,
 restoring each effective `ZDOTDIR` before user code and preserving subsequent
