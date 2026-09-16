@@ -75,6 +75,16 @@ other modified editing keys remain consumed without editing; AltGraph never
 becomes a Ctrl word-edit command. Local model and raw-PTY tests cover these
 rules, but native keyboard/IME acceptance remains deferred.
 
+Primary clicks in the search query now position the caret at the nearest visible
+whole-grapheme boundary using the shared painted viewport, including rail/chrome
+offsets, scaling, and horizontal scrolling. Clicking a confirmed query resumes
+editing without clearing results, selection, filter/scope, or pending scan
+progress. Query focus clears stale IME preedit; subsequent typing and commits
+insert at the clicked caret. Inert search-bar space consumes primary presses
+instead of starting selection in the terminal underneath. Buttons retain their
+existing priority and actions. Geometry, model, and raw-PTY tests cover these
+paths; native pointer/IME acceptance and drag selection remain deferred.
+
 Unmodified Left/Right and Home/End now move the palette query caret; Delete
 removes the following grapheme and Backspace removes the preceding one.
 Combining sequences, flags, and ZWJ emoji are edited whole. Typing and accepted
@@ -93,7 +103,7 @@ Caret placement preserves results and pending worker searches, and busy domain
 stages reject it. Primary palette clicks clear stale IME preedit. Geometry and
 model/worker regressions cover placement; native pointer/IME acceptance remains
 deferred. Drag/Shift-selection and semantic SetTextSelection remain
-unimplemented, and terminal-search pointer placement is unchanged.
+unimplemented.
 
 The private-Sway interaction lane now exercises seven real-keyboard palette
 editing cases and exact Unicode insertion, alternating between two real local

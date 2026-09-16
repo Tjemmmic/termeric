@@ -1,6 +1,7 @@
 //! Shared query scroll/caret geometry for painting and native IME positioning.
 
 use super::{PaletteInputViewport, PaletteLayout};
+#[cfg(test)]
 use unicode_segmentation::UnicodeSegmentation;
 
 impl PaletteLayout {
@@ -20,16 +21,8 @@ impl PaletteLayout {
         if !self.input_contains(x, y) {
             return None;
         }
-        let view = self.input_viewport(text, cursor)?;
-        let mut left = view.text_x;
-        for (offset, grapheme) in text[view.text_range.clone()].grapheme_indices(true) {
-            let width = termeric_core::unicode::grapheme_width(grapheme) as f32 * self.cell_width;
-            if x < left + width / 2.0 {
-                return Some(view.text_range.start + offset);
-            }
-            left += width;
-        }
-        Some(view.text_range.end)
+        self.input_viewport(text, cursor)?
+            .cursor_at(text, x, self.cell_width)
     }
 
     /// Keep the caret visible without splitting a grapheme or drawing outside

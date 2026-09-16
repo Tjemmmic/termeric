@@ -595,6 +595,11 @@ impl App {
                                     &info,
                                 );
                                 match click {
+                                    SearchBarClick::Query(cursor) => {
+                                        self.focus_search_query_at(cursor);
+                                        return;
+                                    }
+                                    SearchBarClick::Background => return,
                                     SearchBarClick::ToggleCaseSensitive => {
                                         self.with_search_and_active_grid(|search, grid| {
                                             search.toggle_case_sensitive(grid);

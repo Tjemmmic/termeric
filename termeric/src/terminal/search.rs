@@ -7,6 +7,7 @@ use regex::{Regex, RegexBuilder};
 use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
 use termeric_core::{CellContent, Grid};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Navigation/highlight occurrences retain a fixed recent window. Complete
 /// total counts and matching-row/filter data continue across the whole grid.
@@ -274,6 +275,22 @@ impl Search {
     pub fn confirm(&mut self) {
         self.active = false;
         // Keep matches, current_match, and filter_mode for continued highlighting/filtering
+    }
+
+    /// Re-enter a visible query without resetting its scope, results, or scan.
+    /// The application owns the caret; refuse stale or non-grapheme positions.
+    pub fn resume_input_at(&mut self, cursor: usize) -> bool {
+        if !(self.active || self.has_results() || self.is_searching())
+            || (cursor != self.query.len()
+                && !self
+                    .query
+                    .grapheme_indices(true)
+                    .any(|(byte, _)| byte == cursor))
+        {
+            return false;
+        }
+        self.active = true;
+        true
     }
 
     /// Toggle filter mode (show only matching lines)
@@ -1019,6 +1036,27 @@ mod tests {
     }
 
     #[test]
+    fn resume_query_rejects_invalid_carets_and_preserves_scope_and_filter() {
+        let terminal = termeric_core::Terminal::new(40, 2);
+        let mut search = Search::new();
+        assert!(!search.resume_input_at(0));
+        search.start_in_rows(0, 1);
+        search.toggle_filter();
+        search.set_query("e\u{301}👩\u{200d}💻", terminal.grid());
+        search.confirm();
+        for cursor in [1, 2, 4, usize::MAX] {
+            assert!(!search.resume_input_at(cursor));
+            assert!(!search.is_active());
+        }
+        assert!(search.resume_input_at("e\u{301}".len()));
+        assert_eq!(search.row_scope, Some(0..=1));
+        assert!(search.filter_mode);
+        assert_eq!(search.query(), "e\u{301}👩\u{200d}💻");
+        search.cancel();
+        assert!(!search.resume_input_at(0));
+    }
+
+    #[test]
     fn scoped_search_normalizes_and_clears_its_row_range() {
         let mut search = Search::new();
         search.start_in_rows(8, 3);
@@ -1233,6 +1271,8 @@ mod tests {
             DeleteWord,
         ] {
             cursor = search.edit_query(cursor, edit, terminal.grid()).unwrap();
+            search.confirm();
+            assert!(search.resume_input_at(cursor));
             assert_eq!(format!("{:?}", search.pending_search), progress);
             assert_eq!(search.query(), "needle");
         }
@@ -1253,6 +1293,8 @@ mod tests {
             WordLeft,
         ] {
             cursor = search.edit_query(cursor, edit, terminal.grid()).unwrap();
+            search.confirm();
+            assert!(search.resume_input_at(cursor));
             assert!(!search.is_searching());
             assert_eq!(search.current_match_index(), selected);
             assert_eq!(search.matches, matches);

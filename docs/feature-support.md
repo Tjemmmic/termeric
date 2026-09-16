@@ -391,6 +391,13 @@ cover query edits and IME insertion without child-input leakage. This does not
 claim native keyboard, IME, or visual acceptance
 (see [input contract](accessibility-and-input.md)).
 
+Search-query primary clicks now use the same whole-grapheme pointer mapping as
+palettes. Clicking a confirmed query resumes input without resetting matches,
+selection, scope/filter, or pending scan progress; blank bar space consumes the
+press instead of reaching terminal selection. Shared-geometry, model, and
+raw-PTY tests cover caret placement and resumed IME insertion. Native pointer/IME
+acceptance and drag selection are not claimed.
+
 The configurable Paste shortcut now reaches command, Unicode, domain, and
 terminal-search query fields at their byte caret. Query pastes reject controls,
 multiline text, and over-limit input atomically; higher-priority or read-only

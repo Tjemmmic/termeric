@@ -189,26 +189,43 @@ impl Renderer {
         info: &SearchBarInfo,
     ) -> SearchBarClick {
         let layout = self.search_bar_layout(info, window_width);
-        if !layout.bar.contains(x, y) {
-            return SearchBarClick::None;
-        }
-        for (rect, click) in [
-            (Some(layout.close), SearchBarClick::Close),
-            (layout.next, SearchBarClick::NextMatch),
-            (layout.previous, SearchBarClick::PrevMatch),
-            (Some(layout.regex), SearchBarClick::ToggleRegex),
-            (
-                Some(layout.case_sensitive),
-                SearchBarClick::ToggleCaseSensitive,
-            ),
-            (Some(layout.filter), SearchBarClick::ToggleFilter),
-        ] {
-            if rect.is_some_and(|rect: SearchBarRect| rect.contains(x, y)) {
-                return click;
-            }
-        }
-        SearchBarClick::None
+        search_bar_click(&layout, info, self.cell_width, x, y)
     }
+}
+
+fn search_bar_click(
+    layout: &SearchBarLayout,
+    info: &SearchBarInfo,
+    cell_width: f32,
+    x: f32,
+    y: f32,
+) -> SearchBarClick {
+    if !layout.bar.contains(x, y) {
+        return SearchBarClick::None;
+    }
+    for (rect, click) in [
+        (Some(layout.close), SearchBarClick::Close),
+        (layout.next, SearchBarClick::NextMatch),
+        (layout.previous, SearchBarClick::PrevMatch),
+        (Some(layout.regex), SearchBarClick::ToggleRegex),
+        (
+            Some(layout.case_sensitive),
+            SearchBarClick::ToggleCaseSensitive,
+        ),
+        (Some(layout.filter), SearchBarClick::ToggleFilter),
+    ] {
+        if rect.is_some_and(|rect: SearchBarRect| rect.contains(x, y)) {
+            return click;
+        }
+    }
+    if layout.input.contains(x, y)
+        && let Some(cursor) = layout
+            .input_viewport(info, cell_width)
+            .and_then(|view| view.cursor_at(&info.query, x, cell_width))
+    {
+        return SearchBarClick::Query(cursor);
+    }
+    SearchBarClick::Background
 }
 
 #[cfg(test)]
@@ -230,6 +247,98 @@ mod tests {
             regex_error: None,
             cursor_pos: 6,
             is_active: true,
+        }
+    }
+
+    #[test]
+    fn search_pointer_uses_scrolled_graphemes_and_preserves_control_priority() {
+        let mut info = info();
+        for cell_width in [6.0, 9.5, 24.0] {
+            for width in [100.0, 800.0, 1600.0] {
+                for text in [
+                    "",
+                    "a界e\u{301}👩\u{200d}💻🇺🇸z",
+                    &"a界e\u{301}👩\u{200d}💻".repeat(60),
+                ] {
+                    info.query = text.into();
+                    for cursor in [0, text.len()] {
+                        info.cursor_pos = cursor;
+                        let layout =
+                            SearchBarLayout::calculate(&info, 120.0, width, 55.0, cell_width, 25.0);
+                        assert_eq!(
+                            search_bar_click(&layout, &info, cell_width, 119.0, 60.0),
+                            SearchBarClick::None
+                        );
+                        assert_eq!(
+                            search_bar_click(&layout, &info, cell_width, 121.0, 56.0),
+                            SearchBarClick::Background
+                        );
+                        let Some(view) = layout.input_viewport(&info, cell_width) else {
+                            continue;
+                        };
+                        let mut x = view.text_x;
+                        for (byte, grapheme) in text[view.text_range.clone()].grapheme_indices(true)
+                        {
+                            let width = termeric_core::unicode::grapheme_width(grapheme) as f32
+                                * cell_width;
+                            for (fraction, expected) in
+                                [(0.25, byte), (0.75, byte + grapheme.len())]
+                            {
+                                assert_eq!(
+                                    search_bar_click(
+                                        &layout,
+                                        &info,
+                                        cell_width,
+                                        x + fraction * width,
+                                        view.text_y
+                                    ),
+                                    SearchBarClick::Query(view.text_range.start + expected)
+                                );
+                            }
+                            x += width;
+                        }
+                        assert_eq!(
+                            search_bar_click(
+                                &layout,
+                                &info,
+                                cell_width,
+                                layout.input.x,
+                                view.text_y
+                            ),
+                            SearchBarClick::Query(view.text_range.start)
+                        );
+                        assert_eq!(
+                            search_bar_click(
+                                &layout,
+                                &info,
+                                cell_width,
+                                layout.input.x + layout.input.width - 0.01,
+                                view.text_y
+                            ),
+                            SearchBarClick::Query(view.text_range.end)
+                        );
+                        for (rect, expected) in [
+                            (layout.close, SearchBarClick::Close),
+                            (layout.regex, SearchBarClick::ToggleRegex),
+                            (layout.case_sensitive, SearchBarClick::ToggleCaseSensitive),
+                            (layout.filter, SearchBarClick::ToggleFilter),
+                            (layout.next.unwrap(), SearchBarClick::NextMatch),
+                            (layout.previous.unwrap(), SearchBarClick::PrevMatch),
+                        ] {
+                            assert_eq!(
+                                search_bar_click(
+                                    &layout,
+                                    &info,
+                                    cell_width,
+                                    rect.x + rect.width / 2.0,
+                                    rect.y
+                                ),
+                                expected
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

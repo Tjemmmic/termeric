@@ -130,6 +130,10 @@ pub enum TabBarClick {
 pub enum SearchBarClick {
     /// No element was clicked
     None,
+    /// Inert painted bar space, consumed without reaching the terminal.
+    Background,
+    /// Focus the existing query at a whole-grapheme byte boundary.
+    Query(usize),
     /// Toggle case sensitivity `[Aa]`
     ToggleCaseSensitive,
     /// Toggle regex mode `[.*]`

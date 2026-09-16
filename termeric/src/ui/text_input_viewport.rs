@@ -14,6 +14,23 @@ pub struct TextInputViewport {
 }
 
 impl TextInputViewport {
+    /// Nearest visible whole-grapheme boundary; callers own vertical hit testing.
+    pub fn cursor_at(&self, text: &str, x: f32, cell_width: f32) -> Option<usize> {
+        if !x.is_finite() || !cell_width.is_finite() || cell_width <= 0.0 {
+            return None;
+        }
+        let visible = text.get(self.text_range.clone())?;
+        let mut left = self.text_x;
+        for (offset, grapheme) in visible.grapheme_indices(true) {
+            let width = termeric_core::unicode::grapheme_width(grapheme) as f32 * cell_width;
+            if x < left + width / 2.0 {
+                return Some(self.text_range.start + offset);
+            }
+            left += width;
+        }
+        Some(self.text_range.end)
+    }
+
     pub fn calculate(
         text: &str,
         cursor: usize,
