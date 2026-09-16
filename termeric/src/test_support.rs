@@ -226,6 +226,8 @@ fn linux_headless_gpu_render_smoke_when_requested() {
         .expect("SGR attribute render smoke failed");
     crate::renderer::headless_ligature_render_smoke(&device, &queue)
         .expect("ligature render smoke failed");
+    crate::renderer::headless_palette_input_smoke(&device, &queue)
+        .expect("palette input geometry smoke failed");
     crate::renderer::headless_image_render_smoke(&device, &queue)
         .expect("Kitty graphics render smoke failed");
     crate::renderer::headless_background_render_smoke(&device, &queue)

@@ -183,8 +183,33 @@ impl App {
         }
     }
 
-    /// Keep the native candidate window and Termeric's preedit decoration on
-    /// the exact focused-pane cursor geometry used by the renderer.
+    fn palette_ime_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<crate::ui::command_palette::PaletteInputViewport> {
+        let info = if self.command_palette.is_active() {
+            self.command_palette.build_info()
+        } else if self.unicode_picker.is_active() {
+            self.unicode_picker.build_info()
+        } else {
+            return None;
+        };
+        crate::ui::command_palette::PaletteLayout::calculate(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            info.animation,
+            info.entries.len(),
+        )
+        .input_viewport(&info.input, info.cursor)
+    }
+
+    /// Keep the native candidate window and preedit decoration on the focused
+    /// input's shared geometry, not the terminal cursor behind a palette.
     pub(super) fn ime_preedit_render_info(
         &self,
         panes: &[crate::terminal::container::PaneRenderInfo],
@@ -234,6 +259,35 @@ impl App {
                 x,
                 y,
                 max_width: (row.x + row.width - x).max(layout.char_scale),
+            });
+        }
+        if self.command_palette.is_active() || self.unicode_picker.is_active() {
+            let (width, height) = renderer.window_size();
+            let view = self.palette_ime_viewport(
+                width as f32,
+                height as f32,
+                renderer.cell_width(),
+                renderer.cell_height(),
+            )?;
+            if let Some(window) = &self.window {
+                window.set_ime_cursor_area(
+                    winit::dpi::PhysicalPosition::new(
+                        view.cursor_x.round() as i32,
+                        view.text_y.round() as i32,
+                    ),
+                    winit::dpi::PhysicalSize::new(
+                        renderer.cell_width().ceil().max(1.0) as u32,
+                        renderer.cell_height().ceil().max(1.0) as u32,
+                    ),
+                );
+            }
+            let preedit = self.ime.preedit()?;
+            return Some(crate::renderer::ImePreeditRenderInfo {
+                text: preedit.text.clone(),
+                cursor: preedit.cursor,
+                x: view.cursor_x,
+                y: view.text_y,
+                max_width: view.right - view.cursor_x,
             });
         }
         let terminal = self.active_terminal()?;
@@ -290,6 +344,74 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_ime_geometry_tracks_the_visible_query_without_a_terminal() {
+        for unicode in [false, true] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.command_palette.set_reduced_motion(true);
+            app.unicode_picker.set_reduced_motion(true);
+            let query = "界e\u{301}👩\u{200d}💻".repeat(30);
+            if unicode {
+                app.unicode_picker.open();
+                app.unicode_picker.accessibility_set_filter(&query);
+            } else {
+                app.command_palette.open();
+                app.command_palette.accessibility_set_input(&query);
+            }
+            for (width, cell_width) in [(450.0, 8.0), (800.0, 10.0), (1400.0, 20.0)] {
+                let view = app
+                    .palette_ime_viewport(width, 900.0, cell_width, 24.0)
+                    .unwrap();
+                let info = if unicode {
+                    app.unicode_picker.build_info()
+                } else {
+                    app.command_palette.build_info()
+                };
+                let expected = crate::ui::command_palette::PaletteLayout::calculate(
+                    width,
+                    900.0,
+                    cell_width,
+                    24.0,
+                    info.animation,
+                    info.entries.len(),
+                )
+                .input_viewport(&info.input, info.cursor)
+                .unwrap();
+                assert_eq!(view, expected);
+                assert!(view.text_range.start > 0);
+                assert_eq!(view.text_range.end, query.len());
+                assert!(view.cursor_x + cell_width <= view.right + 0.001);
+            }
+            app.command_palette.close();
+            app.unicode_picker.close();
+            assert!(app.palette_ime_viewport(800.0, 600.0, 10.0, 20.0).is_none());
+            app.unicode_picker.finish_search_for_test();
+        }
+    }
+
+    #[test]
+    fn oversized_ime_commits_obey_palette_query_limits_without_pty_fallback() {
+        for unicode in [false, true] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            if unicode {
+                app.unicode_picker.open();
+            } else {
+                app.command_palette.open();
+            }
+            app.handle_ime_event(Ime::Commit("界".repeat(300)));
+            let info = if unicode {
+                app.unicode_picker.build_info()
+            } else {
+                app.command_palette.build_info()
+            };
+            assert_eq!(info.input, "界".repeat(256));
+            assert_eq!(info.cursor, info.input.len());
+            assert!(app.ime.preedit().is_none());
+            app.unicode_picker.close();
+            app.unicode_picker.finish_search_for_test();
+        }
+    }
 
     #[test]
     fn preedit_cursor_must_be_a_valid_utf8_range() {

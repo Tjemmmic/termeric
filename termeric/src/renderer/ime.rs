@@ -16,10 +16,10 @@ impl Renderer {
             .max_width
             .min((window_width - padding).max(1.0))
             .max(1.0);
-        let text_capacity = (((available_width - padding * 2.0).max(self.cell_width)
-            / self.cell_width)
-            .floor() as usize)
-            .max(1);
+        // A narrow remainder may fit no complete grapheme. Never force a glyph
+        // past the owning field/pane merely to show one character.
+        let text_capacity =
+            ((available_width - padding * 2.0).max(0.0) / self.cell_width).floor() as usize;
         let visible_text = preedit_prefix(&info.text, text_capacity);
         let text_columns = display_columns(visible_text).max(1);
         let natural_width = text_columns as f32 * self.cell_width + padding * 2.0;
@@ -58,6 +58,12 @@ impl Renderer {
             text_y,
             self.ui.palette_text,
             self.cell_width,
+            super::text::TextClip {
+                left: x,
+                top: y,
+                right: x + width,
+                bottom: y + height,
+            },
         );
 
         if let Some((start, end)) = info.cursor

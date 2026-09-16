@@ -1,7 +1,7 @@
 # Modern text input and accessibility
 
 Termeric enables Winit's platform input-method path on every native window.
-`Ime::Preedit` is local UI state: it is drawn beside the focused pane cursor and
+`Ime::Preedit` is local UI state: it is drawn beside the focused input cursor and
 is never sent to a PTY. Only `Ime::Commit` is routed, once, to the current text
 owner (terminal, search, settings filter, command palette, Unicode picker, workspace rename,
 command form, or typed plugin-setting dialog). Changing pane focus, losing
@@ -12,6 +12,23 @@ cursor row/column, and
 scaled cell dimensions used to render the terminal. Long preedit runs are
 clipped only at grapheme boundaries to the space remaining in the focused pane
 and never paint across a pane divider.
+
+Command and Unicode palettes anchor native candidates and preedit to their own
+visible query caret, not the terminal behind the modal. Their shared
+`PaletteLayout` computes a horizontally scrolled, whole-grapheme query viewport;
+rendering uses that same geometry and clips glyph overhangs to the field.
+The staged domain picker uses the query viewport too, but still rejects IME
+composition. All three palette inputs admit at most 256 non-control Unicode
+scalars through typing, IME commits where accepted, or accessibility replacement.
+Typing/commits stop at the limit; oversized semantic replacement is rejected
+atomically. The complete value and byte-accurate cursor remain in the model and
+semantic tree even when only the tail is visible. Narrow preedit space may show
+no complete grapheme instead of painting outside its owner. Automated geometry,
+limit, and routing tests cover these paths. The opt-in software-GPU smoke also
+shapes mixed-script long queries and verifies every generated glyph vertex
+stays inside the shared input clip; native IME and screen-reader
+acceptance remain deferred. Other text surfaces retain their existing candidate
+placement behavior and are not covered by this palette-specific correction.
 
 Native color fonts use the separate bounded RGBA glyph atlas described in
 [Glyph atlas lifetime](glyph-atlas.md). Extended grapheme width remains the

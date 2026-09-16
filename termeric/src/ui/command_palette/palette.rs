@@ -9,6 +9,8 @@ use super::super::animation::OverlayAnimation;
 use super::super::text_input::TextInput;
 use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 
+const MAX_QUERY_CHARACTERS: usize = 256;
+
 /// Source of a registered command
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandSource {
@@ -368,7 +370,7 @@ impl CommandPalette {
     /// applies to dedicated palette workflows so accessibility cannot create
     /// an unbounded or multiline filter that keyboard input could not express.
     pub fn accessibility_set_input(&mut self, value: &str) -> bool {
-        if value.chars().count() > 256 || value.chars().any(char::is_control) {
+        if value.chars().count() > MAX_QUERY_CHARACTERS || value.chars().any(char::is_control) {
             return false;
         }
         self.input.replace(value);
@@ -388,11 +390,15 @@ impl CommandPalette {
     }
 
     /// Handle a character input
-    pub fn handle_char(&mut self, c: char) {
+    pub fn handle_char(&mut self, c: char) -> bool {
+        if c.is_control() || self.input.text().chars().count() >= MAX_QUERY_CHARACTERS {
+            return false;
+        }
         self.input.insert_char(c);
         self.selected = 0;
         self.scroll_offset = 0;
         self.update_entries();
+        true
     }
 
     /// Handle backspace
@@ -1245,6 +1251,27 @@ impl CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_query_bounds_are_identical_for_typed_and_semantic_input() {
+        let mut palette = CommandPalette::new();
+        palette.open();
+        for _ in 0..256 {
+            assert!(palette.handle_char('界'));
+        }
+        let full = palette.build_info();
+        assert!(!palette.handle_char('x'));
+        assert!(!palette.handle_char('\n'));
+        assert!(!palette.handle_char('\u{1b}'));
+        assert!(!palette.accessibility_set_input(&(full.input.clone() + "x")));
+        assert!(!palette.accessibility_set_input("bad\nquery"));
+        assert_eq!(palette.build_info().input, full.input);
+        assert_eq!(palette.build_info().cursor, full.cursor);
+        palette.handle_backspace();
+        assert!(palette.handle_char('🫚'));
+        assert_eq!(palette.build_info().input.chars().count(), 256);
+        assert!(palette.accessibility_set_input(&full.input));
+    }
 
     fn test_palette() -> CommandPalette {
         let mut palette = CommandPalette::new();

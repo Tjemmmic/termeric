@@ -194,13 +194,9 @@ impl UnicodePicker {
     }
 
     pub fn handle_char(&mut self, character: char) {
-        if !self.search_session
-            || character.is_control()
-            || self.palette.build_info().input.chars().count() >= 256
-        {
+        if !self.search_session || !self.palette.handle_char(character) {
             return;
         }
-        self.palette.handle_char(character);
         self.refresh_dynamic_entry();
     }
 

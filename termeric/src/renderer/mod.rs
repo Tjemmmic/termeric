@@ -24,6 +24,8 @@ mod harvest;
 pub use harvest::sprout_menu_hit_test;
 mod overlays;
 mod palette;
+#[cfg(test)]
+pub(crate) use palette::headless_palette_input_smoke;
 mod panels;
 mod quick_select;
 mod search_bar;

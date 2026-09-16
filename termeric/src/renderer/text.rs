@@ -709,8 +709,8 @@ impl TextPipeline {
         }
     }
 
-    /// Queue free-standing UI text as one shaping run with terminal-cell
-    /// advances. Unlike terminal row runs, this is not pane-clipped.
+    /// Queue UI text as one shaping run with terminal-cell advances and an
+    /// explicit owning-field clip, including glyph overhangs.
     pub(super) fn push_ui_run(
         &mut self,
         text: &str,
@@ -718,6 +718,7 @@ impl TextPipeline {
         y: f32,
         color: [f32; 4],
         cell_width: f32,
+        clip: TextClip,
     ) {
         if !text.is_empty() {
             self.queued.push(QueuedChar {
@@ -729,7 +730,7 @@ impl TextPipeline {
                 y,
                 color,
                 style: FontStyle::default(),
-                clip: None,
+                clip: Some(clip),
             });
         }
     }

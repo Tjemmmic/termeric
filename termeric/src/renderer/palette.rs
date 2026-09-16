@@ -4,6 +4,72 @@ use super::{Renderer, adjust_alpha};
 use crate::ui::command_palette::{PaletteInfo, PaletteLayout};
 use crate::ui::constants::*;
 
+#[cfg(test)]
+pub(crate) fn headless_palette_input_smoke(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> anyhow::Result<()> {
+    use super::{GlyphCache, TextPipeline, text::TextClip};
+    let mut glyphs = GlyphCache::new(
+        device,
+        queue,
+        16.0,
+        "monospace",
+        &[],
+        &[],
+        400,
+        700,
+        1.2,
+        false,
+    )?;
+    glyphs.install_test_font(
+        super::glyph_cache::deterministic_test_font_data(),
+        "Fira Mono",
+        queue,
+    );
+    let mut text = TextPipeline::new(device, wgpu::TextureFormat::Rgba8UnormSrgb, &glyphs)?;
+    for width in [320.0, 800.0] {
+        let layout = PaletteLayout::calculate(width, 600.0, 10.0, 24.0, 1.0, 0);
+        for query in [
+            "ASCII query ".repeat(20),
+            "界e\u{301}👩\u{200d}💻 ASCII ".repeat(15),
+        ] {
+            let view = layout.input_viewport(&query, query.len()).unwrap();
+            let clip = TextClip {
+                left: view.text_x,
+                top: view.text_y,
+                right: view.right,
+                bottom: view.text_y + 24.0,
+            };
+            text.push_ui_run(
+                &query[view.text_range],
+                view.text_x,
+                view.text_y,
+                [1.0; 4],
+                10.0,
+                clip,
+            );
+            let queued = text.take_queued_since(0);
+            anyhow::ensure!(queued.len() == 1 && queued[0].clip == Some(clip));
+            let batch = TextPipeline::build_batch(queued, queue, &mut glyphs);
+            anyhow::ensure!(
+                !batch.vertices.is_empty(),
+                "palette query produced no glyph geometry"
+            );
+            anyhow::ensure!(
+                batch.vertices.iter().all(|vertex| {
+                    vertex.position[0] >= clip.left
+                        && vertex.position[0] <= clip.right
+                        && vertex.position[1] >= clip.top
+                        && vertex.position[1] <= clip.bottom
+                }),
+                "palette query glyph escaped its input field"
+            );
+        }
+    }
+    Ok(())
+}
+
 impl Renderer {
     /// Build command palette render data — centered modal with scrim
     pub(super) fn build_command_palette(
@@ -105,34 +171,42 @@ impl Renderer {
         self.text_pipeline
             .push_char('>', input_x + cell_width * 0.8, text_y, prompt_color);
 
-        // Input text
-        let text_start_x = input_x + cell_width * 2.2;
-        let mut text_x = text_start_x;
-        let text_color = adjust_alpha(self.ui.palette_text, anim);
-        for (byte_idx, c) in info.input.char_indices() {
-            if byte_idx == info.cursor {
-                let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-                self.rect_pipeline
-                    .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
+        // One grapheme-safe, caret-following viewport also anchors native IME.
+        if let Some(view) = layout.input_viewport(&info.input, info.cursor) {
+            let clip = super::text::TextClip {
+                left: view.text_x,
+                top: input_y,
+                right: view.right,
+                bottom: input_y + input_height,
+            };
+            if info.input.is_empty() {
+                if let Some(hint) = layout.input_viewport(&info.placeholder, 0) {
+                    self.text_pipeline.push_ui_run(
+                        &info.placeholder[hint.text_range],
+                        view.text_x,
+                        view.text_y,
+                        adjust_alpha(self.ui.palette_text_dim, 0.6 * anim),
+                        cell_width,
+                        clip,
+                    );
+                }
+            } else {
+                self.text_pipeline.push_ui_run(
+                    &info.input[view.text_range],
+                    view.text_x,
+                    view.text_y,
+                    adjust_alpha(self.ui.palette_text, anim),
+                    cell_width,
+                    clip,
+                );
             }
-            self.text_pipeline.push_char(c, text_x, text_y, text_color);
-            text_x += cell_width;
-        }
-        if info.cursor >= info.input.len() {
-            let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-            self.rect_pipeline
-                .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
-        }
-
-        // Placeholder when empty
-        if info.input.is_empty() {
-            let hint = &info.placeholder;
-            let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
-            let mut hx = text_start_x;
-            for c in hint.chars() {
-                self.text_pipeline.push_char(c, hx, text_y, hint_color);
-                hx += cell_width;
-            }
+            self.rect_pipeline.push_rect(
+                view.cursor_x,
+                view.text_y,
+                2.0,
+                cell_height,
+                adjust_alpha(self.ui.palette_accent, 0.9 * anim),
+            );
         }
 
         // ── Separator ──
