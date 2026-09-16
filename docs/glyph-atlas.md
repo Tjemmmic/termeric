@@ -67,6 +67,32 @@ construction.
 
 ## Diagnostics and verification
 
+Shaped-run retention has two independent owned-byte budgets: 8 MiB for
+persistent runs and 1 MiB for frame-local retry runs, each also limited to
+4,096 entries. Charges include key/run structures and the actual capacities
+of query text, family/fallback strings and vectors, OpenType feature vectors,
+and stored shaped-glyph vectors. Hash-table bucket/control storage is separate
+and bounded by the entry ceiling. Font-system caches, caller-owned output runs,
+and transient shaping buffers are not covered by these budgets.
+
+Capacity pressure preserves the existing whole-cache eviction policy. An
+individual oversized run is rendered normally but is not cached, and does not
+discard smaller useful entries. Atlas-page eviction subtracts the released run
+charges; font/feature resets and new-frame retry cleanup clear the appropriate
+ledger. Equal-key replacement removes the old key allocation too, so differing
+reserved capacities cannot corrupt accounting. Trace diagnostics expose retained
+bytes, entry counts, bypasses, hits/misses, and capacity evictions. This closes a
+retention gap in the previous count-only persistent cache and unbounded retry
+cache; it does not establish a total renderer RSS cap or a speed improvement.
+Eviction-heavy performance remains a separate measurement concern.
+
+Deterministic tests independently recount every stored capacity, exercise both
+limits, verify replacement/retain/clear accounting, and check that oversized
+bypass preserves the caller's complete run. The GPU stress lane forces tiny
+byte limits for real persistent and deferred runs: output remains complete,
+deferred glyphs do not rerasterize within the frame, and next-frame retries
+still recover after atlas pins are released.
+
 The production rasterizer now uses Swash's uncached-image path while retaining
 its scaler context. Previously, every uploaded image also stayed in Swash's
 unbounded CPU image map, including rasters whose atlas pages were evicted or

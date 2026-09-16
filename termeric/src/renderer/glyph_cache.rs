@@ -25,6 +25,8 @@ const MAX_ATLAS_PAGES: u32 = 8;
 const MAX_COLOR_ATLAS_PAGES: u32 = 4;
 const COLOR_PAGE_FLAG: u16 = 1 << 15;
 const MAX_SHAPED_RUNS: usize = 4_096;
+const MAX_SHAPED_RUN_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DEFERRED_RUN_BYTES: usize = 1024 * 1024;
 const ATLAS_PADDING: u32 = 1;
 pub(crate) const MAX_FONT_COVERAGE_INPUT_BYTES: usize = 256;
 pub(crate) const MAX_FONT_COVERAGE_GRAPHEMES: usize = 16;
@@ -218,6 +220,10 @@ pub(crate) struct ShapingCacheMetrics {
     pub misses: u64,
     pub evictions: u64,
     pub entries: usize,
+    pub retained_bytes: usize,
+    pub deferred_entries: usize,
+    pub deferred_bytes: usize,
+    pub skipped_runs: u64,
 }
 
 /// Runtime atlas diagnostics. Capacity is fixed even while logical pages are
@@ -466,6 +472,112 @@ pub struct LigatureRun {
     pub glyphs: Vec<ShapedGlyph>,
 }
 
+/// Count and owned-payload bounds are independent. Hash-table bucket/control
+/// storage is bounded by the entry ceiling, not included in payload accounting.
+struct ShapedRunCache {
+    entries: HashMap<LigatureKey, (LigatureRun, usize)>,
+    bytes: usize,
+    byte_limit: usize,
+    skipped: u64,
+}
+
+impl ShapedRunCache {
+    fn new(byte_limit: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            bytes: 0,
+            byte_limit,
+            skipped: 0,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn get(&self, key: &LigatureKey) -> Option<&LigatureRun> {
+        self.entries.get(key).map(|(run, _)| run)
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&LigatureRun) -> bool) {
+        self.entries.retain(|_, (run, bytes)| {
+            if keep(run) {
+                true
+            } else {
+                self.bytes -= *bytes;
+                false
+            }
+        });
+    }
+
+    /// Preserve the established whole-cache eviction policy. An oversized
+    /// run bypasses caching without evicting useful entries or truncating text.
+    /// Return only capacity evictions, not replacement of an identical key.
+    fn insert(&mut self, key: LigatureKey, run: &LigatureRun) -> usize {
+        let key_bytes = Self::key_bytes(&key);
+        let minimum_bytes = key_bytes.saturating_add(
+            run.glyphs
+                .len()
+                .saturating_mul(std::mem::size_of::<ShapedGlyph>()),
+        );
+        if minimum_bytes > self.byte_limit {
+            self.skipped = self.skipped.saturating_add(1);
+            return 0;
+        }
+        let stored = run.clone();
+        let bytes = key_bytes.saturating_add(
+            stored
+                .glyphs
+                .capacity()
+                .saturating_mul(std::mem::size_of::<ShapedGlyph>()),
+        );
+        if bytes > self.byte_limit {
+            self.skipped = self.skipped.saturating_add(1);
+            return 0;
+        }
+        // Remove the old key too: equal keys can own different capacities.
+        if let Some((_, (_, old_bytes))) = self.entries.remove_entry(&key) {
+            self.bytes -= old_bytes;
+        }
+        let mut evicted = 0;
+        if self.entries.len() >= MAX_SHAPED_RUNS || self.bytes > self.byte_limit - bytes {
+            evicted = self.entries.len();
+            self.clear();
+        }
+        self.entries.insert(key, (stored, bytes));
+        self.bytes += bytes;
+        evicted
+    }
+
+    fn key_bytes(key: &LigatureKey) -> usize {
+        std::mem::size_of::<LigatureKey>()
+            .saturating_add(std::mem::size_of::<(LigatureRun, usize)>())
+            .saturating_add(key.text.capacity())
+            .saturating_add(key.family.capacity())
+            .saturating_add(
+                key.font_features
+                    .features
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<cosmic_text::Feature>()),
+            )
+            .saturating_add(
+                key.fallbacks
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<String>()),
+            )
+            .saturating_add(
+                key.fallbacks
+                    .iter()
+                    .fold(0usize, |sum, family| sum.saturating_add(family.capacity())),
+            )
+    }
+}
+
 /// Glyph cache with texture atlas
 pub struct GlyphCache {
     /// The font system
@@ -486,7 +598,7 @@ pub struct GlyphCache {
     /// Cached glyph entries
     entries: HashMap<GlyphKey, GlyphEntry>,
     /// Cached ligature runs
-    ligature_cache: HashMap<LigatureKey, LigatureRun>,
+    ligature_cache: ShapedRunCache,
     /// Rasterized glyphs produced by shaped runs, keyed by the actual fallback
     /// face/glyph/size/subpixel identity supplied by cosmic-text.
     shaped_entries: HashMap<ShapedGlyphKey, GlyphEntry>,
@@ -495,7 +607,7 @@ pub struct GlyphCache {
     /// next `begin_frame` releases the pins.
     deferred_entries: HashSet<GlyphKey>,
     deferred_shaped_entries: HashSet<ShapedGlyphKey>,
-    deferred_ligature_cache: HashMap<LigatureKey, LigatureRun>,
+    deferred_ligature_cache: ShapedRunCache,
     shaping_cache_metrics: ShapingCacheMetrics,
     atlas: PagedAtlasAllocator,
     color_atlas: PagedAtlasAllocator,
@@ -714,11 +826,11 @@ impl GlyphCache {
             color_texture_view,
             sampler,
             entries: HashMap::new(),
-            ligature_cache: HashMap::new(),
+            ligature_cache: ShapedRunCache::new(MAX_SHAPED_RUN_BYTES),
             shaped_entries: HashMap::new(),
             deferred_entries: HashSet::new(),
             deferred_shaped_entries: HashSet::new(),
-            deferred_ligature_cache: HashMap::new(),
+            deferred_ligature_cache: ShapedRunCache::new(MAX_DEFERRED_RUN_BYTES),
             shaping_cache_metrics: ShapingCacheMetrics::default(),
             atlas,
             color_atlas: PagedAtlasAllocator::recyclable(ATLAS_SIZE, MAX_COLOR_ATLAS_PAGES),
@@ -1062,7 +1174,7 @@ impl GlyphCache {
         self.shaped_entries
             .retain(|_, entry| !belongs_to_page(entry));
         let before = self.ligature_cache.len();
-        self.ligature_cache.retain(|_, run| {
+        self.ligature_cache.retain(|run| {
             run.glyphs
                 .iter()
                 .all(|glyph| !belongs_to_page(&glyph.entry))
@@ -1236,21 +1348,35 @@ impl GlyphCache {
         self.shaping_cache_metrics.misses += 1;
         let (run, retry_next_frame) = self.shape_text_internal(text, style, metrics, queue)?;
         if retry_next_frame {
-            self.deferred_ligature_cache.insert(key, run.clone());
+            self.shaping_cache_metrics.evictions +=
+                self.deferred_ligature_cache.insert(key, &run) as u64;
         } else {
-            if self.ligature_cache.len() >= MAX_SHAPED_RUNS {
-                self.shaping_cache_metrics.evictions += self.ligature_cache.len() as u64;
-                self.ligature_cache.clear();
-            }
-            self.ligature_cache.insert(key, run.clone());
+            self.shaping_cache_metrics.evictions += self.ligature_cache.insert(key, &run) as u64;
             self.shaping_cache_metrics.entries = self.ligature_cache.len();
         }
         Some(run)
     }
 
-    #[cfg(test)]
     pub(crate) fn shaping_cache_metrics(&self) -> ShapingCacheMetrics {
-        self.shaping_cache_metrics
+        ShapingCacheMetrics {
+            entries: self.ligature_cache.len(),
+            retained_bytes: self.ligature_cache.bytes,
+            deferred_entries: self.deferred_ligature_cache.len(),
+            deferred_bytes: self.deferred_ligature_cache.bytes,
+            skipped_runs: self
+                .ligature_cache
+                .skipped
+                .saturating_add(self.deferred_ligature_cache.skipped),
+            ..self.shaping_cache_metrics
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_shaping_byte_limits_for_test(&mut self, persistent: usize, deferred: usize) {
+        self.ligature_cache.clear();
+        self.ligature_cache.byte_limit = persistent;
+        self.deferred_ligature_cache.clear();
+        self.deferred_ligature_cache.byte_limit = deferred;
     }
 
     #[cfg(test)]
@@ -2584,6 +2710,136 @@ fn resolve_configured_family(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    fn cache_fixture(text: &str, count: usize) -> (LigatureKey, LigatureRun) {
+        let key = LigatureKey::new(
+            text,
+            16.0,
+            20.0,
+            FontStyle::default(),
+            false,
+            FontFeatures::new(),
+            "monospace",
+            &["fallback".into()],
+            false,
+            400,
+            700,
+        );
+        let run = LigatureRun {
+            glyphs: vec![
+                ShapedGlyph {
+                    entry: GlyphEntry {
+                        page: 1,
+                        color: false,
+                        x: 0,
+                        y: 0,
+                        width: 1,
+                        height: 1,
+                        bearing_x: 0,
+                        bearing_y: 0
+                    },
+                    x_offset: 0.0,
+                };
+                count
+            ],
+        };
+        (key, run)
+    }
+
+    // Independently enumerate stored capacities rather than trusting charges.
+    fn recount_run_cache(cache: &ShapedRunCache) -> usize {
+        cache
+            .entries
+            .iter()
+            .map(|(key, (run, _))| {
+                std::mem::size_of::<LigatureKey>()
+                    + std::mem::size_of::<(LigatureRun, usize)>()
+                    + key.text.capacity()
+                    + key.family.capacity()
+                    + key.font_features.features.capacity()
+                        * std::mem::size_of::<cosmic_text::Feature>()
+                    + key.fallbacks.capacity() * std::mem::size_of::<String>()
+                    + key.fallbacks.iter().map(String::capacity).sum::<usize>()
+                    + run.glyphs.capacity() * std::mem::size_of::<ShapedGlyph>()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn shaped_cache_accounts_capacities_replacement_retention_and_clear() {
+        let mut cache = ShapedRunCache::new(64 * 1024);
+        let (mut key, run) = cache_fixture("same", 3);
+        key.text.reserve(400);
+        key.family.reserve(300);
+        key.font_features.features.reserve(32);
+        key.fallbacks.reserve(16);
+        key.fallbacks[0].reserve(200);
+        cache.insert(key.clone(), &run);
+        assert_eq!(cache.bytes, recount_run_cache(&cache));
+        let before = cache.bytes;
+        cache.insert(key, &run);
+        assert_eq!(cache.len(), 1);
+        assert!(
+            cache.bytes > before,
+            "replacement must account the moved key's reserved capacity"
+        );
+        assert_eq!(cache.bytes, recount_run_cache(&cache));
+        let (other_key, mut other_run) = cache_fixture("other", 1);
+        other_run.glyphs[0].entry.page = 2;
+        cache.insert(other_key, &other_run);
+        cache.retain(|run| run.glyphs.iter().all(|glyph| glyph.entry.page != 1));
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.bytes, recount_run_cache(&cache));
+        cache.clear();
+        assert_eq!(cache.bytes, 0);
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn shaped_cache_byte_pressure_and_oversized_bypass_preserve_limits() {
+        let (key, run) = cache_fixture("first", 100);
+        let mut measuring = ShapedRunCache::new(usize::MAX);
+        measuring.insert(key.clone(), &run);
+        let size = recount_run_cache(&measuring);
+        for budget in [size, size * 2] {
+            let mut cache = ShapedRunCache::new(budget);
+            cache.insert(key.clone(), &run);
+            assert!(cache.get(&key).is_some());
+            let mut evictions = 0;
+            for name in ["other", "third", "forth"] {
+                let (key, run) = cache_fixture(name, 100);
+                evictions += cache.insert(key, &run);
+                assert!(cache.bytes <= budget);
+                assert_eq!(cache.bytes, recount_run_cache(&cache));
+            }
+            assert!(evictions > 0 && cache.len() < MAX_SHAPED_RUNS);
+            let before = (cache.len(), cache.bytes);
+            let (huge_key, huge_run) = cache_fixture(&"x".repeat(budget + 1), 100);
+            assert_eq!(cache.insert(huge_key, &huge_run), 0);
+            assert_eq!((cache.len(), cache.bytes), before);
+            assert_eq!(cache.skipped, 1);
+            assert_eq!(
+                huge_run.glyphs.len(),
+                100,
+                "bypass must not truncate the caller's output"
+            );
+        }
+    }
+
+    #[test]
+    fn shaped_cache_count_ceiling_remains_independent_of_byte_ceiling() {
+        let mut cache = ShapedRunCache::new(MAX_SHAPED_RUN_BYTES);
+        for index in 0..MAX_SHAPED_RUNS {
+            let (key, run) = cache_fixture(&format!("{index:04}"), 1);
+            assert_eq!(cache.insert(key, &run), 0);
+        }
+        assert_eq!(cache.len(), MAX_SHAPED_RUNS);
+        assert!(cache.bytes < MAX_SHAPED_RUN_BYTES);
+        let (key, run) = cache_fixture("extra", 1);
+        assert_eq!(cache.insert(key, &run), MAX_SHAPED_RUNS);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.bytes, recount_run_cache(&cache));
+    }
 
     #[test]
     fn uncached_rasterization_preserves_pixels_without_retaining_cpu_images() {

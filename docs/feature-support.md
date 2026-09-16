@@ -397,6 +397,13 @@ see [profile behavior and limits](plugin-panes.md).
 
 ## Performance and resource evidence
 
+Shaped-run retention now has independent 8 MiB persistent and 1 MiB frame-local
+retry budgets, plus a 4,096-entry ceiling on each. Accounting covers owned
+key/string/feature/glyph capacities; bucket overhead and transient/font-system
+memory are separate. Over-budget runs still render without caching. Independent
+capacity recounts and software-GPU bypass/retry checks cover these boundaries;
+this is not a total RSS or throughput claim. See [shaped-run budgets](glyph-atlas.md).
+
 Glyph rasterization no longer keeps an unbounded duplicate CPU bitmap map
 behind the bounded GPU atlas. A deterministic 282-key fixture verifies identical
 pixels and placement with zero retained CPU image payload (343,899 bytes in
