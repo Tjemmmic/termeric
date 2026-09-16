@@ -59,10 +59,26 @@ the fixed-size record table at 160,000 entries, avoiding growth overshoot.
 Queries scan that immutable index without reconstructing Unicode names and keep
 only the best 256 scalar candidates; after curated results are merged and
 deduplicated, no more than 256 executable rows enter the shared palette or its
-accessibility tree. The deterministic warm-query rail covers five broad and
-algorithmic queries under a 250 ms aggregate ceiling (48.8 ms observed on the
-September 2026 development host). This is a regression guard, not a universal
-hardware latency guarantee.
+accessibility tree. The deterministic query rail covers five broad and
+algorithmic queries under a 250 ms aggregate ceiling (29.2 ms median across five
+isolated runs on the September 2026 development host). It warms the canonical
+index first; first-use CLDR validation, if needed, remains inside the timing.
+This is a regression guard, not a universal hardware latency guarantee.
+
+Name scoring classifies each term's strongest whole-token, prefix, or substring
+match in one pass instead of repeating up to three searches. The weakest term
+still determines the rank; exact aliases, tie ordering, Unicode-aware word
+boundaries, and result deduplication are unchanged. Differential tests compare
+the former scorer across both complete catalogs for representative queries,
+plus adversarial mixed-tier and Unicode-boundary cases. No new index or cache
+is retained. A same-process, alternating-order dev-profile benchmark measured
+seven-sample median scoring times of 40.75 ms before and 25.43 ms after; this
+measures the scorer, not full UI latency or another terminal's performance.
+Reproduce it without a provider or display:
+
+```bash
+cargo test -p termeric --locked --offline paired_unicode_name_scoring_benchmark -- --ignored --nocapture
+```
 
 The embedded CLDR header, fixed offset table, and UTF-8 pool occupy exactly
 475,510 static bytes under a 768 KiB cap and are structurally/grapheme-validated

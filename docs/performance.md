@@ -185,6 +185,16 @@ of owned candidate/action/command storage. These are broad regression limits;
 the exact source, zero-copy format, normalization, and insertion semantics are
 documented in [cldr-annotations.md](cldr-annotations.md).
 
+Unicode name scoring has an opt-in paired microbenchmark and complete-catalog
+ranking comparisons against its former three-pass implementation. The new
+single-pass classification reduces repeated scans without another retained
+cache; index/result ceilings and latency rails are unchanged. See the
+[Unicode search measurements](unicode-support.md) for the command and locally
+observed results. Run timing checks without simultaneous software-rendered GUI
+workloads: a prior concurrent run exceeded the 250 ms five-query rail, while
+the unchanged standalone run passed. Retain such failed artifacts rather than
+loosening limits or treating a rerun as proof of performance under contention.
+
 Displayed idle RSS has a deliberately broad 512 MiB p95 rail. The row may be
 explicitly skipped with the whole display probe, but a present oversized sample
 fails. This catches catastrophic process regressions while leaving PSS/private

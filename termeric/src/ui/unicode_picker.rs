@@ -450,18 +450,15 @@ fn normalize_name_query(query: &str) -> String {
 }
 
 fn score_unicode_name(name: &str, terms: &[&str]) -> Option<u32> {
-    let all_whole = terms.iter().all(|term| name_has_term(name, term, true));
+    // The weakest term determines the same whole/prefix/substring tier as
+    // the old three scans. Classify each term once and stop on a missing one.
+    let mut quality = 2;
+    for term in terms {
+        quality = quality.min(name_term_quality(name, term)?);
+    }
     let compact_query_len = terms.iter().map(|term| term.len()).sum::<usize>() as u32;
     let length_bonus = 10_000u32.saturating_sub(name.len() as u32);
-    let score = if all_whole {
-        2_000_000
-    } else if terms.iter().all(|term| name_has_term(name, term, false)) {
-        1_500_000
-    } else if terms.iter().all(|term| name.contains(term)) {
-        1_000_000
-    } else {
-        return None;
-    };
+    let score = 1_000_000 + quality * 500_000;
     Some(score + compact_query_len * 100 + length_bonus)
 }
 
@@ -472,19 +469,28 @@ fn score_cldr_annotation(annotation: Annotation<'_>, query: &str, terms: &[&str]
     score_unicode_name(annotation.searchable, terms).map(|score| score + 250_000)
 }
 
-fn name_has_term(name: &str, term: &str, require_right_boundary: bool) -> bool {
-    name.match_indices(term).any(|(start, _)| {
+fn name_term_quality(name: &str, term: &str) -> Option<u32> {
+    let mut quality = None;
+    for (start, _) in name.match_indices(term) {
+        quality.get_or_insert(0); // Any occurrence is at least a substring.
         let left_boundary = name[..start]
             .chars()
             .next_back()
             .is_none_or(|character| !character.is_alphanumeric());
+        if !left_boundary {
+            continue;
+        }
         let end = start + term.len();
         let right_boundary = name[end..]
             .chars()
             .next()
             .is_none_or(|character| !character.is_alphanumeric());
-        left_boundary && (!require_right_boundary || right_boundary)
-    })
+        if right_boundary {
+            return Some(2); // No later occurrence can beat a whole token.
+        }
+        quality = Some(1);
+    }
+    quality
 }
 
 fn score_curated_character(entry: &CuratedCharacter, query: &str, terms: &[&str]) -> Option<u32> {
@@ -1391,6 +1397,165 @@ const CURATED_CHARACTERS: &[CuratedCharacter] = &[
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    // Keep the former scorer as an independent ranking/measurement oracle.
+    // This code is test-only and does not add another production search path.
+    fn reference_name_score(name: &str, terms: &[&str]) -> Option<u32> {
+        let boundary_match = |term: &str, whole: bool| {
+            name.match_indices(term).any(|(start, _)| {
+                let left = name[..start]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|character| !character.is_alphanumeric());
+                let right = name[start + term.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|character| !character.is_alphanumeric());
+                left && (!whole || right)
+            })
+        };
+        let tier = if terms.iter().all(|term| boundary_match(term, true)) {
+            2_000_000
+        } else if terms.iter().all(|term| boundary_match(term, false)) {
+            1_500_000
+        } else if terms.iter().all(|term| name.contains(term)) {
+            1_000_000
+        } else {
+            return None;
+        };
+        Some(
+            tier + terms.iter().map(|term| term.len()).sum::<usize>() as u32 * 100
+                + 10_000u32.saturating_sub(name.len() as u32),
+        )
+    }
+
+    #[test]
+    fn single_pass_scoring_preserves_every_catalog_entry_for_representative_queries() {
+        let names = unicode_name_index();
+        let annotations = annotations::index();
+        for query in [
+            "letter",
+            "black",
+            "arabic letter",
+            "mathematical symbol",
+            "cjk unified",
+            "at",
+            "letter letter",
+            "party piñata",
+            "skin tone",
+            "woman judge",
+            "nonexistentterm",
+            "cjk 4e",
+            "hangul gag",
+        ] {
+            let normalized = normalize_name_query(query);
+            let terms = normalized.split_whitespace().collect::<Vec<_>>();
+            for name in (0..names.records.len())
+                .map(|position| names.name(position))
+                .chain(
+                    (0..annotations.len())
+                        .map(|position| annotations.annotation(position).searchable),
+                )
+            {
+                assert_eq!(
+                    score_unicode_name(name, &terms),
+                    reference_name_score(name, &terms),
+                    "name={name:?}, query={query:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn single_pass_scoring_preserves_unicode_boundaries_and_mixed_match_tiers() {
+        for name in [
+            "",
+            "ALPHA",
+            "XALPHA ALPHABET ALPHA",
+            "ALPHABET XALPHA",
+            "AA-AAA AA",
+            "PIÑATA PARTY",
+            "文ATA ATA文",
+            "A\u{301}ATA",
+            "ΑΛΦΑ Α",
+            "A—B",
+            " B-A ",
+        ] {
+            let queries: &[&[&str]] = &[
+                &[],
+                &[""],
+                &["A"],
+                &["AA"],
+                &["ALPHA"],
+                &["ATA"],
+                &["ALPHA", "BET"],
+                &["ALPHA", "ALPHA"],
+                &["PIÑATA", "PART"],
+                &["Α"],
+                &["文"],
+                &["A", "B"],
+                &["A", "MISSING"],
+                &[" "],
+            ];
+            for terms in queries {
+                assert_eq!(
+                    score_unicode_name(name, terms),
+                    reference_name_score(name, terms),
+                    "name={name:?}, terms={terms:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "opt-in paired Unicode name-scoring benchmark; not a cross-machine speed claim"]
+    fn paired_unicode_name_scoring_benchmark() {
+        let index = unicode_name_index();
+        let queries: &[&[&str]] = &[
+            &["LETTER"],
+            &["BLACK"],
+            &["ARABIC", "LETTER"],
+            &["MATHEMATICAL", "SYMBOL"],
+            &["CJK", "UNIFIED"],
+        ];
+        let measure = |scorer: fn(&str, &[&str]) -> Option<u32>| {
+            let start = Instant::now();
+            let mut checksum = 0u64;
+            for terms in queries {
+                for position in 0..index.records.len() {
+                    checksum += u64::from(
+                        std::hint::black_box(scorer(
+                            std::hint::black_box(index.name(position)),
+                            std::hint::black_box(terms),
+                        ))
+                        .unwrap_or(0),
+                    );
+                }
+            }
+            (start.elapsed(), checksum)
+        };
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for iteration in 0..7 {
+            let (before, after) = if iteration % 2 == 0 {
+                (measure(reference_name_score), measure(score_unicode_name))
+            } else {
+                let after = measure(score_unicode_name);
+                (measure(reference_name_score), after)
+            };
+            assert_eq!(before.1, after.1);
+            old.push(before.0);
+            new.push(after.0);
+        }
+        old.sort();
+        new.sort();
+        eprintln!(
+            "paired-name-scoring old={old:?} new={new:?} median_old={:?} median_new={:?} retained_bytes={}",
+            old[3],
+            new[3],
+            index.retained_bytes()
+        );
+    }
 
     fn filter(picker: &mut UnicodePicker, value: &str) -> PaletteInfo {
         assert!(picker.accessibility_set_filter(value));
