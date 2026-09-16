@@ -3,6 +3,41 @@
 use super::*;
 
 impl App {
+    fn focused_scrollbar_owner(&self) -> Option<crate::tabs::TerminalIdentity> {
+        let tabs = self.tabs.as_ref()?;
+        let target = tabs.active_tab()?.focused_terminal_identity();
+        tabs.origin_for_pane(target.tab_id, target.pane_id)?;
+        Some(target)
+    }
+
+    pub(super) fn begin_scrollbar_drag(&mut self) {
+        self.scrollbar_dragging = self.focused_scrollbar_owner();
+    }
+
+    /// A retained pointer gesture may never migrate to a different terminal,
+    /// including when a caller changes focus without refreshing UI surfaces.
+    fn reconcile_scrollbar_drag(&mut self) -> bool {
+        if self.scrollbar_dragging.is_some()
+            && self.scrollbar_dragging == self.focused_scrollbar_owner()
+        {
+            true
+        } else {
+            self.scrollbar_dragging = None;
+            false
+        }
+    }
+
+    pub(super) fn apply_scrollbar_drag_fraction(&mut self, fraction: f32) {
+        if !self.reconcile_scrollbar_drag() {
+            return;
+        }
+        if let Some(terminal) = self.active_terminal_mut() {
+            let max_offset = terminal.grid().scrollback_len();
+            let new_offset = (fraction.clamp(0.0, 1.0) * max_offset as f32) as usize;
+            terminal.grid_mut().set_scroll_offset(new_offset);
+        }
+    }
+
     /// These surfaces are dispatched here, below the event-loop overlays but
     /// above terminal scrollbars/dividers. Keep their ownership independent
     /// of where the pointer lands (including outside-click dismissal).
@@ -45,7 +80,7 @@ impl App {
 
     pub(super) fn take_native_drag_controls(&mut self) -> Vec<LiveDomainControl> {
         self.mouse_pressed = false;
-        self.scrollbar_dragging = false;
+        self.scrollbar_dragging = None;
         let divider_drag = self.divider_dragging.take();
         let tab_drag = self.tab_dragging.take();
         let _ = self.mouse_state.handle_release(MouseButton::Left);
@@ -141,7 +176,7 @@ impl App {
                         if self.focus_pane_at(position, content_top, padding) {
                             self.refresh_focused_terminal_surfaces();
                         }
-                        self.scrollbar_dragging = true;
+                        self.begin_scrollbar_drag();
                         self.scroll_to_scrollbar_position(position.1);
                         if let Some(window) = &self.window {
                             window.request_redraw();
@@ -740,7 +775,7 @@ impl App {
         }
 
         // Handle scrollbar dragging
-        if self.scrollbar_dragging {
+        if self.scrollbar_dragging.is_some() {
             self.scroll_to_scrollbar_position(position.1);
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -1278,7 +1313,7 @@ impl App {
     pub(super) fn refresh_terminal_pointer_cursor(&self) {
         if self.file_drop_hovered
             || self.divider_dragging.is_some()
-            || self.scrollbar_dragging
+            || self.scrollbar_dragging.is_some()
             || self.tab_dragging.is_some()
             || self.info_overlay.is_active()
             || self.diff_review.is_active()
@@ -1482,6 +1517,7 @@ impl App {
     /// Rebind global surfaces that intentionally describe only the focused
     /// pane. Per-pane selection remains stored with each terminal.
     pub(super) fn refresh_focused_terminal_surfaces(&mut self) {
+        self.reconcile_scrollbar_drag();
         self.reconcile_broadcast_state();
         let active_tab_id = self.tabs.as_ref().and_then(TabManager::active_tab_id);
         if self
@@ -1582,6 +1618,9 @@ impl App {
 
     /// Map a vertical mouse position to a scroll offset and apply it
     pub(super) fn scroll_to_scrollbar_position(&mut self, y: f64) {
+        if !self.reconcile_scrollbar_drag() {
+            return;
+        }
         let Some(renderer) = &self.renderer else {
             return;
         };
@@ -1618,11 +1657,7 @@ impl App {
         // Invert: top of scrollbar = max scroll, bottom = 0 scroll
         let scroll_fraction = 1.0 - fraction;
 
-        if let Some(terminal) = self.active_terminal_mut() {
-            let max_offset = terminal.grid().scrollback_len();
-            let new_offset = (scroll_fraction * max_offset as f32) as usize;
-            terminal.grid_mut().set_scroll_offset(new_offset);
-        }
+        self.apply_scrollbar_drag_fraction(scroll_fraction);
     }
 }
 

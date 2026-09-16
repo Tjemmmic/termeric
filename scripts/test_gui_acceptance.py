@@ -29,6 +29,16 @@ FIXTURE_SPEC.loader.exec_module(terminal_fixture)
 
 
 class GuiAcceptanceRecordTests(unittest.TestCase):
+    def test_scrollback_fixture_is_bounded_owner_tagged_and_ends_at_marker(self):
+        with mock.patch.object(terminal_fixture, "emit") as emit:
+            terminal_fixture.render_scrollback_fixture(42)
+        payload = emit.call_args.args[0]
+        self.assertLess(len(payload), 4096)
+        self.assertEqual(payload.split(b"\r\n")[1:-1],
+                         [f"SCROLL_42_{row:03d}".encode() for row in range(100)])
+        self.assertTrue(payload.endswith(b"SCROLL_END_42"))
+        self.assertNotIn(b"\x1b", payload)
+
     def test_isolated_config_has_distinct_fonts_and_disables_provider_plugins(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.toml"

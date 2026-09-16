@@ -80,6 +80,14 @@ The native overflow lane holds a tab through a width change, rejects unrelated
 focus loss, then verifies unchanged tab order and restored PTY width. Physical
 monitor-scale transitions and native live-domain resizing remain separate checks.
 
+Scrollbar drags capture the clicked terminal's stable tab/pane identity. A
+focus change, closed/closing owner, or missing pane cancels the gesture instead
+of scrolling whichever terminal became selected. Every scroll mutation
+revalidates that identity, even when a caller omitted focus-surface refresh;
+returning to the original pane does not revive a canceled drag. Tab/pane
+isolation and stale-owner refusal have raw PTY/unit coverage; native pane-switch
+and live-domain scrollbar checks remain separate acceptance work.
+
 ## Shared geometry
 
 Rail width is part of the authoritative terminal geometry. The same physical

@@ -1092,7 +1092,7 @@ pub struct App {
     /// Button currently held by an application mouse-reporting sequence.
     terminal_mouse_button: Option<MouseReportButton>,
     /// Whether we're dragging the scrollbar
-    scrollbar_dragging: bool,
+    scrollbar_dragging: Option<crate::tabs::TerminalIdentity>,
     /// Exact pane divider selected at mouse-down.
     divider_dragging: Option<DividerDrag>,
     /// Drag source for direct tab-bar reordering.
@@ -1375,7 +1375,7 @@ impl App {
             file_drop_hovered: false,
             mouse_pressed: false,
             terminal_mouse_button: None,
-            scrollbar_dragging: false,
+            scrollbar_dragging: None,
             divider_dragging: None,
             tab_dragging: None,
             tab_rename: None,

@@ -2101,6 +2101,8 @@ def required_tools(
     tools = ["tic"]
     if backend == "x11":
         tools.append("xdotool")
+        if "tab-overflow" in scenarios:
+            tools.append("xclip")
         if "workspace" in scenarios:
             tools.extend(["kitten", "img2sixel", "timg", "xclip"])
         if set(scenarios) & {"workspace", "domain", "vim", "less", "tmux"}:
@@ -2124,6 +2126,8 @@ def required_tools(
             tools.append("wtype")
         if "interaction" in scenarios:
             tools.extend(["wl-copy", "wl-paste"])
+        elif "tab-overflow" in scenarios:
+            tools.append("wl-paste")
         if start_weston:
             tools.append("weston")
         if start_sway:

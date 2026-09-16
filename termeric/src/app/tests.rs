@@ -1,6 +1,131 @@
 use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
+#[cfg(unix)]
+fn scrollbar_owner_fixture() -> App {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 5".into()],
+        env: Default::default(),
+    };
+    let mut tabs = TabManager::new(80, 24, shell, 100, 1024 * 1024);
+    for _ in 0..2 {
+        tabs.new_tab().unwrap();
+        tabs.active_tab_mut()
+            .unwrap()
+            .focused_terminal_mut()
+            .unwrap()
+            .process(b"history\r\n".repeat(80).as_slice());
+    }
+    tabs.switch_to(0);
+    app.tabs = Some(tabs);
+    app
+}
+
+#[cfg(unix)]
+#[test]
+fn scrollbar_drag_is_canceled_when_keyboard_changes_tabs() {
+    let mut app = scrollbar_owner_fixture();
+    app.begin_scrollbar_drag();
+    app.handle_action(crate::input::Action::NextTab);
+    assert!(app.scrollbar_dragging.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn scrollbar_drag_updates_only_its_live_selected_owner() {
+    for transition in ["tab", "closed", "closing", "missing", "wrong-pane"] {
+        let mut app = scrollbar_owner_fixture();
+        app.apply_scrollbar_drag_fraction(1.0);
+        assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), 0);
+        app.begin_scrollbar_drag();
+        app.refresh_focused_terminal_surfaces();
+        assert!(app.scrollbar_dragging.is_some());
+        app.apply_scrollbar_drag_fraction(1.0);
+        let maximum = app.active_terminal().unwrap().grid().scrollback_len();
+        assert!(maximum > 0);
+        assert_eq!(
+            app.active_terminal().unwrap().grid().scroll_offset(),
+            maximum
+        );
+        app.apply_scrollbar_drag_fraction(0.5);
+        let original_offset = app.active_terminal().unwrap().grid().scroll_offset();
+        assert_eq!(original_offset, maximum / 2);
+        match transition {
+            "tab" => app.tabs.as_mut().unwrap().switch_to(1),
+            "closed" => app.tabs.as_mut().unwrap().active_tab_mut().unwrap().closed = true,
+            "closing" => {
+                app.tabs.as_mut().unwrap().close_tab(0);
+            }
+            "missing" => app.scrollbar_dragging.as_mut().unwrap().tab_id = usize::MAX,
+            "wrong-pane" => app.scrollbar_dragging.as_mut().unwrap().pane_id = PaneId(u32::MAX),
+            _ => unreachable!(),
+        }
+        // Deliberately bypass refresh: the write boundary must revalidate too.
+        app.apply_scrollbar_drag_fraction(1.0);
+        assert!(app.scrollbar_dragging.is_none());
+        let offsets: Vec<_> = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(_, tab)| tab.focused_terminal().unwrap().grid().scroll_offset())
+            .collect();
+        assert_eq!(offsets, vec![original_offset, 0], "{transition}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn scrollbar_drag_cannot_migrate_between_panes_in_the_same_tab() {
+    let mut app = scrollbar_owner_fixture();
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 5".into()],
+        env: Default::default(),
+    };
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+    let owner = tab.take_terminal_owner().unwrap();
+    let mut panes =
+        PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+    let first = panes.focused_id();
+    let second = panes.split(SplitDirection::Vertical).unwrap();
+    panes
+        .get_pane_mut(second)
+        .unwrap()
+        .terminal
+        .process(b"sibling\r\n".repeat(80).as_slice());
+    panes.focus(first);
+    tab.pane_manager = Some(panes);
+    app.begin_scrollbar_drag();
+    app.apply_scrollbar_drag_fraction(1.0);
+    assert!(app.active_terminal().unwrap().grid().scroll_offset() > 0);
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .focus(second);
+    app.apply_scrollbar_drag_fraction(1.0);
+    assert_eq!(app.active_terminal().unwrap().grid().scroll_offset(), 0);
+    assert!(app.scrollbar_dragging.is_none());
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap()
+        .focus(first);
+    app.apply_scrollbar_drag_fraction(0.0);
+    assert!(app.active_terminal().unwrap().grid().scroll_offset() > 0);
+}
+
 #[test]
 fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
     let changes: [fn(&mut App); 3] = [
@@ -11,7 +136,10 @@ fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
     for change in changes {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.mouse_pressed = true;
-        app.scrollbar_dragging = true;
+        app.scrollbar_dragging = Some(crate::tabs::TerminalIdentity {
+            tab_id: 42,
+            pane_id: PaneId(7),
+        });
         app.tab_dragging = Some(TabDrag {
             tab_id: 42,
             live: None,
@@ -30,7 +158,7 @@ fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
         app.mouse_state.handle_move(termeric_core::Point::new(0, 5));
         change(&mut app);
         assert!(!app.mouse_pressed);
-        assert!(!app.scrollbar_dragging);
+        assert!(app.scrollbar_dragging.is_none());
         assert!(app.tab_dragging.is_none());
         assert!(app.divider_dragging.is_none());
         let selection = app.mouse_state.current_selection().unwrap();
@@ -104,7 +232,10 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
     for open in openers {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.mouse_pressed = true;
-        app.scrollbar_dragging = true;
+        app.scrollbar_dragging = Some(crate::tabs::TerminalIdentity {
+            tab_id: 42,
+            pane_id: PaneId(7),
+        });
         app.tab_dragging = Some(TabDrag {
             tab_id: 42,
             live: None,
@@ -123,7 +254,7 @@ fn modal_interruption_finishes_native_gestures_before_pointer_motion() {
         open(&mut app);
         app.handle_mouse_move((100.0, 100.0));
         assert!(!app.mouse_pressed);
-        assert!(!app.scrollbar_dragging);
+        assert!(app.scrollbar_dragging.is_none());
         assert!(app.tab_dragging.is_none());
         assert!(app.divider_dragging.is_none());
         assert!(!app.mouse_state.current_selection().unwrap().active);
@@ -167,7 +298,10 @@ fn closing_modal_still_finishes_native_gesture_before_animation_cleanup() {
 fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.mouse_pressed = true;
-    app.scrollbar_dragging = true;
+    app.scrollbar_dragging = Some(crate::tabs::TerminalIdentity {
+        tab_id: 42,
+        pane_id: PaneId(7),
+    });
     app.divider_dragging = Some(DividerDrag {
         tab_id: 42,
         target: crate::panes::DividerTarget::Local(7),
@@ -185,7 +319,7 @@ fn losing_window_focus_finishes_native_pointer_gestures_without_a_release_event(
     app.mouse_state.handle_move(termeric_core::Point::new(0, 5));
     app.handle_window_focus_change(false);
     assert!(!app.mouse_pressed);
-    assert!(!app.scrollbar_dragging);
+    assert!(app.scrollbar_dragging.is_none());
     assert!(app.divider_dragging.is_none());
     assert!(app.tab_dragging.is_none());
     let selection = app.mouse_state.current_selection().unwrap();

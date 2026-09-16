@@ -92,6 +92,11 @@ rollback. The private Sway lane verifies a held-tab width change without focus
 loss or unintended reorder; unit checks cover scale/direct-sync cleanup and
 rejected-preview restoration. Native monitor-scale and live-domain resize
 acceptance remain separate.
+Scrollbar dragging retains a stable tab/pane owner and cancels on changed focus
+or a stale/closing owner; motion cannot retarget a sibling terminal. Raw-PTY
+tests verify actual scroll offsets, pane/tab isolation, and cancellation
+without relying on focus-refresh callbacks. Native pane-switch and live-domain
+scrollbar acceptance remain separate.
 No-focus/non-modal lost-release, device unplug, edge auto-scrolling,
 and native pinned/live-domain drag acceptance remain separate work.
 

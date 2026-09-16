@@ -530,6 +530,14 @@ a release, preserving selected text and terminal-protocol button state while
 ending native gestures. The cached live-domain preview rollback test exercises
 all three geometry paths with another request still pending. Real monitor-scale
 transitions and native live-domain resizing are not inferred from this evidence.
+Scrollbar owner tests use short-lived local shell PTYs and synthetic history.
+They check real offset changes for the original owner, zero sibling changes
+after tab/pane switches, refusal for closed/closing/missing owners, and no
+resumption after returning to the original pane. The native overflow fixture
+adds finite owner-tagged history and copies the selected tab's visible line
+after Ctrl+Tab during a held scrollbar drag; no search or scroll reset may mask
+an unintended change. Native pane-switch and live-domain scrollbar tests remain
+separate, and terminal-protocol mouse capture is unchanged.
 No-focus/non-modal lost-release, device unplug,
 native pinned/live-domain drags, and real-desktop acceptance
 are not inferred from these results. Terminal mouse-reporting policy is unchanged.

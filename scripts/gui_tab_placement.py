@@ -126,8 +126,10 @@ def native_keyboard_lifetime(gui, app, backend):
     try:
         def focused():
             log = app.log_path.read_text(encoding="utf-8", errors="replace")
-            return (keyboard.poll() is None and log.rfind("Window focus changed: true")
-                    > log.rfind("Window focus changed: false"))
+            # App starts focused; duplicate initial true notifications are not
+            # logged. Only an observed loss requires a subsequent regain.
+            lost = log.rfind("Window focus changed: false")
+            return keyboard.poll() is None and (lost < 0 or log.rfind("Window focus changed: true") > lost)
         gui.wait_until("persistent private keyboard focus", focused)
         yield
     finally:
@@ -314,6 +316,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
     run_dir.mkdir(parents=True, exist_ok=True)
     transcript = run_dir / "pty-transcript.jsonl"
     program, arguments = gui.fixture_command(transcript, instance=174)
+    arguments.append("--scrollback-fixture")
     app = gui.AppProcess(binary, run_dir, backend, program, arguments, env)
     count = 12
 
@@ -338,9 +341,10 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             and gui.latest_terminal_geometry(gui.read_records(transcript), original)[3] <= 240))
         # With the renderer's >=28px rail rows, twelve tabs cannot fit in this
         # <=240px content-height fixture, even before reserving its controls.
-        for expected in range(2, count + 1):
-            chord(("ctrl", "shift"), "t")
-            gui.wait_until(f"overflow tab {expected}", lambda: len(starts()) == expected)
+        with native_keyboard_lifetime(gui, app, backend):
+            for expected in range(2, count + 1):
+                chord(("ctrl", "shift"), "t")
+                gui.wait_until(f"overflow tab {expected}", lambda: len(starts()) == expected)
         pids = starts()
         for key in ("F6", "Home", "Return", "Escape"):
             chord((), key)
@@ -523,12 +527,33 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
                 raise gui.AcceptanceError("panel dismissal resized a background pane")
         if len(starts()) != count + 3:
             raise gui.AcceptanceError("tab dragging unexpectedly created another PTY")
+        select_and_check(1, "SCROLL_TARGET_SELECTED_174", pids[1])
+        chord(("ctrl", "shift"), "End")
+        select_and_check(0, "SCROLL_SOURCE_SELECTED_174", original)
+        with native_keyboard_lifetime(gui, app, backend):
+            lost_before_scroll = app.log_count("Window focus changed: false")
+            native_drag(gui, app, backend, (948, 680), (948, 45), (960, 720),
+                        during_drag=lambda: chord(("ctrl",), "Tab"))
+            if app.log_count("Window focus changed: false") != lost_before_scroll:
+                raise gui.AcceptanceError("scrollbar drag was interrupted by unrelated focus loss")
+        # Copy the cursor's visible line without searching or resetting scroll.
+        # At the bottom this is the owner marker; a stolen scroll reads history.
+        chord(("ctrl", "shift"), "x")
+        chord((), "Home")
+        native_text(app, backend, "v")
+        chord((), "End")
+        native_text(app, backend, "y")
+        clipboard_command = (["wl-paste", "--no-newline"] if backend == "wayland"
+                             else ["xclip", "-selection", "clipboard", "-o"])
+        copied_scroll_line = gui.run(clipboard_command, env=app.env).stdout
+        if copied_scroll_line.strip() != f"SCROLL_END_{pids[1]}":
+            raise gui.AcceptanceError(f"scrollbar drag retargeted the selected tab: {copied_scroll_line!r}")
         app.close_normally(backend)
         gui.wait_until("overflow fixture child cleanup", lambda: all(
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 8, "backend": backend, "original_pids": pids,
+            "schema": 9, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
@@ -539,11 +564,13 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             "modal_drag_focus_losses": 0,
             "resize_drag_focus_losses": 0,
             "resize_drag_widths": [960, 1040, 960],
+            "scrollbar_target_visible_line": copied_scroll_line,
+            "scrollbar_drag_focus_losses": 0,
             "panel_dismiss_input_owners": panel_owners,
             "panel_background_divider_point": [590, 680],
             "panel_geometry": panel_geometry,
             "drag_points": {"source": source, "destination": destination},
-            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal routing; not screenshot, arbitrary lost-release, edge-autoscroll, or screen-reader acceptance",
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar isolation; not screenshot, arbitrary lost-release, edge-autoscroll, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

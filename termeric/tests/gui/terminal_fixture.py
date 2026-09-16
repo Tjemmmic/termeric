@@ -61,6 +61,13 @@ def render_fixture(instance: int) -> None:
     emit(b"\x1b]2;Termeric GUI Acceptance\x07")
 
 
+def render_scrollback_fixture(pid: int) -> None:
+    """Finite, owner-tagged history for native scrollbar isolation checks."""
+    lines = [f"SCROLL_{pid}_{row:03d}" for row in range(100)]
+    lines.append(f"SCROLL_END_{pid}")
+    emit(("\r\n" + "\r\n".join(lines)).encode("ascii"))
+
+
 def png_chunk(kind: bytes, data: bytes) -> bytes:
     payload = kind + data
     return (
@@ -391,6 +398,7 @@ def main() -> int:
     parser.add_argument("--exit-after", type=float)
     parser.add_argument("--soak-output", action="store_true")
     parser.add_argument("--skip-external-graphics", action="store_true")
+    parser.add_argument("--scrollback-fixture", action="store_true")
     args = parser.parse_args()
 
     old_settings = termios.tcgetattr(sys.stdin.fileno())
@@ -429,6 +437,8 @@ def main() -> int:
         cwd=os.getcwd(),
     )
     render_fixture(args.instance)
+    if args.scrollback_fixture:
+        render_scrollback_fixture(os.getpid())
     if not args.skip_external_graphics:
         render_external_graphics_clients(args.transcript)
     exit_deadline = (

@@ -494,6 +494,16 @@ geometry-sync finalizer additionally has unit coverage for scale changes and
 live-domain preview rollback; the native lane does not establish physical
 monitor-scale or live-domain divider acceptance.
 
+Schema 9 adds 100 bounded owner-tagged history lines to the overflow fixture.
+It holds a scrollbar while switching tabs with Ctrl+Tab, moves the pointer to
+the top, and requires the newly selected tab to remain at its original bottom
+marker. Keyboard copy mode reads the visible line through the private native
+clipboard (`wl-paste`, or `xclip` for the unrun X11 adapter), without searching
+or resetting scroll. Focus-loss counts must remain unchanged during the drag.
+Tab setup retains a private virtual keyboard; its focus predicate handles
+Termeric's initially focused state, where no transition log exists yet.
+This does not establish native pane-switch or live-domain scrollbar acceptance.
+
 Background-image functional promotion likewise requires automated static PNG
 and JPEG cases with each fit and opacity extreme under top and left tabs.
 Resize, open search and plugin chrome, split panes, replace the source file,

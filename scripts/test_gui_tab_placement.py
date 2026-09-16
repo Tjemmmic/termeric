@@ -80,9 +80,9 @@ class TabPlacementTests(unittest.TestCase):
 
     def test_overflow_lane_is_selected_with_backend_local_tools(self):
         self.assertEqual(gui.required_tools("wayland", ["tab-overflow"], False, True),
-                         ["sway", "swaymsg", "tic", "wtype"])
+                         ["sway", "swaymsg", "tic", "wl-paste", "wtype"])
         self.assertEqual(gui.required_tools("x11", ["tab-overflow"], False, False, True),
-                         ["openbox", "tic", "xdotool"])
+                         ["openbox", "tic", "xclip", "xdotool"])
         workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
         block = workflow.split("- name: Run Wayland keyboard, pane, and clipboard scenario", 1)[1].split("- name:", 1)[0]
         self.assertIn("--scenario tab-overflow", block)
@@ -239,6 +239,22 @@ class TabPlacementTests(unittest.TestCase):
         with placement.native_keyboard_lifetime(harness, mock.Mock(), "x11"):
             pass
         harness.subprocess.Popen.assert_not_called()
+
+    def test_private_keyboard_accepts_initial_focus_but_waits_after_loss(self):
+        app = mock.Mock(env={})
+        keyboard = mock.Mock()
+        keyboard.poll.return_value = None
+        harness = mock.Mock(subprocess=gui.subprocess, wtype_command=gui.wtype_command)
+        def check_focus(_, predicate):
+            for log, expected in [("", True), ("Window focus changed: false", False),
+                                  ("Window focus changed: false\nWindow focus changed: true", True)]:
+                app.log_path.read_text.return_value = log
+                self.assertEqual(predicate(), expected)
+        harness.wait_until.side_effect = check_focus
+        with mock.patch.object(gui.subprocess, "Popen", return_value=keyboard):
+            with placement.native_keyboard_lifetime(harness, app, "wayland"):
+                pass
+        keyboard.terminate.assert_called_once_with()
 
 
 if __name__ == "__main__":
