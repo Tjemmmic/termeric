@@ -21,6 +21,7 @@ mod plugin_restart;
 mod redraw_scheduler;
 mod renderer_recovery;
 mod runtime_plugins;
+mod search_input;
 mod session_export;
 mod sessions;
 pub mod state;
@@ -4058,17 +4059,22 @@ impl App {
     /// Handle keyboard input when in search mode
     /// Returns true if the input was handled by search mode
     fn handle_search_mode_input(&mut self, event: &winit::event::KeyEvent) -> bool {
-        use winit::keyboard::{Key, NamedKey};
-
         if event.state != winit::event::ElementState::Pressed {
             return self.search.is_active();
         }
+        self.handle_search_key(&event.logical_key)
+    }
 
+    fn handle_search_key(&mut self, key: &winit::keyboard::Key) -> bool {
+        use winit::keyboard::{Key, NamedKey};
         if !self.search.is_active() {
             return false;
         }
+        if self.handle_search_edit_key(key) {
+            return true;
+        }
 
-        match &event.logical_key {
+        match key {
             Key::Named(NamedKey::Escape) => {
                 self.search.cancel();
                 if let Some(window) = &self.window {
@@ -4080,21 +4086,6 @@ impl App {
                 self.search.confirm();
                 if self.copy_mode.is_active() {
                     self.jump_copy_cursor_to_search();
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-            Key::Named(NamedKey::Backspace) => {
-                if self.search_cursor_pos > 0 {
-                    let cursor = self.search_cursor_pos;
-                    if let Some(Some(previous)) =
-                        self.with_search_and_active_grid(|search, grid| {
-                            search.remove_char_before(cursor, grid)
-                        })
-                    {
-                        self.search_cursor_pos = previous;
-                    }
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -4112,44 +4103,6 @@ impl App {
                 // Next match
                 self.search.next();
                 self.scroll_to_current_match();
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-            Key::Named(NamedKey::ArrowLeft) => {
-                // Move to previous character boundary
-                let query = self.search.query();
-                if self.search_cursor_pos > 0 {
-                    if let Some((prev_pos, _)) =
-                        query[..self.search_cursor_pos].char_indices().next_back()
-                    {
-                        self.search_cursor_pos = prev_pos;
-                    }
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-            Key::Named(NamedKey::ArrowRight) => {
-                // Move to next character boundary
-                let query = self.search.query();
-                if self.search_cursor_pos < query.len() {
-                    if let Some((_, ch)) = query[self.search_cursor_pos..].char_indices().next() {
-                        self.search_cursor_pos += ch.len_utf8();
-                    }
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-            Key::Named(NamedKey::Home) => {
-                self.search_cursor_pos = 0;
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
-            Key::Named(NamedKey::End) => {
-                self.search_cursor_pos = self.search.query().len();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }

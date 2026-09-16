@@ -75,55 +75,7 @@ impl TextInput {
     /// the caret must not invalidate search results. Existing scalar-based
     /// methods remain unchanged for other consumers.
     pub fn edit_grapheme(&mut self, edit: TextInputEdit) -> bool {
-        let previous = || {
-            self.buffer
-                .grapheme_indices(true)
-                .map(|(offset, _)| offset)
-                .take_while(|offset| *offset < self.cursor)
-                .last()
-                .unwrap_or(0)
-        };
-        let next = || {
-            self.buffer
-                .grapheme_indices(true)
-                .map(|(offset, _)| offset)
-                .find(|offset| *offset > self.cursor)
-                .unwrap_or(self.buffer.len())
-        };
-        match edit {
-            TextInputEdit::Left => self.cursor = previous(),
-            TextInputEdit::Right => self.cursor = next(),
-            TextInputEdit::Home => self.cursor = 0,
-            TextInputEdit::End => self.cursor = self.buffer.len(),
-            TextInputEdit::Backspace | TextInputEdit::Delete => {
-                if matches!(edit, TextInputEdit::Backspace) && self.cursor == 0
-                    || matches!(edit, TextInputEdit::Delete) && self.cursor == self.buffer.len()
-                {
-                    return false;
-                }
-                let at_boundary = self.cursor == self.buffer.len()
-                    || self
-                        .buffer
-                        .grapheme_indices(true)
-                        .any(|(offset, _)| offset == self.cursor);
-                // An insertion can join a following combining mark. If the
-                // caret is now inside that cluster, delete the whole cluster.
-                let start = if matches!(edit, TextInputEdit::Backspace) || !at_boundary {
-                    previous()
-                } else {
-                    self.cursor
-                };
-                let end = if matches!(edit, TextInputEdit::Backspace) && at_boundary {
-                    self.cursor
-                } else {
-                    next()
-                };
-                self.buffer.drain(start..end);
-                self.cursor = start;
-                return true;
-            }
-        }
-        false
+        edit_grapheme(&mut self.buffer, &mut self.cursor, edit)
     }
 
     /// Delete the character before the cursor (backspace).
@@ -217,6 +169,62 @@ impl TextInput {
         self.cursor = 0;
         s
     }
+}
+
+/// Edit an existing buffer without copying it. Invalid UTF-8 byte cursors are
+/// rejected unchanged. The result reports text changes, not caret movement.
+pub(crate) fn edit_grapheme(buffer: &mut String, cursor: &mut usize, edit: TextInputEdit) -> bool {
+    if !buffer.is_char_boundary(*cursor) {
+        return false;
+    }
+    let previous = || {
+        buffer
+            .grapheme_indices(true)
+            .map(|(offset, _)| offset)
+            .take_while(|offset| *offset < *cursor)
+            .last()
+            .unwrap_or(0)
+    };
+    let next = || {
+        buffer
+            .grapheme_indices(true)
+            .map(|(offset, _)| offset)
+            .find(|offset| *offset > *cursor)
+            .unwrap_or(buffer.len())
+    };
+    match edit {
+        TextInputEdit::Left => *cursor = previous(),
+        TextInputEdit::Right => *cursor = next(),
+        TextInputEdit::Home => *cursor = 0,
+        TextInputEdit::End => *cursor = buffer.len(),
+        TextInputEdit::Backspace | TextInputEdit::Delete => {
+            if matches!(edit, TextInputEdit::Backspace) && *cursor == 0
+                || matches!(edit, TextInputEdit::Delete) && *cursor == buffer.len()
+            {
+                return false;
+            }
+            let at_boundary = *cursor == buffer.len()
+                || buffer
+                    .grapheme_indices(true)
+                    .any(|(offset, _)| offset == *cursor);
+            // An insertion can join a following combining mark. If the
+            // caret is now inside that cluster, delete the whole cluster.
+            let start = if matches!(edit, TextInputEdit::Backspace) || !at_boundary {
+                previous()
+            } else {
+                *cursor
+            };
+            let end = if matches!(edit, TextInputEdit::Backspace) && at_boundary {
+                *cursor
+            } else {
+                next()
+            };
+            buffer.drain(start..end);
+            *cursor = start;
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

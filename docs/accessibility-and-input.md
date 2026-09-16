@@ -35,12 +35,22 @@ search layout includes the vertical tab rail, chrome, and scaled cell metrics;
 glyphs and preedit stay within the query field rather than overlapping controls.
 Higher-priority text surfaces retain ownership, and a collapsed query field does
 not fall back to the terminal cursor. The full bounded query and UTF-8 caret stay
-in the model and semantic tree; this does not change search's existing editing
-semantics. Geometry tests cover narrow, shifted, scaled, and mixed-script fields;
+in the model and semantic tree. Geometry tests cover narrow, shifted, scaled, and mixed-script fields;
 a raw-PTY test verifies search composition/commit does not leak into the child.
 The software-GPU smoke checks shaped search glyphs against their field clip too.
 Native IME and visual acceptance remain deferred. Other text surfaces retain
 their existing candidate placement behavior.
+
+Search query editing uses unmodified Left/Right to cross whole graphemes,
+Home/End to reach either end, and Backspace/Delete to remove whole graphemes.
+This includes combining sequences, ZWJ emoji, and flags. If an insertion leaves
+the byte caret inside a newly joined cluster, movement reaches its boundary and
+deletion removes that entire cluster. Caret-only and no-op edits retain pending
+scan progress, completed results, and the selected match; text changes restart
+the search and recompile regex as needed. Accepted editing keys clear stale IME
+composition. Modified editing keys are consumed without changing the query:
+word motion and selection are not implemented. Local model and raw-PTY tests
+cover these rules, but native keyboard/IME acceptance remains deferred.
 
 Unmodified Left/Right and Home/End now move the palette query caret; Delete
 removes the following grapheme and Backspace removes the preceding one.

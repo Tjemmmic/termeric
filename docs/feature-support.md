@@ -373,8 +373,12 @@ screen-reader, and real-desktop acceptance remain deferred
 Active terminal search shares whole-grapheme horizontal scrolling between its
 painted query/caret and IME candidate/preedit geometry, including rail/chrome
 offsets and scaled cells. Geometry and raw-PTY routing tests pass, and the
-software-GPU smoke checks shaped query clipping. This leaves search editing
-semantics unchanged and does not claim native IME or visual acceptance
+software-GPU smoke checks shaped query clipping. Search also supports
+whole-grapheme Left/Right and Backspace/Delete, plus Home/End; caret-only edits
+preserve scan progress and selected results. Modified editing keys are consumed
+without editing (word motion/selection remain absent). Model and raw-PTY tests
+cover query edits and IME insertion without child-input leakage. This does not
+claim native keyboard, IME, or visual acceptance
 (see [input contract](accessibility-and-input.md)).
 
 Built-in plugin profile selection distinguishes **Automatic profile** from every

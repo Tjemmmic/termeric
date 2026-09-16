@@ -340,6 +340,7 @@ impl Search {
     }
 
     /// Get the current query
+    #[cfg(test)]
     pub fn query(&self) -> &str {
         &self.query
     }
@@ -375,18 +376,22 @@ impl Search {
         }
     }
 
-    /// Remove the character immediately before a UTF-8 cursor and return the
-    /// new cursor position. This keeps editing behavior independent from the
-    /// physical end of the query.
-    pub fn remove_char_before(&mut self, cursor: usize, grid: &Grid) -> Option<usize> {
-        if cursor == 0 || cursor > self.query.len() || !self.query.is_char_boundary(cursor) {
+    /// Whole-grapheme query editing. Cursor-only and no-op edits preserve
+    /// completed results, selection, and progress through a pending scan.
+    pub fn edit_query(
+        &mut self,
+        mut cursor: usize,
+        edit: crate::ui::text_input::TextInputEdit,
+        grid: &Grid,
+    ) -> Option<usize> {
+        if !self.query.is_char_boundary(cursor) {
             return None;
         }
-        let previous = self.query[..cursor].char_indices().next_back()?.0;
-        self.query.drain(previous..cursor);
-        self.compile_regex_if_needed();
-        self.begin_update(grid, None);
-        Some(previous)
+        if crate::ui::text_input::edit_grapheme(&mut self.query, &mut cursor, edit) {
+            self.compile_regex_if_needed();
+            self.begin_update(grid, None);
+        }
+        Some(cursor)
     }
 
     /// Replace the complete query from an accessibility text action.
@@ -1163,7 +1168,14 @@ mod tests {
         assert!(search.insert_text(0, "ac", terminal.grid()));
         assert!(search.insert_text(1, "界", terminal.grid()));
         assert_eq!(search.query(), "a界c");
-        assert_eq!(search.remove_char_before(4, terminal.grid()), Some(1));
+        assert_eq!(
+            search.edit_query(
+                4,
+                crate::ui::text_input::TextInputEdit::Backspace,
+                terminal.grid()
+            ),
+            Some(1)
+        );
         assert_eq!(search.query(), "ac");
 
         let oversized = "x".repeat(MAX_SEARCH_QUERY_BYTES + 1);
@@ -1192,6 +1204,71 @@ mod tests {
                 end_col: 6,
             })
         );
+    }
+
+    #[test]
+    fn query_edits_preserve_pending_progress_and_completed_selection_until_text_changes() {
+        use crate::ui::text_input::TextInputEdit::*;
+        let mut terminal = termeric_core::Terminal::new(40, 2);
+        terminal.grid_mut().set_scrollback_limit(1_000);
+        for _ in 0..200 {
+            terminal.process(b"needle\r\n");
+        }
+        let mut search = Search::new();
+        search.start();
+        assert!(search.set_query("needle", terminal.grid()));
+        assert!(search.advance_rows(terminal.grid(), 10));
+        let progress = format!("{:?}", search.pending_search);
+        let mut cursor = 0;
+        for edit in [Home, Backspace, Right, Left, End, Delete] {
+            cursor = search.edit_query(cursor, edit, terminal.grid()).unwrap();
+            assert_eq!(format!("{:?}", search.pending_search), progress);
+            assert_eq!(search.query(), "needle");
+        }
+        search.finish(terminal.grid());
+        search.next();
+        let selected = search.current_match_index();
+        let matches = search.matches.clone();
+        for edit in [End, Delete, Home, Backspace, Right, Left] {
+            cursor = search.edit_query(cursor, edit, terminal.grid()).unwrap();
+            assert!(!search.is_searching());
+            assert_eq!(search.current_match_index(), selected);
+            assert_eq!(search.matches, matches);
+        }
+        assert_eq!(search.edit_query(0, Delete, terminal.grid()), Some(0));
+        assert_eq!(search.query(), "eedle");
+        assert!(search.is_searching());
+        assert_eq!(search.match_count(), 0);
+        assert!(search.current().is_none());
+        search.finish(terminal.grid());
+        assert_eq!(search.match_count(), 200);
+    }
+
+    #[test]
+    fn query_edits_handle_joined_clusters_invalid_cursors_and_regex_recompilation() {
+        use crate::ui::text_input::TextInputEdit::*;
+        let terminal = termeric_core::Terminal::new(40, 2);
+        let mut search = Search::new();
+        for edit in [Backspace, Delete] {
+            assert!(search.set_query("\u{301}x", terminal.grid()));
+            assert!(search.insert_text(0, "e", terminal.grid()));
+            assert_eq!(search.edit_query(1, edit, terminal.grid()), Some(0));
+            assert_eq!(search.query(), "x");
+        }
+        assert!(search.set_query("界", terminal.grid()));
+        for cursor in [1, 2, 4, usize::MAX] {
+            for edit in [Home, End, Left, Right, Backspace, Delete] {
+                assert_eq!(search.edit_query(cursor, edit, terminal.grid()), None);
+                assert_eq!(search.query(), "界");
+            }
+        }
+        search.toggle_regex(terminal.grid());
+        assert!(search.set_query("[a", terminal.grid()));
+        assert!(search.regex_error.is_some());
+        assert_eq!(search.edit_query(0, Delete, terminal.grid()), Some(0));
+        assert_eq!(search.query(), "a");
+        assert!(search.regex_error.is_none());
+        assert!(search.is_searching());
     }
 
     #[test]
