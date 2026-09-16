@@ -270,11 +270,17 @@ fn plugin_transfer_keeps_streaming_transcript_diff_and_read_only_state_with_one_
                     tab_id: source,
                     targets: vec![owner, PaneId(0)],
                 };
-                app.terminal_mouse_button = Some(MouseReportButton::Left);
+                app.terminal_mouse_capture = Some(TerminalMouseCapture {
+                    owner: crate::tabs::TerminalIdentity {
+                        tab_id: source,
+                        pane_id: owner,
+                    },
+                    button: MouseReportButton::Left,
+                });
                 app.move_pane_to_next_tab();
                 assert!(matches!(app.broadcast, BroadcastState::Inactive));
                 assert!(!app.copy_mode.is_active());
-                assert!(app.terminal_mouse_button.is_none());
+                assert!(app.terminal_mouse_capture.is_none());
                 app.tabs
                     .as_ref()
                     .unwrap()

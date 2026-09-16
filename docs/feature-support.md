@@ -137,6 +137,13 @@ an earlier request pending; private native coverage checks local PTY geometry.
 No-focus/non-modal lost-release, device unplug, edge auto-scrolling,
 and native pinned/live-domain drag acceptance remain separate work.
 
+Application mouse reporting also retains the stable terminal that received its
+press. Motion/release and focus refresh cancel stale ownership instead of
+forwarding held-button state to a newly selected tab or pane. Raw-PTY tests
+verify exact destination bytes, closure and no-revival behavior, modifier-safe
+release, and preserved unheld hover; native held-button focus-switch acceptance
+remains deferred.
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |

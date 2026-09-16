@@ -1272,11 +1272,11 @@ impl ApplicationHandler<AppEvent> for App {
                 // that protocol lifecycle before modal click interception so
                 // the child application cannot retain a stuck button.
                 if state == winit::event::ElementState::Released
-                    && self.terminal_mouse_button.is_some()
+                    && self.terminal_mouse_capture.is_some()
                     && let Some(pos) = self.last_cursor_pos
                 {
                     self.handle_mouse_input(button, state, pos);
-                    if self.terminal_mouse_button.is_none() {
+                    if self.terminal_mouse_capture.is_none() {
                         return;
                     }
                 }

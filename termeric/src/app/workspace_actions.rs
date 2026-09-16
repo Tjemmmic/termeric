@@ -403,7 +403,7 @@ impl App {
             Ok(_) => {
                 self.broadcast = BroadcastState::Inactive;
                 self.leave_copy_mode(false);
-                self.terminal_mouse_button = None;
+                self.terminal_mouse_capture = None;
                 self.refresh_focused_terminal_surfaces();
                 self.toasts.success("Pane moved to the next tab");
             }
@@ -3132,7 +3132,7 @@ impl App {
             .map_err(|error| format!("Could not move pane {pane_id}: {error:#}"))?;
         self.broadcast = BroadcastState::Inactive;
         self.leave_copy_mode(false);
-        self.terminal_mouse_button = None;
+        self.terminal_mouse_capture = None;
         self.refresh_focused_terminal_surfaces();
         if let Some(window) = &self.window {
             window.request_redraw();

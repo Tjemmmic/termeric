@@ -3397,8 +3397,8 @@ impl Application {
         destination.broadcast = super::BroadcastState::Inactive;
         source.leave_copy_mode(false);
         destination.leave_copy_mode(false);
-        source.terminal_mouse_button = None;
-        destination.terminal_mouse_button = None;
+        source.terminal_mouse_capture = None;
+        destination.terminal_mouse_capture = None;
         source.tab_dragging = None;
         destination.tab_dragging = None;
         source.refresh_focused_terminal_surfaces();
@@ -3546,8 +3546,8 @@ impl Application {
         destination.broadcast = super::BroadcastState::Inactive;
         source.leave_copy_mode(false);
         destination.leave_copy_mode(false);
-        source.terminal_mouse_button = None;
-        destination.terminal_mouse_button = None;
+        source.terminal_mouse_capture = None;
+        destination.terminal_mouse_capture = None;
         source.refresh_focused_terminal_surfaces();
         destination.refresh_focused_terminal_surfaces();
         if let Some(window) = &source.window {
@@ -3754,8 +3754,8 @@ impl Application {
         destination.broadcast = super::BroadcastState::Inactive;
         source.leave_copy_mode(false);
         destination.leave_copy_mode(false);
-        source.terminal_mouse_button = None;
-        destination.terminal_mouse_button = None;
+        source.terminal_mouse_capture = None;
+        destination.terminal_mouse_capture = None;
         source.refresh_focused_terminal_surfaces();
         destination.refresh_focused_terminal_surfaces();
         source.toasts.success("Pane moved to the next window");
@@ -3829,8 +3829,8 @@ impl Application {
         destination.broadcast = super::BroadcastState::Inactive;
         source.leave_copy_mode(false);
         destination.leave_copy_mode(false);
-        source.terminal_mouse_button = None;
-        destination.terminal_mouse_button = None;
+        source.terminal_mouse_capture = None;
+        destination.terminal_mouse_capture = None;
         source.tab_dragging = None;
         destination.tab_dragging = None;
         source.refresh_focused_terminal_surfaces();

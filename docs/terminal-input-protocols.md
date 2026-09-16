@@ -33,6 +33,14 @@ selects a rectangular block while using this bypass. A release that belongs to
 an already-reported press remains application-owned so changing modifiers
 mid-drag cannot leave the application button state stuck.
 
+An application-owned press captures its stable tab/pane identity. Focus-surface
+refresh, drag motion, and release revalidate that owner; switching terminals or
+closing the source cancels the capture instead of sending held-button motion or
+a release to another application. Returning focus does not revive the capture.
+Cancellation does not synthesize a release into an unfocused or closed PTY.
+Ordinary DECSET 1003 hover reports still follow the focused terminal, and a
+valid captured release still works after modifier changes or modal takeover.
+
 Ctrl+click on a detected or semantic hyperlink remains Termeric's native link
 activation gesture. Ctrl is included in application reports at other cells.
 
@@ -69,6 +77,10 @@ Unit tests assert byte-exact reports for every implemented tracking and
 encoding family, coordinate boundaries, modifiers, focus, paste, and alternate
 scroll. A real raw-mode shell PTY test captures one combined stream in a
 focused split pane and proves ordering and duplicate-focus suppression.
+Additional raw-PTY captures verify tab/pane-switch isolation at the actual
+mouse-report write paths, release-only transitions, closed-source cancellation,
+no revival after focus returns, modifier changes, and ordinary hover reports.
+Native compositor acceptance of held-button tab/pane switching remains deferred.
 
 Native X11 automation now drives mouse, paste, Vim, less, and tmux through the
 real application window; the private Wayland lane proves launch, first render,

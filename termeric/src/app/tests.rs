@@ -882,7 +882,14 @@ fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
             target: crate::panes::DividerTarget::Local(7),
             last_ratio_millis: 500,
         });
-        app.terminal_mouse_button = Some(MouseReportButton::Left);
+        let capture = TerminalMouseCapture {
+            owner: crate::tabs::TerminalIdentity {
+                tab_id: 42,
+                pane_id: PaneId(0),
+            },
+            button: MouseReportButton::Left,
+        };
+        app.terminal_mouse_capture = Some(capture);
         app.mouse_state.handle_press(
             MouseButton::Left,
             termeric_core::Point::new(0, 0),
@@ -897,7 +904,7 @@ fn geometry_changes_finish_all_native_gestures_without_a_button_release() {
         let selection = app.mouse_state.current_selection().unwrap();
         assert!(!selection.active);
         assert_eq!(selection.end, termeric_core::Point::new(0, 5));
-        assert_eq!(app.terminal_mouse_button, Some(MouseReportButton::Left));
+        assert_eq!(app.terminal_mouse_capture, Some(capture));
         change(&mut app);
         assert!(app.take_native_drag_controls().is_empty());
     }
@@ -1003,7 +1010,14 @@ fn native_modal_cleanup_preserves_unobscured_drag_and_protocol_button() {
         tab_id: 42,
         live: None,
     });
-    app.terminal_mouse_button = Some(MouseReportButton::Left);
+    let capture = TerminalMouseCapture {
+        owner: crate::tabs::TerminalIdentity {
+            tab_id: 42,
+            pane_id: PaneId(0),
+        },
+        button: MouseReportButton::Left,
+    };
+    app.terminal_mouse_capture = Some(capture);
     app.finish_obscured_native_pointer_gesture();
     assert!(app.mouse_pressed);
     assert!(app.tab_dragging.is_some());
@@ -1014,7 +1028,7 @@ fn native_modal_cleanup_preserves_unobscured_drag_and_protocol_button() {
     assert!(!app.mouse_pressed);
     assert!(app.tab_dragging.is_none());
     // Application-owned release reporting has a separate owner/lifecycle.
-    assert_eq!(app.terminal_mouse_button, Some(MouseReportButton::Left));
+    assert_eq!(app.terminal_mouse_capture, Some(capture));
 }
 
 #[test]

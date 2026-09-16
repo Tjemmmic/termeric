@@ -688,6 +688,12 @@ struct DividerDrag {
     last_ratio_millis: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalMouseCapture {
+    owner: crate::tabs::TerminalIdentity,
+    button: MouseReportButton,
+}
+
 #[derive(Debug, Clone)]
 struct TabDrag {
     tab_id: usize,
@@ -1091,8 +1097,8 @@ pub struct App {
     file_drop_hovered: bool,
     /// Whether mouse is currently pressed (for selection)
     mouse_pressed: bool,
-    /// Button currently held by an application mouse-reporting sequence.
-    terminal_mouse_button: Option<MouseReportButton>,
+    /// Exact terminal that received the held application mouse button.
+    terminal_mouse_capture: Option<TerminalMouseCapture>,
     /// Whether we're dragging the scrollbar
     scrollbar_dragging: Option<crate::tabs::TerminalIdentity>,
     /// Exact pane divider selected at mouse-down.
@@ -1377,7 +1383,7 @@ impl App {
             last_cursor_pos: None,
             file_drop_hovered: false,
             mouse_pressed: false,
-            terminal_mouse_button: None,
+            terminal_mouse_capture: None,
             scrollbar_dragging: None,
             divider_dragging: None,
             tab_dragging: None,
@@ -3947,7 +3953,7 @@ impl App {
     fn handle_window_focus_change(&mut self, focused: bool) {
         if !focused {
             self.alt_graph_active = false;
-            self.terminal_mouse_button = None;
+            self.terminal_mouse_capture = None;
             self.finish_native_pointer_gesture();
         }
         if self.window_focused == focused {

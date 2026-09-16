@@ -72,7 +72,7 @@ impl App {
         }
     }
 
-    fn focused_scrollbar_owner(&self) -> Option<crate::tabs::TerminalIdentity> {
+    fn focused_pointer_terminal(&self) -> Option<crate::tabs::TerminalIdentity> {
         let tabs = self.tabs.as_ref()?;
         let target = tabs.active_tab()?.focused_terminal_identity();
         tabs.origin_for_pane(target.tab_id, target.pane_id)?;
@@ -80,14 +80,23 @@ impl App {
     }
 
     pub(super) fn begin_scrollbar_drag(&mut self) {
-        self.scrollbar_dragging = self.focused_scrollbar_owner();
+        self.scrollbar_dragging = self.focused_pointer_terminal();
+    }
+
+    fn reconcile_terminal_mouse_capture(&mut self) {
+        if self
+            .terminal_mouse_capture
+            .is_some_and(|capture| self.focused_pointer_terminal() != Some(capture.owner))
+        {
+            self.terminal_mouse_capture = None;
+        }
     }
 
     /// A retained pointer gesture may never migrate to a different terminal,
     /// including when a caller changes focus without refreshing UI surfaces.
     fn reconcile_scrollbar_drag(&mut self) -> bool {
         if self.scrollbar_dragging.is_some()
-            && self.scrollbar_dragging == self.focused_scrollbar_owner()
+            && self.scrollbar_dragging == self.focused_pointer_terminal()
         {
             true
         } else {
@@ -1223,10 +1232,13 @@ impl App {
         ) else {
             return false;
         };
+        let Some(owner) = self.focused_pointer_terminal() else {
+            return false;
+        };
         if !self.write_terminal_protocol_input(&bytes) {
             return false;
         }
-        self.terminal_mouse_button = Some(button);
+        self.terminal_mouse_capture = Some(TerminalMouseCapture { owner, button });
         self.mouse_pressed = false;
         self.mouse_state.clear_selection();
         if let Some(terminal) = self.active_terminal_mut() {
@@ -1247,10 +1259,18 @@ impl App {
         let Some(button) = report_button(button) else {
             return false;
         };
-        if self.terminal_mouse_button != Some(button) {
+        let Some(capture) = self
+            .terminal_mouse_capture
+            .filter(|capture| capture.button == button)
+        else {
             return false;
+        };
+        self.terminal_mouse_capture = None;
+        // A release must never migrate to a newly focused or replacement PTY.
+        // Do not invent coordinates or deliver input to an unfocused owner.
+        if self.focused_pointer_terminal() != Some(capture.owner) {
+            return true;
         }
-        self.terminal_mouse_button = None;
         let mode = self.active_keyboard_mode();
         let Some((col, row)) =
             self.protocol_grid_position(position, cell_width, cell_height, content_top, padding)
@@ -1277,12 +1297,13 @@ impl App {
         content_top: f32,
         padding: f32,
     ) -> bool {
+        self.reconcile_terminal_mouse_capture();
         let mode = self.active_keyboard_mode();
         if !mode.has_mouse_mode() {
-            self.terminal_mouse_button = None;
+            self.terminal_mouse_capture = None;
             return false;
         }
-        if self.modifiers.shift_key() && self.terminal_mouse_button.is_none() {
+        if self.modifiers.shift_key() && self.terminal_mouse_capture.is_none() {
             return false;
         }
         let Some((col, row)) =
@@ -1292,7 +1313,9 @@ impl App {
         };
         if let Some(bytes) = crate::input::encode_mouse_report(
             mode,
-            crate::input::MouseReportKind::Motion(self.terminal_mouse_button),
+            crate::input::MouseReportKind::Motion(
+                self.terminal_mouse_capture.map(|capture| capture.button),
+            ),
             col,
             row,
             self.modifiers,
@@ -1577,6 +1600,7 @@ impl App {
         self.tab_drag_scroll = None;
         self.reconcile_divider_drag();
         self.reconcile_scrollbar_drag();
+        self.reconcile_terminal_mouse_capture();
         self.reconcile_broadcast_state();
         let active_tab_id = self.tabs.as_ref().and_then(TabManager::active_tab_id);
         if self
@@ -1857,8 +1881,201 @@ fn screen_to_pane_grid(
 
 #[cfg(test)]
 mod tests {
-    use super::{protocol_cell_from_viewport, screen_to_pane_grid};
+    use super::*;
     use crate::panes::PaneRect;
+
+    #[cfg(unix)]
+    fn mouse_report_position(app: &App) -> (f64, f64) {
+        let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+        let (x, y) = tab.pane_manager.as_ref().map_or((0.0, 0.0), |panes| {
+            let rect = panes.calculate_layout()[&panes.focused_id()];
+            (rect.x, rect.y)
+        });
+        ((x + 15.0) as f64, (y + 30.0) as f64)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn application_mouse_gesture_does_not_follow_tab_or_pane_focus() {
+        use crate::app::tests::{
+            current_harvest_capture_routes, fenced_harvest_capture,
+            harvest_rerun_capture_fixture_in,
+        };
+        use termeric_core::term::TerminalMode;
+        for split in [false, true] {
+            for motion in [false, true] {
+                let (mut app, directory, _, mut captures) = harvest_rerun_capture_fixture_in(split);
+                if !split {
+                    app.tabs.as_mut().unwrap().new_tab().unwrap();
+                    captures.extend(current_harvest_capture_routes(&mut app, directory.path()));
+                    app.tabs.as_mut().unwrap().switch_to(0);
+                } else {
+                    app.tabs
+                        .as_mut()
+                        .unwrap()
+                        .active_tab_mut()
+                        .unwrap()
+                        .pane_manager
+                        .as_mut()
+                        .unwrap()
+                        .focus(PaneId(0));
+                }
+                let mode = TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR;
+                app.active_terminal_mut().unwrap().set_mode(mode, true);
+                let position = mouse_report_position(&app);
+                assert!(app.try_report_mouse_press(
+                    MouseButton::Left,
+                    position,
+                    10.0,
+                    20.0,
+                    0.0,
+                    0.0
+                ));
+                // Change ownership without a refresh callback: the write boundary
+                // itself must prevent stale presses reaching another application.
+                if split {
+                    let panes = app
+                        .tabs
+                        .as_mut()
+                        .unwrap()
+                        .active_tab_mut()
+                        .unwrap()
+                        .pane_manager
+                        .as_mut()
+                        .unwrap();
+                    let other = panes
+                        .pane_ids()
+                        .into_iter()
+                        .find(|id| *id != PaneId(0))
+                        .unwrap();
+                    panes.focus(other);
+                } else {
+                    app.tabs.as_mut().unwrap().switch_to(1);
+                }
+                app.active_terminal_mut().unwrap().set_mode(mode, true);
+                let position = mouse_report_position(&app);
+                if motion {
+                    app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0);
+                }
+                app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0);
+                let bytes = fenced_harvest_capture(&mut app, &captures);
+                assert_eq!(bytes[0], b"\x1b[<0;2;2M");
+                assert!(
+                    bytes[1..].iter().all(Vec::is_empty),
+                    "split={split}, motion={motion}: {bytes:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn application_mouse_capture_preserves_valid_drag_release_and_hover() {
+        use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};
+        use termeric_core::term::TerminalMode;
+        let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture_in(false);
+        app.active_terminal_mut().unwrap().set_mode(
+            TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR,
+            true,
+        );
+        let position = mouse_report_position(&app);
+        assert!(app.try_report_mouse_press(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+        let capture = app.terminal_mouse_capture;
+        app.refresh_focused_terminal_surfaces();
+        assert_eq!(app.terminal_mouse_capture, capture);
+        assert!(!app.try_report_mouse_release(MouseButton::Right, position, 10.0, 20.0, 0.0, 0.0));
+        assert_eq!(app.terminal_mouse_capture, capture);
+        // Modifier changes must not turn a captured application drag into selection.
+        app.modifiers = ModifiersState::SHIFT | ModifiersState::ALT;
+        assert!(app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+        assert!(app.terminal_mouse_capture.is_none());
+        assert!(!app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+        app.modifiers = ModifiersState::empty();
+        // DECSET 1003 hover remains allowed without a captured button.
+        app.active_terminal_mut()
+            .unwrap()
+            .set_mode(TerminalMode::MOUSE_ANY_EVENT, true);
+        assert!(app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0));
+        assert_eq!(
+            fenced_harvest_capture(&mut app, &captures)[0],
+            b"\x1b[<0;2;2M\x1b[<44;2;2M\x1b[<12;2;2m\x1b[<35;2;2M"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn application_mouse_capture_cancellation_cannot_resume_after_focus_returns() {
+        use crate::app::tests::{fenced_harvest_capture, harvest_rerun_capture_fixture_in};
+        use termeric_core::term::TerminalMode;
+        for closed in [false, true] {
+            let (mut app, _directory, _, captures) = harvest_rerun_capture_fixture_in(true);
+            let original = app
+                .tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .focused_id();
+            let original_index = captures.iter().position(|(origin, _)| matches!(
+                origin, crate::tabs::TerminalEventOrigin::Pane { pane_id, .. } if *pane_id == original
+            )).unwrap();
+            app.active_terminal_mut().unwrap().set_mode(
+                TerminalMode::MOUSE_BUTTON_EVENT | TerminalMode::MOUSE_SGR,
+                true,
+            );
+            let position = mouse_report_position(&app);
+            assert!(app.try_report_mouse_press(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0));
+            let panes = app
+                .tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .pane_manager
+                .as_mut()
+                .unwrap();
+            if closed {
+                panes.get_pane_mut(original).unwrap().closed = true;
+            } else {
+                let other = panes
+                    .pane_ids()
+                    .into_iter()
+                    .find(|id| *id != original)
+                    .unwrap();
+                panes.focus(other);
+            }
+            app.refresh_focused_terminal_surfaces();
+            assert!(app.terminal_mouse_capture.is_none());
+            let panes = app
+                .tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .pane_manager
+                .as_mut()
+                .unwrap();
+            panes.get_pane_mut(original).unwrap().closed = false;
+            panes.focus(original);
+            app.try_report_mouse_motion(position, 10.0, 20.0, 0.0, 0.0);
+            app.try_report_mouse_release(MouseButton::Left, position, 10.0, 20.0, 0.0, 0.0);
+            let bytes = fenced_harvest_capture(&mut app, &captures);
+            for (index, bytes) in bytes.iter().enumerate() {
+                assert_eq!(
+                    bytes.as_slice(),
+                    if index == original_index {
+                        b"\x1b[<0;2;2M".as_slice()
+                    } else {
+                        b""
+                    }
+                );
+            }
+        }
+    }
 
     #[test]
     fn pane_grid_coordinates_include_pane_origin_and_scrollback() {
