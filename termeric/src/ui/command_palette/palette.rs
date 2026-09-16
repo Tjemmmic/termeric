@@ -487,6 +487,7 @@ impl CommandPalette {
     /// drive a state change in the app:
     /// - click outside the panel → `Cancelled` (caller should close)
     /// - click on a visible entry → selects + executes that entry
+    /// - click inside the query → moves the caret without refiltering results
     /// - click inside the panel but not on an entry → `None` (absorb)
     pub fn handle_click(
         &mut self,
@@ -497,6 +498,10 @@ impl CommandPalette {
         if !layout.contains(x, y) {
             self.close();
             return Some(PaletteResult::Cancelled);
+        }
+        if let Some(cursor) = layout.input_cursor_at(self.input.text(), self.input.cursor(), x, y) {
+            self.input.set_cursor_byte(cursor);
+            return None;
         }
         if let Some(row) = layout.visible_row_at(y) {
             let abs_idx = self.scroll_offset + row;
@@ -1279,6 +1284,34 @@ impl CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_click_preserves_results_and_inserts_at_the_clicked_caret() {
+        let mut palette = test_palette();
+        palette.open();
+        palette.accessibility_set_input("tab");
+        palette.select_next();
+        let before = palette.build_info();
+        let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, before.entries.len());
+        let view = layout.input_viewport(&before.input, before.cursor).unwrap();
+        assert!(
+            palette
+                .handle_click(view.text_x + 10.0, view.text_y, &layout)
+                .is_none()
+        );
+        let after = palette.build_info();
+        assert_eq!(after.input, before.input);
+        assert_eq!(after.cursor, 1);
+        assert_eq!(after.selected, before.selected);
+        assert_eq!(after.scroll_offset, before.scroll_offset);
+        assert_eq!(
+            after.entries.iter().map(|e| &e.id).collect::<Vec<_>>(),
+            before.entries.iter().map(|e| &e.id).collect::<Vec<_>>()
+        );
+        assert!(palette.is_active());
+        palette.handle_char('界');
+        assert_eq!(palette.build_info().input, "t界ab");
+    }
 
     #[test]
     fn caret_only_edits_preserve_results_and_selected_row() {

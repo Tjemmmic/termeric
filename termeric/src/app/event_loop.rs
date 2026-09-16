@@ -1527,6 +1527,7 @@ impl ApplicationHandler<AppEvent> for App {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
+                        self.ime.clear_preedit();
                         let command = if let (Some(pos), Some(renderer)) =
                             (self.last_cursor_pos, &self.renderer)
                         {
@@ -1560,6 +1561,7 @@ impl ApplicationHandler<AppEvent> for App {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
+                        self.ime.clear_preedit();
                         let selection = if let (Some(pos), Some(renderer)) =
                             (self.last_cursor_pos, &self.renderer)
                         {
@@ -1593,11 +1595,12 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // When palette is open, clicks route through the palette:
                 // inside an entry → select+execute, inside but not on an entry
-                // → absorb, outside → close.
+                // → move query caret or absorb, outside → close.
                 if self.command_palette.is_active() {
                     if state == winit::event::ElementState::Pressed
                         && button == winit::event::MouseButton::Left
                     {
+                        self.ime.clear_preedit();
                         if let (Some(pos), Some(renderer)) = (self.last_cursor_pos, &self.renderer)
                         {
                             use crate::ui::command_palette::PaletteLayout;

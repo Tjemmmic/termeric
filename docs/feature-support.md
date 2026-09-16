@@ -361,7 +361,11 @@ whole-grapheme Backspace/Delete with insertion at the moved caret. Ctrl+Left/Rig
 and Ctrl+Backspace/Delete use the same Unicode word-segment editing as search;
 unsupported modified edits and AltGraph are consumed without changing text.
 Local dispatch and blocked-worker regressions cover these bindings, but native
-Ctrl word-edit acceptance is deferred. Cursor-only
+Ctrl word-edit acceptance is deferred. Primary query clicks place the caret at
+the nearest visible whole-grapheme boundary using shared animated/scrolled
+geometry; busy domain filters stay read-only. Geometry and model/worker tests
+cover pointer placement, but native pointer/IME acceptance is deferred.
+Cursor-only
 edits preserve selection and pending Unicode searches, and busy domain stages
 remain read-only. Geometry, model, app routing, IME insertion, and semantic caret
 tests cover this behavior. The private-Sway interaction lane additionally

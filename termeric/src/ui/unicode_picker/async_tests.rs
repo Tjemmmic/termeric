@@ -44,11 +44,27 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
     picker.edit_input(TextInputEdit::BackspaceWord);
     picker.edit_input(TextInputEdit::WordRight);
     picker.edit_input(TextInputEdit::DeleteWord);
+    let info = picker.build_info();
+    let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, info.entries.len());
+    let view = layout.input_viewport(&info.input, info.cursor).unwrap();
+    assert!(
+        picker
+            .handle_click(view.text_x + 20.0, view.text_y, &layout)
+            .is_none()
+    );
+    assert_eq!(picker.build_info().cursor, 2);
     assert_eq!(picker.generation, generation);
     assert!(picker.pending.is_none());
     release.send(()).unwrap();
     picker.finish_search_for_test();
     let ids: Vec<_> = picker.actions.iter().map(|a| a.id.clone()).collect();
+    picker.edit_input(TextInputEdit::Home);
+    assert!(
+        picker
+            .handle_click(view.text_x + 30.0, view.text_y, &layout)
+            .is_none()
+    );
+    assert_eq!(picker.build_info().cursor, 3);
     picker.edit_input(TextInputEdit::Home);
     assert_eq!(
         picker

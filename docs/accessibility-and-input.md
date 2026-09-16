@@ -85,15 +85,23 @@ without changing their read-only filter or a palette behind them. The semantic
 tree reports the moved UTF-8 caret. The palettes also support the same
 Ctrl+Left/Right and Ctrl+Backspace/Delete word edits described above, with local
 dispatch and blocked-worker regression coverage. Unsupported modifiers and
-AltGraph are consumed without deleting text. Shift-selection, pointer caret
-placement, and semantic SetTextSelection remain unimplemented.
+AltGraph are consumed without deleting text. A primary click in a palette query
+now places the caret at the nearest visible whole-grapheme boundary. Hit testing
+uses the same animated input rectangle, cell widths, and horizontally scrolled
+text range as painting; blank padding selects the visible edge, not hidden text.
+Caret placement preserves results and pending worker searches, and busy domain
+stages reject it. Primary palette clicks clear stale IME preedit. Geometry and
+model/worker regressions cover placement; native pointer/IME acceptance remains
+deferred. Drag/Shift-selection and semantic SetTextSelection remain
+unimplemented, and terminal-search pointer placement is unchanged.
 
 The private-Sway interaction lane now exercises seven real-keyboard palette
 editing cases and exact Unicode insertion, alternating between two real local
 PTY owners. It requires post-insertion fences, no modal-query leakage or
 duplicate insertion, no unrelated focus loss, and restoration of the original
 pane. Its `palette-input.json` sidecar records exact per-owner expected/actual
-bytes. This lane covers unmodified editing, not the new Ctrl word bindings.
+bytes. This lane covers unmodified editing, not Ctrl word bindings or pointer
+caret placement.
 It complements the model/geometry tests; it does not test native IME
 composition, visual clipping, Orca, or real-desktop policy. See the
 [native GUI contract](gui-acceptance.md).

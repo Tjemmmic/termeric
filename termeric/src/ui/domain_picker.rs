@@ -238,6 +238,9 @@ impl DomainPicker {
         y: f32,
         layout: &PaletteLayout,
     ) -> Option<DomainPickerCommand> {
+        if !self.can_filter() && layout.input_contains(x, y) {
+            return None;
+        }
         let result = self.palette.handle_click(x, y, layout)?;
         self.resolve_palette_result(result)
     }
@@ -740,10 +743,28 @@ mod tests {
         let mut picker = DomainPicker::new();
         picker.open(&DomainsConfig::default());
         assert!(picker.accessibility_set_filter("local"));
+        let info = picker.build_info();
+        let layout = PaletteLayout::calculate(800.0, 600.0, 10.0, 20.0, 1.0, info.entries.len());
+        let view = layout.input_viewport(&info.input, info.cursor).unwrap();
+        assert!(
+            picker
+                .handle_click(view.text_x + 20.0, view.text_y, &layout)
+                .is_none()
+        );
+        assert_eq!(picker.build_info().cursor, 2);
         let Some(DomainPickerCommand::Discover { .. }) = picker.activate() else {
             panic!("expected local discovery");
         };
         assert!(picker.is_busy());
+        // Even a retained presentation value must stay read-only while loading.
+        picker.palette.accessibility_set_input("read-only");
+        let before_cursor = picker.build_info().cursor;
+        assert!(
+            picker
+                .handle_click(view.text_x, view.text_y, &layout)
+                .is_none()
+        );
+        assert_eq!(picker.build_info().cursor, before_cursor);
         let before = picker.build_info().input;
         picker.handle_char('x');
         picker.handle_backspace();
