@@ -12,8 +12,12 @@ Resource evidence reconciled 2026-09-16: clean `5a5e79d` passes the current
 schema-5 ten-minute core soak and offscreen Vulkan/llvmpipe smoke, with all 28
 checks independently validated. Peak RSS was 50.5 MiB, quartile RSS growth
 712 KiB, and thread/descriptor growth zero. This closes one local evidence gap
-for sustained diff-history pressure; hosted history, displayed/vendor-GPU,
-real-desktop, and multi-day stability remain open. See
+for sustained diff-history pressure. Clean `e446dfd` separately passes the
+schema-6 ten-minute private-Sway displayed soak with all 24 checks independently
+validated: 236.9 MiB peak RSS, 3.6 MiB quartile RSS growth, zero thread/descriptor
+growth, and complete child cleanup. All DRM memory samples remain explicitly
+unavailable. Hosted history, vendor-GPU, real-desktop, and multi-day stability
+remain open; neither run establishes a low-memory ranking. See
 [the exact record and limitations](resource-soak.md#evidence-and-limitations).
 
 ## Bottom line

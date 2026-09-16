@@ -377,6 +377,33 @@ validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
 
+On 2026-09-16, clean `e446dfd` completed the current schema-6 600-second
+displayed-process lane under private headless Sway, using GL/llvmpipe and a
+pixman compositor. All 24 checks passed, and the independent native validator
+accepted the complete manifest, exact source/executable identity, reconstructed
+transcript activity, samples, and outcomes before this documentation-only
+follow-up. The local bundle is `/tmp/termeric-displayed-soak-e446dfd`, with
+`results.json` as its record; it is not a published release artifact.
+
+Across 950 samples, peak application RSS was 242,580 KiB (236.9 MiB), with
+3,680 KiB (3.6 MiB) first-to-last-quartile median RSS growth and zero
+thread/descriptor growth by the same quartile metric. The run completed 953
+PTY progress records, 237 compositor resize actions, 237 pane-churn actions,
+and 611 accepted Kitty image replacements. Peak concurrent fixture children
+was two; all 120 observed fixture processes were gone after normal native
+close. No recognized renderer/runtime error or driver failure was recorded.
+
+All 950 DRM memory samples were explicitly unavailable (`no-drm-client-fd`),
+with null peak/growth values, not zero GPU-memory usage. Passing the optional
+coverage/disposition checks does not establish vendor-GPU memory bounds.
+Likewise, the quartile growth metric reduces sensitivity to warm-up and
+single-sample noise; it is not the first-to-last raw RSS difference.
+These broad regression rails do not establish an optimal memory footprint or
+a controlled improvement/regression relative to older, differently scoped
+records. This is one current-schema local displayed duration observation;
+hosted scheduled history, real-desktop/vendor-GPU behavior, visual quality,
+native IME/accessibility, and multi-day stability remain unverified.
+
 On 2026-09-16, clean candidate `5a5e79d` completed the current schema-5
 600-second core lane with Vulkan/llvmpipe offscreen smoke. All 28 checks passed,
 and the independent validator accepted the source/executable identity, sealed
@@ -493,9 +520,9 @@ inventories but remains clean local release-duration aggregate evidence, not a
 scheduled-CI or real-desktop result.
 
 The core soak still does not create a window; the native lane does so under a
-private compositor. Its current historical artifacts predate schema 5 and do
-not contain vendor-GPU memory; the new sampler makes that evidence collectable
-without claiming that it has already been collected. Neither lane substitutes
+private compositor. The historical displayed records above predate schema 5;
+the schema-6 `e446dfd` record supplies newer local duration evidence but still
+has no vendor-GPU memory measurements. Neither lane substitutes
 for a long real-desktop observation, validates macOS/Windows beyond the separate
 bounded native-PTY smoke, or proves every terminal protocol. Those remaining
 boundaries stay separate platform/manual rows in
