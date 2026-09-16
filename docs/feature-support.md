@@ -65,6 +65,14 @@ normal-height arrow activation, drag, IME, and screen-reader acceptance remain
 separate checks; CI wiring alone does not establish X11 or hosted acceptance.
 See [overflow lane boundaries](gui-acceptance.md#tab-overflow-keyboard-lane).
 
+Held tab drags can traverse hidden tabs through the existing Previous/Next
+controls, with deadline-driven 400-ms initial/200-ms repeat dwell. Each move
+revalidates the source, pinned/closing/domain boundaries, visibility, and pending
+domain authority. Leaving or reversing controls resets dwell; interruptions
+clear it, and blocked boundaries retain no timer. Native coverage checks
+stationary forward/reverse traversal on a normal-height left rail; top/compact
+layouts and native pinned/live-domain traversal remain separate acceptance.
+
 Normal left clicks now exit F6 chrome focus after hit testing, avoiding swallowed
 typing and preserving the displayed keyboard-scrolled tab target. The native
 overflow lane checks terminal, distant-tab, and split-pane input ownership;

@@ -507,6 +507,13 @@ tests reject malformed or duplicate placement settings, accidental edits of
 commented examples, non-positive or height-changing geometry, and wrong native
 input APIs. CI selects the scenario for X11 and private Sway with clean-candidate
 provenance; this is not overflow/drag/IME/visual or hosted-result acceptance.
+
+Tab overflow drag-through has deterministic timestamp tests for initial/repeat
+dwell, reversal, leaving controls, late-event no-catch-up, and no timer at a
+boundary. Owner/closing/pinned/domain/focus/occlusion/modal refusal and single
+live-preview finalization use local PTYs only. Schema-11 native overflow adds
+stationary forward/reverse holds across hidden tabs in the normal left rail;
+other native traversal layouts and real live-domain behavior remain deferred.
 See [the scenario boundaries](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
 
 The separate `tab-overflow` native scenario forces a twelve-tab left rail and

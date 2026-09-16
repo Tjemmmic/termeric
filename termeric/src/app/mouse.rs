@@ -131,6 +131,7 @@ impl App {
         self.scrollbar_dragging = None;
         let divider_drag = self.divider_dragging.take();
         let tab_drag = self.tab_dragging.take();
+        self.tab_drag_scroll = None;
         let _ = self.mouse_state.handle_release(MouseButton::Left);
         let mut controls = Vec::new();
         if let Some(DividerDrag {
@@ -823,6 +824,7 @@ impl App {
         }
 
         // Handle scrollbar dragging
+        self.update_tab_drag_scroll(self.tab_bar_hover, Instant::now());
         if self.scrollbar_dragging.is_some() {
             self.scroll_to_scrollbar_position(position.1);
             if let Some(window) = &self.window {
@@ -1553,6 +1555,7 @@ impl App {
     /// Rebind global surfaces that intentionally describe only the focused
     /// pane. Per-pane selection remains stored with each terminal.
     pub(super) fn refresh_focused_terminal_surfaces(&mut self) {
+        self.tab_drag_scroll = None;
         self.reconcile_divider_drag();
         self.reconcile_scrollbar_drag();
         self.reconcile_broadcast_state();

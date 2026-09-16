@@ -24,6 +24,7 @@ mod session_export;
 mod sessions;
 pub mod state;
 mod system_accessibility;
+mod tab_drag;
 #[cfg(test)]
 mod tests;
 mod transcripts;
@@ -1097,6 +1098,7 @@ pub struct App {
     divider_dragging: Option<DividerDrag>,
     /// Drag source for direct tab-bar reordering.
     tab_dragging: Option<TabDrag>,
+    tab_drag_scroll: Option<tab_drag::OverflowDwell>,
     /// Inline tab rename capture, committed by Enter and cancelled by Escape.
     tab_rename: Option<TabRenameState>,
     /// Deliberately confirmed multi-pane keyboard broadcast state.
@@ -1378,6 +1380,7 @@ impl App {
             scrollbar_dragging: None,
             divider_dragging: None,
             tab_dragging: None,
+            tab_drag_scroll: None,
             tab_rename: None,
             broadcast: BroadcastState::Inactive,
             pending_live_domain_controls: std::collections::HashSet::new(),
@@ -3067,6 +3070,7 @@ impl App {
     }
 
     fn poll_idle_sources(&mut self, now: Instant) {
+        self.poll_tab_drag_scroll(now);
         self.poll_session_export();
         if self.surface_lost
             && self.surface_lost_at.is_some_and(|lost_at| {
@@ -3171,6 +3175,9 @@ impl App {
             self.git_watcher.next_poll_deadline(),
         ];
         if !self.presentation_suspended() {
+            if let Some(dwell) = &self.tab_drag_scroll {
+                deadlines.push(dwell.deadline);
+            }
             if let Some(cursor) = self.next_cursor_blink_deadline(now) {
                 deadlines.push(cursor);
             }

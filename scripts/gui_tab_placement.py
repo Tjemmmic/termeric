@@ -80,7 +80,10 @@ def native_click(gui, app, backend, point, surface=(960, 128)):
         raise ValueError("compact pointer fixture requires X11 or private Sway")
 
 
-def native_drag(gui, app, backend, start, end, surface, during_drag=None, *, end_surface=None):
+def native_drag(gui, app, backend, start, end, surface, during_drag=None, *, end_surface=None,
+                hold_seconds=0.12):
+    if not 0.12 <= hold_seconds <= 10:
+        raise ValueError("native drag hold must be bounded")
     if backend == "wayland":
         with VirtualPointer(app.env) as pointer:
             pointer.move(*start, *surface)
@@ -90,7 +93,7 @@ def native_drag(gui, app, backend, start, end, surface, during_drag=None, *, end
                 if during_drag is not None:
                     during_drag()
                 pointer.move(*end, *(end_surface or surface))
-                gui.time.sleep(0.12)
+                gui.time.sleep(hold_seconds)
             finally:
                 pointer.set_left_button(False)
     elif backend == "x11":
@@ -102,7 +105,7 @@ def native_drag(gui, app, backend, start, end, surface, during_drag=None, *, end
             if during_drag is not None:
                 during_drag()
             app.xdo("mousemove", "--window", app.window_id, *(str(value) for value in end))
-            gui.time.sleep(0.12)
+            gui.time.sleep(hold_seconds)
         finally:
             app.xdo("mouseup", "1")
     else:
@@ -460,6 +463,21 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
         native_drag(gui, app, backend, destination, source, (960, drag_height))
         select_and_check(0, "DRAG_RESTORED_FIRST_174", original)
         select_and_check(1, "DRAG_RESTORED_SECOND_174", pids[1])
+        # Hold on the existing overflow controls without further motion. The
+        # original tab must cross the hidden range, not select sibling PTYs.
+        with native_keyboard_lifetime(gui, app, backend):
+            select_and_check(0, "OVERFLOW_DRAG_START_174", original)
+            native_drag(gui, app, backend, source, (20, math.floor(row_height * 4.5)),
+                        (960, drag_height), hold_seconds=4)
+            select_and_check(count + 1, "OVERFLOW_DRAG_LAST_174", original)
+            native_drag(gui, app, backend, destination, (20, math.floor(row_height * 1.5)),
+                        (960, drag_height), hold_seconds=4)
+            # Previous disappears when the first viewport is visible. Finish
+            # the final visible-slot move normally; no hidden control remains.
+            select_and_check(1, "OVERFLOW_DRAG_FIRST_VIEWPORT_174", original)
+            native_drag(gui, app, backend, destination, source, (960, drag_height))
+            select_and_check(0, "OVERFLOW_DRAG_RESTORED_174", original)
+            select_and_check(1, "OVERFLOW_DRAG_SIBLING_174", pids[1])
         # Holding tab zero must never start moving tab one after Ctrl+Tab.
         native_drag(gui, app, backend, source, (40, source[1]), (960, drag_height),
                     during_drag=lambda: chord(("ctrl",), "Tab"))
@@ -577,7 +595,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 10, "backend": backend, "original_pids": pids,
+            "schema": 11, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
@@ -597,7 +615,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             "panel_background_divider_point": [590, 680],
             "panel_geometry": panel_geometry,
             "drag_points": {"source": source, "destination": destination},
-            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar/divider isolation; not screenshot, arbitrary lost-release, edge-autoscroll, or screen-reader acceptance",
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, held-control overflow traversal, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar/divider isolation; not screenshot, arbitrary lost-release, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

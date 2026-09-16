@@ -512,6 +512,13 @@ counts must remain unchanged so unrelated window blur cannot mask the bug.
 Live-domain acknowledgment/rollback has separate unit coverage, not native
 acceptance in this scenario.
 
+Schema 11 adds stationary four-second holds over the normal left rail's Next
+and Previous controls. Exact PTY markers must show the original dragged tab
+at the far end and then in the first viewport; a final visible-slot drag restores
+the starting order after the Previous control disappears.
+This proves timer-driven hidden-range traversal without extra pointer motion;
+it does not establish top/compact-rail or pinned/live-domain native traversal.
+
 ## Native background-image pixels
 
 Run the bounded private-Sway screenshot scenario independently:

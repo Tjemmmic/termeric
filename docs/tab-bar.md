@@ -32,6 +32,16 @@ When all tabs do not fit, bounded previous/next controls reserve fixed rows and
 the viewport automatically follows the active tab or F6 keyboard focus. Hidden
 tabs remain reachable without shrinking labels into unusable slivers.
 
+While dragging a tab, hold over a visible Previous/Next overflow control to
+move that same tab toward hidden tabs. The first move waits 400 ms; subsequent
+moves wait 200 ms each, even without pointer motion. Top and left layouts use
+their existing rendered control hit boxes, including the compact rail. Moving
+away or reversing direction starts a fresh dwell. Traversal stops when the
+control disappears or an owner, pinned, closing, or live-domain boundary refuses
+the next move. It never selects a sibling, wraps at the end, or catches up with
+a burst after a delayed event-loop wakeup. No repeat timer remains at a blocked
+boundary. Arbitrary edge zones outside these controls are not implemented.
+
 Short overflowing rails (less than five tab-row heights) share one bottom row
 between Previous, Next, and New Tab. This prevents the old separate Next row
 from covering a visible tab and intercepting its clicks. At least three row
@@ -54,8 +64,11 @@ held-button Ctrl+Tab isolation using exact PTY identities. Private Sway also
 checks release while hidden and return while still held, with observed focus
 transitions. Live-domain finalization extracts each control once and restores
 rejected previews, including when another control is pending. Lost release
-without a focus transition, modal takeover, or geometry change, device unplug, edge
-auto-scrolling, and native pinned/live-domain drag acceptance remain separate.
+without a focus transition, modal takeover, or geometry change, device unplug,
+and native pinned/live-domain drag acceptance remain separate. The native
+overflow lane checks stationary forward/reverse overflow-control holds through
+the hidden range on a normal-height left rail; top/compact traversal has shared
+logic and hit-test coverage, not equivalent native traversal evidence.
 
 Modal takeover is reconciled before native/user-event dispatch, before animation
 cleanup, and after queued PTY work. A release consumed by the modal cannot leave

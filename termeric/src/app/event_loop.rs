@@ -1673,6 +1673,13 @@ impl ApplicationHandler<AppEvent> for App {
                 self.handle_mouse_move((position.x, position.y));
             }
 
+            WindowEvent::CursorLeft { .. } => {
+                // Keep the last coordinates for protocol/button releases, but
+                // never keep an overflow dwell alive outside the surface.
+                self.tab_bar_hover = None;
+                self.tab_drag_scroll = None;
+            }
+
             WindowEvent::MouseWheel { delta, .. } => {
                 if self.info_overlay.is_active() {
                     let (mut horizontal, mut vertical) = match delta {

@@ -2,6 +2,190 @@ use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
+fn overflow_drag_fixture() -> App {
+    let mut app = scrollbar_owner_fixture();
+    let tabs = app.tabs.as_mut().unwrap();
+    tabs.new_tab().unwrap();
+    tabs.switch_to(0);
+    app.tab_dragging = Some(TabDrag {
+        tab_id: tabs.active_tab_id().unwrap(),
+        live: None,
+    });
+    app
+}
+
+#[cfg(unix)]
+#[test]
+fn overflow_drag_dwell_repeats_without_motion_or_catchup_and_keeps_owner() {
+    use crate::renderer::TabBarClick::NextTab;
+    let mut app = overflow_drag_fixture();
+    let owner = app.tabs.as_ref().unwrap().active_tab_id();
+    let now = Instant::now();
+    app.update_tab_drag_scroll(Some(NextTab), now);
+    assert_eq!(
+        app.tab_drag_scroll.unwrap().deadline,
+        now + Duration::from_millis(400)
+    );
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_millis(399));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 0);
+    // A stalled event loop must not move every remaining tab in one burst.
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_secs(10));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1);
+    assert_eq!(
+        app.tab_drag_scroll.unwrap().deadline,
+        now + Duration::from_millis(10200)
+    );
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_millis(10199));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1);
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_millis(10200));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 2);
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), owner);
+    assert!(
+        app.tab_drag_scroll.is_none(),
+        "the boundary must not keep an idle timer alive"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn overflow_drag_leaving_or_reversing_controls_starts_a_fresh_dwell() {
+    use crate::renderer::TabBarClick::{NextTab, PreviousTab};
+    let mut app = overflow_drag_fixture();
+    let now = Instant::now();
+    app.update_tab_drag_scroll(Some(NextTab), now);
+    app.update_tab_drag_scroll(None, now + Duration::from_millis(399));
+    assert!(app.tab_drag_scroll.is_none());
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_secs(1));
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_millis(1400));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1);
+    app.update_tab_drag_scroll(Some(PreviousTab), now + Duration::from_millis(1500));
+    assert_eq!(
+        app.tab_drag_scroll.unwrap().deadline,
+        now + Duration::from_millis(1900)
+    );
+    app.update_tab_drag_scroll(Some(PreviousTab), now + Duration::from_millis(1900));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 0);
+    app.finish_native_pointer_gesture();
+    assert!(app.tab_drag_scroll.is_none());
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_secs(10));
+    assert!(app.tab_drag_scroll.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn overflow_drag_revalidates_ownership_visibility_and_boundaries_before_each_step() {
+    use crate::renderer::TabBarClick::NextTab;
+    for change in [
+        "selection",
+        "closed",
+        "closing",
+        "target-closed",
+        "pinned",
+        "live-domain",
+        "unfocused",
+        "occluded",
+        "surface-lost",
+        "modal",
+    ] {
+        let mut app = overflow_drag_fixture();
+        let now = Instant::now();
+        app.update_tab_drag_scroll(Some(NextTab), now);
+        assert!(app.tab_drag_scroll.is_some());
+        match change {
+            "selection" => app.tabs.as_mut().unwrap().switch_to(1),
+            "closed" => app.tabs.as_mut().unwrap().active_tab_mut().unwrap().closed = true,
+            "closing" => app
+                .tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .start_closing(),
+            "target-closed" => {
+                let id = app.tabs.as_ref().unwrap().iter().nth(1).unwrap().1.id;
+                app.tabs.as_mut().unwrap().tab_mut_by_id(id).unwrap().closed = true;
+            }
+            "pinned" => app.tabs.as_mut().unwrap().active_tab_mut().unwrap().pinned = true,
+            "live-domain" => {
+                app.tab_dragging.as_mut().unwrap().live = Some(LiveDomainTabDrag {
+                    domain_id: "other-domain".into(),
+                    remote_tab_id: 1,
+                    initial_index: 0,
+                })
+            }
+            "unfocused" => app.window_focused = false,
+            "occluded" => app.window_occluded = true,
+            "surface-lost" => app.surface_lost = true,
+            "modal" => app.settings_panel.toggle(),
+            _ => unreachable!(),
+        }
+        let order: Vec<_> = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(_, tab)| tab.id)
+            .collect();
+        app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_secs(1));
+        assert!(app.tab_drag_scroll.is_none(), "{change}");
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|(_, tab)| tab.id)
+                .collect::<Vec<_>>(),
+            order,
+            "{change}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn overflow_drag_live_preview_finalizes_once_and_respects_pending_control() {
+    use crate::renderer::TabBarClick::NextTab;
+    let mut app = overflow_drag_fixture();
+    for (index, tab) in app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .all_tabs_mut()
+        .iter_mut()
+        .enumerate()
+    {
+        tab.live_domain = Some(crate::tabs::LiveDomainTab {
+            domain_id: "overflow-domain".into(),
+            tab_id: index as u32 + 10,
+            pane_ids: HashMap::new(),
+        });
+    }
+    let source = app.tabs.as_ref().unwrap().active_tab_id().unwrap();
+    app.tab_dragging.as_mut().unwrap().live = Some(LiveDomainTabDrag {
+        domain_id: "overflow-domain".into(),
+        remote_tab_id: 10,
+        initial_index: 0,
+    });
+    let now = Instant::now();
+    app.update_tab_drag_scroll(Some(NextTab), now);
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_millis(400));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1);
+    assert_eq!(app.tabs.as_ref().unwrap().active_tab_id(), Some(source));
+    let control = LiveDomainControl::MoveTab {
+        domain_id: "overflow-domain".into(),
+        remote_tab_id: 10,
+        index: 1,
+    };
+    app.pending_live_domain_controls.insert(control.clone());
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_secs(1));
+    assert!(app.tab_drag_scroll.is_none());
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1);
+    // Common gesture finalization still owns the single authoritative request.
+    assert_eq!(app.take_native_drag_controls(), vec![control]);
+    assert!(app.take_native_drag_controls().is_empty());
+}
+
+#[cfg(unix)]
 fn scrollbar_owner_fixture() -> App {
     let mut app = App::new_headless(Config::default()).unwrap();
     let shell = ShellConfig {
