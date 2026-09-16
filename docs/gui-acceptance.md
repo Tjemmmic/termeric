@@ -123,6 +123,46 @@ the transcript. Clean local commit `f9ccc2d` passed the private-Sway scenario;
 the capability remains Partial until the X11 counterpart and accepted CI
 history are green. Source presence alone is not acceptance evidence.
 
+## Local software-renderer evidence at `7df2d38`
+
+On 2026-09-16 UTC (2026-09-15 US/Central), clean local source
+`7df2d38912fe29514e7e53358d783db17811913d` passed the private-Sway
+interaction and fullscreen scenarios. Both used the debug executable with
+SHA-256 `0f5ceaee3a3064eb283ab74ca6d473696c8a759d9cf62c737e437e490589a8b3`.
+The host was Linux 7.2.4-arch1-2, Sway 1.12, and OpenGL llvmpipe
+(LLVM 22.1.8, CPU adapter), with `WLR_RENDERER=pixman` and
+`LIBGL_ALWAYS_SOFTWARE=true`. This is not vendor-GPU evidence.
+
+- Interaction passed keyboard input, keyboard copy mode, compositor clipboard,
+  exactly-once bracketed paste, exact split-pane PID routing/closure, and native
+  close. Lost surface, outdated surface, and device loss were each injected
+  once and recovered before the PTY assertions continued.
+- Fullscreen passed reversible character/pixel geometry and sibling-window
+  isolation. No faults were injected in this separate scenario.
+- The opt-in surfaceless OpenGL GPU smoke passed its Unicode, emoji, atlas,
+  SGR, ligature, and 52-row classic-image/Unicode-placeholder readback checks.
+  The GUI signature comparison passed without changing the baseline. Its saved
+  PNG is the small text-signature artifact, **not** a native image-client
+  screenshot or a capture of every GPU subtest.
+
+Local artifacts are under `/tmp/termeric-wayland-interaction-7df2d38`,
+`/tmp/termeric-wayland-fullscreen-7df2d38`, and
+`/tmp/termeric-renderer-7df2d38.{log,png}`. They are temporary local artifacts,
+not uploaded CI history or a completed native-desktop acceptance record.
+The two schema-3 result JSON hashes are respectively
+`28237b5d552a139b9f359c95045973ac98da22697554b212a0de4b6a27cd67e0` and
+`792c009171664809279e1ae9556059d7524c4deff458a75bd1239f351ef99200`.
+The PNG hash is
+`80b8c3b2e9a38c4e52f697e986702463f24dc3741f1b16dcd14fa2d71b8d2471`.
+The GUI harness records the binary digest but does not itself pin source and
+executable identity throughout execution; this is weaker provenance than the
+soak/preflight contract.
+
+X11 was not run: this host lacked Xvfb and Openbox. Weston was also unavailable.
+Real desktop policy, vendor GPUs, IME/Orca, subjective rendering, actual graphics
+clients, and hosted CI acceptance remain outstanding. No real AI-provider
+workflow was invoked, and no capability status is promoted by these results.
+
 ## Visual evidence
 
 Native-window captures are retained as diagnostic artifacts. GPU-presented

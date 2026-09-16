@@ -36,6 +36,13 @@ PTY-to-application-to-render/input path must work.
 Termeric is therefore a **Linux developer preview**, not a general beta or a
 cross-platform daily-driver terminal.
 
+Local source `7df2d38` now also passes private-Sway interaction with all three
+renderer-fault injections, two-window fullscreen isolation, and the software-GPU
+pixel/readback and unchanged visual-signature checks. These refresh the local
+technical evidence only: X11, hosted CI, vendor-GPU, and operator acceptance
+are not promoted. Exact environment, hashes, artifacts, and provenance limits
+are recorded in [the local GUI evidence](gui-acceptance.md#local-software-renderer-evidence-at-7df2d38).
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |
