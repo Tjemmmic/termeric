@@ -3148,11 +3148,11 @@ impl Application {
         }
         let native = window
             .window
-            .as_ref()
+            .clone()
             .ok_or_else(|| format!("GUI window {window_id} has no native window"))?;
         window.quick_access_visible = visible;
         native.set_visible(visible);
-        window.window_occluded = !visible;
+        window.handle_window_occlusion_change(!visible);
         if visible {
             native.set_minimized(false);
             native.focus_window();

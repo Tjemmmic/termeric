@@ -3948,6 +3948,18 @@ impl App {
         }
     }
 
+    fn handle_window_occlusion_change(&mut self, occluded: bool) {
+        self.window_occluded = occluded;
+        if occluded {
+            // Occlusion/hiding need not deliver a focus change or button-up.
+            // Finish previews through their normal authority/rollback path,
+            // then require a new press when the surface becomes visible.
+            self.terminal_mouse_capture = None;
+            self.tab_bar_hover = None;
+            self.finish_native_pointer_gesture();
+        }
+    }
+
     /// Apply one native window focus transition. Repeated notifications are
     /// ignored so DECSET 1004 applications receive exactly one report.
     fn handle_window_focus_change(&mut self, focused: bool) {

@@ -1930,7 +1930,7 @@ impl ApplicationHandler<AppEvent> for App {
             }
 
             WindowEvent::Occluded(occluded) => {
-                self.window_occluded = occluded;
+                self.handle_window_occlusion_change(occluded);
                 if !occluded {
                     self.redraw_scheduler.request(RedrawReason::WindowEvent);
                     if let Some(window) = &self.window {

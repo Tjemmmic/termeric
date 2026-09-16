@@ -40,6 +40,15 @@ render. Terminal tabs, panes, PTYs, scrollback, and current working state remain
 alive while hidden. There is no automatic focus-loss hiding, so ordinary window
 switching cannot unexpectedly conceal work.
 
+Hiding explicitly ends active tab/divider/scrollbar/selection gestures and
+clears application mouse capture, even if the compositor sends no focus-loss
+or button-release event. Native occlusion notifications use the same cleanup.
+Showing the window requires a fresh press to start another gesture; terminal
+state and already-completed selection remain intact. Live-domain previews use
+normal control finalization and authoritative rejection/rollback rather than
+being silently discarded. Unit/local-PTY fixtures cover this lifecycle;
+desktop event-ordering acceptance remains separate.
+
 Window managers remain authoritative. X11 accepts the initial position and
 focus request under normal policy. Wayland may ignore absolute placement and
 deny activation of an existing surface; use a compositor rule keyed by

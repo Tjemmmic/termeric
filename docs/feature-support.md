@@ -144,6 +144,14 @@ verify exact destination bytes, closure and no-revival behavior, modifier-safe
 release, and preserved unheld hover; native held-button focus-switch acceptance
 remains deferred.
 
+Window occlusion and explicit quick-access hiding now finalize native gestures
+and clear application mouse capture without waiting for a separate focus-loss
+or button-release event. Showing the surface cannot resume selection, overflow
+dwell, or divider dragging. Local/synthetic tests preserve ordinary divider
+previews and the authoritative rollback/pending-request path for live domains;
+they do not establish compositor-specific occlusion delivery or native hidden-
+window/live-domain acceptance.
+
 ## Terminal compatibility
 
 | Capability | Status | Current boundary | Tracking |

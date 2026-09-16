@@ -184,6 +184,60 @@ fn direct_tab_drag_preserves_pinned_groups_and_ignores_unrelated_domain_requests
 
 #[cfg(unix)]
 #[test]
+fn occlusion_ends_native_and_application_gestures_without_focus_loss() {
+    use crate::renderer::TabBarClick::NextTab;
+    let mut app = overflow_drag_fixture();
+    let now = Instant::now();
+    app.update_tab_drag_scroll(Some(NextTab), now);
+    assert!(app.tab_drag_scroll.is_some());
+    let owner = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .active_tab()
+        .unwrap()
+        .focused_terminal_identity();
+    app.mouse_pressed = true;
+    app.scrollbar_dragging = Some(owner);
+    app.terminal_mouse_capture = Some(TerminalMouseCapture {
+        owner,
+        button: MouseReportButton::Left,
+    });
+    app.mouse_state.handle_press(
+        MouseButton::Left,
+        termeric_core::Point::new(0, 0),
+        ModifiersState::empty(),
+    );
+    app.mouse_state.handle_move(termeric_core::Point::new(0, 5));
+    assert!(app.window_focused);
+    app.handle_window_occlusion_change(false);
+    assert!(app.mouse_pressed);
+    assert!(app.tab_dragging.is_some());
+    assert!(app.terminal_mouse_capture.is_some());
+    app.handle_window_occlusion_change(true);
+    assert!(app.window_occluded);
+    assert!(
+        app.window_focused,
+        "occlusion must not fabricate keyboard focus changes"
+    );
+    assert!(!app.mouse_pressed);
+    assert!(app.scrollbar_dragging.is_none());
+    assert!(app.terminal_mouse_capture.is_none());
+    assert!(app.tab_dragging.is_none());
+    assert!(app.tab_drag_scroll.is_none());
+    let selection = app.mouse_state.current_selection().unwrap();
+    assert!(!selection.active);
+    assert_eq!(selection.end, termeric_core::Point::new(0, 5));
+    app.handle_window_occlusion_change(true);
+    app.handle_window_occlusion_change(false);
+    app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_secs(2));
+    assert!(!app.apply_tab_drag_target(1));
+    assert_eq!(app.tabs.as_ref().unwrap().active_index(), 0);
+    assert!(app.take_native_drag_controls().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn overflow_drag_dwell_repeats_without_motion_or_catchup_and_keeps_owner() {
     use crate::renderer::TabBarClick::NextTab;
     let mut app = overflow_drag_fixture();
@@ -545,6 +599,72 @@ fn divider_drag_unrelated_domain_requests_do_not_block_preview() {
         app.apply_divider_drag_position(600.0, 200.0);
         assert!(app.divider_dragging.as_ref().unwrap().last_ratio_millis > 500);
         assert!(app.pending_live_domain_controls.contains(&pending));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn occlusion_finalizes_divider_previews_and_preserves_pending_domain_authority() {
+    for remote in [false, true] {
+        let mut app = if remote {
+            domain_divider_pending_fixture()
+        } else {
+            divider_owner_fixture()
+        };
+        app.apply_divider_drag_position(600.0, 200.0);
+        let preview_ratio = app.divider_dragging.as_ref().unwrap().last_ratio_millis;
+        assert!(preview_ratio > 500);
+        let pending = LiveDomainControl::ResizeSplit {
+            domain_id: "divider-pending".into(),
+            remote_split_id: 44,
+            ratio_millis: 600,
+        };
+        if remote {
+            app.pending_live_domain_controls.insert(pending.clone());
+        }
+        let routes = app
+            .tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .live_domain
+            .as_ref()
+            .map(|live| live.pane_ids.clone());
+        app.handle_window_occlusion_change(true);
+        assert!(app.divider_dragging.is_none());
+        assert!(app.take_native_drag_controls().is_empty());
+        let expected_ratio = if remote { 500 } else { preview_ratio };
+        let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+        assert_eq!(
+            tab.pane_manager.as_ref().unwrap().get_dividers()[0].ratio_millis,
+            expected_ratio
+        );
+        assert_eq!(
+            tab.live_domain.as_ref().map(|live| live.pane_ids.clone()),
+            routes
+        );
+        if remote {
+            assert_eq!(app.pending_live_domain_controls.len(), 1);
+            assert!(app.pending_live_domain_controls.remove(&pending));
+        }
+        app.handle_window_occlusion_change(true);
+        app.handle_window_occlusion_change(false);
+        app.apply_divider_drag_position(700.0, 200.0);
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .get_dividers()[0]
+                .ratio_millis,
+            expected_ratio
+        );
+        assert!(app.pending_live_domain_controls.is_empty());
     }
 }
 
