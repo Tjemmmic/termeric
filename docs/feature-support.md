@@ -362,7 +362,11 @@ edits preserve selection and pending Unicode searches, and busy domain stages
 remain read-only. Geometry, model, app routing, IME insertion, and semantic caret
 tests cover this behavior. The private-Sway interaction lane additionally
 requires seven real-keyboard query-editing cases with exact, fenced Unicode
-insertion into alternating local PTY owners. Native IME, visual clipping,
+insertion into alternating local PTY owners. Schema-5 clean-candidate GUI records
+independently reconstruct these cases from the PTY transcript and seal it plus
+the sidecar; an offline checker rejects changed artifacts and older unsealed
+records. This is a palette-specific evidence check, not a validator for every
+GUI scenario. Native IME, visual clipping,
 screen-reader, and real-desktop acceptance remain deferred
 (see [input contract](accessibility-and-input.md)).
 

@@ -49,6 +49,11 @@ bytes. This complements the model/geometry tests; it does not test native IME
 composition, visual clipping, Orca, or real-desktop policy. See the
 [native GUI contract](gui-acceptance.md).
 
+Current strict GUI publication independently reconstructs these seven cases
+from the transcript and seals both files. The offline palette evidence checker
+repeats that reconstruction and verifies both hashes, so missing/changed
+artifacts cannot stand in for the current acceptance contract.
+
 Native color fonts use the separate bounded RGBA glyph atlas described in
 [Glyph atlas lifetime](glyph-atlas.md). Extended grapheme width remains the
 terminal's Unicode width policy; color selection does not change cell width.

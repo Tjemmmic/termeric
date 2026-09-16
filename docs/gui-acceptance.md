@@ -261,7 +261,7 @@ initial identities, and every selected scenario must have passed before the
 CLI prints success. A detected change yields a nonzero exit and retained
 failure evidence even if the functional scenarios themselves passed.
 
-Strict runs emit schema-4 `results.json` with an embedded `candidate` object
+Strict runs emit schema-5 `results.json` with a schema-2 embedded `candidate` object
 and a separate `provenance.json`: observed commit, exact requested scenarios,
 the `skip_visual_checks` option, initial/final executable identities, provenance
 checks, and `candidate_eligible`. The visual option records requested policy;
@@ -269,11 +269,35 @@ it does not claim that every scenario performs pixel comparisons. Default
 debugging runs retain schema 3 and may use dirty source. A failure before any
 scenario result is available retains provenance without fabricating results.
 
+For Wayland `interaction`, candidate eligibility additionally requires the
+seven palette cases to be independently reconstructed from
+`interaction/pty-transcript.jsonl`. The verifier requires exactly the ordered
+case set, two started alternating owners, unique ordered begin/end markers,
+exact U+2603 insertion plus per-owner fences, zero reported unrelated focus
+losses, and restoration of the original owner. It does not trust the sidecar's
+expected bytes as the oracle. It then seals both that transcript (at most 8 MiB)
+and `interaction/palette-input.json` (at most 64 KiB) with lengths and SHA-256
+digests in `candidate.interaction_palette`. Missing, changed-during-read,
+non-regular, symlinked, malformed, or inconsistent artifacts fail publication
+and retain a diagnostic in `interaction_palette_error`.
+
+Re-check those two seals and the palette semantics offline:
+
+```bash
+python3 scripts/gui_palette_evidence.py /tmp/termeric-wayland/results.json
+```
+
+This command checks the palette evidence subset, not all GUI scenarios or the
+source/compiler provenance. Older schema-4 records lack this sealed contract
+and are rejected by this verifier; they remain historical evidence of their
+original checks rather than equivalent current palette acceptance.
+
 This detects observed drift, not hostile same-user tampering, signed compiler
 provenance, or proof that an existing binary was freshly built from the named
 source. Build first. It pins direct harness invocations, not every independently
 spawned descendant, compositor, installed client, font, or driver. Scenario
-logs are retained but not individually sealed by this mode. Historical schema-3
+logs other than the two palette artifacts above are retained but not individually
+sealed by this mode. Historical schema-3
 results, including the local `7df2d38` observations above, do not gain stronger
 provenance retroactively. Real-desktop and provider acceptance remain separate.
 

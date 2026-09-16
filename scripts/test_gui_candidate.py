@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from scripts import gui_acceptance as gui, gui_candidate, soak_provenance
+from scripts.test_gui_palette_evidence import write_fixture
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux executable descriptors")
@@ -34,6 +35,10 @@ class GuiCandidateTests(unittest.TestCase):
                 self.assertTrue(str(path).startswith(f"/proc/{os.getpid()}/fd/"))
                 self.assertEqual(path.read_bytes(), b"original fixture binary")
                 self.assertFalse((artifacts / "results.json").exists())
+                if mode != "missing-palette":
+                    write_fixture(artifacts)
+                if mode == "bad-palette":
+                    (artifacts / "interaction/palette-input.json").write_text('{}')
                 if mode == "source":
                     state["commit"] = "b" * 40
                 if mode == "dirty-after":
@@ -87,7 +92,7 @@ class GuiCandidateTests(unittest.TestCase):
 
     def test_clean_run_seals_selected_scenarios_and_pinned_binary(self):
         record, proof, stdout = self.invoke()
-        self.assertEqual(record["schema"], 4)
+        self.assertEqual(record["schema"], 5)
         self.assertEqual(record["candidate"], proof)
         self.assertTrue(proof["candidate_eligible"])
         self.assertEqual(proof["requested_scenarios"], ["interaction"])
@@ -95,6 +100,16 @@ class GuiCandidateTests(unittest.TestCase):
         self.assertEqual(proof["candidate_sha"], "a" * 40)
         self.assertEqual(record["binary_sha256"], proof["provenance"]["binary_initial"]["sha256"])
         self.assertIn("GUI acceptance passed", stdout)
+        self.assertEqual(proof["interaction_palette"]["case_count"], 7)
+        self.assertEqual(len(proof["interaction_palette"]["artifacts"]), 2)
+
+    def test_missing_or_invalid_palette_artifacts_prevent_candidate_promotion(self):
+        for mode in ("missing-palette", "bad-palette"):
+            record, proof, stdout = self.invoke(mode)
+            self.assertFalse(proof["candidate_eligible"])
+            self.assertIsNotNone(proof["interaction_palette_error"])
+            self.assertEqual(record["candidate"], proof)
+            self.assertNotIn("GUI acceptance passed", stdout)
 
     def test_skipped_visual_policy_is_explicit_without_changing_scenario_results(self):
         record, proof, _ = self.invoke(extra=("--skip-visual-checks",))

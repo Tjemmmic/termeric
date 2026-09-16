@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.native_acceptance_record import atomic_write_json
+from scripts.gui_palette_evidence import collect_palette_evidence
 from scripts.soak_provenance import PinnedExecutable, provenance_checks, source_identity
 
 
@@ -58,16 +59,26 @@ class GuiCandidate:
             )
             checks.append({"name": "selected GUI scenarios and binary binding complete",
                            "actual": completed, "expected": True, "passed": completed})
+            palette = None
+            palette_error = None
+            if document is not None and document.get("backend") == "wayland" and "interaction" in self.scenarios:
+                try:
+                    palette = collect_palette_evidence(self.artifacts)
+                except (ValueError, OSError, TypeError, AttributeError, RecursionError) as error:
+                    palette_error = str(error)
+                checks.append({"name": "native palette transcript independently verified and sealed",
+                               "actual": palette is not None, "expected": True, "passed": palette is not None})
             accepted = all(check["passed"] for check in checks)
             evidence = {
-                "schema": 1, "candidate_sha": proof["source_initial"]["commit"],
+                "schema": 2, "candidate_sha": proof["source_initial"]["commit"],
                 "candidate_eligible": accepted, "requested_scenarios": self.scenarios,
                 "skip_visual_checks": self.skip_visual_checks, "provenance": proof, "checks": checks,
                 "error": None if exc is None else str(exc),
+                "interaction_palette": palette, "interaction_palette_error": palette_error,
             }
             atomic_write_json(self.artifacts / "provenance.json", evidence)
             if document is not None:
-                document = {**document, "schema": 4, "candidate": evidence}
+                document = {**document, "schema": 5, "candidate": evidence}
                 atomic_write_json(self.artifacts / "results.json", document)
             if not accepted and exc_type is None:
                 raise ValueError("GUI candidate evidence failed; see provenance.json")
