@@ -1295,6 +1295,10 @@ mod tests {
             TextInputEdit::Delete,
             TextInputEdit::Home,
             TextInputEdit::Backspace,
+            TextInputEdit::BackspaceWord,
+            TextInputEdit::WordRight,
+            TextInputEdit::DeleteWord,
+            TextInputEdit::WordLeft,
         ] {
             assert!(!palette.edit_input(edit));
             let after = palette.build_info();

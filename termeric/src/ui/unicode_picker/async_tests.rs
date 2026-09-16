@@ -40,6 +40,10 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
     picker.edit_input(TextInputEdit::Delete);
     picker.edit_input(TextInputEdit::Left);
     picker.edit_input(TextInputEdit::Right);
+    picker.edit_input(TextInputEdit::WordLeft);
+    picker.edit_input(TextInputEdit::BackspaceWord);
+    picker.edit_input(TextInputEdit::WordRight);
+    picker.edit_input(TextInputEdit::DeleteWord);
     assert_eq!(picker.generation, generation);
     assert!(picker.pending.is_none());
     release.send(()).unwrap();
@@ -64,6 +68,14 @@ fn cursor_and_noop_edits_preserve_pending_generation_but_delete_replaces_query()
     );
     release.send(()).unwrap();
     picker.finish_search_for_test();
+    let generation = picker.generation;
+    picker.edit_input(TextInputEdit::WordRight);
+    picker.edit_input(TextInputEdit::BackspaceWord);
+    assert_eq!(picker.build_info().input, "");
+    assert_ne!(picker.generation, generation);
+    assert!(!picker.search_pending());
+    assert!(picker.pending.is_none());
+    assert!(observed.try_recv().is_err());
 }
 
 #[test]

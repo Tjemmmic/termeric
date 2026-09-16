@@ -69,8 +69,8 @@ non-word segments such as standalone punctuation and emoji are navigable too.
 Ctrl+Backspace/Delete removes
 that span, expanding deletion edges to whole graphemes even when the caret is
 inside a newly joined cluster. The implementation scans only the bounded query
-and retains no word index. These bindings apply to active terminal search;
-other query fields keep their existing bindings. Selection, Ctrl+Home/End, and
+and retains no word index. These bindings apply to active terminal search and
+the command, Unicode, and domain query palettes. Selection, Ctrl+Home/End, and
 other modified editing keys remain consumed without editing; AltGraph never
 becomes a Ctrl word-edit command. Local model and raw-PTY tests cover these
 rules, but native keyboard/IME acceptance remains deferred.
@@ -82,15 +82,19 @@ IME commits insert at that caret. Cursor-only and no-op edits preserve result
 selection and do not restart Unicode worker searches; actual query changes
 retire old results as usual. Busy domain stages consume navigation/deletion
 without changing their read-only filter or a palette behind them. The semantic
-tree reports the moved UTF-8 caret. Word motion, Shift-selection, pointer caret
-placement, and semantic SetTextSelection are not implemented by this change.
+tree reports the moved UTF-8 caret. The palettes also support the same
+Ctrl+Left/Right and Ctrl+Backspace/Delete word edits described above, with local
+dispatch and blocked-worker regression coverage. Unsupported modifiers and
+AltGraph are consumed without deleting text. Shift-selection, pointer caret
+placement, and semantic SetTextSelection remain unimplemented.
 
 The private-Sway interaction lane now exercises seven real-keyboard palette
 editing cases and exact Unicode insertion, alternating between two real local
 PTY owners. It requires post-insertion fences, no modal-query leakage or
 duplicate insertion, no unrelated focus loss, and restoration of the original
 pane. Its `palette-input.json` sidecar records exact per-owner expected/actual
-bytes. This complements the model/geometry tests; it does not test native IME
+bytes. This lane covers unmodified editing, not the new Ctrl word bindings.
+It complements the model/geometry tests; it does not test native IME
 composition, visual clipping, Orca, or real-desktop policy. See the
 [native GUI contract](gui-acceptance.md).
 

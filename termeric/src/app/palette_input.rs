@@ -8,10 +8,9 @@ impl App {
     /// True means the key belongs to a palette, even when its busy stage is
     /// read-only. Never let editing keys fall through to a terminal behind it.
     pub(super) fn handle_palette_edit_key(&mut self, key: &Key) -> bool {
-        if self.modifiers.control_key()
-            || self.modifiers.alt_key()
-            || self.modifiers.super_key()
-            || self.modifiers.shift_key()
+        if !self.domain_picker.is_active()
+            && !self.unicode_picker.is_active()
+            && !self.command_palette.is_active()
         {
             return false;
         }
@@ -20,8 +19,27 @@ impl App {
             Key::Named(NamedKey::ArrowRight) => TextInputEdit::Right,
             Key::Named(NamedKey::Home) => TextInputEdit::Home,
             Key::Named(NamedKey::End) => TextInputEdit::End,
+            Key::Named(NamedKey::Backspace) => TextInputEdit::Backspace,
             Key::Named(NamedKey::Delete) => TextInputEdit::Delete,
             _ => return false,
+        };
+        if self.alt_graph_active {
+            return true;
+        }
+        let edit = if self.modifiers == ModifiersState::CONTROL {
+            match edit {
+                TextInputEdit::Left => TextInputEdit::WordLeft,
+                TextInputEdit::Right => TextInputEdit::WordRight,
+                TextInputEdit::Backspace => TextInputEdit::BackspaceWord,
+                TextInputEdit::Delete => TextInputEdit::DeleteWord,
+                _ => return true,
+            }
+        } else if !self.modifiers.is_empty() {
+            // Unsupported modified edits are consumed, never reinterpreted as
+            // unmodified deletion or passed to a terminal behind the modal.
+            return true;
+        } else {
+            edit
         };
         if self.domain_picker.is_active() {
             self.domain_picker.edit_input(edit);
@@ -132,8 +150,13 @@ mod tests {
             NamedKey::Delete,
             NamedKey::End,
             NamedKey::ArrowLeft,
+            NamedKey::ArrowRight,
+            NamedKey::Backspace,
         ] {
             assert!(app.handle_palette_edit_key(&Key::Named(key)));
+            app.modifiers = ModifiersState::CONTROL;
+            assert!(app.handle_palette_edit_key(&Key::Named(key)));
+            app.modifiers = ModifiersState::empty();
         }
         assert_eq!(app.domain_picker.build_info().input, before.input);
         assert_eq!(app.domain_picker.build_info().cursor, before.cursor);
@@ -142,19 +165,89 @@ mod tests {
     }
 
     #[test]
-    fn modified_navigation_does_not_pretend_to_support_selection_or_word_motion() {
+    fn unsupported_modified_edits_are_consumed_without_mutation() {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.command_palette.open();
         app.command_palette.accessibility_set_input("two words");
         for modifier in [
-            ModifiersState::CONTROL,
             ModifiersState::ALT,
             ModifiersState::SHIFT,
             ModifiersState::SUPER,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+            ModifiersState::CONTROL | ModifiersState::ALT,
         ] {
             app.modifiers = modifier;
-            assert!(!app.handle_palette_edit_key(&Key::Named(NamedKey::ArrowLeft)));
-            assert_eq!(app.command_palette.build_info().cursor, "two words".len());
+            for key in [
+                NamedKey::ArrowLeft,
+                NamedKey::ArrowRight,
+                NamedKey::Home,
+                NamedKey::End,
+                NamedKey::Backspace,
+                NamedKey::Delete,
+            ] {
+                assert!(app.handle_palette_edit_key(&Key::Named(key)));
+                assert_eq!(app.command_palette.build_info().input, "two words");
+                assert_eq!(app.command_palette.build_info().cursor, "two words".len());
+            }
+        }
+        app.modifiers = ModifiersState::CONTROL;
+        app.alt_graph_active = true;
+        assert!(app.handle_palette_edit_key(&Key::Named(NamedKey::Backspace)));
+        assert_eq!(app.command_palette.build_info().input, "two words");
+        app.command_palette.close();
+        assert!(!app.handle_palette_edit_key(&Key::Named(NamedKey::Backspace)));
+    }
+
+    #[test]
+    fn palette_word_edits_preserve_graphemes_and_clear_preedit() {
+        for kind in ["command", "unicode", "domain"] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            let query = "one  e\u{301} 👩\u{200d}💻 tail";
+            match kind {
+                "command" => {
+                    app.command_palette.open();
+                    app.command_palette.accessibility_set_input(query);
+                }
+                "unicode" => {
+                    app.unicode_picker.open();
+                    app.unicode_picker.accessibility_set_filter(query);
+                }
+                _ => {
+                    app.domain_picker.open(&app.config.domains);
+                    app.domain_picker.accessibility_set_filter(query);
+                }
+            }
+            app.modifiers = ModifiersState::CONTROL;
+            app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+            for (key, expected, cursor) in [
+                (
+                    NamedKey::ArrowLeft,
+                    query,
+                    "one  e\u{301} 👩\u{200d}💻 ".len(),
+                ),
+                (
+                    NamedKey::Backspace,
+                    "one  e\u{301} tail",
+                    "one  e\u{301} ".len(),
+                ),
+                (NamedKey::Delete, "one  e\u{301} ", "one  e\u{301} ".len()),
+                (NamedKey::ArrowLeft, "one  e\u{301} ", 5),
+                (NamedKey::Backspace, "e\u{301} ", 0),
+                (NamedKey::ArrowRight, "e\u{301} ", "e\u{301}".len()),
+                (NamedKey::Home, "e\u{301} ", "e\u{301}".len()),
+                (NamedKey::End, "e\u{301} ", "e\u{301}".len()),
+            ] {
+                assert!(app.handle_palette_edit_key(&Key::Named(key)));
+                let info = match kind {
+                    "command" => app.command_palette.build_info(),
+                    "unicode" => app.unicode_picker.build_info(),
+                    _ => app.domain_picker.build_info(),
+                };
+                assert_eq!(info.input, expected, "{kind}: {key:?}");
+                assert_eq!(info.cursor, cursor, "{kind}: {key:?}");
+                assert!(app.ime.preedit().is_none());
+            }
+            app.unicode_picker.finish_search_for_test();
         }
     }
 }

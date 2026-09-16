@@ -357,11 +357,15 @@ blocked-worker, idle-scheduling, and accessible-status tests cover this lifecycl
 native responsiveness acceptance remains deferred (see [Unicode policy](unicode-support.md)).
 
 Shared palette query editing supports unmodified Left/Right/Home/End and
-whole-grapheme Backspace/Delete with insertion at the moved caret. Cursor-only
+whole-grapheme Backspace/Delete with insertion at the moved caret. Ctrl+Left/Right
+and Ctrl+Backspace/Delete use the same Unicode word-segment editing as search;
+unsupported modified edits and AltGraph are consumed without changing text.
+Local dispatch and blocked-worker regressions cover these bindings, but native
+Ctrl word-edit acceptance is deferred. Cursor-only
 edits preserve selection and pending Unicode searches, and busy domain stages
 remain read-only. Geometry, model, app routing, IME insertion, and semantic caret
 tests cover this behavior. The private-Sway interaction lane additionally
-requires seven real-keyboard query-editing cases with exact, fenced Unicode
+requires seven unmodified real-keyboard query-editing cases with exact, fenced Unicode
 insertion into alternating local PTY owners. Schema-5 clean-candidate GUI records
 independently reconstruct these cases from the PTY transcript and seal it plus
 the sidecar; an offline checker rejects changed artifacts and older unsealed
