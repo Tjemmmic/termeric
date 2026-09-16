@@ -33,6 +33,152 @@ fn scrollbar_drag_is_canceled_when_keyboard_changes_tabs() {
 }
 
 #[cfg(unix)]
+fn divider_owner_fixture() -> App {
+    let mut app = scrollbar_owner_fixture();
+    let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+    let owner = tab.take_terminal_owner().unwrap();
+    let shell = ShellConfig {
+        program: Some("/bin/sh".into()),
+        args: vec!["-c".into(), "sleep 5".into()],
+        env: Default::default(),
+    };
+    let mut panes =
+        PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 10.0, 20.0);
+    panes.split(SplitDirection::Vertical).unwrap();
+    let divider = panes.get_dividers()[0];
+    app.divider_dragging = Some(DividerDrag {
+        tab_id: tab.id,
+        target: divider.target,
+        last_ratio_millis: divider.ratio_millis,
+    });
+    tab.pane_manager = Some(panes);
+    app
+}
+
+#[cfg(unix)]
+#[test]
+fn divider_drag_finishes_when_keyboard_changes_tabs() {
+    let mut app = divider_owner_fixture();
+    app.handle_action(crate::input::Action::NextTab);
+    assert!(app.divider_dragging.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn divider_drag_mutation_revalidates_owner_and_cannot_resume() {
+    for transition in [
+        "tab",
+        "closed",
+        "closing",
+        "missing",
+        "wrong-divider",
+        "zoom",
+    ] {
+        let mut app = divider_owner_fixture();
+        let tab_id = app.divider_dragging.unwrap().tab_id;
+        app.apply_divider_drag_position(480.0, 240.0);
+        let preview_ratio = app.divider_dragging.unwrap().last_ratio_millis;
+        assert!(preview_ratio > 500);
+        match transition {
+            "tab" => app.tabs.as_mut().unwrap().switch_to(1),
+            "closed" => app.tabs.as_mut().unwrap().active_tab_mut().unwrap().closed = true,
+            "closing" => {
+                app.tabs.as_mut().unwrap().close_tab(0);
+            }
+            "missing" => app.divider_dragging.as_mut().unwrap().tab_id = usize::MAX,
+            "wrong-divider" => {
+                app.divider_dragging.as_mut().unwrap().target =
+                    crate::panes::DividerTarget::Local(u64::MAX)
+            }
+            "zoom" => {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .pane_manager
+                    .as_mut()
+                    .unwrap()
+                    .toggle_zoom();
+            }
+            _ => unreachable!(),
+        }
+        // Direct focus changes bypass refresh; the mutation boundary still
+        // refuses a hidden/stale owner and consumes its gesture.
+        app.apply_divider_drag_position(640.0, 240.0);
+        assert!(app.divider_dragging.is_none(), "{transition}");
+        if transition == "zoom" {
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .tab_mut_by_id(tab_id)
+                .unwrap()
+                .pane_manager
+                .as_mut()
+                .unwrap()
+                .toggle_zoom();
+        }
+        app.tabs.as_mut().unwrap().switch_to(0);
+        app.apply_divider_drag_position(320.0, 240.0);
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .tab_by_id(tab_id)
+                .unwrap()
+                .pane_manager
+                .as_ref()
+                .unwrap()
+                .get_dividers()[0]
+                .ratio_millis,
+            preview_ratio,
+            "{transition}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn divider_drag_survives_pane_focus_within_its_selected_tab() {
+    let mut app = divider_owner_fixture();
+    let panes = app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .pane_manager
+        .as_mut()
+        .unwrap();
+    let current = panes.focused_id();
+    let other = panes
+        .pane_ids()
+        .into_iter()
+        .find(|id| *id != current)
+        .unwrap();
+    panes.focus(other);
+    app.refresh_focused_terminal_surfaces();
+    app.apply_divider_drag_position(480.0, 240.0);
+    let preview_ratio = app.divider_dragging.unwrap().last_ratio_millis;
+    assert!(preview_ratio > 500);
+    app.finish_native_pointer_gesture();
+    app.apply_divider_drag_position(640.0, 240.0);
+    assert_eq!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .active_tab()
+            .unwrap()
+            .pane_manager
+            .as_ref()
+            .unwrap()
+            .get_dividers()[0]
+            .ratio_millis,
+        preview_ratio
+    );
+}
+
+#[cfg(unix)]
 #[test]
 fn scrollbar_drag_updates_only_its_live_selected_owner() {
     for transition in ["tab", "closed", "closing", "missing", "wrong-pane"] {

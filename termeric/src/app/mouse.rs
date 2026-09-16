@@ -3,6 +3,54 @@
 use super::*;
 
 impl App {
+    /// A divider belongs to a tab, not its focused pane. Switching panes in
+    /// that tab may continue the drag; hiding/closing its tab must finish it.
+    pub(super) fn reconcile_divider_drag(&mut self) {
+        let Some(drag) = self.divider_dragging else {
+            return;
+        };
+        let valid = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .is_some_and(|tab| {
+                tab.id == drag.tab_id
+                    && !tab.closed
+                    && !tab.is_closing()
+                    && tab.pane_manager.as_ref().is_some_and(|panes| {
+                        panes
+                            .get_dividers()
+                            .iter()
+                            .any(|divider| divider.target == drag.target)
+                    })
+            });
+        if !valid {
+            // Do not drop a live-domain preview: finalize it once through
+            // the existing authoritative acknowledgment/rollback path.
+            self.finish_native_pointer_gesture();
+        }
+    }
+
+    pub(super) fn apply_divider_drag_position(&mut self, x: f32, y: f32) {
+        self.reconcile_divider_drag();
+        let Some(drag) = self.divider_dragging else {
+            return;
+        };
+        let ratio = self
+            .tabs
+            .as_mut()
+            .and_then(|tabs| tabs.tab_mut_by_id(drag.tab_id))
+            .and_then(|tab| tab.pane_manager.as_mut())
+            .and_then(|panes| panes.resize_divider_target(drag.target, x, y));
+        if let Some(ratio_millis) = ratio {
+            if let Some(active_drag) = &mut self.divider_dragging {
+                active_drag.last_ratio_millis = ratio_millis;
+            }
+        } else {
+            self.finish_native_pointer_gesture();
+        }
+    }
+
     fn focused_scrollbar_owner(&self) -> Option<crate::tabs::TerminalIdentity> {
         let tabs = self.tabs.as_ref()?;
         let target = tabs.active_tab()?.focused_terminal_identity();
@@ -784,24 +832,12 @@ impl App {
         }
 
         // Handle pane divider dragging
-        if let Some(drag) = self.divider_dragging {
+        if self.divider_dragging.is_some() {
             let local_x = position.0 as f32 - content_left - padding;
             let local_y = position.1 as f32 - content_top;
-            let ratio = self
-                .tabs
-                .as_mut()
-                .and_then(|tabs| tabs.tab_mut_by_id(drag.tab_id))
-                .and_then(|tab| tab.pane_manager.as_mut())
-                .and_then(|panes| panes.resize_divider_target(drag.target, local_x, local_y));
-            if let Some(ratio_millis) = ratio {
-                if let Some(active_drag) = &mut self.divider_dragging {
-                    active_drag.last_ratio_millis = ratio_millis;
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            } else {
-                self.divider_dragging = None;
+            self.apply_divider_drag_position(local_x, local_y);
+            if let Some(window) = &self.window {
+                window.request_redraw();
             }
             return;
         }
@@ -1517,6 +1553,7 @@ impl App {
     /// Rebind global surfaces that intentionally describe only the focused
     /// pane. Per-pane selection remains stored with each terminal.
     pub(super) fn refresh_focused_terminal_surfaces(&mut self) {
+        self.reconcile_divider_drag();
         self.reconcile_scrollbar_drag();
         self.reconcile_broadcast_state();
         let active_tab_id = self.tabs.as_ref().and_then(TabManager::active_tab_id);

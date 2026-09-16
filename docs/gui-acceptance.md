@@ -504,6 +504,14 @@ Tab setup retains a private virtual keyboard; its focus predicate handles
 Termeric's initially focused state, where no transition log exists yet.
 This does not establish native pane-switch or live-domain scrollbar acceptance.
 
+Schema 10 adds a positive local divider drag that must resize both child PTYs,
+followed by a second drag interrupted by Ctrl+Tab. Subsequent pointer motion
+must change neither the hidden source panes' geometry nor the selected tab's
+geometry. An exact-owner input marker confirms the tab switch, and focus-loss
+counts must remain unchanged so unrelated window blur cannot mask the bug.
+Live-domain acknowledgment/rollback has separate unit coverage, not native
+acceptance in this scenario.
+
 Background-image functional promotion likewise requires automated static PNG
 and JPEG cases with each fit and opacity extreme under top and left tabs.
 Resize, open search and plugin chrome, split panes, replace the source file,

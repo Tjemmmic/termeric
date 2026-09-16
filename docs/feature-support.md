@@ -97,6 +97,11 @@ or a stale/closing owner; motion cannot retarget a sibling terminal. Raw-PTY
 tests verify actual scroll offsets, pane/tab isolation, and cancellation
 without relying on focus-refresh callbacks. Native pane-switch and live-domain
 scrollbar acceptance remain separate.
+Pane-divider motion likewise requires its original open tab to remain selected
+and its exact divider to remain visible. Tab switches finish the gesture without
+further resizing the hidden tab; pane focus within the same tab remains valid.
+Unit coverage checks stale/zoomed targets and live-domain preview rollback with
+an earlier request pending; private native coverage checks local PTY geometry.
 No-focus/non-modal lost-release, device unplug, edge auto-scrolling,
 and native pinned/live-domain drag acceptance remain separate work.
 

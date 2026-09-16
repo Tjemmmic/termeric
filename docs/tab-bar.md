@@ -88,6 +88,16 @@ returning to the original pane does not revive a canceled drag. Tab/pane
 isolation and stale-owner refusal have raw PTY/unit coverage; native pane-switch
 and live-domain scrollbar checks remain separate acceptance work.
 
+Divider drags finish when their tab loses selection, closes, or no longer has
+the captured visible divider (including zoom). Focus changes between panes in
+the same selected tab preserve the gesture. Refresh and the resize mutation
+boundary both validate ownership, so a hidden tab cannot continue resizing and
+returning to it cannot revive the drag. Live-domain previews still use normal
+acknowledgment/rollback; a rejected finalization preserves any earlier pending
+request. Local native coverage checks a real positive resize followed by a
+held-button tab switch with unchanged source and destination PTY geometry.
+Native live-domain acceptance remains separate.
+
 ## Shared geometry
 
 Rail width is part of the authoritative terminal geometry. The same physical

@@ -527,6 +527,28 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
                 raise gui.AcceptanceError("panel dismissal resized a background pane")
         if len(starts()) != count + 3:
             raise gui.AcceptanceError("tab dragging unexpectedly created another PTY")
+        # Prove this is a working divider hit before testing interruption.
+        # Both panes must receive changed PTY geometry, then keep that exact
+        # preview when Ctrl+Tab hides their tab during the next held drag.
+        with native_keyboard_lifetime(gui, app, backend):
+            lost_before_divider = app.log_count("Window focus changed: false")
+            native_drag(gui, app, backend, (590, 680), (680, 680), (960, 720))
+            gui.wait_until("positive divider resize", lambda: all(
+                gui.latest_terminal_geometry(gui.read_records(transcript), pid) != geometry
+                for pid, geometry in panel_geometry.items()))
+            divider_geometry = {pid: gui.latest_terminal_geometry(gui.read_records(transcript), pid)
+                                for pid in panel_geometry}
+            sibling_geometry = gui.latest_terminal_geometry(gui.read_records(transcript), compact_added)
+            native_drag(gui, app, backend, (680, 680), (750, 680), (960, 720),
+                        during_drag=lambda: chord(("ctrl",), "Tab"))
+            assert_focus_input("DIVIDER_SWITCH_TARGET_174", compact_added)
+            if app.log_count("Window focus changed: false") != lost_before_divider:
+                raise gui.AcceptanceError("divider drag was interrupted by unrelated focus loss")
+            if any(gui.latest_terminal_geometry(gui.read_records(transcript), pid) != geometry
+                   for pid, geometry in divider_geometry.items()):
+                raise gui.AcceptanceError("divider drag resized its hidden source tab")
+            if gui.latest_terminal_geometry(gui.read_records(transcript), compact_added) != sibling_geometry:
+                raise gui.AcceptanceError("divider drag resized the newly selected tab")
         select_and_check(1, "SCROLL_TARGET_SELECTED_174", pids[1])
         chord(("ctrl", "shift"), "End")
         select_and_check(0, "SCROLL_SOURCE_SELECTED_174", original)
@@ -553,7 +575,7 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             not Path(f"/proc/{pid}").exists() for pid in starts()))
         gui.assert_no_runtime_errors(app)
         (run_dir / "tab-overflow.json").write_text(json.dumps({
-            "schema": 9, "backend": backend, "original_pids": pids,
+            "schema": 10, "backend": backend, "original_pids": pids,
             "created_pid": added, "keyboard_sequence": overflow_navigation_keys(count),
             "compact_pointer_targets": points, "compact_input_owners": pointer_owners,
             "compact_created_pid": compact_added,
@@ -566,11 +588,14 @@ def run_tab_overflow_scenario(gui, binary: Path, run_dir: Path, env: dict,
             "resize_drag_widths": [960, 1040, 960],
             "scrollbar_target_visible_line": copied_scroll_line,
             "scrollbar_drag_focus_losses": 0,
+            "divider_drag_focus_losses": 0,
+            "divider_source_geometry_after_switch": divider_geometry,
+            "divider_target_geometry_after_switch": sibling_geometry,
             "panel_dismiss_input_owners": panel_owners,
             "panel_background_divider_point": [590, 680],
             "panel_geometry": panel_geometry,
             "drag_points": {"source": source, "destination": destination},
-            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar isolation; not screenshot, arbitrary lost-release, edge-autoscroll, or screen-reader acceptance",
+            "coverage": "overflow keyboard, pointer focus, forward/reverse drag, drag ownership, window-focus/palette/resize interruption, panel outside-divider dismissal, and cross-tab scrollbar/divider isolation; not screenshot, arbitrary lost-release, edge-autoscroll, or screen-reader acceptance",
         }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     finally:
         app.stop_after_failure()

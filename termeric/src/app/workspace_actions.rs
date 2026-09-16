@@ -4595,6 +4595,68 @@ mod workspace_control_tests {
             500
         );
 
+        // Hiding a tab during a divider preview must finalize through the
+        // control path, not silently discard the preview. With an earlier
+        // control pending, rejection restores the cached authoritative ratio
+        // and does not remove that earlier request.
+        let dragged_tab = app.tabs.as_ref().unwrap().active_tab().unwrap().id;
+        let pending = LiveDomainControl::ResizeSplit {
+            domain_id: "domain-topology".into(),
+            remote_split_id: 55,
+            ratio_millis: 600,
+        };
+        app.pending_live_domain_controls.insert(pending.clone());
+        for refresh in [true, false] {
+            let source_index = app
+                .tabs
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find_map(|(index, tab)| (tab.id == dragged_tab).then_some(index))
+                .unwrap();
+            app.tabs.as_mut().unwrap().switch_to(source_index);
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .pane_manager
+                .as_mut()
+                .unwrap()
+                .resize(800.0, 480.0, 10.0, 20.0);
+            app.divider_dragging = Some(DividerDrag {
+                tab_id: dragged_tab,
+                target: crate::panes::DividerTarget::Domain(55),
+                last_ratio_millis: 500,
+            });
+            app.apply_divider_drag_position(60.0, 320.0);
+            assert_ne!(app.divider_dragging.unwrap().last_ratio_millis, 500);
+            app.tabs.as_mut().unwrap().next_tab();
+            if refresh {
+                app.refresh_focused_terminal_surfaces();
+            } else {
+                app.apply_divider_drag_position(60.0, 20.0);
+            }
+            assert!(app.divider_dragging.is_none());
+            assert!(app.take_native_drag_controls().is_empty());
+            assert_eq!(app.pending_live_domain_controls.len(), 1);
+            assert!(app.pending_live_domain_controls.contains(&pending));
+            assert_eq!(
+                app.tabs
+                    .as_ref()
+                    .unwrap()
+                    .tab_by_id(dragged_tab)
+                    .unwrap()
+                    .pane_manager
+                    .as_ref()
+                    .unwrap()
+                    .get_dividers()[0]
+                    .ratio_millis,
+                500
+            );
+        }
+        app.pending_live_domain_controls.remove(&pending);
+
         let mut revision_five = revision_four.clone();
         let moved = revision_five.workspace.tabs[0]
             .panes

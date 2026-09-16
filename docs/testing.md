@@ -538,6 +538,13 @@ adds finite owner-tagged history and copies the selected tab's visible line
 after Ctrl+Tab during a held scrollbar drag; no search or scroll reset may mask
 an unintended change. Native pane-switch and live-domain scrollbar tests remain
 separate, and terminal-protocol mouse capture is unchanged.
+Divider owner tests cover tab switches, closed/closing/missing tabs, stale
+divider IDs, zoom, same-tab pane focus, and no resumption after cancellation.
+They exercise both refresh and direct mutation paths. A cached live-domain
+topology regression confirms finalization restores a rejected preview without
+removing an earlier pending control. The native overflow lane first proves a
+positive two-pane resize, then verifies that a held-divider tab switch leaves
+both the hidden source and newly selected tab's PTY geometry unchanged.
 No-focus/non-modal lost-release, device unplug,
 native pinned/live-domain drags, and real-desktop acceptance
 are not inferred from these results. Terminal mouse-reporting policy is unchanged.
