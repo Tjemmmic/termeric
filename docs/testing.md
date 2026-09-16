@@ -517,6 +517,17 @@ and the top strip, with immediate owner checks, exact stopping indices, restored
 sibling order, and no unrelated focus loss. Pure fixture tests distinguish
 active-index controls from viewport controls across bounded font/tab metrics.
 Native pinned/live-domain traversal and unrun platforms remain deferred.
+The direct-pointer path shares overflow admission. Regression tests first
+reproduced continued movement after a same-domain request became pending and
+movement onto a closed target. They now cover both closed/closing targets,
+exact captured local/remote route revalidation for motion and dwell, stale-owner
+finalization refusal, positive within-pinned-group moves, and unrelated-domain
+requests. These use local PTYs and synthetic domain metadata, not a real server
+or authenticated provider.
+The native pointer-only path also exposed an over-broad keyboard-focus gate
+during this change. A dedicated regression now permits new direct pointer
+drags without a keyboard seat while refusing autonomous repeat and preserving
+focus-loss cleanup; normal native pointer reordering must continue to pass.
 See [the scenario boundaries](gui-acceptance.md#tab-placement-geometry-and-keyboard-lane).
 
 The separate `tab-overflow` native scenario forces a twelve-tab left rail and

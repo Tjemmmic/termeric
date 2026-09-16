@@ -15,6 +15,174 @@ fn overflow_drag_fixture() -> App {
 }
 
 #[cfg(unix)]
+fn live_tab_drag_fixture() -> App {
+    let mut app = overflow_drag_fixture();
+    for (index, tab) in app
+        .tabs
+        .as_mut()
+        .unwrap()
+        .all_tabs_mut()
+        .iter_mut()
+        .enumerate()
+    {
+        tab.live_domain = Some(crate::tabs::LiveDomainTab {
+            domain_id: "drag-domain".into(),
+            tab_id: index as u32 + 10,
+            pane_ids: HashMap::new(),
+        });
+    }
+    app.tab_dragging.as_mut().unwrap().live = Some(LiveDomainTabDrag {
+        domain_id: "drag-domain".into(),
+        remote_tab_id: 10,
+        initial_index: 0,
+    });
+    app
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_tab_drag_stops_when_domain_control_becomes_pending() {
+    let mut app = live_tab_drag_fixture();
+    assert!(app.apply_tab_drag_target(1));
+    let pending = LiveDomainControl::MoveTab {
+        domain_id: "drag-domain".into(),
+        remote_tab_id: 12,
+        index: 0,
+    };
+    app.pending_live_domain_controls.insert(pending.clone());
+    let order: Vec<_> = app
+        .tabs
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|(_, tab)| tab.id)
+        .collect();
+    assert!(
+        !app.apply_tab_drag_target(2),
+        "pending authority must block further pointer previews"
+    );
+    assert_eq!(
+        app.tabs
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(_, tab)| tab.id)
+            .collect::<Vec<_>>(),
+        order
+    );
+    assert_eq!(app.pending_live_domain_controls.len(), 1);
+    assert!(app.pending_live_domain_controls.contains(&pending));
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_tab_drag_refuses_closed_or_closing_targets() {
+    for closing in [false, true] {
+        let mut app = overflow_drag_fixture();
+        let target = app.tabs.as_ref().unwrap().iter().nth(1).unwrap().1.id;
+        let tab = app.tabs.as_mut().unwrap().tab_mut_by_id(target).unwrap();
+        if closing {
+            tab.start_closing();
+        } else {
+            tab.closed = true;
+        }
+        assert!(!app.apply_tab_drag_target(1));
+        assert_eq!(app.tabs.as_ref().unwrap().active_index(), 0);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_tab_drag_accepts_pointer_only_input_but_repeat_requires_keyboard_focus() {
+    use crate::renderer::TabBarClick::NextTab;
+    let mut app = overflow_drag_fixture();
+    let captured = app.tab_dragging.clone();
+    app.handle_window_focus_change(false);
+    assert!(app.tab_dragging.is_none());
+    // A new button-down can arrive without a keyboard seat. It must not be
+    // confused with resuming the previous gesture after a lost release.
+    app.tab_dragging = captured;
+    assert!(app.apply_tab_drag_target(1));
+    let now = Instant::now();
+    app.update_tab_drag_scroll(Some(NextTab), now);
+    assert!(app.tab_drag_scroll.is_none());
+    app.handle_window_focus_change(true);
+    app.update_tab_drag_scroll(Some(NextTab), now);
+    assert!(app.tab_drag_scroll.is_some());
+    app.handle_window_focus_change(false);
+    assert!(app.tab_drag_scroll.is_none());
+    assert!(app.tab_dragging.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn tab_drag_revalidates_captured_domain_route_for_motion_dwell_and_finalization() {
+    use crate::renderer::TabBarClick::NextTab;
+    for change in ["remote-id", "domain", "detached", "closed", "closing"] {
+        let mut app = live_tab_drag_fixture();
+        assert!(app.apply_tab_drag_target(1));
+        let now = Instant::now();
+        app.update_tab_drag_scroll(Some(NextTab), now);
+        assert!(app.tab_drag_scroll.is_some());
+        let source = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        match change {
+            "remote-id" => source.live_domain.as_mut().unwrap().tab_id = 99,
+            "domain" => source.live_domain.as_mut().unwrap().domain_id = "replacement".into(),
+            "detached" => source.live_domain = None,
+            "closed" => source.closed = true,
+            "closing" => source.start_closing(),
+            _ => unreachable!(),
+        }
+        assert!(!app.apply_tab_drag_target(2), "{change}");
+        app.update_tab_drag_scroll(Some(NextTab), now + Duration::from_secs(1));
+        assert!(app.tab_drag_scroll.is_none(), "{change}");
+        assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1, "{change}");
+        assert!(
+            app.take_native_drag_controls().is_empty(),
+            "must not address stale remote owner: {change}"
+        );
+    }
+    // A local drag cannot silently acquire remote authority either.
+    let mut app = overflow_drag_fixture();
+    app.tabs
+        .as_mut()
+        .unwrap()
+        .active_tab_mut()
+        .unwrap()
+        .live_domain = Some(crate::tabs::LiveDomainTab {
+        domain_id: "new-domain".into(),
+        tab_id: 99,
+        pane_ids: HashMap::new(),
+    });
+    assert!(!app.apply_tab_drag_target(1));
+    app.update_tab_drag_scroll(Some(NextTab), Instant::now());
+    assert!(app.tab_drag_scroll.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_tab_drag_preserves_pinned_groups_and_ignores_unrelated_domain_requests() {
+    let mut app = live_tab_drag_fixture();
+    app.tabs.as_mut().unwrap().all_tabs_mut()[0].pinned = true;
+    app.tabs.as_mut().unwrap().all_tabs_mut()[1].pinned = true;
+    app.pending_live_domain_controls
+        .insert(LiveDomainControl::MoveTab {
+            domain_id: "unrelated-domain".into(),
+            remote_tab_id: 77,
+            index: 0,
+        });
+    assert!(app.apply_tab_drag_target(1));
+    assert!(!app.apply_tab_drag_target(2));
+    assert!(app.apply_tab_drag_target(0));
+    assert!(!app.apply_tab_drag_target(usize::MAX));
+    assert!(
+        app.take_native_drag_controls().is_empty(),
+        "returned to original domain index"
+    );
+    assert_eq!(app.pending_live_domain_controls.len(), 1);
+}
+
+#[cfg(unix)]
 #[test]
 fn overflow_drag_dwell_repeats_without_motion_or_catchup_and_keeps_owner() {
     use crate::renderer::TabBarClick::NextTab;

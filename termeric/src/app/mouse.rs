@@ -172,7 +172,13 @@ impl App {
                         tab.live_domain_tab_route()
                             .is_some_and(|(domain, _)| domain == domain_id)
                     })
-                    .position(|(_, tab)| tab.id == tab_id)
+                    .position(|(_, tab)| {
+                        tab.id == tab_id
+                            && !tab.closed
+                            && !tab.is_closing()
+                            && tab.live_domain_tab_route()
+                                == Some((domain_id.as_str(), remote_tab_id))
+                    })
                     .and_then(|index| u16::try_from(index).ok())
             });
             if let Some(index) = index
@@ -807,19 +813,8 @@ impl App {
                 self.tab_bar_hover = new_hover;
                 self.tab_bar_hover_progress = 0.0;
             }
-            if let Some(drag) = &self.tab_dragging
-                && let Some(crate::renderer::TabBarClick::Tab(target)) = new_hover
-                && let Some(tabs) = &mut self.tabs
-            {
-                let allowed = drag.live.as_ref().is_none_or(|live| {
-                    tabs.iter()
-                        .find(|(index, _)| *index == target)
-                        .and_then(|(_, tab)| tab.live_domain_tab_route())
-                        .is_some_and(|(domain, _)| domain == live.domain_id)
-                });
-                if allowed {
-                    let _ = tabs.move_dragged_tab_to(drag.tab_id, target);
-                }
+            if let Some(crate::renderer::TabBarClick::Tab(target)) = new_hover {
+                self.apply_tab_drag_target(target);
             }
         }
 

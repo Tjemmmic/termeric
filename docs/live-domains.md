@@ -109,6 +109,14 @@ moves to the end of the domain's pinned prefix; unpinning moves it to the start
 of the unpinned group. Stable-ID movement is zero-based and rejected when its
 target crosses that boundary. Relay-side OSC title events are not applied as a
 second local authority.
+Direct pointer and timed overflow tab previews share source/destination checks,
+including exact captured domain/remote-tab identity and a fresh pending-request
+check before each move. A request arriving after button-down blocks further
+previews without canceling the earlier request. Closed/closing destinations are
+refused, and finalization cannot send a move for a source whose captured remote
+identity no longer matches. Local regression fixtures cover these races and
+the unaffected pinned-group/unrelated-domain paths; this is not native
+live-domain drag acceptance.
 Swap exchanges the focused pane with the next authoritative leaf while keeping
 split identities and ratios. Balance retains the tree and resets every divider
 to 50%. Columns, rows, and grid rebuild the same ordered pane identities and

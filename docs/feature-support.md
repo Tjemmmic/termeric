@@ -76,6 +76,13 @@ indices, restored sibling order, and no unrelated focus loss. Native
 pinned/live-domain traversal, X11 execution, and visual acceptance remain
 separate checks.
 
+Direct and timed tab dragging now use the same admission check, refusing
+closed/closing targets and newly pending same-domain requests. Source routing
+must still match the exact identity captured at button-down; finalization cannot
+emit a move for a detached/replaced/closed remote owner. Local PTY regressions
+cover these cases plus allowed pinned-group movement and unrelated-domain
+requests; real native live-domain dragging remains unclaimed.
+
 Normal left clicks now exit F6 chrome focus after hit testing, avoiding swallowed
 typing and preserving the displayed keyboard-scrolled tab target. The native
 overflow lane checks terminal, distant-tab, and split-pane input ownership;

@@ -42,6 +42,19 @@ the next move. It never selects a sibling, wraps at the end, or catches up with
 a burst after a delayed event-loop wakeup. No repeat timer remains at a blocked
 boundary. Arbitrary edge zones outside these controls are not implemented.
 
+Direct pointer moves and timed overflow moves share the same admission policy:
+the captured source must remain selected, open, and bound to the same local or
+exact domain/remote-tab identity; the destination must be open and in the same
+pinned group. A live drag additionally requires a same-domain destination and
+no pending request for that domain, including requests started after button-down.
+Requests for unrelated domains do not block it. Finalization rechecks the exact
+captured remote owner before emitting a daemon move, so a replaced, detached,
+closed, or closing source cannot address the previous remote tab. Existing
+authoritative acknowledgment/rollback behavior remains unchanged.
+Keyboard focus gates autonomous overflow repetition, not direct native pointer
+input: a pointer-only Wayland seat may start a new drag. Actual focus loss still
+finalizes an existing gesture and clears its repeat timer.
+
 Short overflowing rails (less than five tab-row heights) share one bottom row
 between Previous, Next, and New Tab. This prevents the old separate Next row
 from covering a visible tab and intercepting its clicks. At least three row

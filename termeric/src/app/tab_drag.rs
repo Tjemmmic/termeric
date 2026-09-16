@@ -15,8 +15,20 @@ pub(super) struct OverflowDwell {
 }
 
 impl App {
-    fn overflow_drag_target(&self, control: TabBarClick) -> Option<(usize, usize)> {
-        if !self.window_focused || self.presentation_suspended() {
+    pub(super) fn apply_tab_drag_target(&mut self, target: usize) -> bool {
+        self.finish_obscured_native_pointer_gesture();
+        let Some(tab_id) = self.tab_drag_target(target) else {
+            return false;
+        };
+        self.tabs
+            .as_mut()
+            .is_some_and(|tabs| tabs.move_dragged_tab_to(tab_id, target))
+    }
+
+    /// Pointer motion and overflow dwell must authorize the same exact source
+    /// and destination. A pending request can arrive after button-down.
+    fn tab_drag_target(&self, index: usize) -> Option<usize> {
+        if self.presentation_suspended() {
             return None;
         }
         let drag = self.tab_dragging.as_ref()?;
@@ -25,27 +37,45 @@ impl App {
         if source.id != drag.tab_id || source.closed || source.is_closing() {
             return None;
         }
+        let target = tabs.iter().find(|(i, _)| *i == index)?.1;
+        if target.closed || target.is_closing() || target.pinned != source.pinned {
+            return None;
+        }
+        match (&drag.live, source.live_domain_tab_route()) {
+            (None, None) => {}
+            (Some(live), Some((domain, remote_tab)))
+                if domain == live.domain_id && remote_tab == live.remote_tab_id =>
+            {
+                if target
+                    .live_domain_tab_route()
+                    .is_none_or(|(domain, _)| domain != live.domain_id)
+                    || self
+                        .pending_live_domain_controls
+                        .iter()
+                        .any(|pending| pending.domain_id() == live.domain_id)
+                {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+        Some(drag.tab_id)
+    }
+
+    fn overflow_drag_target(&self, control: TabBarClick) -> Option<(usize, usize)> {
+        // Autonomous repeat needs keyboard focus; direct native pointer input
+        // can legitimately start a new drag on a pointer-only Wayland seat.
+        // Actual focus loss still finalizes every existing native gesture.
+        if !self.window_focused {
+            return None;
+        }
+        let tabs = self.tabs.as_ref()?;
         let index = match control {
             TabBarClick::PreviousTab => tabs.active_index().checked_sub(1)?,
             TabBarClick::NextTab => tabs.active_index().checked_add(1)?,
             _ => return None,
         };
-        let target = tabs.iter().find(|(i, _)| *i == index)?.1;
-        if target.closed || target.is_closing() || target.pinned != source.pinned {
-            return None;
-        }
-        if let Some(live) = &drag.live
-            && (target
-                .live_domain_tab_route()
-                .is_none_or(|(domain, _)| domain != live.domain_id)
-                || self
-                    .pending_live_domain_controls
-                    .iter()
-                    .any(|pending| pending.domain_id() == live.domain_id))
-        {
-            return None;
-        }
-        Some((drag.tab_id, index))
+        self.tab_drag_target(index).map(|tab_id| (tab_id, index))
     }
 
     /// Both native motion and idle wakeups use the current rendered hit test.
@@ -73,10 +103,7 @@ impl App {
         if now < dwell.deadline {
             return;
         }
-        let moved = self
-            .tabs
-            .as_mut()
-            .is_some_and(|tabs| tabs.move_dragged_tab_to(tab_id, target));
+        let moved = self.apply_tab_drag_target(target);
         self.tab_drag_scroll = if moved && self.overflow_drag_target(control).is_some() {
             Some(OverflowDwell {
                 deadline: now + REPEAT_DWELL,
