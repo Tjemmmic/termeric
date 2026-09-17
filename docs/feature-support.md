@@ -431,8 +431,11 @@ focus-outline, and screen-reader acceptance remain deferred (see
 [input contract](accessibility-and-input.md)).
 
 Explicit custom-command Run and RunCommand keybindings no longer expand the
-selected payload into another saved command when its first word collides with
-a configured name or alias. Ordinary typed aliases still expand on Enter.
+selected payload into another saved command or rewrite it with a cached Git
+branch suggestion. Resolved command chunks skip interactive suggestion creation
+and acceptance; ordinary typed aliases and Git suggestions retain their normal
+behavior. Temporary libgit2 repositories and inert raw-PTY tests verify literal
+Run/keybinding bytes, typed completion, and exact guarded command confirmation.
 The shared terminal-input policy retains read-only, armed/active broadcast,
 and plugin confirmation behavior. Raw-PTY collision and safeguard tests use
 inert byte readers, not real command execution or providers; native operator

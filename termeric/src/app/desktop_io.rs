@@ -1021,13 +1021,13 @@ impl App {
         }
     }
 
-    /// Write input to the active tab's PTY, with custom command alias expansion
+    /// Write interactive input with saved aliases and Git branch suggestions.
     pub(super) fn write_to_pty(&mut self, data: &[u8]) {
         self.write_editable_input(data, true);
     }
 
     /// Explicitly chosen command text is already resolved. Preserve normal input
-    /// policy, but do not reinterpret its first word as another saved command.
+    /// policy, but do not reinterpret it through aliases or Git suggestions.
     pub(super) fn write_saved_command(&mut self, command: &str) {
         for chunk in command_keystrokes(command) {
             self.write_editable_input(&chunk, false);
@@ -1112,7 +1112,7 @@ impl App {
         true
     }
 
-    fn write_editable_input(&mut self, data: &[u8], expand_aliases: bool) {
+    fn write_editable_input(&mut self, data: &[u8], interactive_assistance: bool) {
         if matches!(self.broadcast, BroadcastState::Armed { .. }) {
             self.toasts
                 .warning("Input was not sent while broadcast is armed");
@@ -1135,7 +1135,7 @@ impl App {
         // Track the input line buffer for alias expansion + git completion
         if data == b"\r" {
             // If git completions are visible and a selection is active, accept it
-            if self.accept_git_completion(true) {
+            if interactive_assistance && self.accept_git_completion(true) {
                 return;
             }
             if self.git_completions_visible {
@@ -1151,7 +1151,7 @@ impl App {
                 Some(pos) => (trimmed[..pos].to_string(), trimmed[pos..].to_string()),
                 None => (trimmed.clone(), String::new()),
             };
-            let matched_command = if expand_aliases {
+            let matched_command = if interactive_assistance {
                 self.config
                     .commands
                     .iter()
@@ -1229,8 +1229,11 @@ impl App {
             }
         }
 
-        // Update git completions based on current input
-        if let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer) {
+        // Explicit Run text is already resolved; it must neither build nor
+        // accept interactive suggestions between its edit and submit chunks.
+        if interactive_assistance
+            && let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer)
+        {
             let completions = self.git_watcher.complete_branch(partial);
             if !completions.is_empty() {
                 self.git_completions = completions;
@@ -1526,6 +1529,112 @@ mod desktop_io_tests {
             .collect::<Vec<_>>()
             .join(" ");
         wait_command_output(app, &expected);
+    }
+
+    #[cfg(unix)]
+    fn seed_git_completion_cache(app: &mut App) -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature =
+            git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(1, 0))
+                .unwrap();
+        repo.commit(
+            Some("refs/heads/main"),
+            &signature,
+            &signature,
+            "inert fixture",
+            &tree,
+            &[],
+        )
+        .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            app.git_watcher.update(directory.path().to_str());
+            if app.git_watcher.complete_branch("ma") == ["main"] {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Git fixture scan did not publish: {:?}",
+                app.git_watcher.take_error()
+            );
+            std::thread::yield_now();
+        }
+        drop(tree);
+        drop(repo);
+        directory
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_run_preserves_git_text_even_with_live_branch_suggestions() {
+        let command = "git checkout ma";
+        let expected = format!("\x15{command}\rZ");
+        for keybinding in [false, true] {
+            let mut app = raw_command_app(expected.len());
+            let _repository = seed_git_completion_cache(&mut app);
+            if keybinding {
+                assert!(
+                    app.handle_key_action(crate::input::keybindings::KeyAction::RunCommand {
+                        command: command.into()
+                    })
+                );
+            } else {
+                app.run_custom_command(command);
+            }
+            assert!(!app.git_completions_visible);
+            assert!(app.input_line_buffer.is_empty());
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, expected.as_bytes());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_git_run_guards_the_exact_text_without_a_completion_rewrite() {
+        use crate::terminal::guardrails::GuardrailAction;
+        let command = "git checkout rm -rf /synthetic-never-executed ma";
+        let expected = format!("\x15{command}\rZ");
+        let mut app = raw_command_app(expected.len());
+        let _repository = seed_git_completion_cache(&mut app);
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .tab_type = crate::tabs::TabType::Plugin {
+            plugin_id: "inert-explicit-git-guard".into(),
+        };
+        app.run_custom_command(command);
+        assert!(app.guardrail.is_awaiting_current());
+        assert_eq!(app.guardrail.matched.as_ref().unwrap().command, command);
+        assert!(!app.git_completions_visible);
+        assert!(app.git_completions.is_empty());
+        let request_id = app.guardrail.request_id();
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected.as_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_typed_git_input_still_builds_and_accepts_real_cached_suggestions() {
+        let expected = b"git checkout ma\x7f\x7fmain\rZ";
+        let mut app = raw_command_app(expected.len());
+        let _repository = seed_git_completion_cache(&mut app);
+        app.write_to_pty(b"git checkout ma");
+        assert!(app.git_completions_visible);
+        assert_eq!(app.git_completions, ["main"]);
+        assert_eq!(app.git_completion_index, Some(0));
+        app.write_to_pty(b"\r");
+        assert!(!app.git_completions_visible);
+        assert!(app.input_line_buffer.is_empty());
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected);
     }
 
     #[cfg(unix)]

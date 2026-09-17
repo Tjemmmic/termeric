@@ -388,9 +388,14 @@ reload tests neither persist commands nor execute them. Pointer hover is
 independent of this focus. Model, geometry, modifier, and semantic
 transition tests pass; raw-PTY tests prove navigation isolation and exact Run
 delivery to an inert byte reader (not a command interpreter). Explicit Run
-uses the selected text without another saved-command name/alias expansion;
-ordinary typed command names and aliases still expand once on Enter. This
-distinction also applies to configured RunCommand keybindings. The shared
+uses the selected text without saved-command name/alias expansion or Git branch
+completion. Resolved command chunks neither build nor accept interactive branch
+suggestions, even when a live repository scan has published matching names.
+Ordinary typed command names and aliases still expand once on Enter, and typed
+Git input retains its suggestions. This distinction also applies to configured
+RunCommand keybindings. Temporary libgit2 repositories plus inert PTY readers
+verify exact Run/keybinding bytes, unchanged typed completion, and guarded
+submission/confirmation of the original text without a branch rewrite. The shared
 input path retains focused-terminal routing, read-only and armed-broadcast
 refusal, active broadcast, and plugin-tab destructive-command confirmation.
 Raw-PTY regressions cover colliding names/aliases, suffixes, ordinary typed
