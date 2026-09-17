@@ -367,9 +367,15 @@ duplicate occurrence used for semantic identity. Focus has a visible outline
 and reveals the row in the shared viewport. Changed/removed identities reject
 activation and return focus to New; a focused row hidden by wheel scrolling
 must be revealed before a subsequent activation can Run/Delete it. A viewport
-too short for a whole row never activates that hidden command. Delete returns
-keyboard focus to New instead of leaving it on the next shifted row. Pointer
-hover is independent of this focus. Model, geometry, modifier, and semantic
+too short for a whole row never activates that hidden command. Successful
+pointer, keyboard, and assistive deletion share the same post-delete focus:
+browse mode selects New, while an open form retains its draft and active field.
+Deletion immediately retires all published command-row action IDs, so queued
+Run/Delete/Focus requests cannot target a duplicate that shifts into the deleted
+occurrence; the next semantic frame allocates fresh row IDs. Fixed form/footer
+IDs remain available. This is the explicit Delete lifecycle, not a claim about
+arbitrary external configuration replacement. Pointer hover is independent of
+this focus. Model, geometry, modifier, and semantic
 transition tests pass; raw-PTY tests prove navigation isolation and exact Run
 delivery to an inert byte reader (not a command interpreter). Explicit Run
 uses the selected text without another saved-command name/alias expansion;
@@ -379,8 +385,12 @@ input path retains focused-terminal routing, read-only and armed-broadcast
 refusal, active broadcast, and plugin-tab destructive-command confirmation.
 Raw-PTY regressions cover colliding names/aliases, suffixes, ordinary typed
 expansion, refused prefixes, broadcast delivery, and exact pending plugin
-Enter ownership using an inert reader with plugin metadata only. New tests do not
-persist or delete commands or invoke providers. Native keyboard/focus-outline
+Enter ownership using an inert reader with plugin metadata only. A separate
+Linux subprocess regression deletes synthetic commands and verifies persistence
+only under a temporary XDG configuration root. It covers all three deletion
+routes, duplicate/stale actions before and after tree rebuild, the final row,
+invalid indices, form preservation, and the next Enter action. No provider or
+saved command is executed. Native keyboard/focus-outline
 and screen-reader acceptance remain deferred.
 
 Typed application aliases in plugin tabs are now expanded before destructive-

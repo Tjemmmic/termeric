@@ -2071,6 +2071,15 @@ impl App {
         }
     }
 
+    /// A deletion changes duplicate occurrence identities. Retire all published
+    /// row actions before the next frame; never reuse their node IDs for rows
+    /// that shifted into a deleted occurrence. Fixed form/footer IDs stay live.
+    pub(super) fn retire_commands_accessibility_rows(&mut self) {
+        self.clear_commands_accessibility_focus();
+        self.accessibility.commands_nodes.clear();
+        self.accessibility.commands_targets.clear();
+    }
+
     fn handle_commands_accessibility_action(&mut self, request: ActionRequest) {
         use crate::ui::commands::panel::CommandsPanelAction;
 
@@ -2188,7 +2197,6 @@ impl App {
                     }
                     (CommandsSemanticTarget::Delete(_), Action::Click) => {
                         self.apply_commands_panel_action(CommandsPanelAction::Delete(index));
-                        self.accessibility.focus_override = Some(COMMANDS_NEW);
                     }
                     (
                         target @ (CommandsSemanticTarget::Run(_)
@@ -7293,6 +7301,160 @@ mod tests {
         });
         assert!(app.settings_panel.is_active());
         assert!(!app.command_palette.is_active());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn command_deletion_unifies_focus_and_retires_stale_duplicate_actions() {
+        const CHILD: &str = "TERMERIC_COMMAND_DELETE_FIXTURE_CONFIG";
+        let Some(config_root) = std::env::var_os(CHILD) else {
+            let directory = tempfile::tempdir().unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "app::accessibility::tests::command_deletion_unifies_focus_and_retires_stale_duplicate_actions", "--nocapture"])
+                .env(CHILD, directory.path())
+                .env("XDG_CONFIG_HOME", directory.path())
+                .output().unwrap();
+            assert!(
+                result.status.success(),
+                "isolated child failed:\n{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        };
+        let config_root = std::path::PathBuf::from(config_root);
+        assert!(config_root.is_absolute());
+        assert!(Config::config_path().starts_with(&config_root));
+        use crate::ui::commands::panel::CommandsPanelAction;
+        use winit::keyboard::{Key, NamedKey};
+        for (route, editing) in [
+            ("pointer", false),
+            ("semantic", false),
+            ("keyboard", false),
+            ("pointer", true),
+            ("semantic", true),
+            ("pointer-last", false),
+        ] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            let duplicate = crate::config::CustomCommand {
+                name: "same".into(),
+                command: "inert: never run".into(),
+                alias: None,
+            };
+            app.config.commands = vec![
+                duplicate.clone(),
+                duplicate,
+                crate::config::CustomCommand {
+                    name: "other".into(),
+                    command: "inert: never run either".into(),
+                    alias: None,
+                },
+            ];
+            if route == "pointer-last" {
+                app.config.commands.truncate(1);
+            }
+            let remaining = app.config.commands.len() - 1;
+            app.commands_panel.set_reduced_motion(true);
+            app.commands_panel.toggle();
+            app.accessibility_snapshot();
+            let key = custom_command_keys(&app.config.commands).remove(0);
+            let stale_delete =
+                app.accessibility.commands_nodes[&CommandsSemanticTarget::Delete(key.clone())];
+            let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key)];
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: if route == "keyboard" {
+                    stale_delete
+                } else {
+                    run
+                },
+                data: None,
+            });
+            if editing {
+                app.commands_panel.start_add();
+                app.commands_panel.form_name.replace("retained name");
+                app.commands_panel.form_command.replace("retained command");
+                app.commands_panel.focus_command();
+            }
+            // A refused index must not revoke still-valid row actions.
+            app.apply_commands_panel_action(CommandsPanelAction::Delete(usize::MAX));
+            assert_eq!(app.config.commands.len(), remaining + 1);
+            assert!(app.accessibility.commands_targets.contains_key(&run));
+            match route {
+                "pointer" | "pointer-last" => {
+                    app.apply_commands_panel_action(CommandsPanelAction::Delete(0))
+                }
+                "semantic" => app.handle_accessibility_action(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: stale_delete,
+                    data: None,
+                }),
+                _ => {
+                    assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+                }
+            }
+            assert_eq!(app.config.commands.len(), remaining, "{route}");
+            assert_eq!(
+                app.commands_panel
+                    .build_info(&app.config.commands)
+                    .browse_focus,
+                (!editing).then_some(CommandControl::New),
+                "{route}: keyboard and rendered focus must agree"
+            );
+            // Queued events must not hit the identical command that shifted into
+            // occurrence zero, either before or after the next semantic frame.
+            for rebuild in [false, true] {
+                if rebuild {
+                    assert_eq!(
+                        app.accessibility_snapshot().focus,
+                        if editing {
+                            COMMANDS_COMMAND
+                        } else {
+                            COMMANDS_NEW
+                        }
+                    );
+                }
+                app.handle_accessibility_action(ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: stale_delete,
+                    data: None,
+                });
+                assert_eq!(
+                    app.config.commands.len(),
+                    remaining,
+                    "{route}: stale Delete retargeted a duplicate"
+                );
+                for action in [Action::Click, Action::Focus] {
+                    app.handle_accessibility_action(ActionRequest {
+                        action,
+                        target_tree: TreeId::ROOT,
+                        target_node: run,
+                        data: None,
+                    });
+                    assert!(app.commands_panel.is_open(), "{route}: stale Run activated");
+                }
+            }
+            let persisted: Config =
+                toml::from_str(&std::fs::read_to_string(Config::config_path()).unwrap()).unwrap();
+            assert_eq!(persisted.commands.len(), remaining);
+            if editing {
+                assert_eq!(app.commands_panel.form_name.text(), "retained name");
+                assert_eq!(app.commands_panel.form_command.text(), "retained command");
+                assert!(app.handle_commands_panel_key(&Key::Character("!".into())));
+                assert_eq!(app.commands_panel.form_command.text(), "retained command!");
+            } else {
+                assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+            }
+            assert!(
+                app.commands_panel.is_editing(),
+                "{route}: Enter should open New, not run or delete a command"
+            );
+            assert!(app.commands_panel.is_open());
+            assert_eq!(app.config.commands.len(), remaining);
+        }
     }
 
     #[test]

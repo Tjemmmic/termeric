@@ -414,7 +414,12 @@ trackpad/screen-reader acceptance remains deferred. Browse controls now support
 Tab/Shift+Tab and arrow cycling, Home/End, Enter/Space activation, and Escape
 close, with shared exact-identity keyboard/assistive focus and visible-row
 reveal. Stale or hidden targets cannot activate a replacement/invisible command;
-Delete returns focus to New. Model, modifier, geometry, semantic-transition,
+Deletion now synchronizes pointer/keyboard/assistive focus on New in browse mode
+or preserves the active form field, and retires published row IDs before a
+shifted duplicate can receive stale Run/Delete/Focus actions. An isolated Linux
+subprocess regression exercises deletion and persistence only under a temporary
+configuration root, including the final row and retained drafts. Model,
+modifier, geometry, semantic-transition,
 and raw-PTY tests cover navigation isolation and exact Run bytes delivered to an
 inert reader, without executing a shell command or provider. Native keyboard,
 focus-outline, and screen-reader acceptance remain deferred (see

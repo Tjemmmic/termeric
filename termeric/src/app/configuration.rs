@@ -1024,6 +1024,16 @@ impl App {
                     return;
                 }
                 let name = self.config.commands.remove(index).name;
+                self.retire_commands_accessibility_rows();
+                // Every input route must agree on the safe post-delete target.
+                // A duplicate can otherwise inherit the deleted row's identity.
+                // An open form keeps its draft and caret instead of browse focus.
+                let layout = self.commands_panel_layout();
+                self.commands_panel.focus_browse_control(
+                    crate::ui::commands::navigation::CommandControl::New,
+                    &self.config.commands,
+                    layout,
+                );
                 log::info!("Deleted custom command '{}'", name);
                 match self.save_config() {
                     Ok(message) => {
