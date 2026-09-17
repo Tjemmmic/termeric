@@ -950,7 +950,7 @@ impl ApplicationHandler<AppEvent> for App {
                             return;
                         }
 
-                        if self.handle_shortcuts_filter_text(&event.logical_key) {
+                        if self.handle_shortcuts_filter_key(&event.logical_key) {
                             return;
                         }
                         let shortcuts_key = match &event.logical_key {

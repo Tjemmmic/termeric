@@ -517,10 +517,7 @@ impl ShortcutsPanel {
                 ShortcutsAction::None
             }
             ShortcutsKey::Backspace => {
-                if self.filter.edit_grapheme(TextInputEdit::Backspace) {
-                    self.selected = 0;
-                    self.scroll_offset = 0;
-                }
+                self.edit_filter(TextInputEdit::Backspace);
                 ShortcutsAction::None
             }
             ShortcutsKey::RecordedChord(_) => ShortcutsAction::None,
@@ -566,6 +563,21 @@ impl ShortcutsPanel {
         self.selected = 0;
         self.scroll_offset = 0;
         true
+    }
+
+    /// Edit the filter without disturbing result navigation on caret-only moves.
+    /// Returns whether either the text or caret changed.
+    pub fn edit_filter(&mut self, edit: TextInputEdit) -> bool {
+        if !self.is_active() || self.recording {
+            return false;
+        }
+        let previous_cursor = self.filter.cursor();
+        let changed = self.filter.edit_grapheme(edit);
+        if changed {
+            self.selected = 0;
+            self.scroll_offset = 0;
+        }
+        changed || self.filter.cursor() != previous_cursor
     }
 
     /// Active filter geometry without rebuilding or cloning result rows.
@@ -944,6 +956,64 @@ mod tests {
         assert!(!panel.accessibility_set_filter("new"));
         assert!(panel.is_recording());
         assert_eq!(panel.filter.text().chars().count(), 128);
+    }
+
+    #[test]
+    fn filter_caret_edits_preserve_result_navigation_until_text_changes() {
+        let mut panel = ShortcutsPanel::new();
+        panel.open();
+        let text = "e\u{301}👩\u{200d}💻🇺🇸";
+        assert!(panel.insert_filter_text(text));
+        panel.selected = 2;
+        panel.scroll_offset = 1;
+        for cursor in ["e\u{301}👩\u{200d}💻".len(), "e\u{301}".len(), 0] {
+            assert!(panel.edit_filter(TextInputEdit::Left));
+            assert_eq!(panel.filter.cursor(), cursor);
+            assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
+        }
+        assert!(!panel.edit_filter(TextInputEdit::Left));
+        assert!(!panel.edit_filter(TextInputEdit::Backspace));
+        assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
+        assert!(panel.edit_filter(TextInputEdit::Right));
+        assert_eq!(panel.filter.cursor(), "e\u{301}".len());
+        assert!(panel.edit_filter(TextInputEdit::Backspace));
+        assert_eq!(panel.filter.text(), "👩\u{200d}💻🇺🇸");
+        assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
+        assert!(panel.edit_filter(TextInputEdit::End));
+        assert_eq!(panel.filter.cursor(), panel.filter.text().len());
+        assert!(panel.edit_filter(TextInputEdit::Home));
+        assert!(panel.insert_filter_text("界"));
+        assert_eq!(panel.filter.text(), "界👩\u{200d}💻🇺🇸");
+    }
+
+    #[test]
+    fn filter_word_edits_obey_lifecycle_and_plain_delete_keeps_binding_action() {
+        let mut panel = ShortcutsPanel::new();
+        let registry = ShortcutRegistry::new();
+        assert!(!panel.edit_filter(TextInputEdit::Home));
+        panel.open();
+        assert!(panel.insert_filter_text("copy paste"));
+        assert!(panel.edit_filter(TextInputEdit::WordLeft));
+        assert_eq!(panel.filter.cursor(), 5);
+        assert!(panel.edit_filter(TextInputEdit::WordRight));
+        assert_eq!(panel.filter.cursor(), 10);
+        assert!(panel.edit_filter(TextInputEdit::BackspaceWord));
+        assert_eq!(panel.filter.text(), "copy ");
+        panel.start_recording(BindableAction::Copy);
+        assert!(!panel.edit_filter(TextInputEdit::Home));
+        assert!(!panel.edit_filter(TextInputEdit::BackspaceWord));
+        assert_eq!(panel.filter.text(), "copy ");
+        assert_eq!(panel.filter.cursor(), 5);
+        panel.handle_key(ShortcutsKey::Escape, &registry);
+        assert!(panel.accessibility_set_filter("copy"));
+        assert!(matches!(
+            panel.handle_key(ShortcutsKey::Delete, &registry),
+            ShortcutsAction::SetShortcut { chord: None, .. }
+        ));
+        assert_eq!(panel.filter.text(), "copy");
+        panel.close_immediately();
+        assert!(!panel.edit_filter(TextInputEdit::Backspace));
+        assert_eq!(panel.filter.text(), "copy");
     }
 
     #[test]

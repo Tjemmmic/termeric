@@ -369,6 +369,16 @@ is consumed without insertion. Chord recording still owns its input and rejects
 filter mutations. Model, dispatch, and raw-PTY isolation tests pass without
 saving user bindings; native IME/visual acceptance remains deferred.
 
+The filter supports whole-grapheme Left/Right, Home/End, and Backspace, plus
+Ctrl+Left/Right word navigation and Ctrl+Backspace word deletion. Caret-only
+movement preserves the selected result and scroll position; text deletion resets
+them. Changed caret/text clears stale IME preedit and requests a redraw, so
+subsequent keyboard or IME text inserts at the displayed position. Unsupported
+modified editing keys are consumed without mutation or PTY delivery. Plain
+Delete still clears the selected binding, not filter text; modified Delete does
+neither. Recording retains exclusive key ownership. Filter selection and pointer
+caret placement are not implemented by this keyboard-editing change.
+
 The shortcut filter now renders a caret-following whole-grapheme viewport with
 shaped, explicitly clipped text and a clipped placeholder. Its visible caret
 and native IME candidate/preedit position share `ShortcutsPanelLayout`, including
