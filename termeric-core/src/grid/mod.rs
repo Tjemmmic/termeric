@@ -339,6 +339,9 @@ impl Grid {
         let mut valid = HashSet::new();
         let mut has_descriptors = false;
         for row in 0..self.rows {
+            if !self.row_mut(row).is_some_and(Row::has_multicells) {
+                continue;
+            }
             let Some(cells) = self.row(row) else {
                 continue;
             };
@@ -767,6 +770,11 @@ mod tests {
                 let mut actual = Grid::new(8, 4);
                 let mut expected = Grid::new(8, 4);
                 for grid in [&mut actual, &mut expected] {
+                    // Prime cached absence before descriptor insertion so the
+                    // parity check also covers cache invalidation on edits.
+                    for row in 0..4 {
+                        assert!(!grid.row_mut(row).unwrap().has_multicells());
+                    }
                     grid.cell_mut(0, 0).unwrap().set_char('x');
                     for offset in 0..8 {
                         if mask & (1 << offset) != 0 {

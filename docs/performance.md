@@ -722,6 +722,51 @@ binary isolation sidecar, fixture/configuration records, and display/launcher
 logs. Caches/data/state are excluded. Original `/tmp/` paths map to these
 archive directories; this remains local, unpublished diagnostic evidence.
 
+### Row-local multicell-presence cache
+
+The next core replay isolated another avoidable cost: even after skipping the
+second repair pass, every scroll still scanned every unchanged row for OSC 66
+descriptors. Each row now caches descriptor presence independently of render
+dirtiness. Cell edits and exposed mutable references invalidate it; clearing a
+row establishes known absence. Rows retain their cache when moved by scrolling,
+while reconstructed rows start unknown. Repair skips only rows known to have
+no descriptors; rows with malformed/orphan descriptors still use the original
+validation and BCE cleanup. No cached block coordinates or validation results
+are reused after structural edits.
+
+Tests cover all 15 row-edit routes with initially absent/present descriptors
+and absent/present replacement cells, clone independence, metadata-only edits,
+clean-row queries, and unchanged `Send`/`Sync` properties. The cache fits into
+the previous row header's padding, with a layout regression check; this is not
+a measured RSS improvement. The 512-case frozen repair comparison now also
+primes cached absence before inserting descriptors.
+
+The same local paired replay method (three alternating process pairs, one
+discarded warmup and five measured rounds per process, 15 samples per chunk)
+compared the `7b5d19e` core with this cache. Median milliseconds:
+
+| Input chunk size | Before | Cached presence |
+| --- | ---: | ---: |
+| 4 KiB | 59.53 | 39.54 |
+| 64 KiB | 60.69 | 39.98 |
+| Entire 1 MiB payload | 60.95 | 40.63 |
+
+This roughly 33–34% improvement applies to this core-only workload, not native
+PTY response or another terminal. Cursor, history length, and reply agreed in
+every replay. Two attempted gprofng captures reported unreliable interval-timer
+sampling (the initial capture also lacked symbol resolution); their CPU
+percentages are explicitly **not** used as evidence. The paired wall-clock
+replays ran separately, without the profiler or concurrent builds/tests.
+
+The local archive `target/terminal-comparison/2026-09-17-row-multicell-cache.tar.gz`
+has SHA-256
+`2dee766f4aba0f55d4f3e6f189d396228f9639c4adcb86104d6bf47bd5b4d2a9`.
+It retains source/executables, exact patch/payload, build records, all paired
+logs, summary/method hashes, and the rejected profiler captures for diagnosis.
+The baseline replay executable is from the preceding `d6d5261` diagnostic;
+the core source was verified unchanged between that commit and `7b5d19e`.
+This remains local diagnostic evidence, not a release benchmark-contract row.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic

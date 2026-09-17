@@ -11,6 +11,11 @@ pub struct Row {
     dirty: bool,
     /// True if this row was soft-wrapped (content continues on next row)
     wrapped: bool,
+    /// Lazy descriptor presence, independent of render dirtiness. Every cell
+    /// mutation must invalidate or recompute it; exposed mutable references
+    /// must invalidate it. Keeping
+    /// it on the row lets unchanged rows retain it through scrolling.
+    multicells_present: Option<bool>,
 }
 
 impl Row {
@@ -20,6 +25,7 @@ impl Row {
             cells: vec![Cell::default(); cols],
             dirty: true,
             wrapped: false,
+            multicells_present: Some(false),
         }
     }
 
@@ -29,6 +35,7 @@ impl Row {
             cells,
             dirty: true,
             wrapped,
+            multicells_present: None,
         }
     }
 
@@ -54,7 +61,14 @@ impl Row {
     /// Get a mutable reference to a cell
     pub fn get_mut(&mut self, col: usize) -> Option<&mut Cell> {
         self.dirty = true;
+        self.multicells_present = None;
         self.cells.get_mut(col)
+    }
+
+    pub(crate) fn has_multicells(&mut self) -> bool {
+        *self
+            .multicells_present
+            .get_or_insert_with(|| self.cells.iter().any(|cell| cell.multicell.is_present()))
     }
 
     /// Clear all cells in the row
@@ -64,6 +78,7 @@ impl Row {
         }
         self.dirty = true;
         self.wrapped = false;
+        self.multicells_present = Some(false);
     }
 
     /// Resize the row to a new number of columns
@@ -111,6 +126,7 @@ impl Row {
     /// Iterate over all cells mutably
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Cell> {
         self.dirty = true;
+        self.multicells_present = None;
         self.cells.iter_mut()
     }
 
@@ -244,6 +260,7 @@ impl Row {
         exact_rectangle: bool,
         mut apply: impl FnMut(&mut CellAttrs),
     ) {
+        self.multicells_present = None;
         let start = start.min(self.cells.len());
         let end = end.min(self.cells.len()).max(start);
         let mut changed = false;
@@ -331,6 +348,7 @@ impl Row {
     /// Clear a grapheme atomically when an edit targets either half of a wide
     /// cell pair.
     pub fn clear_grapheme_at(&mut self, col: usize) {
+        self.multicells_present = None;
         if col >= self.cells.len() {
             return;
         }
@@ -358,6 +376,10 @@ impl Row {
     /// Remove orphan leaders/spacers using the caller's active blank-cell
     /// background policy.
     fn repair_wide_cells_with(&mut self, blank: &Cell) {
+        // Range/resize edits delegate here. Their inserted/copied blank cells
+        // can carry descriptors too, so invalidate even if no wide pair needs
+        // repair. Other mutation paths handle their own cache invalidation.
+        self.multicells_present = None;
         for col in 0..self.cells.len() {
             if self.cells[col].flags.contains(CellFlags::WIDE_CHAR) {
                 let paired = self
@@ -646,6 +668,7 @@ impl std::ops::Index<usize> for Row {
 impl std::ops::IndexMut<usize> for Row {
     fn index_mut(&mut self, col: usize) -> &mut Self::Output {
         self.dirty = true;
+        self.multicells_present = None;
         &mut self.cells[col]
     }
 }
@@ -654,6 +677,109 @@ impl std::ops::IndexMut<usize> for Row {
 mod tests {
     use super::*;
     use crate::{CellAttrs, Color, ColorSpec};
+
+    fn descriptor_cell() -> Cell {
+        use crate::grid::{MultiCell, MultiCellAlignment};
+        Cell {
+            multicell: MultiCell::new(
+                2,
+                1,
+                0,
+                0,
+                MultiCellAlignment::Start,
+                MultiCellAlignment::Start,
+                0,
+                0,
+            )
+            .unwrap(),
+            ..Cell::with_char('x')
+        }
+    }
+
+    #[test]
+    fn multicell_presence_cache_tracks_all_cell_mutation_routes() {
+        type Edit = fn(&mut Row, &Cell);
+        let edits: &[(&str, Edit)] = &[
+            ("get_mut", |row, cell| {
+                *row.get_mut(3).unwrap() = cell.clone()
+            }),
+            ("index_mut", |row, cell| row[3] = cell.clone()),
+            ("iter_mut", |row, cell| {
+                *row.iter_mut().nth(3).unwrap() = cell.clone()
+            }),
+            ("clear", |row, _| row.clear()),
+            ("resize", |row, _| row.resize(2)),
+            ("insert", |row, cell| row.insert_cells(2, 1, cell)),
+            ("delete", |row, cell| row.delete_cells(2, 1, cell)),
+            ("copy", |row, cell| {
+                row.copy_range_from(
+                    &Row::from_cells(vec![cell.clone(); 8], false),
+                    2,
+                    5,
+                    &Cell::default(),
+                )
+            }),
+            ("replace", |row, cell| {
+                row.replace_range(2, std::slice::from_ref(cell), &Cell::default())
+            }),
+            ("fill", |row, cell| {
+                row.fill_range(2, 5, cell, &Cell::default())
+            }),
+            ("attributes", |row, _| {
+                row.change_attributes_range(0, 8, true, |attrs| attrs.insert(CellAttrs::BOLD))
+            }),
+            ("erase", |row, cell| row.erase_range(0, 8, cell)),
+            ("selective_erase", |row, cell| {
+                row.selective_erase_range(0, 8, cell)
+            }),
+            ("clear_grapheme", |row, _| row.clear_grapheme_at(3)),
+            ("repair_wide", |row, _| row.repair_wide_cells()),
+        ];
+        for (name, edit) in edits {
+            for initial in [Cell::default(), descriptor_cell()] {
+                for replacement in [Cell::default(), descriptor_cell()] {
+                    let mut row = Row::new(8);
+                    row[3] = initial.clone();
+                    // Also exercise descriptor removal by wide-cell repair.
+                    row[3].flags.insert(CellFlags::WIDE_CHAR);
+                    assert_eq!(row.has_multicells(), initial.multicell.is_present());
+                    edit(&mut row, &replacement);
+                    let expected = row.iter().any(|cell| cell.multicell.is_present());
+                    assert_eq!(row.has_multicells(), expected, "{name}");
+                    assert_eq!(row.multicells_present, Some(expected), "{name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multicell_presence_cache_is_row_owned_and_independent_of_render_dirtiness() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Row>();
+        // The byte-sized cache fits in the previous row header's padding.
+        let old_size = (size_of::<Vec<Cell>>() + 2).next_multiple_of(align_of::<Vec<Cell>>());
+        assert_eq!(size_of::<Row>(), old_size);
+
+        let mut row = Row::from_cells(vec![descriptor_cell()], true);
+        assert_eq!(row.multicells_present, None);
+        row.set_clean();
+        assert!(row.has_multicells());
+        assert!(!row.is_dirty());
+        let mut clone = row.clone();
+        row.clear();
+        assert!(!row.has_multicells());
+        assert!(clone.has_multicells());
+        clone.set_dirty();
+        clone.set_wrapped(false);
+        assert_eq!(clone.multicells_present, Some(true));
+        clone.clear();
+        clone.set_clean();
+        for _ in 0..100 {
+            assert!(!clone.has_multicells());
+            assert_eq!(clone.multicells_present, Some(false));
+            assert!(!clone.is_dirty());
+        }
+    }
 
     #[test]
     fn test_row_creation() {
