@@ -443,6 +443,19 @@ review-only: protocol acceptance is not a pixel oracle or proof that every
 placement is visible. The sidecar is diagnostic, not an independently sealed
 graphics-publication contract. Real-client visual judgment remains manual.
 
+Client version, execution, output-validation, delivery, and local-media cleanup
+failures produce a `graphics_client_error` transcript record before the fixture
+exits. Both native lanes fail immediately when that record is observed, rather
+than waiting for an acceptance timeout. The record identifies the client,
+protocol, stage, known version, exit status (when available), output byte count,
+and bounded, control-sanitized stderr. An exit status of zero with no output is
+still a failure. Later clients are not attempted after a failure; the Wayland
+sidecar retains completed client records and client errors even on failure.
+Partial results never satisfy the seven-client oracle, and a failure before
+capture does not produce a review PNG. This distinguishes a client that emitted
+nothing from a terminal that received output but never accepted it; it does not
+diagnose why an external client failed.
+
 ## What remains manual
 
 Only policy- or perception-dependent checks remain manual: real-compositor

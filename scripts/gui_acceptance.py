@@ -40,7 +40,7 @@ from scripts.gui_tab_placement import run_tab_overflow_scenario, run_tab_placeme
 from scripts.gui_background import run_background_scenario
 from scripts.gui_mouse_routing import run_mouse_ownership_checks
 from scripts.gui_palette_input import run_palette_input_checks
-from scripts.gui_graphics import graphics_clients_accepted, run_wayland_graphics
+from scripts.gui_graphics import graphics_clients_ready, run_wayland_graphics
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
 BASELINES = ROOT / "termeric" / "tests" / "gui" / "baselines"
@@ -890,6 +890,11 @@ def run_workspace_scenario(
         app.wait_ready("x11")
         wait_until("fixture startup record", lambda: len(read_records(transcript)) >= 1)
         wait_until(
+            "kitten stream/local-media, independent timg Kitty, img2sixel, and timg iTerm2 output accepted",
+            lambda: graphics_clients_ready(read_records(transcript), app.log_contains),
+            30,
+        )
+        wait_until(
             "settled fixture render",
             lambda: app.log_contains("frame_hits: 35"),
             15,
@@ -900,11 +905,6 @@ def run_workspace_scenario(
             15,
         )
 
-        wait_until(
-            "kitten stream/local-media, independent timg Kitty, img2sixel, and timg iTerm2 output accepted",
-            lambda: graphics_clients_accepted(read_records(transcript), app.log_contains),
-            15,
-        )
         app.snapshot("graphics-clients", update, review_only=True)
         input_before_chrome = transcript_bytes(transcript)
         app.key("F6")

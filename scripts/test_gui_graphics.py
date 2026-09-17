@@ -1,8 +1,13 @@
 import copy
+import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
+from scripts import gui_acceptance, gui_graphics
 from scripts.gui_acceptance import required_tools
-from scripts.gui_graphics import FIXED_IDS, PROTOCOLS, graphics_clients_accepted
+from scripts.gui_graphics import FIXED_IDS, PROTOCOLS, graphics_clients_accepted, graphics_clients_ready
 
 
 class GraphicsAcceptanceTests(unittest.TestCase):
@@ -46,6 +51,64 @@ class GraphicsAcceptanceTests(unittest.TestCase):
     def test_wayland_graphics_declares_all_clients_and_private_input_tools(self):
         tools = required_tools("wayland", ["graphics"], False, True)
         self.assertEqual(set(tools), {"tic", "kitten", "img2sixel", "timg", "wtype", "sway", "swaymsg"})
+
+    def test_explicit_failure_is_never_accepted_and_stops_polling(self):
+        error = {"event": "graphics_client_error", "tool": "img2sixel",
+                 "stage": "validate-output", "error": "produced no terminal output"}
+        self.assertFalse(self.accepted(self.records + [error]))
+        self.assertFalse(graphics_clients_ready(self.records[:-1], self.log.__contains__))
+        self.assertTrue(graphics_clients_ready(self.records, self.log.__contains__))
+        with mock.patch.object(gui_acceptance.time, "sleep") as sleep:
+            with self.assertRaisesRegex(ValueError, "img2sixel.*validate-output.*no terminal output"):
+                gui_acceptance.wait_until("graphics", lambda:
+                    graphics_clients_ready(self.records[:5] + [error], self.log.__contains__))
+            sleep.assert_not_called()
+
+    def test_failed_wayland_run_retains_partial_results_and_cleans_up(self):
+        error = {"event": "graphics_client_error", "tool": "img2sixel",
+                 "stage": "validate-output", "error": "produced no terminal output"}
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            records = self.records[:5] + [error]
+            (run_dir / "pty-transcript.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in records))
+            with mock.patch.object(gui_acceptance, "AppProcess") as factory, \
+                    mock.patch.object(gui_graphics, "capture_private_output") as capture:
+                app = factory.return_value
+                with self.assertRaisesRegex(ValueError, "img2sixel"):
+                    gui_graphics.run_wayland_graphics(gui_acceptance, run_dir / "termeric", run_dir, {})
+                app.stop_after_failure.assert_called_once_with()
+                app.finish.assert_called_once_with()
+                app.wayland_type.assert_not_called()
+                capture.assert_not_called()
+            report = json.loads((run_dir / "graphics-input.json").read_text())
+            self.assertEqual(report["clients"], self.records[:5])
+            self.assertEqual(report["client_errors"], [error])
+            self.assertIn("img2sixel", report["error"])
+            self.assertNotIn("capture", report)
+
+    def test_x11_checks_client_failure_before_reply_or_render_waits(self):
+        error = {"event": "graphics_client_error", "tool": "kitten-stream",
+                 "stage": "version", "error": "no version"}
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(gui_acceptance, "AppProcess") as factory, \
+                mock.patch.object(gui_acceptance, "read_records", return_value=[error]), \
+                mock.patch.object(gui_acceptance.time, "sleep") as sleep:
+            with self.assertRaisesRegex(ValueError, "kitten-stream.*version"):
+                gui_acceptance.run_workspace_scenario(Path("termeric"), Path(directory), {}, False)
+            sleep.assert_not_called()
+            factory.return_value.snapshot.assert_not_called()
+            factory.return_value.stop_after_failure.assert_called_once_with()
+            factory.return_value.finish.assert_called_once_with()
+
+    def test_wayland_cleanup_runs_even_if_failure_reporting_cannot_read_transcript(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(gui_acceptance, "AppProcess") as factory, \
+                mock.patch.object(gui_acceptance, "read_records", side_effect=OSError("read failed")):
+            with self.assertRaisesRegex(OSError, "read failed"):
+                gui_graphics.run_wayland_graphics(gui_acceptance, Path("termeric"), Path(directory), {})
+            factory.return_value.stop_after_failure.assert_called_once_with()
+            factory.return_value.finish.assert_called_once_with()
 
 
 if __name__ == "__main__":

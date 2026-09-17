@@ -213,11 +213,7 @@ def render_external_graphics_clients(
     write_graphics_fixture(image)
     rows, cols, pixel_width, pixel_height = terminal_geometry or winsize()
     window_size = f"{cols},{rows},{pixel_width},{pixel_height}"
-    versions = {
-        "kitten": command_version(["kitten", "--version"]),
-        "img2sixel": command_version(["img2sixel", "--version"]),
-        "timg": command_version(["timg", "--version"]),
-    }
+    versions: dict[str, str] = {}
 
     with open(image, "rb") as fixture:
         image_bytes = fixture.read()
@@ -327,31 +323,56 @@ def render_external_graphics_clients(
         ),
     )
     for tool, version_key, protocol, cursor_row, cursor_col, command, stdin_data in clients:
-        result = subprocess.run(
-            command,
-            input=stdin_data,
-            check=True,
-            capture_output=True,
-            timeout=15,
-        )
-        if not result.stdout:
-            raise RuntimeError(f"{tool} produced no terminal output")
-        protocol_fields: dict[str, object] = {}
-        if protocol.startswith("kitty"):
-            protocol_fields["image_id"] = kitty_image_id(result.stdout)
-        target = None
-        medium = None
-        if protocol in ("kitty-temporary-file", "kitty-shared-memory"):
-            medium = b"t" if protocol == "kitty-temporary-file" else b"s"
-            target = kitty_media_target(result.stdout, medium)
-            require_media_target(target, medium)
-        emit(f"\x1b[{cursor_row};{cursor_col}H".encode() + result.stdout)
-        if target is not None and medium is not None:
-            wait_for_media_cleanup(target, medium)
-            protocol_fields["cleanup_observed"] = True
-            protocol_fields["cleanup_target"] = os.path.basename(target).decode(
-                "utf-8", "replace"
-            )[:256]
+        result = None
+        stage = "version"
+        try:
+            if version_key not in versions:
+                versions[version_key] = command_version([version_key, "--version"])
+            stage = "execute"
+            result = subprocess.run(
+                command,
+                input=stdin_data,
+                check=True,
+                capture_output=True,
+                timeout=15,
+            )
+            stage = "validate-output"
+            if not result.stdout:
+                raise RuntimeError(f"{tool} produced no terminal output")
+            protocol_fields: dict[str, object] = {}
+            if protocol.startswith("kitty"):
+                protocol_fields["image_id"] = kitty_image_id(result.stdout)
+            target = None
+            medium = None
+            if protocol in ("kitty-temporary-file", "kitty-shared-memory"):
+                medium = b"t" if protocol == "kitty-temporary-file" else b"s"
+                target = kitty_media_target(result.stdout, medium)
+                require_media_target(target, medium)
+            stage = "emit"
+            emit(f"\x1b[{cursor_row};{cursor_col}H".encode() + result.stdout)
+            if target is not None and medium is not None:
+                stage = "cleanup"
+                wait_for_media_cleanup(target, medium)
+                protocol_fields["cleanup_observed"] = True
+                protocol_fields["cleanup_target"] = os.path.basename(target).decode(
+                    "utf-8", "replace"
+                )[:256]
+        except Exception as error:
+            # Keep subprocess diagnostics separate from protocol bytes. Never
+            # emit subprocess-error output into the terminal or call a failed
+            # transfer successful. The original exception remains a failure.
+            diagnostic = result if result is not None else error
+            stderr = getattr(diagnostic, "stderr", None) or b""
+            write_record(
+                transcript, "graphics_client_error", tool=tool, protocol=protocol,
+                version=versions.get(version_key), stage=stage,
+                error_type=type(error).__name__, error=graphics_diagnostic(str(error)),
+                returncode=getattr(diagnostic, "returncode", None),
+                output_bytes=len(getattr(diagnostic, "stdout", None) or b""),
+                stderr=graphics_diagnostic(stderr),
+                stderr_bytes=len(stderr), stderr_truncated=len(stderr) > 1024,
+            )
+            raise
         write_record(
             transcript,
             "graphics_client",
@@ -369,6 +390,13 @@ def render_external_graphics_clients(
             terminal_pixel_height=pixel_height,
             **protocol_fields,
         )
+
+
+def graphics_diagnostic(value: str | bytes) -> str:
+    """Bound retained diagnostics and neutralize terminal control characters."""
+    if isinstance(value, bytes):
+        value = value[:1024].decode("utf-8", "replace")
+    return "".join(character if character.isprintable() else "�" for character in value[:1024])
 
 
 def render_soak_frame(iteration: int) -> int:

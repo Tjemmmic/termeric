@@ -20,6 +20,8 @@ FIXED_IDS = {"kitten-stream": 1701, "kitten-unicode-placeholder": 1702,
 
 
 def graphics_clients_accepted(records, log_contains):
+    if any(row.get("event") == "graphics_client_error" for row in records):
+        return False
     clients = [row for row in records if row.get("event") == "graphics_client"]
     if len(clients) != len(PROTOCOLS) or {row.get("tool"): row.get("protocol") for row in clients} != PROTOCOLS:
         return False
@@ -42,6 +44,15 @@ def graphics_clients_accepted(records, log_contains):
     return all(log_contains(message) for message in messages)
 
 
+def graphics_clients_ready(records, log_contains):
+    """Fail the polling loop immediately on an explicit fixture failure."""
+    for row in records:
+        if row.get("event") == "graphics_client_error":
+            raise ValueError(f"graphics client {row.get('tool')} failed during "
+                             f"{row.get('stage')}: {row.get('error')}")
+    return graphics_clients_accepted(records, log_contains)
+
+
 def run_wayland_graphics(gui, binary, run_dir, env):
     run_dir.mkdir(parents=True, exist_ok=True)
     transcript = run_dir / "pty-transcript.jsonl"
@@ -52,10 +63,9 @@ def run_wayland_graphics(gui, binary, run_dir, env):
     try:
         app.wait_ready("wayland")
         gui.wait_until("all seven native graphics clients accepted", lambda:
-            graphics_clients_accepted(gui.read_records(transcript), app.log_contains), 30)
+            graphics_clients_ready(gui.read_records(transcript), app.log_contains), 30)
         gui.wait_until("native Kitty reply", lambda:
             b"\x1b_Gi=17;OK\x1b\\" in gui.transcript_bytes(transcript), 15)
-        report["clients"] = [row for row in gui.read_records(transcript) if row.get("event") == "graphics_client"]
         starts = [row for row in gui.read_records(transcript) if row.get("event") == "started"]
         if len(starts) != 1:
             raise gui.AcceptanceError("graphics fixture requires exactly one PTY owner")
@@ -81,6 +91,13 @@ def run_wayland_graphics(gui, binary, run_dir, env):
         report["error"] = str(error)
         raise
     finally:
-        (run_dir / "graphics-input.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        app.stop_after_failure()
-        app.finish()
+        try:
+            records = gui.read_records(transcript)
+            report["clients"] = [row for row in records if row.get("event") == "graphics_client"]
+            report["client_errors"] = [row for row in records if row.get("event") == "graphics_client_error"]
+            (run_dir / "graphics-input.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        finally:
+            try:
+                app.stop_after_failure()
+            finally:
+                app.finish()

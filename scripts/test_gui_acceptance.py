@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -359,6 +360,74 @@ esac
             self.assertEqual(fixture_bytes[:8], b"\x89PNG\r\n\x1a\n")
             self.assertEqual(struct.unpack(">II", fixture_bytes[16:24]), (64, 64))
             self.assertEqual(int(kitten_stdin.read_text()), len(fixture_bytes))
+
+    def test_graphics_client_failures_record_stage_and_preserve_original_exception(self):
+        payload = b"\x1b_Ga=T,i=1701;AAAA\x1b\\"
+        cases = [
+            ("empty", subprocess.CompletedProcess([], 0, b"", b""), "validate-output", 0, 0),
+            ("invalid", subprocess.CompletedProcess([], 0, b"bad", b""), "validate-output", 0, 3),
+            ("exit", subprocess.CalledProcessError(2, ["kitten"], output=payload,
+                stderr=b"\x1b[31merror\n" + b"x" * 2048), "execute", 2, len(payload)),
+            ("timeout", subprocess.TimeoutExpired(["kitten"], 15, output=payload,
+                stderr=b"\xff\n"), "execute", None, len(payload)),
+            ("missing", FileNotFoundError("not installed"), "execute", None, 0),
+            ("version", subprocess.CalledProcessError(3, ["kitten", "--version"],
+                stderr=b"no version"), "version", 3, 0),
+        ]
+        for name, result, stage, returncode, output_bytes in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                transcript = Path(directory) / "transcript.jsonl"
+                version = mock.Mock(return_value="fixture 1.0")
+                run = mock.Mock(return_value=result)
+                if isinstance(result, Exception):
+                    (version if name == "version" else run).side_effect = result
+                with mock.patch.object(terminal_fixture, "command_version", version), \
+                        mock.patch.object(terminal_fixture.subprocess, "run", run), \
+                        mock.patch.object(terminal_fixture, "emit") as emit:
+                    with self.assertRaises(Exception) as caught:
+                        terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800))
+                    if isinstance(result, Exception):
+                        self.assertIs(caught.exception, result)
+                    emit.assert_not_called()
+                    self.assertEqual(run.call_count, 0 if name == "version" else 1)
+                records = [json.loads(line) for line in transcript.read_text().splitlines()]
+                self.assertEqual(len(records), 1)
+                record = records[0]
+                self.assertEqual(record["event"], "graphics_client_error")
+                self.assertEqual(record["tool"], "kitten-stream")
+                self.assertEqual(record["protocol"], "kitty")
+                self.assertEqual(record["stage"], stage)
+                self.assertEqual(record["returncode"], returncode)
+                self.assertEqual(record["output_bytes"], output_bytes)
+                self.assertEqual(record["version"], None if name == "version" else "fixture 1.0")
+                self.assertLessEqual(len(record["stderr"]), 1024)
+                self.assertTrue(all(c.isprintable() for c in record["stderr"]))
+                self.assertEqual(record["stderr_truncated"], name == "exit")
+                self.assertEqual(record["stderr_bytes"], len(getattr(result, "stderr", None) or b""))
+
+    def test_graphics_cleanup_failure_retains_prior_successes_but_not_failed_transfer(self):
+        payloads = [b"\x1b_Ga=T,i=1701;AAAA\x1b\\", b"\x1b_Ga=T,i=1702;AAAA\x1b\\",
+                    b"\x1b_Ga=T,i=1703,t=t;L3RtcC9raXR0eS10dHktZ3JhcGhpY3MtcHJvdG9jb2wtZmFrZQ==\x1b\\"]
+        failure = RuntimeError("media target was not removed")
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "transcript.jsonl"
+            with mock.patch.object(terminal_fixture, "command_version", return_value="fixture 1") as version, \
+                    mock.patch.object(terminal_fixture.subprocess, "run", side_effect=[
+                        subprocess.CompletedProcess([], 0, data, b"") for data in payloads]) as run, \
+                    mock.patch.object(terminal_fixture, "emit") as emit, \
+                    mock.patch.object(terminal_fixture, "require_media_target"), \
+                    mock.patch.object(terminal_fixture, "wait_for_media_cleanup", side_effect=failure):
+                with self.assertRaises(RuntimeError) as caught:
+                    terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800))
+                self.assertIs(caught.exception, failure)
+                version.assert_called_once_with(["kitten", "--version"])
+                self.assertEqual(run.call_count, 3)
+                self.assertEqual(emit.call_count, 3)
+            records = [json.loads(line) for line in transcript.read_text().splitlines()]
+            self.assertEqual([r["event"] for r in records], ["graphics_client", "graphics_client", "graphics_client_error"])
+            self.assertEqual(records[-1]["tool"], "kitten-file")
+            self.assertEqual(records[-1]["stage"], "cleanup")
+            self.assertNotIn("cleanup_observed", records[-1])
 
     def test_graphics_fixture_extracts_only_explicit_nonzero_kitty_image_ids(self) -> None:
         payload = (
