@@ -386,6 +386,16 @@ filter caret nor IME preedit. Geometry and ownership tests plus the opt-in
 software-GPU glyph-clipping smoke cover this path; real desktop presentation
 and IME-client acceptance remain deferred.
 
+Primary clicks in the Settings filter now place the caret at the nearest visible
+whole-grapheme boundary using that same scaled/animated viewport. Padding maps
+to the visible slice edges, not hidden text. The resulting filter-only action
+revalidates active/dropdown state and the exact grapheme boundary before moving
+the caret or clearing IME preedit; it never applies configuration. Result
+selection and scroll position are preserved. A click that dismisses an open
+dropdown does not also move the filter caret, and collapsed inputs do nothing.
+Geometry, model/action, paste/IME, and raw-PTY regressions cover this path;
+native pointer acceptance and drag selection remain deferred/separate.
+
 The keyboard-shortcut editor is a bounded modal tree with a UTF-8-aware filter,
 category headings, and one stable action button per visible binding. Action
 identity comes from `BindableAction`, never a filtered row number. Activating a

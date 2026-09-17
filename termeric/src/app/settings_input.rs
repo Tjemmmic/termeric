@@ -163,8 +163,71 @@ mod tests {
                 .filter,
             format!("{}界", "x".repeat(255))
         );
+        let info = app
+            .settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        let layout = crate::ui::settings::SettingsModalLayout::calculate(
+            800.0,
+            700.0,
+            8.0,
+            16.0,
+            info.animation,
+            info.entries.len(),
+        );
+        let view = layout
+            .input_viewport(&info.filter, info.filter_cursor, 16.0)
+            .unwrap();
+        let action = app.settings_panel.handle_click(
+            view.text_x,
+            view.text_y,
+            &app.config,
+            &app.shortcut_registry,
+            800.0,
+            700.0,
+            8.0,
+            16.0,
+        );
+        app.apply_settings_action(action);
+        assert!(app.handle_settings_filter_key(&Key::Named(NamedKey::Backspace)));
+        app.handle_ime_event(winit::event::Ime::Commit("@".into()));
+        let info = app
+            .settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        assert!(info.filter.contains('@'));
+        assert!(info.filter.ends_with('界'));
         app.settings_panel.close();
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a");
+    }
+
+    #[test]
+    fn settings_pointer_caret_action_clears_preedit_without_applying_configuration() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let original_config = toml::to_string(&app.config).unwrap();
+        app.settings_panel.set_reduced_motion(true);
+        app.settings_panel.toggle();
+        assert!(app.settings_panel.insert_filter_text("e\u{301}界"));
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        app.apply_settings_action(SettingsAction::PlaceFilterCaret(1));
+        assert!(app.ime.preedit().is_some());
+        app.apply_settings_action(SettingsAction::PlaceFilterCaret(3));
+        assert!(app.ime.preedit().is_none());
+        assert!(app.paste_clipboard_payload("@"));
+        assert_eq!(
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .filter,
+            "e\u{301}@界"
+        );
+        assert_eq!(toml::to_string(&app.config).unwrap(), original_config);
+        assert!(app.redraw_scheduler.has_pending());
+        app.settings_panel.close();
+        app.apply_settings_action(SettingsAction::PlaceFilterCaret(0));
+        assert_eq!(
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .filter_cursor,
+            4
+        );
     }
 }

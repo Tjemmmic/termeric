@@ -721,6 +721,17 @@ impl App {
     /// Apply a settings panel action to the app config
     pub(super) fn apply_settings_action(&mut self, action: SettingsAction) {
         match action {
+            SettingsAction::PlaceFilterCaret(cursor) => {
+                if self.settings_panel.place_filter_caret(cursor) {
+                    self.ime.clear_preedit();
+                    self.redraw_scheduler
+                        .request(redraw_scheduler::RedrawReason::KeyboardInput);
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+                return;
+            }
             SettingsAction::SetFontSize(size) => {
                 self.set_font_size(size);
             }

@@ -69,7 +69,28 @@ pub struct SettingsInputRect {
     pub height: f32,
 }
 
+impl SettingsInputRect {
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
 impl SettingsModalLayout {
+    pub fn input_cursor_at(
+        &self,
+        text: &str,
+        cursor: usize,
+        position: (f32, f32),
+        cell_height: f32,
+    ) -> Option<usize> {
+        let (x, y) = position;
+        if !self.input.contains(x, y) {
+            return None;
+        }
+        self.input_viewport(text, cursor, cell_height)?
+            .cursor_at(text, x, self.cell_width)
+    }
+
     pub fn input_viewport(
         &self,
         text: &str,
@@ -382,6 +403,8 @@ pub struct SettingEntry {
 /// Result of a user action in the settings panel
 #[derive(Debug, Clone)]
 pub enum SettingsAction {
+    /// Revalidated filter-only caret placement; never a configuration change.
+    PlaceFilterCaret(usize),
     /// Change font size to this value
     SetFontSize(f32),
     /// Change font family to this value
@@ -1591,6 +1614,23 @@ impl SettingsPanel {
         true
     }
 
+    /// Reject hidden/dropdown owners and non-grapheme boundaries before mutation.
+    pub fn place_filter_caret(&mut self, cursor: usize) -> bool {
+        use unicode_segmentation::UnicodeSegmentation;
+        if !self.is_active()
+            || self.dropdown_open
+            || (cursor != self.filter.len()
+                && !self
+                    .filter
+                    .grapheme_indices(true)
+                    .any(|(offset, _)| offset == cursor))
+        {
+            return false;
+        }
+        self.filter_cursor = cursor;
+        true
+    }
+
     /// Candidate geometry needs only filter state, never a rebuilt settings list.
     pub fn input_viewport(
         &self,
@@ -2128,6 +2168,14 @@ impl SettingsPanel {
             return SettingsAction::None;
         }
 
+        // Input padding maps to visible slice edges. A collapsed input still
+        // consumes the click, and dropdown dismissal above never moves a caret.
+        if layout.input.contains(x, y) {
+            return layout
+                .input_cursor_at(&self.filter, self.filter_cursor, (x, y), cell_height)
+                .map_or(SettingsAction::None, SettingsAction::PlaceFilterCaret);
+        }
+
         // Click on an entry row (respecting scroll).
         let Some(visible_row) = layout.visible_row_at(y) else {
             return SettingsAction::None;
@@ -2321,6 +2369,121 @@ mod tests {
 
     fn default_registry() -> ShortcutRegistry {
         ShortcutRegistry::new()
+    }
+
+    #[test]
+    fn filter_pointer_geometry_uses_visible_grapheme_halves_and_padding_edges() {
+        use unicode_segmentation::UnicodeSegmentation;
+        for (width, cw, ch) in [(1000.0, 8.0, 16.0), (500.0, 15.0, 30.0)] {
+            for animation in [0.2, 0.7, 1.0] {
+                let layout = SettingsModalLayout::calculate(width, 700.0, cw, ch, animation, 8);
+                for text in [
+                    "e\u{301}界👩\u{200d}💻🇺🇸".to_string(),
+                    "a界e\u{301}👩\u{200d}💻".repeat(20),
+                ] {
+                    let cursor = text.len();
+                    let view = layout.input_viewport(&text, cursor, ch).unwrap();
+                    let mut x = view.text_x;
+                    for (offset, grapheme) in text[view.text_range.clone()].grapheme_indices(true) {
+                        let pixels = termeric_core::unicode::grapheme_width(grapheme) as f32 * cw;
+                        for (fraction, expected) in [
+                            (0.25, view.text_range.start + offset),
+                            (0.75, view.text_range.start + offset + grapheme.len()),
+                        ] {
+                            assert_eq!(
+                                layout.input_cursor_at(
+                                    &text,
+                                    cursor,
+                                    (x + fraction * pixels, view.text_y),
+                                    ch
+                                ),
+                                Some(expected)
+                            );
+                        }
+                        x += pixels;
+                    }
+                    assert_eq!(
+                        layout.input_cursor_at(&text, cursor, (layout.input.x, view.text_y), ch),
+                        Some(view.text_range.start)
+                    );
+                    assert_eq!(
+                        layout.input_cursor_at(
+                            &text,
+                            cursor,
+                            (layout.input.x + layout.input.width, view.text_y),
+                            ch
+                        ),
+                        Some(view.text_range.end)
+                    );
+                    for position in [
+                        (view.text_x, layout.input.y - 1.0),
+                        (f32::NAN, view.text_y),
+                        (view.text_x, f32::INFINITY),
+                    ] {
+                        assert_eq!(layout.input_cursor_at(&text, cursor, position, ch), None);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filter_pointer_action_preserves_results_and_dropdown_dismissal_never_moves_caret() {
+        let mut panel = SettingsPanel::new();
+        let config = Config::default();
+        let registry = default_registry();
+        panel.set_reduced_motion(true);
+        assert!(!panel.place_filter_caret(0));
+        panel.open();
+        let text = "e\u{301}界👩\u{200d}💻";
+        assert!(panel.insert_filter_text(text));
+        panel.selected = 2;
+        panel.scroll_offset = 1;
+        let layout = SettingsModalLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 0);
+        let (x, y) = (layout.input.x + 2.2 * 8.0 + 6.0, layout.input.y);
+        let action = panel.handle_click(x, y, &config, &registry, 1000.0, 700.0, 8.0, 16.0);
+        let SettingsAction::PlaceFilterCaret(cursor) = action else {
+            panic!("expected filter caret");
+        };
+        assert_eq!(cursor, "e\u{301}".len());
+        assert_eq!(
+            panel.filter_cursor,
+            text.len(),
+            "hit test only proposes an action"
+        );
+        assert!(panel.place_filter_caret(cursor));
+        assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
+        for invalid in [1, 2, 4, text.len() + 1] {
+            assert!(!panel.place_filter_caret(invalid));
+            assert_eq!(panel.filter_cursor, cursor);
+        }
+        panel.dropdown_open = true;
+        assert!(!panel.place_filter_caret(0));
+        assert!(matches!(
+            panel.handle_click(x, y, &config, &registry, 1000.0, 700.0, 8.0, 16.0),
+            SettingsAction::None
+        ));
+        assert!(!panel.dropdown_open);
+        assert_eq!(panel.filter_cursor, cursor);
+        assert!(panel.insert_filter_text("@"));
+        assert_eq!(panel.filter, "e\u{301}@界👩\u{200d}💻");
+        let collapsed = SettingsModalLayout::calculate(60.0, 700.0, 8.0, 16.0, 1.0, 0);
+        assert!(matches!(
+            panel.handle_click(
+                collapsed.input.x,
+                collapsed.input.y,
+                &config,
+                &registry,
+                60.0,
+                700.0,
+                8.0,
+                16.0
+            ),
+            SettingsAction::None
+        ));
+        assert_eq!(panel.filter_cursor, cursor + 1);
+        panel.close();
+        assert!(!panel.place_filter_caret(0));
     }
 
     #[test]
