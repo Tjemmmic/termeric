@@ -6,6 +6,7 @@ use crate::ui::domain_picker::{DomainPickerCommand, DomainPickerPrepared};
 
 impl App {
     pub(super) fn open_domain_picker(&mut self) {
+        self.ime.clear_preedit();
         self.command_palette.close();
         self.domain_picker.open(&self.config.domains);
         if let Some(window) = &self.window {
@@ -14,6 +15,7 @@ impl App {
     }
 
     pub(super) fn handle_domain_picker_command(&mut self, command: DomainPickerCommand) {
+        self.ime.clear_preedit();
         match command {
             DomainPickerCommand::Discover {
                 generation,
@@ -31,6 +33,7 @@ impl App {
         result: Result<Vec<crate::domain::model::DomainSummary>, String>,
     ) {
         if self.domain_picker.complete(generation, result) {
+            self.ime.clear_preedit();
             self.redraw_scheduler
                 .request(super::redraw_scheduler::RedrawReason::WindowEvent);
             if let Some(window) = &self.window {
@@ -56,11 +59,22 @@ impl App {
                 });
             }
         }
+        self.ime.clear_preedit();
         self.redraw_scheduler
             .request(super::redraw_scheduler::RedrawReason::WindowEvent);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+
+    pub(super) fn close_domain_picker(&mut self) {
+        self.ime.clear_preedit();
+        self.domain_picker.close();
+    }
+
+    pub(super) fn back_or_close_domain_picker(&mut self) {
+        self.ime.clear_preedit();
+        self.domain_picker.back_or_close();
     }
 
     fn discover_domains(&mut self, generation: u64, authority: crate::domain::DomainAuthority) {
@@ -152,6 +166,35 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domain_picker_stage_changes_retire_composition_without_external_discovery() {
+        use winit::event::Ime;
+        let mut app = App::new_headless(crate::config::Config::default()).unwrap();
+        app.command_palette.open();
+        app.handle_ime_event(Ime::Preedit("old palette".into(), None));
+        app.open_domain_picker();
+        assert!(app.ime.preedit().is_none());
+        app.handle_ime_event(Ime::Preedit("discovery".into(), None));
+        let command = app.domain_picker.activate().unwrap();
+        // Headless orchestration rejects before constructing a client or
+        // worker, so this cannot connect to a daemon or saved SSH host.
+        app.handle_domain_picker_command(command);
+        assert!(app.ime.preedit().is_none());
+        assert!(!app.domain_picker.can_filter());
+        app.back_or_close_domain_picker();
+        assert!(app.domain_picker.can_filter());
+        app.handle_ime_event(Ime::Preedit("closing".into(), None));
+        app.back_or_close_domain_picker();
+        assert!(!app.domain_picker.is_active());
+        assert!(app.ime.preedit().is_none());
+        app.open_domain_picker();
+        app.handle_ime_event(Ime::Preedit("closing again".into(), None));
+        app.close_domain_picker();
+        assert!(!app.domain_picker.is_active());
+        assert!(app.ime.preedit().is_none());
+        assert!(app.requested_window_launch.is_none());
+    }
 
     #[test]
     fn prepared_picker_snapshot_becomes_an_explicit_window_launch() {

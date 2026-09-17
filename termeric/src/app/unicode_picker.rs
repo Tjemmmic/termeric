@@ -22,7 +22,7 @@ impl App {
             self.toasts.warning("The active pane is read-only");
             return;
         }
-        self.domain_picker.close();
+        self.close_domain_picker();
         self.command_palette.close();
         self.pending_unicode_picker = Some(PendingUnicodePicker { terminal });
         self.unicode_picker.open();

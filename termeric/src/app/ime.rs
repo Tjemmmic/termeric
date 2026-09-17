@@ -80,13 +80,15 @@ impl App {
             || self.guardrail.is_active()
             || self.diff_review.is_active()
             || self.context_picker.is_active()
-            || self.domain_picker.is_active()
             || self
                 .harvest
                 .as_ref()
                 .is_some_and(|h| h.sprout_menu.is_some() || h.cellar.is_expanded())
         {
             return false;
+        }
+        if self.domain_picker.is_active() {
+            return self.domain_picker.can_filter();
         }
         if self.command_palette.is_active() || self.unicode_picker.is_active() {
             return true;
@@ -123,6 +125,8 @@ impl App {
         if self.info_overlay.input_focused() {
             let request_id = self.info_overlay.request_id();
             self.info_overlay.insert_input_text(request_id, text);
+        } else if self.domain_picker.is_active() {
+            self.domain_picker.insert_query_text(text);
         } else if self.command_palette.is_active() {
             self.command_palette.insert_query_text(text);
         } else if self.unicode_picker.is_active() {
@@ -173,7 +177,12 @@ impl App {
         cell_width: f32,
         cell_height: f32,
     ) -> Option<crate::ui::command_palette::PaletteInputViewport> {
-        let info = if self.command_palette.is_active() {
+        let info = if self.domain_picker.is_active() {
+            if !self.domain_picker.can_filter() {
+                return None;
+            }
+            self.domain_picker.build_info()
+        } else if self.command_palette.is_active() {
             self.command_palette.build_info()
         } else if self.unicode_picker.is_active() {
             self.unicode_picker.build_info()
@@ -197,6 +206,7 @@ impl App {
         self.search.is_active()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
+            && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
             && self.tab_rename.is_none()
@@ -211,6 +221,7 @@ impl App {
             && self.commands_panel.is_editing()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
+            && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
             && self.tab_rename.is_none()
@@ -224,6 +235,7 @@ impl App {
             && !self.shortcuts_panel.is_recording()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
+            && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
             && self.tab_rename.is_none()
@@ -234,6 +246,7 @@ impl App {
             && !self.settings_panel.is_dropdown_open()
             && self.accepts_ime_text()
             && !self.info_overlay.is_active()
+            && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
             && self.tab_rename.is_none()
@@ -358,7 +371,8 @@ impl App {
                 max_width: (row.x + row.width - x).max(layout.char_scale),
             });
         }
-        if self.command_palette.is_active()
+        if self.domain_picker.is_active()
+            || self.command_palette.is_active()
             || self.unicode_picker.is_active()
             || self.commands_owns_ime_text()
             || self.shortcuts_owns_ime_text()
@@ -796,6 +810,106 @@ mod tests {
     }
 
     #[test]
+    fn domain_picker_ime_owns_editable_stages_and_blocks_busy_background_input() {
+        use crate::ui::domain_picker::DomainPickerCommand;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.command_palette.open();
+        app.command_palette.accessibility_set_input("background");
+        app.domain_picker.open(&app.config.domains);
+        app.search.start();
+        app.settings_panel.toggle();
+        assert!(!app.search_owns_ime_text());
+        assert!(!app.settings_owns_ime_text());
+        app.handle_ime_event(Ime::Preedit("日本".into(), None));
+        assert!(app.ime.preedit().is_some());
+        app.handle_ime_event(Ime::Commit("a界b".into()));
+        app.handle_palette_edit_key(&winit::keyboard::Key::Named(
+            winit::keyboard::NamedKey::ArrowLeft,
+        ));
+        app.handle_ime_event(Ime::Commit("e\u{301}".into()));
+        assert_eq!(app.domain_picker.build_info().input, "a界e\u{301}b");
+        for text in ["bad\nquery".into(), "x".repeat(257)] {
+            app.handle_ime_event(Ime::Commit(text));
+            assert_eq!(app.domain_picker.build_info().input, "a界e\u{301}b");
+        }
+        app.domain_picker.accessibility_set_filter("");
+        let Some(DomainPickerCommand::Discover { generation, .. }) = app.domain_picker.activate()
+        else {
+            panic!("expected discovery");
+        };
+        let before = app.domain_picker.build_info().input;
+        app.handle_ime_event(Ime::Preedit("blocked".into(), None));
+        app.handle_ime_event(Ime::Commit("blocked".into()));
+        assert!(app.ime.preedit().is_none());
+        assert_eq!(app.domain_picker.build_info().input, before);
+        assert!(app.palette_ime_viewport(800.0, 600.0, 10.0, 20.0).is_none());
+        app.handle_domain_picker_loaded(
+            generation,
+            Ok(vec![crate::domain::model::DomainSummary {
+                id: "domain-test".into(),
+                name: "日本".into(),
+                workspace_id: "workspace-test".into(),
+                tabs: 1,
+                panes: 1,
+                attachments: 0,
+                created_at: "2026-01-01T00:00:00Z".into(),
+            }]),
+        );
+        app.handle_ime_event(Ime::Preedit("日".into(), None));
+        let preedit = app.ime.preedit().cloned();
+        assert!(preedit.is_some());
+        app.handle_domain_picker_loaded(generation.wrapping_sub(1), Err("stale".into()));
+        assert_eq!(app.ime.preedit(), preedit.as_ref());
+        app.handle_ime_event(Ime::Commit("日本".into()));
+        assert_eq!(app.domain_picker.build_info().input, "日本");
+        let Some(DomainPickerCommand::PrepareWindow { generation, .. }) =
+            app.domain_picker.activate()
+        else {
+            panic!("expected preparation");
+        };
+        app.handle_ime_event(Ime::Preedit("blocked".into(), None));
+        app.handle_ime_event(Ime::Commit("blocked".into()));
+        assert!(app.ime.preedit().is_none());
+        assert!(!app.accepts_ime_text());
+        app.handle_domain_picker_prepared(generation, Err("test failure".into()));
+        assert!(!app.accepts_ime_text(), "error stage is not a filter");
+        app.domain_picker.back_or_close();
+        assert!(app.accepts_ime_text());
+        assert_eq!(app.command_palette.build_info().input, "background");
+        assert!(app.requested_window_launch.is_none());
+    }
+
+    #[test]
+    fn domain_picker_ime_geometry_uses_its_query_even_over_retained_panels() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.command_palette.open();
+        app.command_palette.accessibility_set_input("background");
+        app.domain_picker.set_reduced_motion(true);
+        app.domain_picker.open(&app.config.domains);
+        let query = "界e\u{301}👩\u{200d}💻".repeat(30);
+        assert!(app.domain_picker.accessibility_set_filter(&query));
+        for (width, cell_width) in [(450.0, 8.0), (800.0, 10.0), (1400.0, 20.0)] {
+            let info = app.domain_picker.build_info();
+            let expected = crate::ui::command_palette::PaletteLayout::calculate(
+                width,
+                900.0,
+                cell_width,
+                24.0,
+                info.animation,
+                info.entries.len(),
+            )
+            .input_viewport(&info.input, info.cursor)
+            .unwrap();
+            assert_eq!(
+                app.palette_ime_viewport(width, 900.0, cell_width, 24.0),
+                Some(expected.clone())
+            );
+            assert!(expected.text_range.start > 0);
+            assert!(expected.cursor_x + cell_width <= expected.right + 0.001);
+        }
+    }
+
+    #[test]
     fn palette_ime_geometry_tracks_the_visible_query_without_a_terminal() {
         for unicode in [false, true] {
             let mut app = App::new_headless(Config::default()).unwrap();
@@ -923,23 +1037,24 @@ mod tests {
             }
         };
         wait_for(&mut app, "READY");
-        for unicode in [false, true] {
-            if unicode {
-                app.unicode_picker.open();
-            } else {
-                app.command_palette.open();
+        for kind in ["command", "unicode", "domain"] {
+            match kind {
+                "command" => app.command_palette.open(),
+                "unicode" => app.unicode_picker.open(),
+                _ => app.open_domain_picker(),
             }
             app.handle_ime_event(Ime::Preedit("draft".into(), None));
             app.handle_ime_event(Ime::Commit("x".repeat(257)));
             app.handle_ime_event(Ime::Commit("bad\ncommit".into()));
             app.handle_ime_event(Ime::Commit("e\u{301}👩\u{200d}💻".into()));
-            let info = if unicode {
-                app.unicode_picker.build_info()
-            } else {
-                app.command_palette.build_info()
+            let info = match kind {
+                "command" => app.command_palette.build_info(),
+                "unicode" => app.unicode_picker.build_info(),
+                _ => app.domain_picker.build_info(),
             };
             assert_eq!(info.input, "e\u{301}👩\u{200d}💻");
             assert!(app.ime.preedit().is_none());
+            app.close_domain_picker();
             app.command_palette.close();
             app.unicode_picker.close();
             app.unicode_picker.finish_search_for_test();

@@ -105,16 +105,14 @@ mod tests {
             };
             assert_eq!(info.input, "ae\u{301}X👩\u{200d}💻z");
             assert_eq!(info.cursor, "ae\u{301}X".len());
-            if kind != "domain" {
-                app.handle_ime_event(winit::event::Ime::Commit("Q".into()));
-                let info = if kind == "command" {
-                    app.command_palette.build_info()
-                } else {
-                    app.unicode_picker.build_info()
-                };
-                assert_eq!(info.input, "ae\u{301}XQ👩\u{200d}💻z");
-                assert_eq!(info.cursor, "ae\u{301}XQ".len());
-            }
+            app.handle_ime_event(winit::event::Ime::Commit("Q".into()));
+            let info = match kind {
+                "command" => app.command_palette.build_info(),
+                "unicode" => app.unicode_picker.build_info(),
+                _ => app.domain_picker.build_info(),
+            };
+            assert_eq!(info.input, "ae\u{301}XQ👩\u{200d}💻z");
+            assert_eq!(info.cursor, "ae\u{301}XQ".len());
             assert!(app.handle_palette_edit_key(&Key::Named(NamedKey::End)));
             assert!(app.handle_palette_edit_key(&Key::Named(NamedKey::ArrowLeft)));
             assert!(app.handle_palette_edit_key(&Key::Named(NamedKey::Delete)));

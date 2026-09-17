@@ -3,7 +3,7 @@
 Termeric enables Winit's platform input-method path on every native window.
 `Ime::Preedit` is local UI state: it is drawn beside the focused input cursor and
 is never sent to a PTY. Only `Ime::Commit` is routed, once, to the current text
-owner (terminal, search, settings filter, command palette, Unicode picker, workspace rename,
+owner (terminal, search, settings filter, command palette, Unicode/domain picker, workspace rename,
 command form, or typed plugin-setting dialog). Changing pane focus, losing
 window focus, or disabling the IME
 cancels stale preedit. Candidate geometry is reported in physical pixels from
@@ -13,15 +13,18 @@ scaled cell dimensions used to render the terminal. Long preedit runs are
 clipped only at grapheme boundaries to the space remaining in the focused pane
 and never paint across a pane divider.
 
-Command and Unicode palettes anchor native candidates and preedit to their own
+Command, Unicode, and editable domain palettes anchor native candidates and preedit to their own
 visible query caret, not the terminal behind the modal. Their shared
 `PaletteLayout` computes a horizontally scrolled, whole-grapheme query viewport;
 rendering uses that same geometry and clips glyph overhangs to the field.
-The staged domain picker uses the query viewport too, but still rejects IME
-composition. All three palette inputs admit at most 256 non-control Unicode
+The staged domain picker accepts composition only in its host/domain filter
+stages; loading, preparation, and error stages swallow it without falling through
+to retained panels or the terminal. Opening, leaving, or accepting a stage change
+retires stale preedit; ignored stale replies preserve current composition.
+All three palette inputs admit at most 256 non-control Unicode
 scalars through typing, IME commits where accepted, or accessibility replacement.
-Typing/commits stop at the limit; oversized semantic replacement is rejected
-atomically. The complete value and byte-accurate cursor remain in the model and
+Typing stops at the limit; complete IME commits and semantic replacements are
+rejected atomically when oversized or invalid. The complete value and byte-accurate cursor remain in the model and
 semantic tree even when only the tail is visible. Narrow preedit space may show
 no complete grapheme instead of painting outside its owner. Automated geometry,
 limit, and routing tests cover these paths. The opt-in software-GPU smoke also
@@ -120,15 +123,15 @@ IME commits insert at that caret. Cursor-only and no-op edits preserve result
 selection and do not restart Unicode worker searches; actual query changes
 retire old results as usual. Busy domain stages consume navigation/deletion
 without changing their read-only filter or a palette behind them. The semantic
-tree reports the moved UTF-8 caret. Command/Unicode IME commits are now atomic:
+tree reports the moved UTF-8 caret. Command/Unicode/domain IME commits are atomic:
 the complete commit must fit the 256-scalar/1-KiB single-line query limit, or the
 query and caret remain unchanged. No prefix is inserted and no control characters
 are silently stripped. An accepted commit performs one splice and result refresh.
 Typing, paste, and semantic replacement share the same control and Unicode
 line/paragraph-separator exclusions. Accepted command/Unicode/domain semantic
 replacement clears stale preedit and schedules a redraw; rejected replacement
-preserves it. The domain picker still does not accept platform IME commits;
-its busy stages remain read-only. Native IME/assistive-technology acceptance is
+preserves it. The domain picker's busy stages remain read-only.
+Native IME/assistive-technology acceptance is
 still deferred. The palettes also support the same
 Ctrl+Left/Right and Ctrl+Backspace/Delete word edits described above, with local
 dispatch and blocked-worker regression coverage. Unsupported modifiers and

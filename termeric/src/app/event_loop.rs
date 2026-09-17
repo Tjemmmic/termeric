@@ -771,7 +771,7 @@ impl ApplicationHandler<AppEvent> for App {
                         use winit::keyboard::{Key, NamedKey};
                         let command = match &event.logical_key {
                             Key::Named(NamedKey::Escape) => {
-                                self.domain_picker.back_or_close();
+                                self.back_or_close_domain_picker();
                                 None
                             }
                             Key::Named(NamedKey::ArrowUp) => {
@@ -796,7 +796,7 @@ impl ApplicationHandler<AppEvent> for App {
                                     && self.modifiers.shift_key()
                                     && (c.as_str() == "p" || c.as_str() == "P") =>
                             {
-                                self.domain_picker.close();
+                                self.close_domain_picker();
                                 None
                             }
                             Key::Character(c)
@@ -1513,7 +1513,7 @@ impl ApplicationHandler<AppEvent> for App {
                             self.domain_picker
                                 .handle_click(pos.0 as f32, pos.1 as f32, &layout)
                         } else {
-                            self.domain_picker.close();
+                            self.close_domain_picker();
                             None
                         };
                         if let Some(command) = command {

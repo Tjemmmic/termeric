@@ -6644,17 +6644,7 @@ mod tests {
                 })
             };
             for value in ["e\u{301}👩\u{200d}💻", &"🫚".repeat(256), ""] {
-                // Seed composition before opening the domain picker, which
-                // intentionally does not yet accept platform IME commits.
-                if kind == DOMAIN_INPUT {
-                    app.domain_picker.close();
-                    app.command_palette.open();
-                    app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
-                    app.command_palette.close();
-                    app.domain_picker.open(&app.config.domains);
-                } else {
-                    app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
-                }
+                app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
                 assert!(app.ime.preedit().is_some());
                 set(&mut app, value);
                 assert!(app.ime.preedit().is_none());
@@ -6668,9 +6658,7 @@ mod tests {
                 );
             }
             set(&mut app, "keep");
-            if kind != DOMAIN_INPUT {
-                app.handle_ime_event(winit::event::Ime::Preedit("keep composition".into(), None));
-            }
+            app.handle_ime_event(winit::event::Ime::Preedit("keep composition".into(), None));
             let preedit = app.ime.preedit().cloned();
             for value in ["a\nb", "\u{2028}", "\u{2029}", &"x".repeat(257)] {
                 set(&mut app, value);
