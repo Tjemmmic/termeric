@@ -491,6 +491,13 @@ are bounded and clipped; views too small for one item retire completion instead
 of consuming keys for an invisible popup. Geometry/text regressions pass; native
 visual acceptance remains deferred (see [input contract](accessibility-and-input.md)).
 
+Split-pane completion placement now projects the uniquely focused pane's
+rendered cursor through its actual grid origin, including fractional coordinates
+and updated frame geometry. Missing or ambiguous focus does not anchor to a
+sibling. Render-data tests cover focus/resize/zoom/content-origin changes,
+single-grid collapse, and edge fitting; native split-pane visual acceptance
+remains deferred (see [input contract](accessibility-and-input.md)).
+
 Guarded submission cancellation preserves the already-sent editable prefix on
 the unchanged focused route, so retrying Enter rechecks it. Withheld paste and
 replacement bytes are excluded; safe editing and exactly-once broadcast retry

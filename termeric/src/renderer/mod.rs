@@ -1720,10 +1720,18 @@ impl Renderer {
         self.text_pipeline.mark_layer();
         // Names and width metadata are shared; cloning this frame does not
         // duplicate or scan the complete branch list.
-        if let Some(ref info) = self.git_completions.clone() {
+        if let Some(ref info) = self.git_completions.clone()
+            && let Some(anchor) = git::CompletionAnchor::for_view(
+                cursor_pos,
+                panes,
+                (content_left, content_top),
+                (cell_width, cell_height),
+                padding,
+            )
+        {
             self.build_git_completions(
                 info,
-                cursor_pos,
+                anchor,
                 content_left,
                 content_top,
                 content_width,

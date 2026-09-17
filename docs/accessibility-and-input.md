@@ -489,6 +489,19 @@ one-row fallback, tiny windows, fractional font metrics, invalid geometry, and
 bounded Unicode/large-label text queuing. Native visual acceptance remains
 deferred; the tests do not constitute screenshot or screen-reader acceptance.
 
+In split mode, the popup anchor now comes from the uniquely focused pane's
+render snapshot: its pixel rectangle and fractional/animated cursor position.
+It uses the same grid origin as terminal drawing rather than treating pane-local
+cursor cells as coordinates for the entire window. Single-grid outer padding
+is preserved; pane vertical placement is not padded a second time. Fresh frame
+geometry handles focus, resize, zoom, content-origin changes, and collapse back
+to a single grid without retaining old offsets. Missing/ambiguous focus or a
+nonfinite anchor does not fall back to an unrelated grid. The popup remains a
+window-level overlay and may extend over a sibling pane; existing viewport
+clamping and edge flipping still apply. Render-data tests cover these mappings
+and the lower-right-pane edge case; native split-pane visual acceptance remains
+deferred.
+
 Withholding a guarded submission now preserves the tracked prefix already sent
 to the terminal. Cancel does not send an erase command or submission, and a
 subsequent Enter on the unchanged focused route checks that prefix again.

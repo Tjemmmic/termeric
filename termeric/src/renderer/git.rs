@@ -7,6 +7,51 @@ use super::{Renderer, TextClip};
 const EDGE: f32 = 2.0;
 const MAX_ITEMS: usize = 8;
 
+/// Pixel position of the rendered cursor, including its owning grid's origin.
+/// Keeping pixels explicit avoids mixing pane-local cells with window geometry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct CompletionAnchor {
+    x: f32,
+    y: f32,
+}
+
+impl CompletionAnchor {
+    pub(super) fn for_view(
+        single_cursor: (f32, f32),
+        panes: &[PaneRenderData<'_>],
+        content_origin: (f32, f32),
+        cell_size: (f32, f32),
+        padding: f32,
+    ) -> Option<Self> {
+        let (origin, cursor) = if panes.is_empty() {
+            (
+                (content_origin.0 + padding, content_origin.1 + padding),
+                single_cursor,
+            )
+        } else {
+            let mut focused = panes.iter().filter(|pane| pane.is_focused);
+            let pane = focused.next()?;
+            if focused.next().is_some() {
+                return None;
+            }
+            // Match the exact origins passed to build_pane_grid, including the
+            // asymmetry: pane y already includes its content-area placement.
+            (
+                (
+                    content_origin.0 + padding + pane.rect.x,
+                    content_origin.1 + pane.rect.y,
+                ),
+                pane.cursor_pos,
+            )
+        };
+        let anchor = Self {
+            x: origin.0 + cursor.0 * cell_size.0,
+            y: origin.1 + cursor.1 * cell_size.1,
+        };
+        (anchor.x.is_finite() && anchor.y.is_finite()).then_some(anchor)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CompletionViewport {
     content_left: f32,
@@ -72,20 +117,20 @@ struct CompletionLayout {
 }
 
 impl CompletionLayout {
-    fn calculate(
+    fn calculate_at_anchor(
         info: &GitCompletionInfo,
-        cursor: (f32, f32),
+        anchor: CompletionAnchor,
         view: CompletionViewport,
     ) -> Option<Self> {
         let bounds = view.bounds()?;
         let count = info.completions.len();
-        if count == 0 || !cursor.0.is_finite() || !cursor.1.is_finite() {
+        if count == 0 || !anchor.x.is_finite() || !anchor.y.is_finite() {
             return None;
         }
         let row_height = view.cell_height * 1.6;
         let desired_rows = 1 + count.min(MAX_ITEMS) + usize::from(count > MAX_ITEMS);
         let desired_height = EDGE * 2.0 + desired_rows as f32 * row_height;
-        let cursor_y = (bounds.top + cursor.1 * view.cell_height).clamp(bounds.top, bounds.bottom);
+        let cursor_y = anchor.y.clamp(bounds.top, bounds.bottom);
         let below_y = (cursor_y + view.cell_height).min(bounds.bottom);
         let below = bounds.bottom - below_y;
         let above = cursor_y - bounds.top;
@@ -124,7 +169,8 @@ impl CompletionLayout {
         let width = ((info.completions.max_name_chars() + 4) as f32 * view.cell_width)
             .max(view.cell_width * 24.0)
             .min(max_width);
-        let x = (bounds.left + cursor.0 * view.cell_width)
+        let x = anchor
+            .x
             .clamp(bounds.left, (bounds.right - width).max(bounds.left));
         Some(Self {
             x,
@@ -150,6 +196,22 @@ impl CompletionLayout {
             right: self.x + self.width - EDGE,
             bottom: self.y + self.height - EDGE,
         }
+    }
+
+    #[cfg(test)]
+    fn calculate(
+        info: &GitCompletionInfo,
+        cursor: (f32, f32),
+        view: CompletionViewport,
+    ) -> Option<Self> {
+        let anchor = CompletionAnchor::for_view(
+            cursor,
+            &[],
+            (view.content_left, view.content_top),
+            (view.cell_width, view.cell_height),
+            view.padding,
+        )?;
+        Self::calculate_at_anchor(info, anchor, view)
     }
 }
 
@@ -202,15 +264,15 @@ impl Renderer {
     pub(super) fn build_git_completions(
         &mut self,
         info: &GitCompletionInfo,
-        cursor_pos: (f32, f32),
+        anchor: CompletionAnchor,
         content_left: f32,
         content_top: f32,
         content_width: f32,
         window_height: f32,
     ) {
-        let Some(layout) = CompletionLayout::calculate(
+        let Some(layout) = CompletionLayout::calculate_at_anchor(
             info,
-            cursor_pos,
+            anchor,
             CompletionViewport {
                 content_left,
                 content_top,
@@ -355,6 +417,172 @@ mod tests {
             cell_height: 20.0,
             padding: 8.0,
         }
+    }
+
+    fn pane<'a>(
+        terminal: &'a termeric_core::Terminal,
+        urls: &'a crate::terminal::url::UrlCache,
+        origin: (f32, f32),
+        cursor: (f32, f32),
+        focused: bool,
+    ) -> PaneRenderData<'a> {
+        PaneRenderData {
+            terminal_key: terminal as *const _ as usize,
+            grid: terminal.presentation_grid(),
+            selection: None,
+            dynamic_colors: terminal.presentation_dynamic_colors(),
+            extra_cursors: terminal.presentation_extra_cursors(),
+            rect: crate::panes::PaneRect {
+                x: origin.0,
+                y: origin.1,
+                width: 320.0,
+                height: 240.0,
+            },
+            is_focused: focused,
+            broadcast_target: None,
+            read_only: false,
+            is_zoomed: false,
+            cursor_pos: cursor,
+            cursor_style: crate::config::CursorStyle::Block,
+            cursor_opacity: 1.0,
+            url_cache: urls,
+            copy_mode: None,
+            images: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn split_popup_anchor_matches_the_focused_grid_pixel_origin() {
+        let terminal = termeric_core::Terminal::new(80, 24);
+        let urls = crate::terminal::url::UrlCache::new(24);
+        for origin in [(0.0, 30.0), (100.0, 50.0)] {
+            for cell in [(10.0, 20.0), (9.75, 23.4)] {
+                for padding in [0.0, 8.0, 17.5] {
+                    for second_origin in [(320.0, 0.0), (0.0, 240.0)] {
+                        for focused in [0, 1] {
+                            let panes = [
+                                pane(&terminal, &urls, (0.0, 0.0), (1.25, 2.5), focused == 0),
+                                pane(&terminal, &urls, second_origin, (2.5, 3.25), focused == 1),
+                            ];
+                            let anchor = CompletionAnchor::for_view(
+                                (999.0, 999.0),
+                                &panes,
+                                origin,
+                                cell,
+                                padding,
+                            )
+                            .unwrap();
+                            let pane = &panes[focused];
+                            // Same pixel origin used by build_pane_grid; the
+                            // unrelated top-level cursor must never be used.
+                            let expected_x =
+                                origin.0 + padding + pane.rect.x + pane.cursor_pos.0 * cell.0;
+                            let expected_y = origin.1 + pane.rect.y + pane.cursor_pos.1 * cell.1;
+                            assert!((anchor.x - expected_x).abs() < 0.001);
+                            assert!((anchor.y - expected_y).abs() < 0.001);
+                            let viewport = CompletionViewport {
+                                content_left: origin.0,
+                                content_top: origin.1,
+                                content_width: 1200.0,
+                                window_height: 1400.0,
+                                cell_width: cell.0,
+                                cell_height: cell.1,
+                                padding,
+                            };
+                            let layout = CompletionLayout::calculate_at_anchor(
+                                &info(1, Some(0)),
+                                anchor,
+                                viewport,
+                            )
+                            .unwrap();
+                            assert!((layout.x - expected_x).abs() < 0.001);
+                            assert!((layout.y - (expected_y + cell.1)).abs() < 0.001);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn popup_anchor_follows_focus_resize_zoom_move_and_single_grid_collapse() {
+        let terminal = termeric_core::Terminal::new(80, 24);
+        let urls = crate::terminal::url::UrlCache::new(24);
+        let mut panes = [
+            pane(&terminal, &urls, (0.0, 0.0), (1.0, 2.0), true),
+            pane(&terminal, &urls, (320.0, 240.0), (3.5, 4.25), false),
+        ];
+        let anchor = |panes: &[PaneRenderData<'_>]| {
+            CompletionAnchor::for_view((999.0, 999.0), panes, (100.0, 50.0), (10.0, 20.0), 8.0)
+                .unwrap()
+        };
+        assert_eq!(anchor(&panes), CompletionAnchor { x: 118.0, y: 90.0 });
+        panes[0].is_focused = false;
+        panes[1].is_focused = true;
+        assert_eq!(anchor(&panes), CompletionAnchor { x: 463.0, y: 375.0 });
+        panes[1].rect.x = 400.0;
+        panes[1].rect.y = 300.0;
+        assert_eq!(anchor(&panes), CompletionAnchor { x: 543.0, y: 435.0 });
+        panes[1].is_zoomed = true;
+        panes[1].rect.x = 0.0;
+        panes[1].rect.y = 0.0;
+        assert_eq!(anchor(&panes[1..]), CompletionAnchor { x: 143.0, y: 135.0 });
+        let moved =
+            CompletionAnchor::for_view((0.0, 0.0), &panes[1..], (230.0, 90.0), (10.0, 20.0), 8.0)
+                .unwrap();
+        assert_eq!(moved, CompletionAnchor { x: 273.0, y: 175.0 });
+        let collapsed =
+            CompletionAnchor::for_view(panes[1].cursor_pos, &[], (100.0, 50.0), (10.0, 20.0), 8.0)
+                .unwrap();
+        // Single-grid rendering has vertical outer padding, unlike pane origins.
+        assert_eq!(collapsed, CompletionAnchor { x: 143.0, y: 143.0 });
+    }
+
+    #[test]
+    fn popup_anchor_refuses_missing_ambiguous_or_nonfinite_pane_focus() {
+        let terminal = termeric_core::Terminal::new(80, 24);
+        let urls = crate::terminal::url::UrlCache::new(24);
+        let mut panes = [
+            pane(&terminal, &urls, (0.0, 0.0), (1.0, 2.0), false),
+            pane(&terminal, &urls, (320.0, 240.0), (3.0, 4.0), false),
+        ];
+        let anchor = |panes: &[PaneRenderData<'_>]| {
+            CompletionAnchor::for_view((0.0, 0.0), panes, (100.0, 50.0), (10.0, 20.0), 8.0)
+        };
+        assert!(anchor(&panes).is_none());
+        panes[0].is_focused = true;
+        panes[1].is_focused = true;
+        assert!(anchor(&panes).is_none());
+        panes[0].is_focused = false;
+        panes[1].cursor_pos.0 = f32::NAN;
+        assert!(anchor(&panes).is_none());
+        panes[1].cursor_pos = (3.0, 4.0);
+        assert!(
+            CompletionAnchor::for_view(
+                (f32::NAN, f32::NAN),
+                &panes,
+                (100.0, 50.0),
+                (10.0, 20.0),
+                8.0,
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn lower_right_pane_anchor_still_flips_and_clamps_to_window_bounds() {
+        let terminal = termeric_core::Terminal::new(80, 24);
+        let urls = crate::terminal::url::UrlCache::new(24);
+        let panes = [pane(&terminal, &urls, (600.0, 700.0), (5.0, 10.0), true)];
+        let anchor =
+            CompletionAnchor::for_view((0.0, 0.0), &panes, (100.0, 50.0), (10.0, 20.0), 8.0)
+                .unwrap();
+        assert_eq!(anchor, CompletionAnchor { x: 758.0, y: 950.0 });
+        let layout =
+            CompletionLayout::calculate_at_anchor(&info(20, Some(18)), anchor, view()).unwrap();
+        assert_eq!(layout.x + layout.width, 892.0);
+        assert_eq!(layout.y + layout.height, anchor.y);
+        assert!((layout.start..layout.end).contains(&18));
     }
 
     #[test]
