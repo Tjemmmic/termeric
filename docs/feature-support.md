@@ -789,10 +789,18 @@ Cursor interpolation now uses a fixed 150 ms `Instant`-based ease-out
 transition, with deterministic retargeting and lifecycle tests. Hidden cursor
 movement snaps, and the scheduler no longer chases live-grid cursor positions
 behind synchronized-output snapshots. This corrects animation timing; it does
-not yet establish a native CPU reduction, especially where the old
+not establish a universal CPU reduction, especially where the old
 frame-dependent implementation accidentally snapped immediately. See
 [the transition contract](event-driven-rendering.md) and
 [the implementation boundary](performance.md#bounded-cursor-transition-implementation).
+
+Clean `8f3154f` native follow-up with animations enabled reduced the observed
+4 KiB post-response tail from 25–27 extra frames over 395–429 ms to nine frames
+over 135–142 ms. The 1 MiB case now consistently animates too, so it consumes
+more post-response CPU than the old traced cases that accidentally snapped.
+Both outcomes are retained as a predictable-duration correction and its cost,
+not an across-the-board optimization; see
+[the native cursor evidence](performance.md#native-cursor-follow-up-at-8f3154f).
 
 ## Release gates
 

@@ -1182,6 +1182,58 @@ whereas a visible new transition now animates consistently. Native before/after
 evidence must retain that tradeoff, rather than comparing only the old slow
 tail or hiding new animation work with reduced motion.
 
+### Native cursor follow-up at `8f3154f`
+
+After the cursor fix passed the clean release preflight, the same private
+Sway/Xwayland llvmpipe diagnostic was repeated with animations enabled,
+installed Noto Sans Mono, 100×30 cells, 901×601 windows, two-second resource
+windows, boundary thread snapshots, the opt-in frame counter, and narrow
+frame-reason logging. Separate 4 KiB and 1 MiB runs each excluded one warmup
+and retained five measured fresh processes per terminal in rotated order.
+There were no concurrent builds/tests or source changes during measurement.
+
+| Termeric case | Measured samples | Additional post-boundary frames | Last frame after boundary | Process CPU ticks during 2-second window |
+| --- | ---: | ---: | --- | --- |
+| Old 4 KiB, counter + trace at `f9ad5d2` | 5 | 25–27 | 395–429 ms | 29–34 |
+| Fixed 4 KiB at `8f3154f` | 5 | 9 in every sample | 135–142 ms | 9–11 |
+| Old 1 MiB, counter + trace at `f9ad5d2` | 10 | 0 in every sample | Before the boundary | 0–1 |
+| Fixed 1 MiB at `8f3154f` | 5 | 9–10 | 132–152 ms | 11–12 |
+
+Every additional new frame had reason `animation`. The time column is relative
+to the resource snapshot, **not the cursor transition's start**; rendering can
+start before that snapshot and finish on the next available frame after the
+150 ms endpoint. New 4 KiB process tick deltas were `[10, 9, 11, 11, 11]` and
+1 MiB deltas were `[11, 12, 11, 11, 11]`. Corresponding summed thread runtimes
+were 99.32–115.50 ms and 102.91–125.90 ms. Thread identities remained stable,
+snapshots had no read errors, and all retained resource/font/geometry controls
+passed. Kitty's process tick deltas were zero in both runs; no font-equivalent
+cross-terminal ranking is inferred from that observation.
+
+The short workload's formerly long tail is now bounded and consistently
+shorter in this local follow-up. The larger workload exposes the cost of
+correcting the old accidental snap: it now actually animates and consumes
+more post-response CPU than the earlier traced no-animation samples. The old
+untraced frame-counter repeat also had four intermittent longer tails, retained
+in the previous section rather than pooled into this table. This is a
+predictable-duration/lifecycle correction with a measured tradeoff, **not an
+across-the-board CPU optimization or zero-idle-CPU claim**. These chronological
+runs are not interleaved old/new trials and do not establish hardware-GPU
+gains, scanout latency, or a general terminal ranking.
+
+Source `8f3154ff1e258a61cf027308f2a63ce125c641ce` remained clean/unchanged;
+both runs used Termeric executable SHA-256
+`ac8c5c1bbe2ad3104f8ddda23d0bb97f41a49d3bd7efd00671c8ba679577d751`.
+Summaries/contracts, process boundaries, frame counts/reasons, and thread
+identity/runtime deltas were independently recounted. No provider workflow ran
+and both private runtimes were removed. The unpublished local archive
+`target/terminal-comparison/2026-09-17-8f3154f-cursor-motion.tar.gz` has SHA-256
+`51872ce629f9c4400f72c22766e3b369aac2b4abab22b4d6f13d7a2ab8002237`.
+It retains both run directories, launcher/diagnostic wrapper, and recount
+script/summary. All 198 files were verified byte-for-byte. Caches/data/state
+are excluded and original `/tmp/` paths map to archive names. Forced teardown
+is not graceful-close acceptance; manual visual feel and hardware-GPU resource
+testing remain separate checks.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic
