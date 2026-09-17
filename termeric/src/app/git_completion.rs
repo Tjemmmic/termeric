@@ -72,7 +72,7 @@ mod tests {
     fn completion_app() -> App {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.input_line_buffer = "git checkout ma".into();
-        app.git_completions = vec!["main".into(), "maintenance".into()];
+        app.git_completions = vec!["main".into(), "maintenance".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app

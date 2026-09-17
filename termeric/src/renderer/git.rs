@@ -38,12 +38,7 @@ impl Renderer {
         let dropdown_height = visible_count as f32 * row_height + 4.0; // +4 for top/bottom padding
 
         // Width: based on longest branch name (min 24 chars, max 50% of window)
-        let max_len = info
-            .completions
-            .iter()
-            .map(|s| s.chars().count())
-            .max()
-            .unwrap_or(10);
+        let max_len = info.completions.max_name_chars();
         let dropdown_width = ((max_len + 4) as f32 * ui_cw)
             .max(ui_cw * 24.0)
             .min(content_width * 0.5);

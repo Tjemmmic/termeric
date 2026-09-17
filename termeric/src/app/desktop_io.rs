@@ -1236,7 +1236,7 @@ impl App {
         {
             let completions = self.git_watcher.complete_branch(partial);
             if !completions.is_empty() {
-                self.git_completions = completions;
+                self.git_completions = completions.into();
                 self.git_completion_index = Some(0);
                 self.git_completions_visible = true;
             } else {
@@ -1628,7 +1628,7 @@ mod desktop_io_tests {
         let _repository = seed_git_completion_cache(&mut app);
         app.write_to_pty(b"git checkout ma");
         assert!(app.git_completions_visible);
-        assert_eq!(app.git_completions, ["main"]);
+        assert_eq!(&*app.git_completions, ["main"]);
         assert_eq!(app.git_completion_index, Some(0));
         app.write_to_pty(b"\r");
         assert!(!app.git_completions_visible);
@@ -1650,7 +1650,7 @@ mod desktop_io_tests {
             .shell_integration =
             crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
         app.write_to_pty(b"git checkout to");
-        app.git_completions = vec!["topic;printf${IFS}UNEXPECTED".into()];
+        app.git_completions = vec!["topic;printf${IFS}UNEXPECTED".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app.write_to_pty(b"\r");
@@ -1671,7 +1671,7 @@ mod desktop_io_tests {
             .shell_integration =
             crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
         app.write_to_pty(b"git checkout a");
-        app.git_completions = vec!["a'b".into()];
+        app.git_completions = vec!["a'b".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         assert!(app.handle_git_completion_key(&winit::keyboard::Key::Named(
@@ -1702,7 +1702,7 @@ mod desktop_io_tests {
                 app.toggle_focused_pane_read_only();
             }
             app.input_line_buffer = typed.into();
-            app.git_completions = vec!["main".into()];
+            app.git_completions = vec!["main".into()].into();
             app.git_completion_index = Some(0);
             app.git_completions_visible = true;
             app.modifiers = ModifiersState::CONTROL;
@@ -1731,7 +1731,7 @@ mod desktop_io_tests {
         let expected = b"git checkout ma\rZ";
         let mut app = raw_command_app(expected.len());
         app.write_to_pty(b"git checkout ma");
-        app.git_completions = vec!["main".into()];
+        app.git_completions = vec!["main".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app.modifiers = ModifiersState::CONTROL;
@@ -1757,7 +1757,7 @@ mod desktop_io_tests {
                 let expected = format!("{typed}Z");
                 let mut app = raw_command_app(expected.len());
                 app.write_to_pty(typed.as_bytes());
-                app.git_completions = vec![branch.into()];
+                app.git_completions = vec![branch.into()].into();
                 app.git_completion_index = Some(0);
                 app.git_completions_visible = true;
                 assert!(app.accept_git_completion(submit));
@@ -1776,13 +1776,13 @@ mod desktop_io_tests {
             let expected = b"git checkout maZ";
             let mut app = raw_command_app(expected.len());
             app.write_to_pty(b"git checkout ma");
-            app.git_completions = vec!["main".into()];
+            app.git_completions = vec!["main".into()].into();
             app.git_completion_index = Some(0);
             app.git_completions_visible = true;
             if read_only {
                 app.toggle_focused_pane_read_only();
                 // Exercise the mutation boundary even with a stale visible list.
-                app.git_completions = vec!["main".into()];
+                app.git_completions = vec!["main".into()].into();
                 app.git_completion_index = Some(0);
                 app.git_completions_visible = true;
             } else {
@@ -1844,7 +1844,7 @@ mod desktop_io_tests {
             .unwrap()
             .shell_integration = ShellIntegrationSupport::Enabled("fish");
         app.write_to_pty(b"git checkout a");
-        app.git_completions = vec!["a'b".into()];
+        app.git_completions = vec!["a'b".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app.write_to_pty(b"\r");
@@ -1890,7 +1890,7 @@ mod desktop_io_tests {
             } else {
                 app.write_to_pty(typed.as_bytes());
                 if kind == "completion" {
-                    app.git_completions = vec!["main".into()];
+                    app.git_completions = vec!["main".into()].into();
                     app.git_completion_index = Some(0);
                     app.git_completions_visible = true;
                 }
@@ -2255,7 +2255,7 @@ mod desktop_io_tests {
             plugin_id: "inert-completion-guard".into(),
         };
         app.write_to_pty(typed.as_bytes());
-        app.git_completions = vec!["main".into()];
+        app.git_completions = vec!["main".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app.write_to_pty(b"\r");
@@ -2302,7 +2302,7 @@ mod desktop_io_tests {
                 plugin_id: "inert-safe-completion".into(),
             };
             app.write_to_pty(b"git checkout ma");
-            app.git_completions = vec!["main".into()];
+            app.git_completions = vec!["main".into()].into();
             app.git_completion_index = selected;
             app.git_completions_visible = true;
             app.write_to_pty(b"\r");
@@ -2330,7 +2330,7 @@ mod desktop_io_tests {
             plugin_id: "inert-captured-completion".into(),
         };
         app.write_to_pty(typed.as_bytes());
-        app.git_completions = vec!["main".into()];
+        app.git_completions = vec!["main".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app.write_to_pty(b"\r");
@@ -2340,13 +2340,13 @@ mod desktop_io_tests {
             "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.2".into(),
         ], None, Some("not-the-completion-owner"), None, Default::default()).unwrap();
         wait_command_output(&mut app, "READY");
-        app.git_completions = vec!["replacement".into()];
+        app.git_completions = vec!["replacement".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
         app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
         // Confirming background input must not overwrite the focused completion state.
-        assert_eq!(app.git_completions, ["replacement"]);
+        assert_eq!(&*app.git_completions, ["replacement"]);
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, b"Z");
         app.tabs.as_mut().unwrap().switch_to(0);
@@ -2370,7 +2370,7 @@ mod desktop_io_tests {
                 plugin_id: "inert-refused-completion".into(),
             };
             app.write_to_pty(typed.as_bytes());
-            app.git_completions = vec!["main".into()];
+            app.git_completions = vec!["main".into()].into();
             app.git_completion_index = Some(0);
             app.git_completions_visible = true;
             app.write_to_pty(b"\r");
@@ -2396,7 +2396,7 @@ mod desktop_io_tests {
         let mut app = raw_command_app(1);
         app.toggle_focused_pane_read_only();
         app.input_line_buffer = "stale".into();
-        app.git_completions = vec!["stale".into()];
+        app.git_completions = vec!["stale".into()].into();
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
         app.run_custom_command("B");

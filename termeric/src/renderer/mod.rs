@@ -1718,6 +1718,8 @@ impl Renderer {
         // ── LAYER 5: Git completion dropdown (overlays grid) ──
         self.rect_pipeline.mark_layer();
         self.text_pipeline.mark_layer();
+        // Names and width metadata are shared; cloning this frame does not
+        // duplicate or scan the complete branch list.
         if let Some(ref info) = self.git_completions.clone() {
             self.build_git_completions(
                 info,

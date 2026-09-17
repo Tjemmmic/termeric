@@ -58,13 +58,34 @@ a new overflow after recovery can warn again. Generation checks also reject
 stale limit results.
 
 These are per-scan collected-name and text-byte bounds, not a 4 MiB process-memory
-ceiling. Vector/allocator overhead, simultaneous old/new snapshots, filtered and
-rendered copies, lowercasing scratch space, tracked user input, Git status, and
+ceiling. Vector/allocator overhead, simultaneous old/new snapshots, filtered
+lists, lowercasing scratch space, tracked user input, Git status, and
 libgit2's internal repository/index/ref storage are separate. Native RSS and
 large-repository latency still need measurement; collection cannot cancel a
 blocked libgit2 call. Regression fixtures cover exact count/byte limits, UTF-8,
 remote normalization and duplicates, warning/recovery behavior, and real packed
 refs exceeding the production limits without launching Git or a provider.
+
+### Completion rendering storage
+
+Filtered suggestions move into an immutable, reference-counted list shared by
+input state and renderer snapshots. The app-to-renderer handoff and renderer
+dispatch clone only that shared handle, not every branch string. The maximum
+Unicode-scalar name length is computed once on list replacement and reused for
+popup sizing; redraws no longer scan every name for width. Selection changes,
+window resizing, and font scaling reuse the same names and length metadata.
+Ordering, matching, insertion, and the existing scalar-based sizing policy are
+unchanged; this does not add grapheme-aware or display-width-aware sizing.
+
+Clearing uses an allocation-free empty state. Existing render snapshots retain
+their original immutable names until released, so replacing input suggestions
+cannot change an older frame's data or width metadata. The worker cache and
+filtered list remain separate allocations, and filtering still allocates on
+input. This change removes redundant per-frame copies, not all completion
+allocations. Tests check moved string/vector storage, Unicode length metadata,
+1,000 render-snapshot clones sharing a full 16,384-name / 4 MiB fixture, and
+final-owner release after clearing/replacement. These are deterministic storage
+and lifetime checks, not measured native frame-time or process-RSS results.
 
 ## Transcript writer
 

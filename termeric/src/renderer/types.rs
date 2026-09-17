@@ -152,7 +152,7 @@ pub enum SearchBarClick {
 #[derive(Debug, Clone)]
 pub struct GitCompletionInfo {
     /// The list of matching branch names
-    pub completions: Vec<String>,
+    pub completions: crate::git::BranchCompletions,
     /// Currently selected index
     pub selected_index: Option<usize>,
 }

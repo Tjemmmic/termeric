@@ -479,6 +479,12 @@ Git status and typed input, and warns once to use shell completion. In-budget
 refreshes restore suggestions on subsequent input. These bounds do not cap
 libgit2 internals or whole-process RSS (see [background I/O](background-io.md)).
 
+Completion redraws now share immutable suggestion storage and cached name-length
+metadata instead of deep-copying the list twice and rescanning it for popup
+width each frame. Storage/lifetime regressions cover full-budget lists,
+replacement, and Unicode scalar sizing; native performance gains are not yet
+measured (see [background I/O](background-io.md)).
+
 Guarded submission cancellation preserves the already-sent editable prefix on
 the unchanged focused route, so retrying Enter rechecks it. Withheld paste and
 replacement bytes are excluded; safe editing and exactly-once broadcast retry

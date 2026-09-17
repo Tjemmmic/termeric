@@ -4,9 +4,11 @@
 //! and status tracking. Uses libgit2 via the `git2` crate.
 
 mod completion;
+mod completion_list;
 mod watcher;
 
 pub(crate) use completion::{BranchQuoting, branch_edit};
+pub use completion_list::BranchCompletions;
 pub use watcher::GitWatcher;
 
 use git2::Repository;

@@ -4960,7 +4960,7 @@ fn harvest_rerun_is_literal_and_reports_only_successful_delivery() {
     });
     app.input_line_buffer = "old editable input".into();
     app.git_completions_visible = true;
-    app.git_completions = vec!["unrelated".into()];
+    app.git_completions = vec!["unrelated".into()].into();
     app.git_completion_index = Some(0);
     app.execute_sprout_action(crate::harvest::sprouts::SproutAction::Rerun, Some(entry));
     let bytes = fenced_harvest_capture(&mut app, &captures);
@@ -7792,7 +7792,7 @@ fn read_only_focused_pane_rejects_keyboard_and_running_gui_control_input() {
     assert!(!app.write_terminal_protocol_input(b"blocked"));
 
     app.input_line_buffer = "stale-shell-state".into();
-    app.git_completions = vec!["stale-branch".into()];
+    app.git_completions = vec!["stale-branch".into()].into();
     app.git_completion_index = Some(0);
     app.git_completions_visible = true;
     app.write_to_pty(b"more");

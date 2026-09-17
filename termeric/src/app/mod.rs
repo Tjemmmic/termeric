@@ -1183,7 +1183,7 @@ pub struct App {
     /// Git repository watcher (tracks branch, dirty status per tab)
     git_watcher: crate::git::GitWatcher,
     /// Current git completion candidates
-    git_completions: Vec<String>,
+    git_completions: crate::git::BranchCompletions,
     /// Selected index in git completion dropdown (None = no selection)
     git_completion_index: Option<usize>,
     /// Whether git completion dropdown is visible
@@ -1432,7 +1432,7 @@ impl App {
             commands_panel: crate::ui::commands::panel::CommandsPanel::new(),
             input_line_buffer: String::new(),
             git_watcher: crate::git::GitWatcher::new(git_event_waker()),
-            git_completions: Vec::new(),
+            git_completions: crate::git::BranchCompletions::default(),
             git_completion_index: None,
             git_completions_visible: false,
             tab_bar_hover: None,
