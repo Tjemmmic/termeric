@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts.compare_terminals import (
     BenchmarkSettings,
@@ -10,9 +11,15 @@ from scripts.compare_terminals import (
     SUPPORTED_TERMINALS,
     build_launch_spec,
     comparison_contract,
+    direct_children,
+    idle_cpu_measurement,
+    parse_resource_status,
     process_tree_sample,
+    run_sample,
     stat_fields,
     summarize,
+    terminal_resources,
+    terminal_summary,
     x11_environment,
 )
 from scripts.terminal_benchmark_fixture import emit_workload
@@ -44,9 +51,15 @@ def sample(
             "columns": columns,
             "rows": rows,
             "output_lines": output_lines,
+            "pty_response_ms": 1.0,
         },
         "fixture_ready": {"columns": ready_columns, "rows": ready_rows},
         "window_geometry": {"width": width, "height": height},
+        "startup_to_visible_ms": 2.0,
+        "resources": {
+            "rss_kib": 100, "idle_cpu_percent_one_core": 0.0,
+            "measurement_status": {"rss_kib": "complete", "idle_cpu_percent_one_core": "complete"},
+        },
     }
 
 
@@ -253,9 +266,171 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
         parsed = stat_fields(os.getpid())
         self.assertIsNotNone(parsed)
         snapshot = process_tree_sample({os.getpid()})
+        self.assertEqual(snapshot["status"], "complete")
+        self.assertEqual(snapshot["errors"], [])
         self.assertEqual(snapshot["pids"], [os.getpid()])
         self.assertGreater(snapshot["rss_kib"], 0)
         self.assertGreaterEqual(snapshot["threads"], 1)
+
+    def test_resource_status_requires_unique_exact_fields_and_units(self):
+        self.assertEqual(parse_resource_status("VmRSS:\t0 kB\nThreads:\t1\n"), (0, 1))
+        for text in [
+            "Threads: 1\n", "VmRSS: 100 kB\n", "VmRSS: 100 MB\nThreads: 1\n",
+            "VmRSS: -1 kB\nThreads: 1\n", "VmRSS: 1.5 kB\nThreads: 1\n",
+            "VmRSS: 10 kB\nVmRSS: 20 kB\nThreads: 1\n",
+            "VmRSS: 10 kB\nThreads: 1\nThreads: 2\n",
+            "VmRSS: 10 kB\nThreads: 0\n", "VmRSS: 10 kB\nThreads: true\n",
+        ]:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_resource_status(text)
+
+    def test_partial_process_read_never_publishes_partial_tree_totals(self):
+        def descriptors(path):
+            if path.parent.name == "2":
+                raise PermissionError("injected fd access denial")
+            return iter([Path("0"), Path("1")])
+
+        with patch("scripts.compare_terminals.stat_fields", return_value=(1, 1, 10, 100)), \
+                patch.object(Path, "read_text", return_value="VmRSS: 100 kB\nThreads: 2\n"), \
+                patch.object(Path, "iterdir", descriptors):
+            observed = process_tree_sample({1, 2})
+        self.assertEqual(observed["status"], "unavailable")
+        self.assertEqual(observed["requested_pids"], [1, 2])
+        self.assertEqual(observed["pids"], [1])
+        self.assertEqual(observed["identities"], [
+            {"pid": 1, "start_time_ticks": 100}, {"pid": 2, "start_time_ticks": 100},
+        ])
+        self.assertEqual(observed["processes"][0]["rss_kib"], 100)
+        for name in ("rss_kib", "threads", "fds", "cpu_ticks"):
+            self.assertIsNone(observed[name])
+        self.assertIn("pid 2", observed["errors"][0])
+
+    def test_process_identity_counter_and_status_failures_are_unavailable(self):
+        for stat_values, status in [
+            ([None], "VmRSS: 100 kB\nThreads: 1\n"),
+            ([(1, 1, -1, 100)], "VmRSS: 100 kB\nThreads: 1\n"),
+            ([(1, 1, 10, -1)], "VmRSS: 100 kB\nThreads: 1\n"),
+            ([(1, 1, 10, 100), None], "VmRSS: 100 kB\nThreads: 1\n"),
+            ([(1, 1, 10, 100), (1, 1, 10, 200)], "VmRSS: 100 kB\nThreads: 1\n"),
+            ([(1, 1, 10, 100), (1, 1, 9, 100)], "VmRSS: 100 kB\nThreads: 1\n"),
+            ([(1, 1, 10, 100)], "Threads: 1\n"),
+        ]:
+            with self.subTest(stat_values=stat_values, status=status), \
+                    patch("scripts.compare_terminals.stat_fields", side_effect=stat_values), \
+                    patch.object(Path, "read_text", return_value=status), \
+                    patch.object(Path, "iterdir", return_value=iter([])):
+                observed = process_tree_sample({1})
+            self.assertEqual(observed["status"], "unavailable")
+            self.assertEqual(observed["processes"], [])
+            self.assertIsNone(observed["rss_kib"])
+        self.assertEqual(process_tree_sample(set())["status"], "unavailable")
+
+    def test_complete_resource_totals_are_recounted_from_all_observed_processes(self):
+        with patch("scripts.compare_terminals.stat_fields", side_effect=lambda pid: (1, 1, pid * 10, pid * 100)), \
+                patch.object(Path, "read_text", return_value="VmRSS: 100 kB\nThreads: 2\n"), \
+                patch.object(Path, "iterdir", side_effect=lambda: iter([Path("0"), Path("1")])):
+            observed = process_tree_sample({1, 2})
+        self.assertEqual(observed["status"], "complete")
+        self.assertEqual(observed["pids"], [1, 2])
+        for name, total in [("rss_kib", 200), ("threads", 4), ("fds", 4), ("cpu_ticks", 30)]:
+            self.assertEqual(observed[name], total)
+            self.assertEqual(observed[name], sum(process[name] for process in observed["processes"]))
+
+    def test_discovery_denial_is_explicit_not_an_empty_process_tree(self):
+        with patch.object(Path, "iterdir", side_effect=PermissionError("denied")):
+            with self.assertRaises(PermissionError):
+                direct_children(1)
+        with patch("scripts.compare_terminals.benchmark_pids", side_effect=PermissionError("denied")):
+            observed = terminal_resources(1, 2, 3)
+        self.assertEqual(observed["status"], "unavailable")
+        self.assertIsNone(observed["rss_kib"])
+        self.assertIn("discovery unavailable", observed["errors"][0])
+
+    def test_idle_cpu_requires_the_same_complete_identities_and_monotonic_counters(self):
+        def observation(*records):
+            return {"status": "complete", "processes": [
+                {"pid": pid, "start_time_ticks": start, "cpu_ticks": ticks}
+                for pid, start, ticks in records
+            ]}
+        before = observation((1, 100, 10), (2, 200, 20))
+        self.assertEqual(idle_cpu_measurement(before, before, 1.0, 100), (0.0, []))
+        self.assertEqual(idle_cpu_measurement(before, observation((1, 100, 11), (2, 200, 23)), 2.0, 100), (2.0, []))
+        for after in [
+            observation(), observation((1, 100, 10)),
+            observation((1, 100, 10), (2, 200, 20), (3, 300, 1)),
+            observation((1, 101, 10), (2, 200, 20)),
+            observation((1, 100, 9), (2, 200, 99)),
+            {"status": "unavailable", "processes": []},
+        ]:
+            value, reasons = idle_cpu_measurement(before, after, 1.0, 100)
+            self.assertIsNone(value)
+            self.assertTrue(reasons)
+        for elapsed, frequency in [(0, 100), (float("nan"), 100), (1, 0)]:
+            self.assertIsNone(idle_cpu_measurement(before, before, elapsed, frequency)[0])
+
+    def test_missing_resource_samples_block_only_the_affected_metric(self):
+        for metric in ("rss_kib", "idle_cpu_percent_one_core"):
+            other = "rss_kib" if metric != "rss_kib" else "idle_cpu_percent_one_core"
+            for invalid in (None, -1, float("nan"), float("inf"), True):
+                first = sample()
+                first["resources"][metric] = invalid
+                report = comparison_contract([terminal("termeric", first), terminal("kitty", sample())], SETTINGS)
+                self.assertFalse(report["ranking_permitted"][metric])
+                for unaffected in (other, "startup_to_visible_ms", "pty_response_ms"):
+                    self.assertTrue(report["ranking_permitted"][unaffected])
+            first = sample()
+            del first["resources"]["measurement_status"]
+            report = comparison_contract([terminal("termeric", first), terminal("kitty", sample())], SETTINGS)
+            self.assertFalse(report["ranking_permitted"][metric])
+        report = comparison_contract([terminal("termeric", sample()), terminal("kitty", sample())], SETTINGS)
+        self.assertTrue(report["comparable"])
+
+    def test_resource_summary_does_not_cherry_pick_complete_samples(self):
+        first, second = sample(), sample()
+        second["resources"]["rss_kib"] = None
+        second["resources"]["measurement_status"]["rss_kib"] = "unavailable"
+        summary = terminal_summary([first, second])
+        self.assertEqual(summary["rss_kib"]["status"], "unavailable")
+        self.assertEqual(summary["rss_kib"]["samples"], [100.0, None])
+        self.assertTrue(all(value is None for value in summary["rss_kib"]["statistics"].values()))
+        self.assertEqual(summary["idle_cpu_percent_one_core"]["statistics"]["median"], 0.0)
+        self.assertEqual(summary["startup_to_visible_ms"]["statistics"]["median"], 2.0)
+
+    def test_sample_keeps_valid_timings_and_cleanup_when_resource_read_is_unavailable(self):
+        before = {
+            "status": "unavailable", "processes": [], "errors": ["denied"],
+            "identities": [{"pid": 122, "start_time_ticks": 9}],
+        }
+        after = {
+            "status": "complete", "pids": [123], "errors": [],
+            "rss_kib": 100, "threads": 1, "fds": 2, "cpu_ticks": 3,
+            "processes": [{"pid": 123, "start_time_ticks": 10, "cpu_ticks": 3}],
+            "identities": [{"pid": 123, "start_time_ticks": 10}],
+        }
+        ready = {**sample()["fixture_ready"], "pid": 124}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch("scripts.compare_terminals.subprocess.Popen") as launch, \
+                patch("scripts.compare_terminals.wait_for_file", side_effect=[ready, sample()["fixture"]]), \
+                patch("scripts.compare_terminals.find_window", return_value=("42", 123, 10.5)), \
+                patch("scripts.compare_terminals.window_geometry", return_value=sample()["window_geometry"]), \
+                patch("scripts.compare_terminals.terminal_resources", side_effect=[before, after]), \
+                patch("scripts.compare_terminals.stat_fields", return_value=(124, 124, 0, 20)), \
+                patch("scripts.compare_terminals.time.monotonic", side_effect=[10.0, 11.0, 12.0]), \
+                patch("scripts.compare_terminals.time.sleep"), \
+                patch("scripts.compare_terminals.terminate_run") as cleanup:
+            launch.return_value.pid = 123
+            result, _ = run_sample(
+                "kitty", "/fixture/kitty", Path(temporary) / "sample", SETTINGS,
+                1024, 20.0, 1.0, {"DISPLAY": ":99"},
+            )
+        self.assertEqual(result["startup_to_visible_ms"], 500.0)
+        self.assertEqual(result["fixture"]["pty_response_ms"], 1.0)
+        self.assertEqual(result["resources"]["rss_kib"], 100)
+        self.assertIsNone(result["resources"]["idle_cpu_percent_one_core"])
+        self.assertEqual(result["resources"]["measurement_status"]["idle_cpu_percent_one_core"], "unavailable")
+        self.assertEqual(result["resources"]["observations"], {"before": before, "after": after})
+        cleanup.assert_called_once()
+        self.assertEqual(cleanup.call_args.args[3], {122: 9, 123: 10, 124: 20})
 
 
 if __name__ == "__main__":

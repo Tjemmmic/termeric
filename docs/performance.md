@@ -517,6 +517,36 @@ startup and OSC-title parsing. CPU is percent of one logical core, and RSS is a
 sum across the observed terminal process tree rather than the launcher PID
 alone.
 
+Schema **2** makes resource observations explicitly complete or unavailable.
+Every discovered terminal PID must yield unique, valid RSS/thread fields,
+readable descriptor counts, and matching Linux start-time identities before and
+after its observation. Missing RSS is not zero, and an unreadable process does
+not disappear from the aggregate. Failed discovery or any incomplete process
+observation leaves the tree totals `null`, with reasons and successfully read
+per-process diagnostics retained. The common fixture is still excluded from
+resource totals and retained separately for cleanup. Known PID/start-time
+identities also remain available to cleanup when later RSS or descriptor reads
+fail; metric ineligibility does not discard process-lifecycle bookkeeping.
+
+Idle CPU requires two complete observations of the same PID/start-time set and
+nondecreasing counters for every process. Membership changes, PID reuse,
+counter decreases, and incomplete observations produce an unavailable CPU row,
+not a zero-clamped delta or a subtraction across different process trees. A
+complete final RSS snapshot can remain usable even when the idle interval is
+not. Resource summaries retain missing samples as `null` and do not compute
+statistics from a cherry-picked subset. Each metric's comparison contract also
+requires explicit complete measurement status and finite, nonnegative values;
+usable startup/PTY timing rows are independent of resource-read failures.
+
+These checks cover the discovered trees at the two observation points, not an
+atomic `/proc` snapshot or CPU used by helpers born and exited entirely between
+them. RSS remains summed resident mappings, not proportional or private memory,
+and these observations do not measure peak allocation or GPU memory. Synthetic
+read/discovery denial, exit/reuse/churn/counter, partial-summary, and launch-path
+tests plus a live self-process read exercise this contract without launching an
+external terminal or provider. Older schema-1 resource totals lack this evidence
+and are not upgraded into schema-2 measurements.
+
 Comparison is fail closed per metric. Initial-grid drift blocks startup
 ranking; final-grid or retention drift blocks PTY ranking; native-window pixel
 drift additionally blocks RSS/idle-CPU ranking. Raw samples remain useful when

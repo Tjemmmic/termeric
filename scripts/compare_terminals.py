@@ -518,22 +518,22 @@ def stat_fields(pid: int) -> tuple[int, int, int, int] | None:
         text = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
         fields = text[text.rfind(")") + 2 :].split()
         return int(fields[2]), int(fields[3]), int(fields[11]) + int(fields[12]), int(fields[19])
-    except (FileNotFoundError, IndexError, ValueError):
+    except (OSError, IndexError, ValueError):
         return None
 
 
 def direct_children(pid: int) -> set[int]:
     children: set[int] = set()
     task_dir = Path("/proc") / str(pid) / "task"
-    try:
-        tasks = list(task_dir.iterdir())
-    except (FileNotFoundError, PermissionError):
-        return children
+    tasks = list(task_dir.iterdir())
     for task in tasks:
         try:
             children.update(int(value) for value in (task / "children").read_text().split())
-        except (FileNotFoundError, PermissionError, ValueError):
-            continue
+        except FileNotFoundError:
+            # A vanished thread is normal; a still-present thread with an
+            # unreadable children file is not evidence of an empty subtree.
+            if task.exists():
+                raise
     return children
 
 
@@ -545,7 +545,7 @@ def descendants(roots: set[int]) -> set[int]:
             if child not in observed:
                 observed.add(child)
                 pending.append(child)
-    return {pid for pid in observed if Path("/proc", str(pid)).exists()}
+    return observed
 
 
 def benchmark_pids(launcher_pid: int, window_pid: int, fixture_pid: int) -> set[int]:
@@ -563,31 +563,107 @@ def benchmark_pids(launcher_pid: int, window_pid: int, fixture_pid: int) -> set[
     return owned - fixture_tree
 
 
+def unavailable_resources(reason: str) -> dict[str, Any]:
+    return {
+        "status": "unavailable", "pids": [], "processes": [], "identities": [],
+        "rss_kib": None, "threads": None, "fds": None, "cpu_ticks": None,
+        "errors": [reason],
+    }
+
+
+def parse_resource_status(text: str) -> tuple[int, int]:
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        label, separator, value = line.partition(":")
+        if not separator or label not in {"VmRSS", "Threads"}:
+            continue
+        pattern = r"([0-9]+)\s+kB" if label == "VmRSS" else r"([0-9]+)"
+        match = re.fullmatch(pattern, value.strip())
+        if label in values or match is None:
+            raise ValueError(f"invalid or duplicate {label}")
+        values[label] = int(match[1])
+    if set(values) != {"VmRSS", "Threads"} or values["Threads"] < 1:
+        raise ValueError("missing RSS or positive thread count")
+    return values["VmRSS"], values["Threads"]
+
+
 def process_tree_sample(pids: set[int]) -> dict[str, Any]:
-    rss_kib = 0
-    cpu_ticks = 0
-    threads = 0
-    fds = 0
-    live = []
+    if not pids:
+        return unavailable_resources("no terminal processes were observed")
+    processes = []
+    identities = []
+    errors = []
     for pid in sorted(pids):
         proc = Path("/proc") / str(pid)
-        parsed = stat_fields(pid)
-        if parsed is None:
-            continue
         try:
-            status = {
-                line.split(":", 1)[0]: line.split(":", 1)[1].strip()
-                for line in (proc / "status").read_text(encoding="utf-8").splitlines()
-                if ":" in line
-            }
-            rss_kib += int(status.get("VmRSS", "0 kB").split()[0])
-            threads += int(status.get("Threads", "0"))
-            fds += len(list((proc / "fd").iterdir()))
-        except (FileNotFoundError, PermissionError, ValueError):
+            before = stat_fields(pid)
+            if before is None or before[2] < 0 or before[3] < 0:
+                raise ValueError("process stat unavailable")
+            # Cleanup must not depend on successful RSS or descriptor reads.
+            # Its existing PID/start-time revalidation still prevents signaling
+            # a replacement process if this identity subsequently disappears.
+            identities.append({"pid": pid, "start_time_ticks": before[3]})
+            rss, threads = parse_resource_status((proc / "status").read_text(encoding="utf-8"))
+            fds = len(list((proc / "fd").iterdir()))
+            after = stat_fields(pid)
+            if after is None or before[3] != after[3] or after[2] < before[2]:
+                raise ValueError("process identity or CPU counter changed during observation")
+        except (OSError, ValueError) as error:
+            errors.append(f"pid {pid}: resource observation unavailable ({type(error).__name__})")
             continue
-        cpu_ticks += parsed[2]
-        live.append(pid)
-    return {"pids": live, "rss_kib": rss_kib, "threads": threads, "fds": fds, "cpu_ticks": cpu_ticks}
+        processes.append({
+            "pid": pid, "start_time_ticks": after[3], "cpu_ticks": after[2],
+            "rss_kib": rss, "threads": threads, "fds": fds,
+        })
+    result = {
+        "status": "unavailable" if errors else "complete",
+        "pids": [process["pid"] for process in processes],
+        "requested_pids": sorted(pids), "processes": processes,
+        "identities": identities, "errors": errors,
+    }
+    for metric in ("rss_kib", "threads", "fds", "cpu_ticks"):
+        # Retain per-process diagnostics, but never rank a partial tree total.
+        result[metric] = None if errors else sum(process[metric] for process in processes)
+    return result
+
+
+def terminal_resources(launcher_pid: int, window_pid: int, fixture_pid: int) -> dict[str, Any]:
+    try:
+        return process_tree_sample(benchmark_pids(launcher_pid, window_pid, fixture_pid))
+    except (OSError, ValueError) as error:
+        return unavailable_resources(f"process-tree discovery unavailable ({type(error).__name__})")
+
+
+def idle_cpu_measurement(
+    before: dict[str, Any], after: dict[str, Any], elapsed: float, clock_ticks: int,
+) -> tuple[float | None, list[str]]:
+    if before["status"] != "complete" or after["status"] != "complete":
+        return None, ["idle interval has an incomplete process observation"]
+    old = {process["pid"]: process for process in before["processes"]}
+    new = {process["pid"]: process for process in after["processes"]}
+    if not old or old.keys() != new.keys():
+        return None, ["terminal process membership changed during idle interval"]
+    delta = 0
+    for pid, process in new.items():
+        previous = old[pid]
+        if process["start_time_ticks"] != previous["start_time_ticks"]:
+            return None, ["terminal process identity changed during idle interval"]
+        change = process["cpu_ticks"] - previous["cpu_ticks"]
+        if change < 0:
+            return None, ["terminal CPU counter decreased during idle interval"]
+        delta += change
+    if not math.isfinite(elapsed) or elapsed <= 0 or clock_ticks <= 0:
+        return None, ["invalid idle sampling duration or clock frequency"]
+    return delta / clock_ticks / elapsed * 100.0, []
+
+
+def metric_available(resources: dict[str, Any], name: str) -> bool:
+    value = resources.get(name)
+    statuses = resources.get("measurement_status")
+    return (
+        isinstance(statuses, dict) and statuses.get(name) == "complete"
+        and type(value) in (int, float) and math.isfinite(value) and value >= 0
+    )
 
 
 def terminate_run(
@@ -694,6 +770,16 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
     resource_reasons = list(pty_reasons)
     if len(observed_pixels) > 1:
         resource_reasons.append("observed native-window pixel sizes differ across samples")
+    resource_metric_reasons = {}
+    for metric in ("rss_kib", "idle_cpu_percent_one_core"):
+        reasons = list(resource_reasons)
+        for terminal in completed:
+            if not terminal["samples"] or any(
+                not metric_available(sample.get("resources", {}), metric)
+                for sample in terminal["samples"]
+            ):
+                reasons.append(f"{terminal['terminal']}: incomplete {metric} observation")
+        resource_metric_reasons[metric] = reasons
     metric_contracts = {
         "startup_to_visible_ms": {
             "comparable": not startup_reasons,
@@ -704,12 +790,12 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
             "reasons": sorted(set(pty_reasons)),
         },
         "rss_kib": {
-            "comparable": not resource_reasons,
-            "reasons": sorted(set(resource_reasons)),
+            "comparable": not resource_metric_reasons["rss_kib"],
+            "reasons": sorted(set(resource_metric_reasons["rss_kib"])),
         },
         "idle_cpu_percent_one_core": {
-            "comparable": not resource_reasons,
-            "reasons": sorted(set(resource_reasons)),
+            "comparable": not resource_metric_reasons["idle_cpu_percent_one_core"],
+            "reasons": sorted(set(resource_metric_reasons["idle_cpu_percent_one_core"])),
         },
     }
     reasons = sorted(
@@ -782,20 +868,20 @@ def run_sample(
             time.sleep(0.1)
         (run_dir / "gate").touch()
         fixture_result = wait_for_file(run_dir / "fixture.json", process, timeout)
-        owned = benchmark_pids(process.pid, window_pid, int(ready["pid"]))
+        before = terminal_resources(process.pid, window_pid, int(ready["pid"]))
         tracked = {
-            pid: parsed[3]
-            for pid in owned | {int(ready["pid"])}
-            if (parsed := stat_fields(pid)) is not None
+            item["pid"]: item["start_time_ticks"] for item in before["identities"]
         }
-        before = process_tree_sample(owned)
+        fixture_stat = stat_fields(int(ready["pid"]))
+        if fixture_stat is not None:
+            tracked[int(ready["pid"])] = fixture_stat[3]
         idle_started = time.monotonic()
         time.sleep(idle_seconds)
         elapsed = time.monotonic() - idle_started
-        owned |= benchmark_pids(process.pid, window_pid, int(ready["pid"]))
-        after = process_tree_sample(owned)
+        after = terminal_resources(process.pid, window_pid, int(ready["pid"]))
+        tracked.update({item["pid"]: item["start_time_ticks"] for item in after["identities"]})
         clock_ticks = os.sysconf("SC_CLK_TCK")
-        idle_cpu = max(0.0, after["cpu_ticks"] - before["cpu_ticks"]) / clock_ticks / elapsed * 100.0
+        idle_cpu, cpu_errors = idle_cpu_measurement(before, after, elapsed, clock_ticks)
         sample = {
             "startup_to_visible_ms": (visible_at - started) * 1000.0,
             "fixture": fixture_result,
@@ -810,6 +896,12 @@ def run_sample(
                 "idle_cpu_percent_one_core": idle_cpu,
                 "accounted_pids": after["pids"],
                 "fixture_pid_excluded": int(ready["pid"]),
+                "measurement_status": {
+                    "rss_kib": after["status"],
+                    "idle_cpu_percent_one_core": "complete" if idle_cpu is not None else "unavailable",
+                },
+                "unavailable_reasons": {"rss_kib": after["errors"], "idle_cpu_percent_one_core": cpu_errors},
+                "observations": {"before": before, "after": after},
             },
         }
         return sample, spec.controls
@@ -823,12 +915,19 @@ def terminal_summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
     fields = {
         "startup_to_visible_ms": [float(sample["startup_to_visible_ms"]) for sample in samples],
         "pty_response_ms": [float(sample["fixture"]["pty_response_ms"]) for sample in samples],
-        "rss_kib": [float(sample["resources"]["rss_kib"]) for sample in samples],
-        "idle_cpu_percent_one_core": [
-            float(sample["resources"]["idle_cpu_percent_one_core"]) for sample in samples
-        ],
     }
-    return {name: {"samples": values, "statistics": summarize(values)} for name, values in fields.items()}
+    result = {name: {"samples": values, "statistics": summarize(values)} for name, values in fields.items()}
+    for name in ("rss_kib", "idle_cpu_percent_one_core"):
+        values = [
+            float(sample["resources"][name]) if metric_available(sample["resources"], name) else None
+            for sample in samples
+        ]
+        complete = bool(values) and all(value is not None for value in values)
+        result[name] = {
+            "samples": values, "statistics": summarize(values if complete else []),
+            "status": "complete" if complete else "unavailable",
+        }
+    return result
 
 
 def main() -> int:
@@ -983,7 +1082,7 @@ def main() -> int:
 
     contract = comparison_contract(terminals, settings)
     report = {
-        "schema": 1,
+        "schema": 2,
         "run_id": run_id,
         "run_artifacts": str(run_root),
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1020,8 +1119,8 @@ def main() -> int:
         "metric_boundaries": {
             "startup_to_visible_ms": "process launch through a visible X11 window containing the unique OSC 2 title marker; includes child startup and title parsing",
             "pty_response_ms": "child begins exact byte stream through receipt of CSI 6 n response; excludes proof of compositor presentation",
-            "rss_kib": "sum of terminal process-tree RSS after workload, excluding the common fixture process",
-            "idle_cpu_percent_one_core": "terminal process-tree CPU during post-workload idle, excluding the common fixture process",
+            "rss_kib": "sum of completely observed terminal process-tree RSS after workload, excluding the common fixture; incomplete observations are unavailable, never zero or partial totals",
+            "idle_cpu_percent_one_core": "CPU delta of the same observed terminal PID/start-time identities across post-workload idle, excluding the common fixture; incomplete observations or process churn are unavailable",
         },
         "comparison_contract": contract,
         "round_orders": round_orders,
