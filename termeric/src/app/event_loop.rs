@@ -1843,8 +1843,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // Every remaining modal/context surface owns the wheel while
                 // visible, even when it has no scroll action of its own.
-                if self.commands_panel.is_open()
-                    || self.session_panel.is_open()
+                if self.session_panel.is_open()
                     || self.session_dropdown_open
                     || self.info_overlay.is_active()
                     || self.diff_review.is_active()
@@ -1857,6 +1856,9 @@ impl ApplicationHandler<AppEvent> for App {
                         .as_ref()
                         .is_some_and(|harvest| harvest.sprout_menu.is_some())
                 {
+                    return;
+                }
+                if self.handle_commands_panel_scroll(delta) {
                     return;
                 }
                 let scroll_speed = self.config.scrollback.scroll_speed;

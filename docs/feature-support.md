@@ -404,6 +404,15 @@ the shell or retained editors. Headless and raw-PTY tests cover frontmost input,
 blocked transitions, draft preservation, and rename resumption after dismissal;
 native desktop acceptance remains separate (see [input contract](accessibility-and-input.md)).
 
+Custom-command lists now scroll by wheel/trackpad through a shared whole-row
+viewport, keeping painting, hover, and Run/Delete targets aligned at absolute
+command indices. Resize/form/config changes clamp the effective range, reopening
+resets it, and scrolling preserves drafts and composition. Accessible list
+scrolling and exact-identity focus reveal are covered alongside geometry/model
+and raw-PTY isolation tests, without executing or persisting commands. Native
+trackpad/screen-reader acceptance remains deferred; keyboard-only browse action
+navigation remains absent (see [input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected

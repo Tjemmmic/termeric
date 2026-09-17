@@ -27,7 +27,8 @@ impl Renderer {
             anim,
             info.edit_mode != EditMode::Browse,
             info.commands.len(),
-        );
+        )
+        .scrolled(info.scroll_offset);
         let panel_width = layout.panel.width;
         let panel_x = layout.panel.x;
         let padding = layout.padding;
@@ -362,13 +363,22 @@ impl Renderer {
         // ── Section label ──
         if !info.commands.is_empty() {
             let section_y = list_start_y;
-            let section_label = if info.commands.len() == 1 {
+            let section_label = if layout.visible_count < info.commands.len() {
+                let range = layout.visible_range();
+                format!(
+                    "{}–{} / {} · scroll",
+                    if range.is_empty() { 0 } else { range.start + 1 },
+                    range.end,
+                    info.commands.len()
+                )
+            } else if info.commands.len() == 1 {
                 "1 command".to_string()
             } else {
                 format!("{} commands", info.commands.len())
             };
             let sx = panel_x + padding;
-            for (i, c) in section_label.chars().enumerate() {
+            let label_cells = ((panel_width - padding * 2.0).max(0.0) / ui_cw) as usize;
+            for (i, c) in section_label.chars().take(label_cells).enumerate() {
                 self.text_pipeline
                     .push_char(c, sx + i as f32 * ui_cw, section_y, dim_color);
             }
@@ -402,7 +412,8 @@ impl Renderer {
             }
         }
 
-        for (i, cmd) in info.commands.iter().enumerate() {
+        for i in layout.visible_range() {
+            let cmd = &info.commands[i];
             let item_y = layout.command_row(i).y;
 
             // Hover highlight (full row)
@@ -543,7 +554,8 @@ impl Renderer {
             info.animation,
             info.edit_mode != EditMode::Browse,
             info.commands.len(),
-        );
+        )
+        .scrolled(info.scroll_offset);
 
         // Click outside panel = close
         if x < layout.panel.x {
@@ -578,16 +590,7 @@ impl Renderer {
         }
 
         // Command rows
-        for i in 0..info.commands.len() {
-            if layout.command_delete(i).contains(x, y) {
-                return CommandsPanelAction::Delete(i);
-            }
-            if layout.command_run(i).contains(x, y) {
-                return CommandsPanelAction::Run(i);
-            }
-        }
-
-        CommandsPanelAction::None
+        layout.row_action(x, y)
     }
 
     pub(super) fn build_session_management_panel(

@@ -53,6 +53,8 @@ pub enum EditMode {
 pub struct CommandsPanel {
     /// Animation state
     animation: PanelAnimation,
+    /// First requested list row; geometry clamps this after resize/config changes.
+    scroll_offset: usize,
     /// Mouse-hovered command index (None if not hovering a row)
     pub hovered_index: Option<usize>,
     /// Whether hovering the "Add Command" button
@@ -72,6 +74,7 @@ pub struct CommandsPanel {
 pub struct CommandsPanelInfo {
     /// Animation progress (0.0 = hidden, 1.0 = fully visible)
     pub animation: f32,
+    pub scroll_offset: usize,
     /// List of commands to display
     pub commands: Vec<CustomCommand>,
     /// Mouse-hovered command row index
@@ -131,6 +134,9 @@ pub struct CommandsPanelLayout {
     pub row_height: f32,
     pub cell_width: f32,
     pub cell_height: f32,
+    pub scroll_offset: usize,
+    pub visible_count: usize,
+    command_count: usize,
 }
 
 impl CommandsPanelLayout {
@@ -293,13 +299,57 @@ impl CommandsPanelLayout {
             row_height: cell_height * 3.0,
             cell_width,
             cell_height,
+            scroll_offset: 0,
+            visible_count: (((window_height - list_start_y).max(0.0) / (cell_height * 3.0)).floor()
+                as usize)
+                .min(command_count),
+            command_count,
         }
     }
 
+    /// Whole rows only: no clipped command may expose an invisible Run/Delete target.
+    pub fn scrolled(mut self, offset: usize) -> Self {
+        self.scroll_offset = if self.visible_count == 0 {
+            0
+        } else {
+            offset.min(self.command_count.saturating_sub(self.visible_count))
+        };
+        self
+    }
+
+    pub fn visible_range(self) -> std::ops::Range<usize> {
+        self.scroll_offset..self.scroll_offset + self.visible_count
+    }
+
+    /// Resolve only painted rows, preserving their absolute command identity.
+    pub fn row_action(self, x: f32, y: f32) -> CommandsPanelAction {
+        if !self.panel.contains(x, y) {
+            return CommandsPanelAction::None;
+        }
+        for index in self.visible_range() {
+            let row = self.command_row(index);
+            if y < row.y || y >= row.y + row.height {
+                continue;
+            }
+            if self.command_delete(index).contains(x, y) {
+                return CommandsPanelAction::Delete(index);
+            }
+            if self.command_run(index).contains(x, y) {
+                return CommandsPanelAction::Run(index);
+            }
+        }
+        CommandsPanelAction::None
+    }
+
     pub fn command_row(self, index: usize) -> CommandsPanelRect {
+        let relative = if index >= self.scroll_offset {
+            (index - self.scroll_offset) as f32
+        } else {
+            -((self.scroll_offset - index) as f32)
+        };
         CommandsPanelRect {
             x: self.panel.x,
-            y: self.list_start_y + index as f32 * self.row_height,
+            y: self.list_start_y + relative * self.row_height,
             width: self.panel.width,
             height: self.row_height,
         }
@@ -333,6 +383,7 @@ impl CommandsPanel {
     pub fn new() -> Self {
         Self {
             animation: PanelAnimation::with_duration(0.25),
+            scroll_offset: 0,
             hovered_index: None,
             hovered_add: false,
             hovered_delete: None,
@@ -346,6 +397,7 @@ impl CommandsPanel {
     pub fn toggle(&mut self) {
         self.cancel_edit();
         if !self.animation.is_open() {
+            self.scroll_offset = 0;
             // Reset hover state when opening
             self.hovered_index = None;
             self.hovered_add = false;
@@ -396,6 +448,60 @@ impl CommandsPanel {
         self.hovered_index = index;
         self.hovered_add = add;
         self.hovered_delete = delete;
+    }
+
+    pub fn layout(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+        command_count: usize,
+    ) -> CommandsPanelLayout {
+        CommandsPanelLayout::calculate(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            self.animation_progress(),
+            self.is_editing(),
+            command_count,
+        )
+        .scrolled(self.scroll_offset)
+    }
+
+    /// Scroll against current geometry, not a stale row count from a previous frame.
+    pub fn scroll_rows(&mut self, delta: isize, layout: CommandsPanelLayout) -> bool {
+        if !self.is_open() || delta == 0 || layout.visible_count == 0 {
+            return false;
+        }
+        let current = layout.scrolled(self.scroll_offset).scroll_offset;
+        let next = layout
+            .scrolled(current.saturating_add_signed(delta))
+            .scroll_offset;
+        self.scroll_offset = next;
+        if next == current {
+            return false;
+        }
+        self.set_hover(None, false, None);
+        true
+    }
+
+    /// Assistive focus must bring the exact revalidated command into the viewport.
+    pub fn reveal_row(&mut self, index: usize, layout: CommandsPanelLayout) -> bool {
+        if !self.is_open() || index >= layout.command_count || layout.visible_count == 0 {
+            return false;
+        }
+        let current = layout.scrolled(self.scroll_offset);
+        self.scroll_offset = if index < current.scroll_offset {
+            index
+        } else if index >= current.visible_range().end {
+            index + 1 - current.visible_count
+        } else {
+            current.scroll_offset
+        };
+        self.set_hover(None, false, None);
+        true
     }
 
     // ── Inline form editing ──
@@ -557,6 +663,7 @@ impl CommandsPanel {
     pub fn build_info(&self, commands: &[CustomCommand]) -> CommandsPanelInfo {
         CommandsPanelInfo {
             animation: self.animation_progress(),
+            scroll_offset: self.scroll_offset,
             commands: commands.to_vec(),
             hovered_index: self.hovered_index,
             hovered_add: self.hovered_add,
@@ -576,6 +683,113 @@ impl CommandsPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrolled_rows_share_visible_run_delete_geometry_at_all_panel_sizes() {
+        for (width, height, cell) in [
+            (800.0, 600.0, 8.0),
+            (1600.0, 1200.0, 16.0),
+            (800.0, 180.0, 8.0),
+        ] {
+            for editing in [false, true] {
+                for animation in [0.25, 1.0] {
+                    for count in [0, 1, 100] {
+                        let layout = CommandsPanelLayout::calculate(
+                            width,
+                            height,
+                            cell,
+                            cell * 2.0,
+                            animation,
+                            editing,
+                            count,
+                        )
+                        .scrolled(usize::MAX);
+                        assert!(layout.visible_range().end <= count);
+                        if layout.visible_count > 0 {
+                            assert_eq!(layout.visible_range().end, count);
+                        }
+                        for index in layout.visible_range() {
+                            let row = layout.command_row(index);
+                            assert!(row.y >= layout.list_start_y);
+                            assert!(row.y + row.height <= height);
+                            let run = layout.command_run(index);
+                            let delete = layout.command_delete(index);
+                            let y = row.y + row.height / 2.0;
+                            assert!(
+                                matches!(layout.row_action(run.x + 1.0, y), CommandsPanelAction::Run(i) if i == index)
+                            );
+                            // During sliding, the delete button may still be outside the window.
+                            if delete.x + delete.width / 2.0 <= width {
+                                assert!(
+                                    matches!(layout.row_action(delete.x + delete.width / 2.0, y), CommandsPanelAction::Delete(i) if i == index)
+                                );
+                            }
+                        }
+                        for (x, y) in [
+                            (layout.panel.x + 1.0, layout.list_start_y - 1.0),
+                            (
+                                layout.panel.x + 1.0,
+                                layout.list_start_y
+                                    + layout.visible_count as f32 * layout.row_height,
+                            ),
+                            (layout.panel.x - 1.0, layout.list_start_y),
+                            (
+                                layout.panel.x + layout.panel.width + 1.0,
+                                layout.list_start_y,
+                            ),
+                            (f32::NAN, layout.list_start_y),
+                        ] {
+                            assert!(matches!(layout.row_action(x, y), CommandsPanelAction::None));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn command_scroll_clamps_after_resize_form_and_inventory_changes_and_resets_on_open() {
+        let layout = |height, editing, count| {
+            CommandsPanelLayout::calculate(800.0, height, 8.0, 16.0, 1.0, editing, count)
+        };
+        let mut panel = CommandsPanel::new();
+        assert!(!panel.scroll_rows(1, layout(600.0, false, 100)));
+        panel.toggle();
+        panel.set_hover(Some(0), true, Some(0));
+        assert!(panel.scroll_rows(isize::MAX, layout(600.0, false, 100)));
+        assert_eq!(
+            panel.scroll_offset,
+            100 - layout(600.0, false, 100).visible_count
+        );
+        assert_eq!(panel.hovered_index, None);
+        assert_eq!(panel.hovered_delete, None);
+        assert!(!panel.hovered_add);
+        assert!(!panel.scroll_rows(1, layout(600.0, false, 100)));
+        assert!(panel.scroll_rows(isize::MIN, layout(600.0, false, 100)));
+        assert_eq!(panel.scroll_offset, 0);
+        assert!(panel.reveal_row(99, layout(600.0, false, 100)));
+        let old_offset = panel.scroll_offset;
+        assert!(!panel.reveal_row(100, layout(600.0, false, 100)));
+        assert_eq!(panel.scroll_offset, old_offset);
+        panel.start_add();
+        panel.form_name.replace("kept draft");
+        assert!(panel.reveal_row(99, layout(600.0, true, 100)));
+        assert!(panel.scroll_offset > old_offset);
+        assert_eq!(panel.form_name.text(), "kept draft");
+        let tiny = layout(100.0, true, 100).scrolled(panel.scroll_offset);
+        assert!(tiny.visible_range().is_empty());
+        assert!(!panel.scroll_rows(-1, tiny));
+        assert!(!panel.reveal_row(99, tiny));
+        let smaller_inventory = layout(1200.0, false, 3).scrolled(panel.scroll_offset);
+        assert_eq!(smaller_inventory.visible_range(), 0..3);
+        assert!(!panel.scroll_rows(1, smaller_inventory));
+        assert_eq!(panel.scroll_offset, 0);
+        assert!(panel.scroll_rows(20, layout(600.0, false, 100)));
+        panel.close();
+        assert!(!panel.is_open());
+        panel.toggle();
+        assert_eq!(panel.scroll_offset, 0);
+    }
 
     #[test]
     fn shared_layout_keeps_form_and_row_actions_disjoint() {

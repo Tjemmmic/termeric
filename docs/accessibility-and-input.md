@@ -359,6 +359,21 @@ as in its inline form. Escape closes it; other browse keys cannot reach a
 retained search, tab rename, or terminal. Existing pointer and accessibility
 Run/Delete/New actions are unchanged.
 
+The command list now accepts vertical wheel/trackpad scrolling in browse and
+form modes. A shared whole-row viewport limits painting, hover, and Run/Delete
+hit targets to visible commands, with absolute indices preserved after scrolling.
+The range counter makes overflow discoverable; resize, form visibility, and
+configuration changes clamp the effective offset, and reopening starts at the
+top. Horizontal, zero, and invalid wheel deltas remain consumed by the panel
+without reaching the terminal. Scrolling leaves the form and IME composition
+unchanged. The accessible list offers ScrollUp/ScrollDown where available;
+off-screen commands remain discoverable without fictitious visible bounds, and
+Focus reveals the exact identity after revalidation. Automated geometry,
+state, semantic-focus, and raw-PTY isolation tests cover these paths without
+running, saving, or deleting commands. Native pointer/trackpad and screen-reader
+acceptance remain deferred; keyboard-only browse action navigation is not yet
+implemented.
+
 The custom-command Name and Command fields support whole-grapheme Left/Right,
 Home/End, Backspace/Delete, and Ctrl+Left/Right/Backspace/Delete word edits.
 Typing and IME commits insert at the active caret; unsupported modified editing

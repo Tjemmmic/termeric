@@ -2069,6 +2069,11 @@ impl App {
         use crate::ui::commands::panel::CommandsPanelAction;
 
         match request.target_node {
+            COMMANDS_LIST => match request.action {
+                Action::ScrollUp => self.scroll_commands_panel(-1),
+                Action::ScrollDown => self.scroll_commands_panel(1),
+                _ => {}
+            },
             COMMANDS_NEW => match request.action {
                 Action::Click => {
                     self.apply_commands_panel_action(CommandsPanelAction::StartAdd);
@@ -2166,39 +2171,16 @@ impl App {
                     (
                         CommandsSemanticTarget::Run(_) | CommandsSemanticTarget::Delete(_),
                         Action::Focus,
-                    ) => self.accessibility.focus_override = Some(request.target_node),
+                    ) => {
+                        let layout = self.commands_panel_layout();
+                        if self.commands_panel.reveal_row(index, layout) {
+                            self.accessibility.focus_override = Some(request.target_node);
+                        }
+                    }
                     _ => {}
                 }
             }
         }
-    }
-
-    fn commands_accessibility_layout(
-        &self,
-        info: &crate::ui::commands::panel::CommandsPanelInfo,
-    ) -> crate::ui::commands::panel::CommandsPanelLayout {
-        let (width, height, cell_width, cell_height) = self
-            .renderer
-            .as_ref()
-            .map(|renderer| {
-                let (width, height) = renderer.window_size();
-                (
-                    width as f32,
-                    height as f32,
-                    renderer.cell_width(),
-                    renderer.cell_height(),
-                )
-            })
-            .unwrap_or((800.0, 600.0, 8.0, 16.0));
-        crate::ui::commands::panel::CommandsPanelLayout::calculate(
-            width,
-            height,
-            cell_width,
-            cell_height,
-            info.animation,
-            info.edit_mode != crate::ui::commands::panel::EditMode::Browse,
-            info.commands.len(),
-        )
     }
 
     fn handle_session_accessibility_action(&mut self, request: ActionRequest) {
@@ -4982,7 +4964,7 @@ impl App {
         use crate::ui::commands::panel::EditMode;
 
         let info = self.commands_panel.build_info(&self.config.commands);
-        let layout = self.commands_accessibility_layout(&info);
+        let layout = self.commands_panel_layout();
         let keys = custom_command_keys(&info.commands);
         let retained = keys
             .iter()
@@ -5084,7 +5066,9 @@ impl App {
             run.set_description(description);
             run.add_action(Action::Click);
             run.add_action(Action::Focus);
-            run.set_bounds(command_rect(layout.command_run(index)));
+            if layout.visible_range().contains(&index) {
+                run.set_bounds(command_rect(layout.command_run(index)));
+            }
             nodes.push((run_id, run));
 
             let mut delete = Node::new(Role::Button);
@@ -5092,12 +5076,16 @@ impl App {
             delete.set_description("Permanently removes this custom command");
             delete.add_action(Action::Click);
             delete.add_action(Action::Focus);
-            delete.set_bounds(command_rect(layout.command_delete(index)));
+            if layout.visible_range().contains(&index) {
+                delete.set_bounds(command_rect(layout.command_delete(index)));
+            }
             nodes.push((delete_id, delete));
 
             let mut group = Node::new(Role::Group);
             group.set_label(command.name.clone());
-            group.set_bounds(command_rect(layout.command_row(index)));
+            if layout.visible_range().contains(&index) {
+                group.set_bounds(command_rect(layout.command_row(index)));
+            }
             group.set_children([run_id, delete_id]);
             nodes.push((group_id, group));
             command_groups.push(group_id);
@@ -5105,6 +5093,12 @@ impl App {
 
         let mut list = Node::new(Role::List);
         list.set_label(format!("{} custom commands", info.commands.len()));
+        if layout.scroll_offset > 0 {
+            list.add_action(Action::ScrollUp);
+        }
+        if layout.visible_count > 0 && layout.visible_range().end < info.commands.len() {
+            list.add_action(Action::ScrollDown);
+        }
         list.set_orientation(accesskit::Orientation::Vertical);
         list.set_bounds(rect(
             layout.panel.x,
@@ -7296,6 +7290,89 @@ mod tests {
     }
 
     #[test]
+    fn command_semantic_focus_reveals_exact_offscreen_rows_without_execution() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.config.commands = (0..100)
+            .map(|index| crate::config::CustomCommand {
+                name: format!("Command {index}"),
+                command: "inert: never run".into(),
+                alias: None,
+            })
+            .collect();
+        app.commands_panel.set_reduced_motion(true);
+        app.commands_panel.toggle();
+        let keys = custom_command_keys(&app.config.commands);
+        let before = app.accessibility_snapshot();
+        let last = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(keys[99].clone())];
+        let bounds = |snapshot: &SemanticSnapshot, id| {
+            snapshot
+                .nodes
+                .iter()
+                .find(|(node, _)| *node == id)
+                .unwrap()
+                .1
+                .bounds()
+        };
+        assert_eq!(bounds(&before, last), None);
+        assert!(
+            before
+                .nodes
+                .iter()
+                .any(|(id, node)| *id == COMMANDS_LIST && node.supports_action(Action::ScrollDown))
+        );
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: last,
+            data: None,
+        });
+        let after = app.accessibility_snapshot();
+        assert_eq!(after.focus, last);
+        let layout = app.commands_panel_layout();
+        assert_eq!(layout.visible_range().end, 100);
+        assert_eq!(
+            bounds(&after, last),
+            Some(command_rect(layout.command_run(99)))
+        );
+        assert!(app.commands_panel.is_open());
+        assert_eq!(app.config.commands.len(), 100);
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::ScrollUp,
+            target_tree: TreeId::ROOT,
+            target_node: COMMANDS_LIST,
+            data: None,
+        });
+        assert_eq!(
+            app.commands_panel_layout().scroll_offset,
+            layout.scroll_offset - 1
+        );
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::ScrollDown,
+            target_tree: TreeId::ROOT,
+            target_node: COMMANDS_LIST,
+            data: None,
+        });
+        assert_eq!(
+            app.commands_panel_layout().scroll_offset,
+            layout.scroll_offset
+        );
+        // Config replacement must not turn the old row's focus into another command.
+        app.config.commands[99].name = "replacement".into();
+        app.scroll_commands_panel(isize::MIN);
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: last,
+            data: None,
+        });
+        assert_eq!(app.commands_panel_layout().scroll_offset, 0);
+        let fresh = app.accessibility_snapshot();
+        assert!(!fresh.nodes.iter().any(|(id, _)| *id == last));
+        assert!(app.commands_panel.is_open());
+        assert_eq!(app.config.commands.len(), 100);
+    }
+
+    #[test]
     fn custom_commands_is_one_modal_tree_with_shared_action_geometry() {
         use crate::config::CustomCommand;
 
@@ -7310,8 +7387,7 @@ mod tests {
         // accessibility snapshot sample the same panel position.
         app.commands_panel.set_reduced_motion(true);
         app.commands_panel.toggle();
-        let info = app.commands_panel.build_info(&app.config.commands);
-        let layout = app.commands_accessibility_layout(&info);
+        let layout = app.commands_panel_layout();
         let snapshot = app.accessibility_snapshot();
         let node = |id| {
             &snapshot

@@ -6,6 +6,64 @@ use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// Called after higher wheel owners; even a horizontal/invalid event stays modal.
+    pub(super) fn handle_commands_panel_scroll(
+        &mut self,
+        delta: winit::event::MouseScrollDelta,
+    ) -> bool {
+        if !self.commands_panel.is_open() {
+            return false;
+        }
+        let lines = match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => f64::from(y),
+            winit::event::MouseScrollDelta::PixelDelta(pos) => pos.y / 20.0,
+        };
+        if lines.is_finite() {
+            let rows = if lines > 0.0 {
+                -(lines.ceil() as isize)
+            } else {
+                (-lines).ceil() as isize
+            };
+            self.scroll_commands_panel(rows);
+        }
+        true
+    }
+
+    pub(super) fn commands_panel_layout(&self) -> crate::ui::commands::panel::CommandsPanelLayout {
+        let (width, height, cell_width, cell_height) = self
+            .renderer
+            .as_ref()
+            .map(|renderer| {
+                let (width, height) = renderer.window_size();
+                (
+                    width as f32,
+                    height as f32,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                )
+            })
+            .unwrap_or((800.0, 600.0, 8.0, 16.0));
+        // Read only panel state, without copying command/form strings on wheel events.
+        self.commands_panel.layout(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            self.config.commands.len(),
+        )
+    }
+
+    pub(super) fn scroll_commands_panel(&mut self, delta: isize) {
+        let layout = self.commands_panel_layout();
+        if self.commands_panel.scroll_rows(delta, layout) {
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::PointerInput);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+
     /// The command manager is modal in browse mode too. A retained rename
     /// or search, and the PTY behind them, must never receive its keystrokes.
     pub(super) fn handle_commands_panel_key(&mut self, key: &Key) -> bool {
@@ -104,6 +162,61 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exercise_command_scrolling(app: &mut App) {
+        use winit::dpi::PhysicalPosition;
+        use winit::event::{Ime, MouseScrollDelta};
+
+        let original = std::mem::take(&mut app.config.commands);
+        app.config.commands = (0..100)
+            .map(|index| crate::config::CustomCommand {
+                name: format!("Command {index}"),
+                command: "inert: must never run".into(),
+                alias: None,
+            })
+            .collect();
+        app.commands_panel.close();
+        assert!(!app.handle_commands_panel_scroll(MouseScrollDelta::LineDelta(0.0, -1.0)));
+        app.commands_panel.toggle();
+        app.commands_panel.start_add();
+        app.commands_panel.form_name.replace("kept draft");
+        app.handle_ime_event(Ime::Preedit("kept preedit".into(), None));
+        let initial = app.commands_panel_layout();
+        app.redraw_scheduler.begin_frame();
+        assert!(app.handle_commands_panel_scroll(MouseScrollDelta::LineDelta(0.0, -3.0)));
+        assert_eq!(app.commands_panel_layout().scroll_offset, 3);
+        assert_eq!(app.redraw_scheduler.begin_frame(), "pointer-input");
+        assert!(
+            app.handle_commands_panel_scroll(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+                0.0, 21.0
+            )))
+        );
+        assert_eq!(app.commands_panel_layout().scroll_offset, 1);
+        for delta in [
+            MouseScrollDelta::LineDelta(5.0, 0.0),
+            MouseScrollDelta::LineDelta(0.0, f32::NAN),
+            MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, f64::INFINITY)),
+        ] {
+            assert!(app.handle_commands_panel_scroll(delta));
+            assert_eq!(app.commands_panel_layout().scroll_offset, 1);
+        }
+        assert!(app.handle_commands_panel_scroll(MouseScrollDelta::LineDelta(0.0, -f32::MAX)));
+        let last = app.commands_panel_layout();
+        assert_eq!(last.visible_range().end, 100);
+        assert_eq!(last.form, initial.form);
+        assert_eq!(app.commands_panel.form_name.text(), "kept draft");
+        assert!(app.ime.preedit().is_some());
+        assert_eq!(app.config.commands.len(), 100);
+        app.config.commands = original;
+        app.commands_panel.close();
+    }
+
+    #[test]
+    fn command_wheel_scroll_is_bounded_and_preserves_form_and_composition() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.commands_panel.set_reduced_motion(true);
+        exercise_command_scrolling(&mut app);
+    }
 
     fn exercise_atomic_form_input(app: &mut App) {
         use crate::ui::commands::panel::{CommandsPanel, EditMode};
@@ -375,6 +488,8 @@ mod tests {
         assert!(app.handle_commands_form_key(&Key::Named(NamedKey::Escape)));
         assert!(!app.commands_panel.is_editing());
         assert!(app.commands_panel.is_open());
+        app.commands_panel.set_reduced_motion(true);
+        exercise_command_scrolling(&mut app);
         app.commands_panel.close();
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a"); // first raw byte: no editing/IME bytes leaked

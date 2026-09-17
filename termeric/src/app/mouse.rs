@@ -973,57 +973,18 @@ impl App {
         if self.commands_panel.is_open() {
             let px = position.0 as f32;
             let py = position.1 as f32;
-            if let Some(renderer) = &self.renderer {
-                let (ui_cw, cell_height) = renderer.cell_size();
-                let window_size = self.window.as_ref().map(|w| w.inner_size());
-                if let Some(size) = window_size {
-                    let window_width = size.width as f32;
-                    let anim = self.commands_panel.animation_progress();
-                    let panel_width = (ui_cw * 36.0).max(340.0).min(window_width * 0.45);
-                    let panel_x = window_width - panel_width * anim;
-                    let padding = ui_cw * 1.8;
-
-                    if px >= panel_x {
-                        let header_height = cell_height * 2.8;
-                        let btn_y = header_height + cell_height * 0.8;
-                        let btn_height = cell_height * 2.0;
-
-                        // Check "+ New Command" button hover
-                        let hovered_add = py >= btn_y && py <= btn_y + btn_height;
-
-                        // Calculate list start (skip form if editing)
-                        let mut list_start_y = btn_y + btn_height + cell_height * 0.8;
-                        if self.commands_panel.is_editing() {
-                            let field_height = cell_height * 1.8;
-                            let form_total_h = field_height * 2.0 + cell_height * 3.2;
-                            list_start_y += form_total_h + cell_height * 0.5;
-                        }
-                        if !self.config.commands.is_empty() {
-                            list_start_y += cell_height * 1.5;
-                        }
-
-                        let row_height = cell_height * 3.0;
-                        let mut hovered_index = None;
-                        let mut hovered_delete = None;
-                        for i in 0..self.config.commands.len() {
-                            let item_y = list_start_y + i as f32 * row_height;
-                            if py >= item_y && py < item_y + row_height {
-                                hovered_index = Some(i);
-                                // Check delete button
-                                let del_x = panel_x + panel_width - padding - ui_cw * 1.5;
-                                if px >= del_x - ui_cw * 0.5 && px <= del_x + ui_cw * 1.5 {
-                                    hovered_delete = Some(i);
-                                }
-                                break;
-                            }
-                        }
-                        self.commands_panel
-                            .set_hover(hovered_index, hovered_add, hovered_delete);
-                    } else {
-                        self.commands_panel.set_hover(None, false, None);
-                    }
-                }
-            }
+            let layout = self.commands_panel_layout();
+            use crate::ui::commands::panel::CommandsPanelAction;
+            let (hovered_index, hovered_delete) = match layout.row_action(px, py) {
+                CommandsPanelAction::Run(index) => (Some(index), None),
+                CommandsPanelAction::Delete(index) => (Some(index), Some(index)),
+                _ => (None, None),
+            };
+            self.commands_panel.set_hover(
+                hovered_index,
+                layout.new_button.contains(px, py),
+                hovered_delete,
+            );
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
