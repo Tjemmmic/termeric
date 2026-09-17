@@ -434,8 +434,10 @@ press instead of reaching terminal selection. Shared-geometry, model, and
 raw-PTY tests cover caret placement and resumed IME insertion. Native pointer/IME
 acceptance and drag selection are not claimed.
 
-The configurable Paste shortcut now reaches command, Unicode, domain, and
-terminal-search query fields at their byte caret. Query pastes reject controls,
+The configurable Paste shortcut now reaches command, Unicode, domain,
+shortcut-filter, and terminal-search query fields at their byte caret. The
+shortcut filter retains its 128-scalar bound and refuses paste while recording
+a chord, without reading the clipboard or changing bindings. Query pastes reject controls,
 multiline text, and over-limit input atomically; higher-priority or read-only
 surfaces cannot redirect them to a background query or shell. Local routing and
 raw-PTY isolation tests pass. Native clipboard acceptance for these fields is

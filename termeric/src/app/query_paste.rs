@@ -9,6 +9,7 @@ enum PasteTarget {
     Domain,
     Search,
     CommandsForm,
+    ShortcutsFilter,
     Blocked,
     Terminal,
 }
@@ -36,10 +37,18 @@ impl App {
         if self.command_palette.is_active() {
             return PasteTarget::Command;
         }
-        if self.shortcuts_panel.is_active()
-            || self.settings_panel.is_active()
+        if self.tab_rename.is_some() {
+            return PasteTarget::Blocked;
+        }
+        if self.shortcuts_panel.is_active() {
+            return if self.shortcuts_panel.is_recording() {
+                PasteTarget::Blocked
+            } else {
+                PasteTarget::ShortcutsFilter
+            };
+        }
+        if self.settings_panel.is_active()
             || self.session_panel.is_open()
-            || self.tab_rename.is_some()
             || self.session_dropdown_open
         {
             return PasteTarget::Blocked;
@@ -111,6 +120,7 @@ impl App {
             PasteTarget::Unicode => self.unicode_picker.insert_query_text(text),
             PasteTarget::Domain => self.domain_picker.insert_query_text(text),
             PasteTarget::CommandsForm => self.commands_panel.insert_form_text(text),
+            PasteTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
             PasteTarget::Search => {
                 let cursor = self.search_cursor_pos;
                 let accepted = self
@@ -145,6 +155,140 @@ mod tests {
     use crate::input::keybindings::{BindableAction, KeyChord};
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
+
+    #[test]
+    fn shortcut_filter_paste_is_atomic_at_caret_and_obeys_its_own_scalar_limit() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.shortcuts_panel.open();
+        assert_eq!(app.clipboard_paste_target(), PasteTarget::ShortcutsFilter);
+        assert!(app.paste_clipboard_payload("az"));
+        app.shortcuts_panel.edit_filter(TextInputEdit::Left);
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        for rejected in [
+            "",
+            "\n",
+            "\t",
+            "\u{1b}[200~",
+            "\u{2028}",
+            "\u{2029}",
+            &"x".repeat(129),
+            &"x".repeat(4097),
+        ] {
+            assert!(!app.paste_clipboard_payload(rejected));
+            let info = app.shortcuts_panel.build_info(&app.shortcut_registry);
+            assert_eq!(info.filter, "az");
+            assert_eq!(info.cursor, 1);
+            assert!(app.ime.preedit().is_some());
+        }
+        assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
+        let before = app.shortcuts_panel.build_info(&app.shortcut_registry);
+        assert_eq!(before.filter, "a界e\u{301}👩\u{200d}💻z");
+        assert_eq!(before.cursor, before.filter.len() - 1);
+        assert!(app.ime.preedit().is_none());
+        let remaining = 128 - before.filter.chars().count();
+        assert!(app.paste_clipboard_payload(&"🫚".repeat(remaining - 1)));
+        let almost = app.shortcuts_panel.build_info(&app.shortcut_registry);
+        assert!(!app.paste_clipboard_payload("e\u{301}"));
+        let unchanged = app.shortcuts_panel.build_info(&app.shortcut_registry);
+        assert_eq!(unchanged.filter, almost.filter);
+        assert_eq!(unchanged.cursor, almost.cursor);
+        assert!(app.paste_clipboard_payload("🫚"));
+        assert!(!app.paste_clipboard_payload("x"));
+        assert_eq!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .filter
+                .chars()
+                .count(),
+            128
+        );
+        assert!(app.redraw_scheduler.has_pending());
+    }
+
+    #[test]
+    fn shortcut_filter_paste_binding_honors_rebinding_disabling_and_recording() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.shortcuts_panel.open();
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let default = Key::Character("v".into());
+        assert!(app.handle_query_paste_key(&default));
+        let rebound = Key::Named(NamedKey::F8);
+        app.shortcut_registry.set_binding(
+            BindableAction::Paste,
+            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+        );
+        assert!(!app.handle_query_paste_key(&default));
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_query_paste_key(&rebound));
+        app.shortcuts_panel.start_recording(BindableAction::Copy);
+        assert!(app.clipboard_paste_blocked());
+        // Let the recording handler see the chord, without reading a clipboard.
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert!(!app.paste_clipboard_payload("not a binding"));
+        assert!(app.shortcuts_panel.is_recording());
+        assert!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .filter
+                .is_empty()
+        );
+        app.shortcuts_panel.open();
+        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert!(app.config.keybindings.is_empty());
+    }
+
+    #[test]
+    fn shortcut_filter_paste_retains_lower_fields_and_respects_higher_owners() {
+        for higher in 0..6 {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.search.start();
+            app.commands_panel.toggle();
+            app.commands_panel.start_add();
+            app.settings_panel.toggle();
+            app.shortcuts_panel.open();
+            assert!(app.paste_clipboard_payload("filter"));
+            assert!(app.search.query().is_empty());
+            assert!(app.commands_panel.form_name.text().is_empty());
+            match higher {
+                0 => {
+                    app.info_overlay.show("Notice", vec![]);
+                }
+                1 => app.command_palette.open(),
+                2 => app.unicode_picker.open(),
+                3 => app.domain_picker.open(&app.config.domains),
+                4 => {
+                    app.shortcuts_panel.start_recording(BindableAction::Copy);
+                }
+                _ => {
+                    app.tab_rename = Some(TabRenameState {
+                        tab_id: 0,
+                        original: None,
+                        input: String::new(),
+                        max_chars: 80,
+                    });
+                }
+            }
+            assert_eq!(
+                app.paste_clipboard_payload("higher"),
+                (1..=3).contains(&higher)
+            );
+            assert_eq!(
+                app.shortcuts_panel
+                    .build_info(&app.shortcut_registry)
+                    .filter,
+                "filter"
+            );
+            assert!(app.search.query().is_empty());
+            assert!(app.commands_panel.form_name.text().is_empty());
+            match higher {
+                1 => assert_eq!(app.command_palette.build_info().input, "higher"),
+                2 => assert_eq!(app.unicode_picker.build_info().input, "higher"),
+                3 => assert_eq!(app.domain_picker.build_info().input, "higher"),
+                _ => assert!(app.clipboard_paste_blocked()),
+            }
+        }
+    }
 
     #[test]
     fn command_form_paste_honors_shortcuts_and_preserves_state_on_rejection() {
@@ -190,7 +334,10 @@ mod tests {
     fn command_form_paste_respects_higher_modal_owners_and_retained_search() {
         for open in [
             (|app: &mut App| app.settings_panel.toggle()) as fn(&mut App),
-            |app| app.shortcuts_panel.open(),
+            |app| {
+                app.shortcuts_panel.open();
+                app.shortcuts_panel.start_recording(BindableAction::Copy);
+            },
             |app| app.session_panel.open_workspaces(),
             |app| {
                 app.info_overlay.show("Notice", vec![]);
@@ -303,7 +450,10 @@ mod tests {
         app.search.start();
         for open in [
             (|app: &mut App| app.settings_panel.toggle()) as fn(&mut App),
-            |app| app.shortcuts_panel.open(),
+            |app| {
+                app.shortcuts_panel.open();
+                app.shortcuts_panel.start_recording(BindableAction::Copy);
+            },
             |app| app.commands_panel.toggle(),
             |app| app.session_panel.open_workspaces(),
         ] {
@@ -387,6 +537,21 @@ mod tests {
         app.commands_panel.cancel_edit();
         assert!(!app.paste_clipboard_payload("browse must not write"));
         app.commands_panel.close();
+        app.shortcuts_panel.open();
+        assert!(app.paste_clipboard_payload("az"));
+        app.shortcuts_panel.edit_filter(TextInputEdit::Left);
+        assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
+        assert_eq!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .filter,
+            "a界e\u{301}👩\u{200d}💻z"
+        );
+        assert!(!app.paste_clipboard_payload("\nexecute\n"));
+        assert!(!app.paste_clipboard_payload(&"x".repeat(129)));
+        app.shortcuts_panel.start_recording(BindableAction::Copy);
+        assert!(!app.paste_clipboard_payload("recording must not write"));
+        app.shortcuts_panel.close_immediately();
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));
         wait_for(&mut app, "5a");
