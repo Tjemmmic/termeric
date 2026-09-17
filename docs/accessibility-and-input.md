@@ -120,7 +120,16 @@ IME commits insert at that caret. Cursor-only and no-op edits preserve result
 selection and do not restart Unicode worker searches; actual query changes
 retire old results as usual. Busy domain stages consume navigation/deletion
 without changing their read-only filter or a palette behind them. The semantic
-tree reports the moved UTF-8 caret. The palettes also support the same
+tree reports the moved UTF-8 caret. Command/Unicode IME commits are now atomic:
+the complete commit must fit the 256-scalar/1-KiB single-line query limit, or the
+query and caret remain unchanged. No prefix is inserted and no control characters
+are silently stripped. An accepted commit performs one splice and result refresh.
+Typing, paste, and semantic replacement share the same control and Unicode
+line/paragraph-separator exclusions. Accepted command/Unicode/domain semantic
+replacement clears stale preedit and schedules a redraw; rejected replacement
+preserves it. The domain picker still does not accept platform IME commits;
+its busy stages remain read-only. Native IME/assistive-technology acceptance is
+still deferred. The palettes also support the same
 Ctrl+Left/Right and Ctrl+Backspace/Delete word edits described above, with local
 dispatch and blocked-worker regression coverage. Unsupported modifiers and
 AltGraph are consumed without deleting text. A primary click in a palette query

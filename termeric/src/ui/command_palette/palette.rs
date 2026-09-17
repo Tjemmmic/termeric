@@ -11,6 +11,16 @@ use crate::input::keybindings::{BindableAction, ShortcutRegistry};
 
 const MAX_QUERY_CHARACTERS: usize = 256;
 
+fn valid_query_character(character: char) -> bool {
+    !character.is_control() && !matches!(character, '\u{2028}' | '\u{2029}')
+}
+
+fn valid_query_text(text: &str) -> bool {
+    text.len() <= MAX_QUERY_CHARACTERS * 4
+        && text.chars().all(valid_query_character)
+        && text.chars().count() <= MAX_QUERY_CHARACTERS
+}
+
 /// Source of a registered command
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandSource {
@@ -370,7 +380,7 @@ impl CommandPalette {
     /// applies to dedicated palette workflows so accessibility cannot create
     /// an unbounded or multiline filter that keyboard input could not express.
     pub fn accessibility_set_input(&mut self, value: &str) -> bool {
-        if value.chars().count() > MAX_QUERY_CHARACTERS || value.chars().any(char::is_control) {
+        if !valid_query_text(value) {
             return false;
         }
         self.input.replace(value);
@@ -393,17 +403,12 @@ impl CommandPalette {
     /// results only once. Rejection preserves the cursor and selected result.
     pub fn insert_query_text(&mut self, text: &str) -> bool {
         if text.is_empty()
-            || text.len() > MAX_QUERY_CHARACTERS * 4
-            || text
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+            || !valid_query_text(text)
             || self.input.text().chars().count() + text.chars().count() > MAX_QUERY_CHARACTERS
         {
             return false;
         }
-        for character in text.chars() {
-            self.input.insert_char(character);
-        }
+        self.input.insert_text(text);
         self.selected = 0;
         self.scroll_offset = 0;
         self.update_entries();
@@ -412,7 +417,7 @@ impl CommandPalette {
 
     /// Handle a character input
     pub fn handle_char(&mut self, c: char) -> bool {
-        if c.is_control() || self.input.text().chars().count() >= MAX_QUERY_CHARACTERS {
+        if !valid_query_character(c) || self.input.text().chars().count() >= MAX_QUERY_CHARACTERS {
             return false;
         }
         self.input.insert_char(c);
@@ -1356,12 +1361,20 @@ mod tests {
         assert!(!palette.handle_char('\u{1b}'));
         assert!(!palette.accessibility_set_input(&(full.input.clone() + "x")));
         assert!(!palette.accessibility_set_input("bad\nquery"));
+        for character in ['\u{2028}', '\u{2029}'] {
+            assert!(!palette.accessibility_set_input(&character.to_string()));
+            assert!(!palette.insert_query_text(&character.to_string()));
+        }
         assert_eq!(palette.build_info().input, full.input);
         assert_eq!(palette.build_info().cursor, full.cursor);
         palette.handle_backspace();
         assert!(palette.handle_char('🫚'));
         assert_eq!(palette.build_info().input.chars().count(), 256);
         assert!(palette.accessibility_set_input(&full.input));
+        palette.accessibility_set_input("");
+        assert!(!palette.handle_char('\u{2028}'));
+        assert!(!palette.handle_char('\u{2029}'));
+        assert_eq!(palette.build_info().input, "");
     }
 
     fn test_palette() -> CommandPalette {

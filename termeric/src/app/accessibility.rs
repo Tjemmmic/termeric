@@ -1281,7 +1281,10 @@ impl App {
                         return;
                     };
                     if self.command_palette.accessibility_set_input(value) {
+                        self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(PALETTE_INPUT);
+                        self.redraw_scheduler
+                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -1329,7 +1332,10 @@ impl App {
                         return;
                     };
                     if self.domain_picker.accessibility_set_filter(value) {
+                        self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(DOMAIN_INPUT);
+                        self.redraw_scheduler
+                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -1381,7 +1387,10 @@ impl App {
                         return;
                     };
                     if self.unicode_picker.accessibility_set_filter(value) {
+                        self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(UNICODE_INPUT);
+                        self.redraw_scheduler
+                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -6613,6 +6622,67 @@ mod tests {
         });
         assert!(app.command_palette.is_active());
         assert!(!app.settings_panel.is_active());
+    }
+
+    #[test]
+    fn palette_semantic_replacement_retires_composition_only_when_accepted() {
+        for kind in [PALETTE_INPUT, UNICODE_INPUT, DOMAIN_INPUT] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            if kind == PALETTE_INPUT {
+                app.command_palette.open();
+            } else if kind == UNICODE_INPUT {
+                app.unicode_picker.open();
+            } else {
+                app.domain_picker.open(&app.config.domains);
+            }
+            let set = |app: &mut App, value: &str| {
+                app.handle_accessibility_action(ActionRequest {
+                    action: Action::SetValue,
+                    target_tree: TreeId::ROOT,
+                    target_node: kind,
+                    data: Some(ActionData::Value(value.into())),
+                })
+            };
+            for value in ["e\u{301}👩\u{200d}💻", &"🫚".repeat(256), ""] {
+                // Seed composition before opening the domain picker, which
+                // intentionally does not yet accept platform IME commits.
+                if kind == DOMAIN_INPUT {
+                    app.domain_picker.close();
+                    app.command_palette.open();
+                    app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+                    app.command_palette.close();
+                    app.domain_picker.open(&app.config.domains);
+                } else {
+                    app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+                }
+                assert!(app.ime.preedit().is_some());
+                set(&mut app, value);
+                assert!(app.ime.preedit().is_none());
+                let snapshot = app.accessibility_snapshot();
+                assert_eq!(snapshot.focus, kind);
+                let input = &snapshot.nodes.iter().find(|(id, _)| *id == kind).unwrap().1;
+                assert_eq!(input.value(), Some(value));
+                assert_eq!(
+                    input.text_selection().unwrap().focus.character_index,
+                    value.chars().count()
+                );
+            }
+            set(&mut app, "keep");
+            if kind != DOMAIN_INPUT {
+                app.handle_ime_event(winit::event::Ime::Preedit("keep composition".into(), None));
+            }
+            let preedit = app.ime.preedit().cloned();
+            for value in ["a\nb", "\u{2028}", "\u{2029}", &"x".repeat(257)] {
+                set(&mut app, value);
+                assert_eq!(app.ime.preedit(), preedit.as_ref());
+                let snapshot = app.accessibility_snapshot();
+                let input = &snapshot.nodes.iter().find(|(id, _)| *id == kind).unwrap().1;
+                assert_eq!(input.value(), Some("keep"));
+            }
+            assert!(!app.fullscreen_requested);
+            app.unicode_picker.close();
+            app.unicode_picker.finish_search_for_test();
+        }
     }
 
     #[test]

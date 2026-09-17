@@ -124,13 +124,9 @@ impl App {
             let request_id = self.info_overlay.request_id();
             self.info_overlay.insert_input_text(request_id, text);
         } else if self.command_palette.is_active() {
-            for character in printable() {
-                self.command_palette.handle_char(character);
-            }
+            self.command_palette.insert_query_text(text);
         } else if self.unicode_picker.is_active() {
-            for character in printable() {
-                self.unicode_picker.handle_char(character);
-            }
+            self.unicode_picker.insert_query_text(text);
         } else if let Some(rename) = &mut self.tab_rename {
             for character in printable() {
                 if rename.input.chars().count() < rename.max_chars {
@@ -845,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_ime_commits_obey_palette_query_limits_without_pty_fallback() {
+    fn palette_ime_commits_are_atomic_at_query_limits_and_reject_multiline_text() {
         for unicode in [false, true] {
             let mut app = App::new_headless(Config::default()).unwrap();
             if unicode {
@@ -859,9 +855,32 @@ mod tests {
             } else {
                 app.command_palette.build_info()
             };
-            assert_eq!(info.input, "界".repeat(256));
+            assert_eq!(info.input, "");
             assert_eq!(info.cursor, info.input.len());
             assert!(app.ime.preedit().is_none());
+            let prefix = "界".repeat(255);
+            app.handle_ime_event(Ime::Commit(prefix.clone()));
+            app.handle_palette_edit_key(&winit::keyboard::Key::Named(
+                winit::keyboard::NamedKey::Home,
+            ));
+            for text in ["xy", "a\nb", "\u{2028}", "\u{2029}", "\t", "\x1b"] {
+                app.handle_ime_event(Ime::Commit(text.into()));
+                let info = if unicode {
+                    app.unicode_picker.build_info()
+                } else {
+                    app.command_palette.build_info()
+                };
+                assert_eq!(info.input, prefix, "{text:?}");
+                assert_eq!(info.cursor, 0);
+            }
+            app.handle_ime_event(Ime::Commit("🫚".into()));
+            let info = if unicode {
+                app.unicode_picker.build_info()
+            } else {
+                app.command_palette.build_info()
+            };
+            assert_eq!(info.input, format!("🫚{prefix}"));
+            assert_eq!(info.cursor, "🫚".len());
             app.unicode_picker.close();
             app.unicode_picker.finish_search_for_test();
         }
@@ -874,6 +893,59 @@ mod tests {
         assert_eq!(state.preedit().unwrap().cursor, Some((0, 3)));
         state.set_preedit("日本".into(), Some((1, 3)));
         assert_eq!(state.preedit().unwrap().cursor, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn palette_atomic_commits_never_fall_through_to_a_live_pty() {
+        let mut tabs = TabManager::new(
+            80,
+            24,
+            crate::config::ShellConfig::default(),
+            100,
+            1024 * 1024,
+        );
+        tabs.new_tab_with_command("/bin/sh", &[
+            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
+        ], None, Some("palette-ime"), None, Default::default()).unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+        let wait_for = |app: &mut App, expected: &str| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                app.process_pty_events();
+                let output = app.active_terminal().unwrap().rows_text(0, 23);
+                if output.contains(expected) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "missing {expected}: {output}");
+                std::thread::yield_now();
+            }
+        };
+        wait_for(&mut app, "READY");
+        for unicode in [false, true] {
+            if unicode {
+                app.unicode_picker.open();
+            } else {
+                app.command_palette.open();
+            }
+            app.handle_ime_event(Ime::Preedit("draft".into(), None));
+            app.handle_ime_event(Ime::Commit("x".repeat(257)));
+            app.handle_ime_event(Ime::Commit("bad\ncommit".into()));
+            app.handle_ime_event(Ime::Commit("e\u{301}👩\u{200d}💻".into()));
+            let info = if unicode {
+                app.unicode_picker.build_info()
+            } else {
+                app.command_palette.build_info()
+            };
+            assert_eq!(info.input, "e\u{301}👩\u{200d}💻");
+            assert!(app.ime.preedit().is_none());
+            app.command_palette.close();
+            app.unicode_picker.close();
+            app.unicode_picker.finish_search_for_test();
+        }
+        app.write_to_pty(b"Z");
+        wait_for(&mut app, "5a");
     }
 
     #[test]
