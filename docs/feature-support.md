@@ -717,6 +717,15 @@ end-to-end percentage claim. The paired core diagnostic measures the narrower
 optimization; resource ranking remains disallowed by unequal window sizes.
 See [native follow-up evidence](performance.md#native-follow-up-at-d6d5261).
 
+The subsequent row-local presence cache at `4081caa` has a paired core-replay
+improvement plus two clean native Termeric/kitty follow-ups. Termeric's native
+PTY medians were 48.10 and 50.51 ms; all ten samples were below the preceding
+build's recorded range. This supports lower response times in that local
+software-rendered workload, not a portable causal percentage, a memory ranking,
+or an overall terminal winner. kitty remained faster on the PTY workload;
+pixel-matched resource and broader hardware/platform evidence remain open.
+See [row-cache native evidence](performance.md#native-follow-up-at-4081caa).
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the

@@ -767,6 +767,50 @@ The baseline replay executable is from the preceding `d6d5261` diagnostic;
 the core source was verified unchanged between that commit and `7b5d19e`.
 This remains local diagnostic evidence, not a release benchmark-contract row.
 
+### Native follow-up at `4081caa`
+
+Two more independent native runs on 2026-09-17 exercised the row-local cache
+through the same private Sway/Xwayland, llvmpipe OpenGL, isolated configuration,
+and Python PTY fixture. Each again used one warmup plus five measured fresh
+processes per terminal, rotated launch order, a 1 MiB payload, and exact 100×30
+initial/final grids. All twenty measured samples completed with complete
+resource observations. Clean source `4081caa75798dac1d2633e82b9dbc0af919cf8e2`
+and executable SHA-256
+`a05af7c785118613273ea7ced12a254fc2fa7cf2b8e5255c4dcd5630198184a4`
+were unchanged before/after both runs. kitty remained 0.48.2 with the same
+executable hash. Both runs are retained; timings below are milliseconds:
+
+| Run | Terminal | Startup median | Startup p95 | PTY response median | PTY response p95 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| First | Termeric | 185.68 | 186.46 | 48.10 | 50.31 |
+| First | kitty | 346.26 | 361.10 | 24.26 | 26.70 |
+| Repeat | Termeric | 188.53 | 194.05 | 50.51 | 52.63 |
+| Repeat | kitty | 346.90 | 366.33 | 23.60 | 29.88 |
+
+All ten new Termeric PTY samples (46.65–52.63 ms) were below the previous
+`d6d5261` samples (67.82–84.21 ms). This is stronger native evidence than the
+overlapping ranges after the first repair change: the lower response times
+recurred across both runs and agree in direction with the paired core result.
+However, old/new native binaries were not interleaved, startup and kitty timing
+also shifted, and software-rendering conditions limit generalization. Do not
+derive a portable or precisely causal native percentage from these historical
+comparisons. kitty still responds to this workload in roughly half the time;
+Termeric's lower startup time does not make it the overall faster terminal.
+
+Both per-run contracts allow startup/PTY ranking and reject RSS/idle ranking
+for the unchanged 700×388 versus 1001×661 native-window mismatch. No memory,
+hardware-rendering, scanout-latency, or daily-driver qualification is implied.
+No provider workflow ran; both private compositors/runtimes were cleaned up.
+
+The local archive `target/terminal-comparison/2026-09-17-4081caa-kitty.tar.gz`
+has SHA-256
+`37ba9fc3d4226ff39c866b482079c61a0bbb7e77c53776836318874bda9b27ff`.
+It preserves the launcher plus `termeric-comparison-4081caa-measured/` and
+`termeric-comparison-4081caa-repeat/`, including original reports, source/binary
+sidecars, configurations, fixture records, and display/launcher logs. Original
+`/tmp/` paths map to these archive directories. Caches/data/state are excluded;
+this is local unpublished evidence, not a release artifact.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic
