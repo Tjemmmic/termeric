@@ -9,6 +9,14 @@ use crate::ui::text_input_viewport::TextInputViewport;
 
 const MAX_FILTER_CHARACTERS: usize = 256;
 
+fn valid_filter_text(text: &str) -> bool {
+    text.len() <= MAX_FILTER_CHARACTERS * 4
+        && text.chars().count() <= MAX_FILTER_CHARACTERS
+        && !text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+}
+
 /// Default fallback font (always available)
 const DEFAULT_FONT: &str = "monospace";
 const NO_FONT_FALLBACK: &str = "None";
@@ -1580,17 +1588,29 @@ impl SettingsPanel {
         if !self.is_active()
             || self.dropdown_open
             || text.is_empty()
-            || text.len() > MAX_FILTER_CHARACTERS * 4
+            || !valid_filter_text(text)
             || self.filter.chars().count() + text.chars().count() > MAX_FILTER_CHARACTERS
-            || text
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
             || !self.filter.is_char_boundary(self.filter_cursor)
         {
             return false;
         }
         self.filter.insert_str(self.filter_cursor, text);
         self.filter_cursor += text.len();
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.selection_visibility_pending = false;
+        true
+    }
+
+    /// Replace the filter atomically using the same policy as keyboard/IME/paste.
+    /// Empty replacement clears the query; the accepted caret ends at the text.
+    pub fn accessibility_set_filter(&mut self, text: &str) -> bool {
+        if !self.is_active() || self.dropdown_open || !valid_filter_text(text) {
+            return false;
+        }
+        self.filter.clear();
+        self.filter.push_str(text);
+        self.filter_cursor = text.len();
         self.selected = 0;
         self.scroll_offset = 0;
         self.selection_visibility_pending = false;
@@ -2372,6 +2392,50 @@ mod tests {
 
     fn default_registry() -> ShortcutRegistry {
         ShortcutRegistry::new()
+    }
+
+    #[test]
+    fn semantic_filter_replacement_is_atomic_bounded_and_owner_checked() {
+        let mut panel = SettingsPanel::new();
+        assert!(!panel.accessibility_set_filter("hidden"));
+        panel.open();
+        assert!(panel.accessibility_set_filter(&"🫚".repeat(256)));
+        assert_eq!((panel.filter.len(), panel.filter_cursor), (1024, 1024));
+        panel.selected = 3;
+        panel.scroll_offset = 2;
+        panel.selection_visibility_pending = true;
+        for value in [
+            "\n",
+            "\r",
+            "\t",
+            "\0",
+            "\u{7f}",
+            "\u{85}",
+            "\u{2028}",
+            "\u{2029}",
+            &"x".repeat(257),
+            &"🫚".repeat(257),
+        ] {
+            assert!(!panel.accessibility_set_filter(value));
+            assert_eq!(panel.filter, "🫚".repeat(256));
+            assert_eq!(panel.filter_cursor, 1024);
+            assert_eq!((panel.selected, panel.scroll_offset), (3, 2));
+            assert!(panel.selection_visibility_pending);
+        }
+        panel.dropdown_open = true;
+        assert!(!panel.accessibility_set_filter(""));
+        assert!(!panel.accessibility_set_filter("size"));
+        assert_eq!(panel.filter_cursor, 1024);
+        panel.dropdown_open = false;
+        assert!(panel.accessibility_set_filter("e\u{301}👩\u{200d}💻"));
+        assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
+        assert!(!panel.selection_visibility_pending);
+        assert_eq!(panel.filter_cursor, panel.filter.len());
+        assert!(panel.accessibility_set_filter(""));
+        assert!(panel.filter.is_empty());
+        assert_eq!(panel.filter_cursor, 0);
+        panel.close();
+        assert!(!panel.accessibility_set_filter("closed"));
     }
 
     #[test]

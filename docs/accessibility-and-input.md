@@ -286,6 +286,18 @@ used by rendering and pointer hit tests. Every mutation returns the same
 configuration-validation path. Requests for background controls are swallowed
 while the modal is active.
 
+The filter advertises and handles `SetValue` through the same single-line,
+256-scalar/1,024-byte policy used by keyboard, IME, and paste insertion. Accepted
+replacement (including empty text to clear) moves the caret to the end, resets
+results, clears stale preedit, and returns semantic focus to the filter without
+applying or saving configuration. Rejected payloads leave the query state
+unchanged. While a dropdown is open, the filter is read-only, advertises neither
+replacement nor focus actions, and rejects retained requests; semantic focus
+falls back to the selected setting rather than the non-editable filter. Higher
+modals and closed Settings also reject stale replacement requests. Model and
+in-process AccessKit action/tree tests cover this contract; native screen-reader
+acceptance remains deferred.
+
 Font → Range Overrides is exposed as a named button with its active count. It
 opens the same accessible information/input overlay used by other bounded
 management flows: rules and navigation are named choices, add/edit uses one

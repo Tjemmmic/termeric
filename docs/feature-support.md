@@ -459,6 +459,14 @@ eleven clipboard, Unicode, pointer, and keyboard-editing cases with exact PTY
 ownership and reversible font-size effects. Selection and real-desktop
 clipboard/IME/visual acceptance for this filter remain separate work.
 
+Settings-filter accessibility replacement is now wired through the same bounded
+single-line policy, including empty-query clearing and UTF-8 caret reporting.
+Successful semantic edits clear preedit and refresh results without applying
+configuration. Dropdowns expose a read-only filter and reject retained edit/focus
+requests; closed or covered Settings cannot receive background edits. Model and
+in-process action/tree regressions cover this boundary, not native screen-reader
+acceptance.
+
 The Settings filter now shapes and clips a caret-following whole-grapheme slice;
 its renderer, accessibility bounds, and IME candidate/preedit position use the
 same scaled/animated input geometry. Dropdowns and collapsed fields expose no

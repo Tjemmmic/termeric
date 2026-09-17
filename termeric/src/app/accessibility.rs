@@ -1783,8 +1783,28 @@ impl App {
     }
 
     fn handle_settings_accessibility_action(&mut self, request: ActionRequest) {
-        if request.target_node == SETTINGS_INPUT && request.action == Action::Focus {
-            self.accessibility.focus_override = Some(SETTINGS_INPUT);
+        if request.target_node == SETTINGS_INPUT {
+            // A retained node must not edit or take focus from a live dropdown.
+            if self.settings_panel.is_dropdown_open() {
+                return;
+            }
+            match request.action {
+                Action::Focus => {
+                    self.accessibility.focus_override = Some(SETTINGS_INPUT);
+                }
+                Action::SetValue => {
+                    let Some(ActionData::Value(value)) = request.data.as_ref() else {
+                        return;
+                    };
+                    if self.settings_panel.accessibility_set_filter(value) {
+                        self.ime.clear_preedit();
+                        self.accessibility.focus_override = Some(SETTINGS_INPUT);
+                        self.redraw_scheduler
+                            .request(redraw_scheduler::RedrawReason::Accessibility);
+                    }
+                }
+                _ => {}
+            }
             return;
         }
         let Some(target) = self
@@ -4680,7 +4700,12 @@ impl App {
             layout.input.height,
         ));
         input.set_controls([SETTINGS_LIST]);
-        input.add_action(Action::Focus);
+        if info.dropdown_open {
+            input.set_read_only();
+        } else {
+            input.add_action(Action::Focus);
+            input.add_action(Action::SetValue);
+        }
 
         let selectables_before_offset = info.entries[..info.scroll_offset]
             .iter()
@@ -4890,13 +4915,19 @@ impl App {
         nodes.push((SETTINGS_DIALOG, dialog));
         nodes.push((ROOT, root));
 
+        let default_focus = if info.dropdown_open {
+            selected_setting.unwrap_or(SETTINGS_DIALOG)
+        } else {
+            SETTINGS_INPUT
+        };
         let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_settings_node(*node)
+            (!info.dropdown_open || *node != SETTINGS_INPUT)
+                && self.accessibility.is_settings_node(*node)
                 && nodes.iter().any(|(current, _)| current == node)
         });
-        let focus = requested_focus.unwrap_or(SETTINGS_INPUT);
+        let focus = requested_focus.unwrap_or(default_focus);
         if self.accessibility.focus_override.is_some() && requested_focus.is_none() {
-            self.accessibility.focus_override = Some(SETTINGS_INPUT);
+            self.accessibility.focus_override = Some(default_focus);
         }
         SemanticSnapshot { nodes, focus }
     }
@@ -6822,6 +6853,170 @@ mod tests {
         });
         assert_eq!(app.config.font.features.get("ss01"), Some(&1));
         assert_eq!(app.info_overlay.title(), "OpenType Feature Overrides");
+    }
+
+    #[test]
+    fn settings_filter_semantic_replacement_updates_text_caret_and_results_only() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        let original = toml::to_string(&app.config).unwrap();
+        let snapshot = app.accessibility_snapshot();
+        let input = &snapshot
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == SETTINGS_INPUT)
+            .unwrap()
+            .1;
+        assert!(input.supports_action(Action::SetValue));
+        assert!(!input.is_read_only());
+        for text in ["size", "e\u{301}👩\u{200d}💻", "", &"🫚".repeat(256)] {
+            app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SETTINGS_INPUT,
+                data: Some(ActionData::Value(text.into())),
+            });
+            let snapshot = app.accessibility_snapshot();
+            let input = &snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SETTINGS_INPUT)
+                .unwrap()
+                .1;
+            assert_eq!(input.value(), Some(text));
+            assert_eq!(
+                input.text_selection().unwrap().focus.character_index,
+                text.chars().count()
+            );
+            assert_eq!(
+                input
+                    .character_lengths()
+                    .iter()
+                    .map(|size| usize::from(*size))
+                    .sum::<usize>(),
+                text.len()
+            );
+            assert_eq!(snapshot.focus, SETTINGS_INPUT);
+            assert!(app.ime.preedit().is_none());
+            assert!(app.redraw_scheduler.has_pending());
+            assert_eq!(toml::to_string(&app.config).unwrap(), original);
+            if text == "size" {
+                assert!(snapshot.nodes.iter().any(
+                    |(_, node)| node.label() == Some("Size") && node.role() == Role::SpinButton
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn settings_filter_semantic_rejection_preserves_state_and_dropdown_focus() {
+        use crate::ui::settings::SettingsKey;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        assert!(app.settings_panel.accessibility_set_filter("family"));
+        let original = toml::to_string(&app.config).unwrap();
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        for data in [
+            None,
+            Some(ActionData::Value("bad\nquery".into())),
+            Some(ActionData::Value("x".repeat(257).into())),
+        ] {
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SETTINGS_INPUT,
+                data,
+            });
+            assert!(app.ime.preedit().is_some());
+            assert_eq!(
+                app.settings_panel
+                    .build_info(&app.config, &app.shortcut_registry)
+                    .filter,
+                "family"
+            );
+        }
+        app.accessibility.focus_override = Some(SETTINGS_INPUT);
+        app.settings_panel
+            .handle_key(SettingsKey::Right, &app.config, &app.shortcut_registry);
+        assert!(app.settings_panel.is_dropdown_open());
+        let snapshot = app.accessibility_snapshot();
+        let input = &snapshot
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == SETTINGS_INPUT)
+            .unwrap()
+            .1;
+        assert!(input.is_read_only());
+        assert!(!input.supports_action(Action::SetValue));
+        assert!(!input.supports_action(Action::Focus));
+        let focus = snapshot.focus;
+        assert_ne!(focus, SETTINGS_INPUT);
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == focus)
+                .unwrap()
+                .1
+                .is_expanded(),
+            Some(true)
+        );
+        for action in [Action::Focus, Action::SetValue] {
+            app.handle_accessibility_action(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: SETTINGS_INPUT,
+                data: Some(ActionData::Value("size".into())),
+            });
+            assert_eq!(app.accessibility_snapshot().focus, focus);
+            assert_eq!(
+                app.settings_panel
+                    .build_info(&app.config, &app.shortcut_registry)
+                    .filter,
+                "family"
+            );
+        }
+        app.settings_panel
+            .handle_key(SettingsKey::Escape, &app.config, &app.shortcut_registry);
+        let snapshot = app.accessibility_snapshot();
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SETTINGS_INPUT)
+                .unwrap()
+                .1
+                .supports_action(Action::SetValue)
+        );
+        assert_eq!(toml::to_string(&app.config).unwrap(), original);
+    }
+
+    #[test]
+    fn settings_filter_semantic_requests_cannot_edit_hidden_or_covered_fields() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        assert!(app.settings_panel.accessibility_set_filter("size"));
+        app.command_palette.open();
+        for covered in [true, false] {
+            if !covered {
+                app.command_palette.close();
+                app.settings_panel.close();
+            }
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SETTINGS_INPUT,
+                data: Some(ActionData::Value("hidden".into())),
+            });
+            assert_eq!(
+                app.settings_panel
+                    .build_info(&app.config, &app.shortcut_registry)
+                    .filter,
+                "size"
+            );
+            assert!(app.command_palette.build_info().input.is_empty());
+        }
     }
 
     #[test]
