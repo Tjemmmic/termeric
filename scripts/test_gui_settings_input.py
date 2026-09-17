@@ -30,6 +30,16 @@ class SettingsInputTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings.verify_settings_delivery({True: b"fence"}, True, b"fence")
 
+    def test_font_state_oracle_collapses_only_identical_adjacent_diagnostics(self):
+        line = lambda size, cols, rows: f"INFO Font size set to {size}, grid resized to {cols}x{rows}\n"
+        raised, restored = line(15, 112, 40), line(14, 126, 42)
+        self.assertEqual(settings.font_changes(raised + raised + restored + restored),
+                         [(15, 112, 40), (14, 126, 42)])
+        for extra in [line(16, 100, 38), line(15, 111, 40), restored + raised]:
+            self.assertNotEqual(settings.font_changes(raised + extra + restored),
+                                [(15, 112, 40), (14, 126, 42)])
+        self.assertEqual(settings.font_changes(raised.rstrip("\n")), [])
+
     def test_clipboard_source_requires_transfer_and_is_closed_after_success(self):
         gui, app = mock.Mock(), mock.Mock(env={"WAYLAND_DISPLAY": "private"})
         gui.AcceptanceError = ValueError

@@ -1,6 +1,7 @@
 """Private Wayland Settings-filter routing, with observable setting effects."""
 import json
 import math
+import re
 import subprocess
 
 from scripts.gui_tab_placement import native_click, native_keyboard_lifetime
@@ -39,6 +40,30 @@ def verify_settings_delivery(streams, owner, fence):
         raise ValueError("Settings editing leaked bytes or lost its exact PTY owner")
 
 
+def font_changes(log):
+    """Collapse repeated identical diagnostics, not distinct state transitions."""
+    states = []
+    for size, cols, rows in re.findall(r"Font size set to ([0-9]+(?:\.[0-9]+)?), grid resized to ([0-9]+)x([0-9]+)\r?\n", log):
+        state = (float(size), int(cols), int(rows))
+        if not states or states[-1] != state:
+            states.append(state)
+    return states
+
+
+def observed_font_changes(app, offset):
+    with app.log_path.open("rb") as log:
+        log.seek(offset)
+        data = log.read(4 * 1024 * 1024 + 1)
+    if len(data) > 4 * 1024 * 1024:
+        raise ValueError("Settings case log exceeds its diagnostic budget")
+    return font_changes(data.decode("utf-8", "replace"))
+
+
+def font_state(size, geometry):
+    rows, cols, _width, _height = geometry
+    return size, cols, rows
+
+
 def paste_private(gui, app, text):
     # Foreground ownership and --paste-once make successful transfer observable
     # and keep the source process within this scenario's cleanup boundary.
@@ -75,8 +100,7 @@ def run_settings_input_checks(gui, app, transcript, owner):
                 before = gui.input_streams(records())
                 geometry = gui.latest_terminal_geometry(records(), owner)
                 loss = app.log_count("Window focus changed: false")
-                larger_before = app.log_count("Font size set to 15,")
-                restored_before = app.log_count("Font size set to 14,")
+                log_offset = app.log_path.stat().st_size
                 app.wayland_chord(("ctrl",), "comma")
                 # Start on Family, not Size. Ignoring the paste must not let
                 # the default selected Size row falsely satisfy the oracle.
@@ -94,14 +118,15 @@ def run_settings_input_checks(gui, app, transcript, owner):
                         raise ValueError("unknown native Settings edit")
                 app.wayland_chord((), "Right")
                 gui.wait_until(f"{name}: filtered Size action changes native geometry", lambda:
-                    app.log_count("Font size set to 15,") == larger_before + 1
+                    observed_font_changes(app, log_offset) == [font_state(15, gui.latest_terminal_geometry(records(), owner))]
                     and gui.latest_terminal_geometry(records(), owner) != geometry)
                 larger = gui.latest_terminal_geometry(records(), owner)
                 if not (larger[0] < geometry[0] and larger[1] < geometry[1]):
                     raise gui.AcceptanceError("larger font did not reduce PTY rows and columns")
                 app.wayland_chord((), "Left")
+                expected_changes = [font_state(15, larger), font_state(14, geometry)]
                 gui.wait_until(f"{name}: filtered Size action restores native geometry", lambda:
-                    app.log_count("Font size set to 14,") == restored_before + 1
+                    observed_font_changes(app, log_offset) == expected_changes
                     and gui.latest_terminal_geometry(records(), owner) == geometry)
                 app.wayland_chord((), "Escape")  # clear filter
                 app.wayland_chord((), "Escape")  # close Settings
@@ -113,11 +138,11 @@ def run_settings_input_checks(gui, app, transcript, owner):
                 case = {"case": name, "owner_pid": owner, "before": geometry,
                         "larger": larger, "restored": gui.latest_terminal_geometry(records(), owner),
                         "actual_hex": {str(pid): data.hex() for pid, data in delta.items() if data},
+                        "font_changes": observed_font_changes(app, log_offset),
                         "unrelated_focus_losses": app.log_count("Window focus changed: false") - loss}
                 report["cases"].append(case)
                 verify_settings_delivery(delta, owner, fence)
-                if (app.log_count("Font size set to 15,") != larger_before + 1
-                        or app.log_count("Font size set to 14,") != restored_before + 1):
+                if case["font_changes"] != expected_changes:
                     raise gui.AcceptanceError("Settings case applied an extra font-size change")
                 if case["unrelated_focus_losses"] != 0:
                     raise gui.AcceptanceError("unrelated focus loss invalidated Settings evidence")

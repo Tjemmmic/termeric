@@ -425,12 +425,15 @@ The Wayland `interaction` scenario also includes seven Settings-filter cases:
 clipboard insertion, multiline/oversize rejection, combining/ZWJ Backspace, and
 pointer placement across wide/combining text. Each starts with a non-Size row
 selected so an ignored paste cannot pass through the default Size selection.
-The corrected query must select Size, produce one logged 14→15 font-size change
+The corrected query must select Size, produce a logged 14→15 font-size transition
 with fewer PTY rows/columns, and restore the exact original geometry at 14.
 Exact owner-scoped PTY fences reject leaked filter text/editing keys, and
 unrelated window focus loss fails the case. Clipboard sources run in foreground,
 serve one paste, and are reaped on success or failure. The scenario uses only
 the isolated fixture configuration and never saves user settings.
+The font-state oracle collapses consecutive identical diagnostics from direct
+application and configuration refresh, but rejects additional size/geometry
+transitions and requires each reported grid size to match the actual PTY.
 
 `interaction/settings-input.json` retains diagnostic per-case geometry and
 delivery results. It is not an independently reconstructed/sealed Settings
