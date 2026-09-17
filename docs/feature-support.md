@@ -744,6 +744,16 @@ medians do not erase those bursts, whose attribution remains open. Failed and
 successful calibration records and both full runs are preserved in
 [the calibrated evidence](performance.md#calibrated-resource-comparison-at-5e7d4b9).
 
+A clean `c9dadca` thread/frame diagnostic did not reproduce those large CPU
+bursts across 25 measured Termeric processes; this is not a fix or permission
+to discard the earlier observations. It also found the requested comparison
+font absent: Termeric resolved to Noto Sans Mono, while kitty's actual face
+was not captured. Existing geometry/resource contracts pass but do not verify
+same-font equivalence, so the local figures above must not be promoted as
+fully controlled font-equivalent rankings. Font-resolution controls and CPU
+attribution remain open; see
+[the diagnostic evidence](performance.md#post-workload-cpu-diagnostic-at-c9dadca).
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the

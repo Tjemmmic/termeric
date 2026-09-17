@@ -899,6 +899,15 @@ workload does not establish a general memory-efficiency winner. The changed
 font/window configuration also prevents treating these numbers as optimization
 percentages against the earlier unmatched runs.
 
+**Font-control limitation discovered in the follow-up:** the requested DejaVu
+Sans Mono family is not installed on this host. Termeric's traced renderer
+resolves to Noto Sans Mono; kitty's actual selected face was not captured.
+The runner verifies requested settings and observed geometry, not matching
+resolved fonts. These results therefore pass its existing geometry/resource
+contract but do **not** prove a same-font comparison. The numbers above remain
+observations of this local profile, not fully controlled font-equivalent
+rankings. See the diagnostic follow-up below.
+
 The CPU tail is important: Termeric's third sample in the first run consumed
 22 CPU ticks during the observation, and its first sample in the repeat consumed
 24 ticks, yielding approximately 11% and 12% of one core. All other measured
@@ -916,6 +925,68 @@ directories with original reports, source/binary sidecars, configuration,
 fixture records, and display/launcher logs. Original `/tmp/` paths map to the
 archive directories. Caches/data/state are excluded. This is local unpublished
 diagnostic evidence, not hardware-backed or release-duration acceptance.
+
+### Post-workload CPU diagnostic at `c9dadca`
+
+The next investigation retained the calibrated recipe and unchanged release
+executable, then observed only the explicitly launched terminal processes under
+another private Sway/Xwayland session. A temporary wrapper sampled Linux
+`/proc/PID/task/TID/stat` approximately every 25 ms between the runner's existing
+resource snapshots. PID/TID start times, per-thread names/user/system ticks,
+process ticks, monotonic/wall timestamps, errors, and both original boundary
+snapshots are retained. The common fixture remains excluded. Sampling runs in
+the runner, not the terminal; it still perturbs scheduling and is **diagnostic
+evidence, not a replacement performance distribution**.
+
+Three runs each excluded one warmup per terminal and rotated Termeric/kitty
+order. The first two enabled `RUST_LOG=info,termeric::app=trace`; the third used
+the original warning-level logging. All measured terminal process snapshots
+were complete, and all thread reads succeeded.
+
+| Run | Measured processes per terminal | Post-response observation | Termeric process CPU tick deltas | Largest observed Termeric CPU (% of one core) |
+| --- | ---: | ---: | --- | ---: |
+| Traced extended window | 5 | 6 seconds | 0, 0, 1, 1, 0 | 0.167 |
+| Traced original window | 10 | 2 seconds | 0, 0, 0, 0, 1, 0, 0, 1, 0, 0 | 0.500 |
+| Warning-level original window | 10 | 2 seconds | ten zeros | 0.000 |
+
+The host exposes 100 CPU ticks per second. No run reproduced the previous
+22/24-tick observations. All Termeric thread identities stayed stable and no
+individual Termeric thread accrued a whole observed tick between its first
+and last samples. This does not contradict the occasional one-tick process
+delta: process/thread observations have different boundaries and independently
+rounded counters. In particular, the Git worker did not show measurable CPU
+growth. The frame traces show startup/animation/output frames, with no later
+frame-reason lines during the remaining observation windows; their one-second
+timestamp precision cannot establish whether the last output frame preceded
+the exact resource boundary. This is evidence against a sustained redraw loop
+in these samples, **not attribution or a fix for the original intermittent
+bursts**. No settling delay was added and no original sample was removed.
+Kitty's process CPU deltas were all zero at this resolution; one warning-level
+sample changed its thread set, which remains visible in the diagnostic summary.
+
+Tracing also exposed the font-control limitation above. Under a retained
+sample's isolated XDG environment, `fc-list :family=DejaVu Sans Mono family`
+returned no faces and `fc-match` resolved that request to Noto Sans Mono.
+Termeric's renderer independently logged Noto Sans Mono. This does not prove
+kitty used the same face. The next comparison-control work should reject
+missing requested fonts or explicitly classify substitutions, retain resolved
+face evidence where available, and rerun a genuinely installed common family.
+CPU-burst attribution remains open; do not optimize a guessed subsystem or
+advertise uniformly zero idle CPU from these non-reproductions.
+
+Source `c9dadca8aa25984e1dcf82f1e9b14c06615fda4c` was clean/unchanged in all
+three isolation records; executable SHA-256 remained
+`a05af7c785118613273ea7ced12a254fc2fa7cf2b8e5255c4dcd5630198184a4`.
+No provider workflow ran, and every private runtime was removed. Forced X11
+window teardown produced errors in some launcher logs after sampling; these
+runs do not qualify graceful-close behavior. The local unpublished archive
+`target/terminal-comparison/2026-09-17-c9dadca-cpu-diagnostic.tar.gz` has SHA-256
+`6f6e9bdb1c38af7baa0f811a1b1a740d3a14d27e5785712de4d3229a714f0ccb`.
+It retains the temporary launcher/wrapper, all three runs including warmups,
+thread samples, configurations, fixture/display/log records, font probes,
+and a recountable `summary.json` plus `summarize.py`. All 419 archived files
+were verified byte-for-byte against their originals. Caches/data/state are
+excluded; original `/tmp/` paths map to the archive directory names.
 
 ## Profiling recipes
 
