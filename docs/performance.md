@@ -674,6 +674,54 @@ patch, Cargo artifact paths, and method/hash record. Its SHA-256 is
 It is an opt-in local diagnostic, not a new metric in the versioned release
 benchmark contract or a published release artifact.
 
+### Native follow-up at `d6d5261`
+
+Two independent private-Sway/Xwayland runs on 2026-09-17 repeated the native
+Termeric/kitty comparison after the multicell-repair optimization. Both used
+the same launcher/settings as the `49b3fab` run: one warmup plus five measured
+fresh processes per terminal, rotated launch order, exact 100×30 initial/final
+grids, 1 MiB shared bytes, 10,000-line retention, and llvmpipe OpenGL. All twenty
+measured samples completed with complete process-resource observations. Clean
+source `d6d5261aac99cc2514d100e823bb38acfa9aafb1` and executable SHA-256
+`feb3a86b55ad0fd87f22764e56c41199ac954ed732266f4936abeaa969805f84`
+were unchanged before/after each run. kitty remained version 0.48.2 with the
+same executable hash recorded above.
+
+Both runs are retained, without selecting the faster result. Timings are in
+milliseconds; each row summarizes five samples:
+
+| Run | Terminal | Startup median | Startup p95 | PTY response median | PTY response p95 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| First | Termeric | 201.43 | 209.65 | 74.66 | 84.21 |
+| First | kitty | 365.92 | 410.49 | 27.68 | 30.12 |
+| Repeat | Termeric | 204.18 | 223.45 | 71.49 | 73.18 |
+| Repeat | kitty | 363.57 | 369.79 | 28.31 | 31.34 |
+
+The new Termeric PTY medians are below the earlier 76.42 ms, but the original
+70.19–96.34 ms sample range overlaps both new runs. The old/new native builds
+were not interleaved, and kitty's timing also shifted from its earlier 22.85 ms
+median. This is encouraging directional evidence, **not a proven end-to-end
+percentage improvement** from the repair change. The paired core replay above
+remains the narrower optimization evidence. The native results still identify
+a substantial PTY-response gap to investigate; they do not justify claiming
+that the parser, transport, or renderer alone explains that entire gap.
+
+Startup and PTY rankings pass each run's comparison contract. RSS/idle rankings
+remain rejected for the same 700×388 versus 1001×661 native-window mismatch;
+complete resource reads do not make unlike pixel workloads comparable. Neither
+run promotes native-hardware performance, presentation latency, or daily-driver
+acceptance. No AI-provider workflow ran, and both private compositors/runtimes
+were cleaned up without interacting with the operator's desktop.
+
+The local archive `target/terminal-comparison/2026-09-17-d6d5261-kitty.tar.gz`
+has SHA-256
+`7097bb54ae1f8b69190573246cac9864f3053a38dc1dacdaac011e22328ef838`.
+It contains the launcher plus `termeric-comparison-d6d5261-measured/` and
+`termeric-comparison-d6d5261-repeat/`, each with its original report, source/
+binary isolation sidecar, fixture/configuration records, and display/launcher
+logs. Caches/data/state are excluded. Original `/tmp/` paths map to these
+archive directories; this remains local, unpublished diagnostic evidence.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic

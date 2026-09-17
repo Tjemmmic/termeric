@@ -709,6 +709,14 @@ all ten measured samples, while correctly refusing resource ranking for unequal
 native window sizes. It does not promote hardware performance or platform
 acceptance (see [local comparison evidence](performance.md#current-local-comparison-evidence)).
 
+Two clean `d6d5261` software-Xwayland follow-ups retain all twenty measured
+Termeric/kitty samples after the multicell-repair optimization. Termeric's PTY
+medians decreased relative to the earlier record, but overlapping samples,
+non-interleaved old/new builds, and shifted kitty timing prevent a causal
+end-to-end percentage claim. The paired core diagnostic measures the narrower
+optimization; resource ranking remains disallowed by unequal window sizes.
+See [native follow-up evidence](performance.md#native-follow-up-at-d6d5261).
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the
