@@ -386,6 +386,18 @@ search. Hermetic shortcut, UTF-8 boundary, field-limit, ownership, and raw-PTY
 tests cover this path without accessing a real clipboard or submitting a command.
 Real-desktop clipboard/IME acceptance remains separate.
 
+Keyboard text events and IME commits now use that same atomic form insertion
+path: no partial command is kept near a byte ceiling, and invalid input is
+rejected rather than stripped. Accessibility replacement shares the same
+single-line/control/size validation and permits empty drafts. Acceptance moves
+the caret to the end, focuses the target field, clears preedit, and requests an
+accessibility redraw; rejection preserves both fields, focus, caret, and
+composition. Rejected keyboard events likewise preserve composition; a native
+IME Commit still ends composition even if its text is rejected. These changes
+do not rewrite stored commands or change explicit Save/Run behavior. Model,
+keyboard/IME, semantic-tree, and raw-PTY tests cover both field limits without
+saving or executing a command.
+
 The workspace manager and legacy-snapshot manager share a bounded modal model.
 Each visible entry is a named group with exact Load and Delete actions;
 workspaces additionally expose Rename. Stable actions resolve the saved entry's

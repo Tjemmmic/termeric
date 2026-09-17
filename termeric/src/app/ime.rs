@@ -151,9 +151,7 @@ impl App {
         } else if self.session_panel.is_open() {
             self.session_panel.insert_rename_text(text);
         } else if self.commands_panel.is_open() {
-            for character in printable() {
-                self.commands_panel.form_char(character);
-            }
+            self.commands_panel.insert_form_text(text);
         } else if self.search.is_active() {
             let cursor = self.search_cursor_pos;
             if self

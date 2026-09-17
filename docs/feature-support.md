@@ -362,7 +362,11 @@ matching IME candidate geometry. Automated model, geometry, modifier, and raw-PT
 isolation tests pass; native visual/IME acceptance remains deferred. Configured
 clipboard paste inserts atomically at the active form caret under the existing
 256-byte Name and 16 KiB Command limits, rejects multiline/control/oversized
-input without terminal fallback, and never submits the form. Hermetic clipboard
+input without terminal fallback, and never submits the form. Keyboard text and
+IME commits share that atomic insertion path; semantic replacement shares its
+single-line/control/size validation and clears stale composition only on
+acceptance. Tests cover both field limits, caret/focus preservation on rejection,
+and raw-PTY isolation without saving or executing commands. Hermetic clipboard
 routing tests pass; real-desktop clipboard acceptance is separate. Primary field
 clicks now position the caret at visible whole-grapheme boundaries using the same
 scrolled/animated geometry as painting and IME. Geometry, model, and raw-PTY

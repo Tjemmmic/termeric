@@ -450,23 +450,6 @@ impl CommandsPanel {
         }
     }
 
-    /// Handle a character input in the form
-    pub fn form_char(&mut self, c: char) {
-        let limit = match self.edit_mode {
-            EditMode::EditingName => Self::MAX_FORM_NAME_BYTES,
-            EditMode::EditingCommand => Self::MAX_FORM_COMMAND_BYTES,
-            EditMode::Browse => return,
-        };
-        if c == '\n' || c == '\r' || c == '\0' {
-            return;
-        }
-        if let Some(input) = self.active_input()
-            && input.text().len() + c.len_utf8() <= limit
-        {
-            input.insert_char(c);
-        }
-    }
-
     /// Edit only the active field, preserving the other field and form limits.
     pub fn form_edit(&mut self, edit: TextInputEdit) {
         if let Some(input) = self.active_input() {
@@ -500,8 +483,15 @@ impl CommandsPanel {
         true
     }
 
-    /// Atomic clipboard insertion into the open form. Never truncate a
-    /// command, execute it, or change focus when the paste is rejected.
+    fn valid_form_text(text: &str, limit: usize) -> bool {
+        text.len() <= limit
+            && !text
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    }
+
+    /// Atomic keyboard, IME, and clipboard insertion into the open form.
+    /// Never truncate a command, execute it, or change focus on rejection.
     pub fn insert_form_text(&mut self, text: &str) -> bool {
         if !self.is_open() {
             return false;
@@ -511,12 +501,7 @@ impl CommandsPanel {
             EditMode::EditingCommand => Self::MAX_FORM_COMMAND_BYTES,
             EditMode::Browse => return false,
         };
-        if text.is_empty()
-            || text.len() > limit
-            || text
-                .chars()
-                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
-        {
+        if text.is_empty() || !Self::valid_form_text(text, limit) {
             return false;
         }
         let input = self.active_input().expect("editable field checked above");
@@ -530,7 +515,7 @@ impl CommandsPanel {
     /// Replace a form field from an assistive-technology value action. The
     /// same single-line and size limits apply as to typed input.
     pub fn accessibility_set_name(&mut self, value: &str) -> bool {
-        if value.len() > Self::MAX_FORM_NAME_BYTES || value.contains(['\0', '\n', '\r']) {
+        if !Self::valid_form_text(value, Self::MAX_FORM_NAME_BYTES) {
             return false;
         }
         self.focus_name();
@@ -539,7 +524,7 @@ impl CommandsPanel {
     }
 
     pub fn accessibility_set_command(&mut self, value: &str) -> bool {
-        if value.len() > Self::MAX_FORM_COMMAND_BYTES || value.contains(['\0', '\n', '\r']) {
+        if !Self::valid_form_text(value, Self::MAX_FORM_COMMAND_BYTES) {
             return false;
         }
         self.focus_command();
@@ -821,6 +806,7 @@ mod tests {
         use TextInputEdit::*;
         for name in [true, false] {
             let mut panel = CommandsPanel::new();
+            panel.toggle();
             panel.start_add();
             panel.form_name.replace("untouched");
             panel.form_command.replace("untouched");
@@ -832,7 +818,7 @@ mod tests {
             for edit in [Home, Right, Delete, Right] {
                 panel.form_edit(edit);
             }
-            panel.form_char('X');
+            assert!(panel.insert_form_text("X"));
             assert_eq!(
                 panel.active_input().unwrap().text(),
                 "ae\u{301}X👩\u{200d}💻🇺🇸z"
@@ -928,6 +914,7 @@ mod tests {
     #[test]
     fn form_values_are_utf8_aware_single_line_and_bounded() {
         let mut panel = CommandsPanel::new();
+        panel.toggle();
         panel.start_add();
         assert!(panel.accessibility_set_name("Deploy 🫚"));
         assert_eq!(panel.form_name.text(), "Deploy 🫚");
@@ -935,9 +922,8 @@ mod tests {
         assert_eq!(panel.form_name.text(), "Deploy 🫚");
 
         panel.focus_command();
-        for _ in 0..CommandsPanel::MAX_FORM_COMMAND_BYTES + 10 {
-            panel.form_char('x');
-        }
+        assert!(panel.insert_form_text(&"x".repeat(CommandsPanel::MAX_FORM_COMMAND_BYTES)));
+        assert!(!panel.insert_form_text("x"));
         assert_eq!(
             panel.form_command.text().len(),
             CommandsPanel::MAX_FORM_COMMAND_BYTES
@@ -953,7 +939,7 @@ mod tests {
         let mut panel = CommandsPanel::new();
         panel.toggle();
         panel.start_add();
-        panel.form_char('x');
+        assert!(panel.insert_form_text("x"));
         panel.cancel_edit();
         assert!(panel.is_open());
         assert!(!panel.is_editing());

@@ -2106,6 +2106,9 @@ impl App {
                             self.commands_panel.accessibility_set_command(value)
                         };
                         if accepted {
+                            self.ime.clear_preedit();
+                            self.redraw_scheduler
+                                .request(redraw_scheduler::RedrawReason::Accessibility);
                             self.accessibility.focus_override = Some(request.target_node);
                         }
                     }
@@ -7419,6 +7422,83 @@ mod tests {
             data: None,
         });
         assert!(!app.commands_panel.is_editing());
+        assert!(app.config.commands.is_empty());
+    }
+
+    #[test]
+    fn custom_command_semantic_replacement_rejects_controls_without_changing_focus() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.commands_panel.toggle();
+        app.commands_panel.start_add();
+        for (target, other, limit) in [
+            (COMMANDS_NAME, COMMANDS_COMMAND, 256),
+            (COMMANDS_COMMAND, COMMANDS_NAME, 16 * 1024),
+        ] {
+            for value in ["", "e\u{301}👩\u{200d}💻", &"🫚".repeat(limit / 4)] {
+                app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+                app.redraw_scheduler.begin_frame();
+                app.handle_accessibility_action(ActionRequest {
+                    action: Action::SetValue,
+                    target_tree: TreeId::ROOT,
+                    target_node: target,
+                    data: Some(ActionData::Value(value.into())),
+                });
+                assert!(app.ime.preedit().is_none());
+                assert!(app.redraw_scheduler.begin_frame().contains("accessibility"));
+                let snapshot = app.accessibility_snapshot();
+                assert_eq!(snapshot.focus, target);
+                let node = &snapshot
+                    .nodes
+                    .iter()
+                    .find(|(id, _)| *id == target)
+                    .unwrap()
+                    .1;
+                assert_eq!(node.value(), Some(value));
+                assert_eq!(
+                    node.text_selection().unwrap().focus.character_index,
+                    value.chars().count()
+                );
+            }
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: other,
+                data: None,
+            });
+            let before = app.commands_panel.build_info(&[]);
+            let cursors = (
+                app.commands_panel.form_name.cursor(),
+                app.commands_panel.form_command.cursor(),
+            );
+            app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
+            for value in [
+                "a\nb",
+                "a\rb",
+                "\t",
+                "\x1b",
+                "\0",
+                "\u{7f}",
+                "\u{85}",
+                "\u{2028}",
+                "\u{2029}",
+                &"x".repeat(limit + 1),
+            ] {
+                app.handle_accessibility_action(ActionRequest {
+                    action: Action::SetValue,
+                    target_tree: TreeId::ROOT,
+                    target_node: target,
+                    data: Some(ActionData::Value(value.into())),
+                });
+                assert!(app.ime.preedit().is_some());
+                assert_eq!(app.accessibility_snapshot().focus, other);
+                let after = app.commands_panel.build_info(&[]);
+                assert_eq!(after.form_name, before.form_name);
+                assert_eq!(after.form_command, before.form_command);
+                assert_eq!(app.commands_panel.form_name.cursor(), cursors.0);
+                assert_eq!(app.commands_panel.form_command.cursor(), cursors.1);
+                assert_eq!(after.edit_mode, before.edit_mode);
+            }
+        }
         assert!(app.config.commands.is_empty());
     }
 

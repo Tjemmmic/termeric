@@ -57,10 +57,14 @@ impl App {
                 Key::Named(NamedKey::Enter) if plain => {
                     self.apply_commands_panel_action(CommandsPanelAction::Submit);
                 }
-                Key::Named(NamedKey::Space) if text => self.commands_panel.form_char(' '),
+                Key::Named(NamedKey::Space) if text => {
+                    if !self.commands_panel.insert_form_text(" ") {
+                        return true;
+                    }
+                }
                 Key::Character(value) if text => {
-                    for character in value.chars().filter(|c| !c.is_control()) {
-                        self.commands_panel.form_char(character);
+                    if !self.commands_panel.insert_form_text(value) {
+                        return true;
                     }
                 }
                 _ => return true,
@@ -79,6 +83,102 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exercise_atomic_form_input(app: &mut App) {
+        use crate::ui::commands::panel::{CommandsPanel, EditMode};
+        use winit::event::Ime;
+
+        for name in [true, false] {
+            app.commands_panel.start_add();
+            let limit = if name {
+                256
+            } else {
+                CommandsPanel::MAX_FORM_COMMAND_BYTES
+            };
+            let original = "x".repeat(limit - 3);
+            assert!(if name {
+                app.commands_panel.accessibility_set_name(&original)
+            } else {
+                app.commands_panel.accessibility_set_command(&original)
+            });
+            let field = if name {
+                EditMode::EditingName
+            } else {
+                EditMode::EditingCommand
+            };
+            assert!(app.commands_panel.place_form_caret(field, 1));
+            let assert_unchanged = |app: &App| {
+                let (active, other) = if name {
+                    (
+                        &app.commands_panel.form_name,
+                        &app.commands_panel.form_command,
+                    )
+                } else {
+                    (
+                        &app.commands_panel.form_command,
+                        &app.commands_panel.form_name,
+                    )
+                };
+                assert_eq!(active.text(), original);
+                assert_eq!(active.cursor(), 1);
+                assert!(other.text().is_empty());
+            };
+            for rejected in [
+                "",
+                "xy界",
+                "a\nb",
+                "a\rb",
+                "\t",
+                "\x1b",
+                "\0",
+                "\u{85}",
+                "\u{2028}",
+                "\u{2029}",
+                &"x".repeat(limit + 1),
+            ] {
+                app.handle_ime_event(Ime::Preedit("draft".into(), None));
+                assert!(app.handle_commands_form_key(&Key::Character(rejected.into())));
+                assert_unchanged(app);
+                assert!(app.ime.preedit().is_some());
+                app.handle_ime_event(Ime::Commit(rejected.into()));
+                assert_unchanged(app);
+                // A native Commit ends the composition even when its text
+                // is rejected; keyboard rejection does not end composition.
+                assert!(app.ime.preedit().is_none());
+            }
+            app.handle_ime_event(Ime::Commit("界".into()));
+            let expected = format!("x界{}", &original[1..]);
+            let active = if name {
+                &app.commands_panel.form_name
+            } else {
+                &app.commands_panel.form_command
+            };
+            assert_eq!(active.text(), expected);
+            assert_eq!(active.cursor(), 4);
+            app.handle_ime_event(Ime::Preedit("keep".into(), None));
+            assert!(app.handle_commands_form_key(&Key::Named(NamedKey::Space)));
+            assert!(app.ime.preedit().is_some());
+            assert!(app.handle_commands_form_key(&Key::Named(NamedKey::Backspace)));
+            assert!(app.handle_commands_form_key(&Key::Character("e\u{301}".into())));
+            let active = if name {
+                &app.commands_panel.form_name
+            } else {
+                &app.commands_panel.form_command
+            };
+            assert_eq!(active.text(), format!("xe\u{301}{}", &original[1..]));
+            assert_eq!(active.cursor(), 4);
+            assert!(app.ime.preedit().is_none());
+            assert!(app.config.commands.is_empty());
+        }
+        app.commands_panel.start_add();
+    }
+
+    #[test]
+    fn keyboard_and_ime_form_text_are_atomic_at_each_field_limit() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.commands_panel.toggle();
+        exercise_atomic_form_input(&mut app);
+    }
 
     #[test]
     fn pointer_and_semantic_field_changes_retire_old_preedit() {
@@ -179,6 +279,7 @@ mod tests {
         };
         wait_for(&mut app, "READY");
         app.commands_panel.toggle();
+        exercise_atomic_form_input(&mut app);
         app.commands_panel.start_add();
         assert!(app.handle_commands_form_key(&Key::Character("a界e\u{301}👩\u{200d}💻z".into())));
         for key in [
