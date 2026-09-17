@@ -859,6 +859,7 @@ impl App {
             if self.guard_plugin_writes(&input, writes) {
                 return true;
             }
+            self.input_line_buffer.clear();
         }
         let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) else {
             return false;
@@ -943,6 +944,7 @@ impl App {
             if self.guard_plugin_writes(&input, writes) {
                 return true;
             }
+            self.input_line_buffer.clear();
         }
         let Some(manager) = self
             .tabs
@@ -1009,7 +1011,6 @@ impl App {
             })
             .collect();
         if self.guard_plugin_writes(&candidate, writes) {
-            self.input_line_buffer.clear();
             return true;
         }
         let Some(manager) = self
@@ -5039,7 +5040,7 @@ mod workspace_control_tests {
             app.guardrail.matched.as_ref().unwrap().target,
             format!("Broadcast to {} panes", targets.len())
         );
-        assert!(app.input_line_buffer.is_empty());
+        assert_eq!(app.input_line_buffer, "rm -rf /");
     }
 
     #[cfg(unix)]
@@ -5115,7 +5116,7 @@ mod workspace_control_tests {
 
         assert!(app.guardrail.is_awaiting_current());
         assert_eq!(app.guardrail.matched.as_ref().unwrap().command, "rm -rf /");
-        assert!(app.input_line_buffer.is_empty());
+        assert_eq!(app.input_line_buffer, "rm -rf /");
     }
 
     #[cfg(unix)]
@@ -5165,7 +5166,7 @@ mod workspace_control_tests {
         assert!(app.write_broadcast_bytes(b"\r"));
         assert!(app.guardrail.is_awaiting_current());
         assert_eq!(app.guardrail.matched.as_ref().unwrap().command, "rm -rf /");
-        assert!(app.input_line_buffer.is_empty());
+        assert_eq!(app.input_line_buffer, "rm -rf /");
     }
 
     #[cfg(unix)]

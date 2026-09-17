@@ -971,9 +971,11 @@ impl App {
     /// Track only enough editable-line state to guard a broadcast commit.
     /// Alias expansion and completion deliberately remain disabled while
     /// broadcasting, but destructive input must not bypass the safety check.
+    /// A commit candidate does not consume the existing line: callers clear it
+    /// only after the guard accepts, since withheld bytes never reached the PTY.
     pub(super) fn track_broadcast_guardrail_input(&mut self, data: &[u8]) -> Option<String> {
         if data == b"\r" || data == b"\n" {
-            return Some(std::mem::take(&mut self.input_line_buffer));
+            return Some(self.input_line_buffer.clone());
         }
         if data == b"\x7f" {
             self.input_line_buffer.pop();
@@ -990,7 +992,7 @@ impl App {
             self.input_line_buffer.clear();
         } else if let Ok(text) = std::str::from_utf8(data) {
             if text.contains(['\r', '\n']) {
-                let mut committed = std::mem::take(&mut self.input_line_buffer);
+                let mut committed = self.input_line_buffer.clone();
                 committed.push_str(text);
                 return Some(committed);
             }
@@ -1091,7 +1093,12 @@ impl App {
                                     let _ = tab.write(&wire);
                                 }
                             }
-                            self.clear_terminal_input_tracking();
+                            if !intercepted {
+                                self.input_line_buffer.clear();
+                            }
+                            self.git_completions_visible = false;
+                            self.git_completions.clear();
+                            self.git_completion_index = None;
                             return;
                         }
                     }
@@ -1133,7 +1140,8 @@ impl App {
                     rewrite.clone().unwrap_or_else(|| data.to_vec()),
                 )];
                 if self.guard_plugin_writes(input, writes) {
-                    self.input_line_buffer.clear();
+                    // The typed prefix is still in the terminal. Retain it so
+                    // Cancel followed by Enter checks it again, including aliases.
                     return;
                 }
             }
@@ -1486,6 +1494,236 @@ mod desktop_io_tests {
 
     #[cfg(unix)]
     #[test]
+    fn cancelled_guardrail_rechecks_retained_input_without_sending_submission() {
+        use crate::terminal::guardrails::GuardrailAction;
+        for kind in ["typed", "alias", "completion", "paste", "explicit"] {
+            let typed = match kind {
+                "alias" => "alias /synthetic-never-executed",
+                "completion" => "git checkout ; rm -rf /synthetic-never-executed ma",
+                _ => "rm -rf /synthetic-never-executed",
+            };
+            let prefix = if kind == "explicit" { "\x15" } else { "" };
+            let expected = format!("{prefix}{typed}\x15safe\rZ");
+            let mut app = raw_command_app(expected.len());
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "inert-cancel-retry".into(),
+            };
+            app.config.commands[0].command = "rm -rf".into();
+            if kind == "explicit" {
+                app.run_custom_command(typed);
+            } else {
+                app.write_to_pty(typed.as_bytes());
+                if kind == "completion" {
+                    app.git_completions = vec!["main".into()];
+                    app.git_completion_index = Some(0);
+                    app.git_completions_visible = true;
+                }
+                if kind == "paste" {
+                    app.write_paste_text(" ignored\n");
+                } else {
+                    app.write_to_pty(b"\r");
+                }
+            }
+            for _ in 0..2 {
+                assert!(
+                    app.guardrail.is_awaiting_current(),
+                    "{kind}: submission bypassed confirmation"
+                );
+                let request_id = app.guardrail.request_id();
+                app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+                app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+                app.write_to_pty(b"\r");
+                assert!(
+                    app.guardrail.is_awaiting_current(),
+                    "{kind}: Enter after cancellation bypassed confirmation"
+                );
+                assert_ne!(app.guardrail.request_id(), request_id);
+                assert_eq!(app.input_line_buffer, typed);
+            }
+            let request_id = app.guardrail.request_id();
+            app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+            // Clearing the retained line allows an unrelated safe command.
+            app.write_to_pty(b"\x15");
+            app.write_to_pty(b"safe");
+            app.write_to_pty(b"\r");
+            assert!(!app.guardrail.is_awaiting_current());
+            assert!(app.input_line_buffer.is_empty());
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, expected.as_bytes());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_paste_retains_only_the_prefix_already_sent() {
+        use crate::terminal::guardrails::GuardrailAction;
+        let expected = b"rm safe\rZ";
+        let mut app = raw_command_app(expected.len());
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .tab_type = crate::tabs::TabType::Plugin {
+            plugin_id: "inert-cancel-paste-prefix".into(),
+        };
+        app.write_to_pty(b"rm ");
+        app.write_paste_text("-rf /synthetic-never-executed\n");
+        assert!(app.guardrail.is_awaiting_current());
+        let request_id = app.guardrail.request_id();
+        app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+        assert_eq!(app.input_line_buffer, "rm ");
+        app.write_to_pty(b"safe");
+        app.write_to_pty(b"\r");
+        assert!(!app.guardrail.is_awaiting_current());
+        assert!(app.input_line_buffer.is_empty());
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_broadcast_rechecks_original_line_and_confirms_once_to_each_reader() {
+        use crate::terminal::guardrails::GuardrailAction;
+        for withheld in [b"\r".as_slice(), b" ignored\n".as_slice()] {
+            let typed = "rm -rf /synthetic";
+            let expected = format!("{typed}\rZ");
+            let mut app = raw_command_app(expected.len());
+            let shell = crate::config::ShellConfig {
+                program: Some("/bin/sh".into()),
+                args: vec![
+                    "-c".into(),
+                    format!(
+                        "stty raw -echo; printf READY; dd bs=1 count={} 2>/dev/null | od -An -tx1 -v; sleep 0.2",
+                        expected.len()
+                    ),
+                ],
+                env: Default::default(),
+            };
+            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+            let owner = tab.take_terminal_owner().unwrap();
+            let mut panes = PaneManager::from_existing(
+                owner,
+                shell,
+                100,
+                1024 * 1024,
+                1600.0,
+                480.0,
+                8.0,
+                16.0,
+            );
+            panes.split(SplitDirection::Vertical).unwrap();
+            let targets = panes.pane_ids();
+            let tab_id = tab.id;
+            tab.pane_manager = Some(panes);
+            let wait_all = |app: &mut App, expected: &str| {
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let mut last = Vec::new();
+                loop {
+                    app.process_pty_events();
+                    let Some(panes) = app
+                        .tabs
+                        .as_ref()
+                        .and_then(TabManager::active_tab)
+                        .and_then(|tab| tab.pane_manager.as_ref())
+                    else {
+                        panic!("readers exited before {expected:?}; last output: {last:?}");
+                    };
+                    let outputs: Vec<_> = targets
+                        .iter()
+                        .map(|id| {
+                            panes
+                                .get_pane(*id)
+                                .unwrap()
+                                .terminal
+                                .rows_text(0, 23)
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .collect();
+                    if outputs.iter().all(|output| output.contains(expected)) {
+                        return;
+                    }
+                    assert!(Instant::now() < deadline, "missing {expected}: {outputs:?}");
+                    last = outputs;
+                    std::thread::yield_now();
+                }
+            };
+            wait_all(&mut app, "READY");
+            // Polling startup refreshes tab metadata from the real shell owners.
+            // Mark only the input policy after startup; neither reader is a provider.
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "inert-cancel-broadcast".into(),
+            };
+            app.broadcast = BroadcastState::Active {
+                tab_id,
+                targets: targets.clone(),
+            };
+            app.write_to_pty(typed.as_bytes());
+            if withheld == b"\r" {
+                app.write_to_pty(withheld);
+            } else {
+                app.write_paste_text(std::str::from_utf8(withheld).unwrap());
+            }
+            assert!(app.guardrail.is_awaiting_current());
+            let cancelled_id = app.guardrail.request_id();
+            app.apply_guardrail_action(GuardrailAction::Cancel {
+                request_id: cancelled_id,
+            });
+            app.write_to_pty(b"\r");
+            assert!(app.guardrail.is_awaiting_current());
+            assert_eq!(app.guardrail.matched.as_ref().unwrap().command, typed);
+            assert_eq!(app.input_line_buffer, typed);
+            app.apply_guardrail_action(GuardrailAction::Confirm {
+                request_id: cancelled_id,
+            });
+            assert!(app.guardrail.is_awaiting_current());
+            let request_id = app.guardrail.request_id();
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            assert!(app.input_line_buffer.is_empty());
+            app.write_to_pty(b"Z");
+            let hex = expected
+                .as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            wait_all(&mut app, &hex);
+        }
+    }
+
+    #[test]
+    fn broadcast_commit_candidates_preserve_only_previously_tracked_bytes() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        for bytes in [b"\r".as_slice(), b"\n", b" suffix\n"] {
+            app.input_line_buffer = "rm -rf /synthetic".into();
+            let candidate = app.track_broadcast_guardrail_input(bytes).unwrap();
+            assert_eq!(app.input_line_buffer, "rm -rf /synthetic");
+            assert_eq!(
+                candidate,
+                if bytes.len() == 1 {
+                    "rm -rf /synthetic"
+                } else {
+                    "rm -rf /synthetic suffix\n"
+                }
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn explicit_run_preserves_text_when_saved_names_or_aliases_collide() {
         for (command, expected) in [
             ("B", b"\x15B\r".as_slice()),
@@ -1560,7 +1798,7 @@ mod desktop_io_tests {
             // Inspect, then discard the batch: no destructive bytes are delivered.
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
-            assert_eq!(app.input_line_buffer, "Z");
+            assert_eq!(app.input_line_buffer, format!("{typed}Z"));
         }
     }
 
@@ -1668,7 +1906,7 @@ mod desktop_io_tests {
             )]
         );
         assert!(app.git_completions.is_empty());
-        assert!(app.input_line_buffer.is_empty());
+        assert_eq!(app.input_line_buffer, typed);
         assert!(!app.git_completions_visible);
         // Discard the inspected batch and fence the untouched typed line.
         app.write_to_pty(b"Z");

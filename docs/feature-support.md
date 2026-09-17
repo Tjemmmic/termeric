@@ -445,6 +445,13 @@ cancellation, replay, and read-only refusal have inert raw-PTY coverage. Native
 client acceptance, shell-aware quoting, and broader command parsing remain
 outside this change (see [input contract](accessibility-and-input.md)).
 
+Guarded submission cancellation preserves the already-sent editable prefix on
+the unchanged focused route, so retrying Enter rechecks it. Withheld paste and
+replacement bytes are excluded; safe editing and exactly-once broadcast retry
+have inert raw-PTY coverage. This does not preserve shell state across focus,
+history/cursor edits, or read-only resets, and is not a complete shell parser
+(see [input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected

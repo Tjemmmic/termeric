@@ -4048,7 +4048,7 @@ impl App {
             }
             if guarded_pane.is_some() && !intercepted {
                 self.track_guarded_paste_suffix(text);
-            } else {
+            } else if !intercepted {
                 self.input_line_buffer.clear();
             }
         }

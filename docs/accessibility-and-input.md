@@ -407,6 +407,19 @@ extend the pattern matcher into shell parsing, add branch-name quoting, or
 change the Tab-only insertion path. Native Git-client/operator acceptance
 remains deferred; no real provider was invoked.
 
+Withholding a guarded submission now preserves the tracked prefix already sent
+to the terminal. Cancel does not send an erase command or submission, and a
+subsequent Enter on the unchanged focused route checks that prefix again.
+This includes typed commands, saved aliases, explicit Run, selected Git
+completion, and typed/pasted broadcast input. Rejected paste/replacement bytes
+are not added to the tracker. Successful focused confirmation clears tracking;
+stale confirmation cannot submit a cancelled request. Inert raw-PTY regressions
+cover repeated cancellation, editing to a safe line, paste-prefix fidelity, and
+exactly-once confirmation to both broadcast destinations. This is not a
+per-pane shell editor: focus changes, history/cursor editing, and read-only
+transitions can still reset the lightweight tracker. Native/provider acceptance
+and broader shell-state tracking remain deferred.
+
 The command list now accepts vertical wheel/trackpad scrolling in browse and
 form modes. A shared whole-row viewport limits painting, hover, and Run/Delete
 hit targets to visible commands, with absolute indices preserved after scrolling.
