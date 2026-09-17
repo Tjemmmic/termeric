@@ -435,7 +435,7 @@ raw-PTY tests cover caret placement and resumed IME insertion. Native pointer/IM
 acceptance and drag selection are not claimed.
 
 The configurable Paste shortcut now reaches command, Unicode, domain,
-shortcut-filter, and terminal-search query fields at their byte caret. The
+shortcut-filter, Settings-filter, and terminal-search query fields at their byte caret. The
 shortcut filter retains its 128-scalar bound and refuses paste while recording
 a chord, without reading the clipboard or changing bindings. Query pastes reject controls,
 multiline text, and over-limit input atomically; higher-priority or read-only
@@ -448,7 +448,9 @@ Settings-filter keyboard text and IME commits now use atomic insertion under a
 complete combining/ZWJ events. Backspace removes whole graphemes; dropdowns
 refuse filter mutation, and AltGraph text cannot trigger the Ctrl+S/Ctrl+R
 actions. Model/dispatch/raw-PTY checks cover this boundary without changing
-configuration. Clipboard, selection, caret navigation, and native IME/visual
+configuration. Settings-filter paste uses the same atomic limits, refuses
+clipboard reads while a dropdown is open, and never applies a setting or falls
+through to a retained field or PTY. Selection, caret navigation, and native clipboard/IME/visual
 acceptance for this filter remain separate work.
 
 The Settings filter now shapes and clips a caret-following whole-grapheme slice;

@@ -10,6 +10,7 @@ enum PasteTarget {
     Search,
     CommandsForm,
     ShortcutsFilter,
+    SettingsFilter,
     Blocked,
     Terminal,
 }
@@ -47,10 +48,14 @@ impl App {
                 PasteTarget::ShortcutsFilter
             };
         }
-        if self.settings_panel.is_active()
-            || self.session_panel.is_open()
-            || self.session_dropdown_open
-        {
+        if self.settings_panel.is_active() {
+            return if self.settings_panel.is_dropdown_open() {
+                PasteTarget::Blocked
+            } else {
+                PasteTarget::SettingsFilter
+            };
+        }
+        if self.session_panel.is_open() || self.session_dropdown_open {
             return PasteTarget::Blocked;
         }
         if self.commands_panel.is_open() {
@@ -121,6 +126,7 @@ impl App {
             PasteTarget::Domain => self.domain_picker.insert_query_text(text),
             PasteTarget::CommandsForm => self.commands_panel.insert_form_text(text),
             PasteTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
+            PasteTarget::SettingsFilter => self.settings_panel.insert_filter_text(text),
             PasteTarget::Search => {
                 let cursor = self.search_cursor_pos;
                 let accepted = self
@@ -155,6 +161,165 @@ mod tests {
     use crate::input::keybindings::{BindableAction, KeyChord};
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
+
+    fn open_settings_dropdown(app: &mut App) {
+        app.settings_panel
+            .open_to_section(crate::ui::settings::SettingsSection::Theme);
+        app.settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        app.settings_panel.handle_key(
+            crate::ui::settings::SettingsKey::Right,
+            &app.config,
+            &app.shortcut_registry,
+        );
+        assert!(app.settings_panel.is_dropdown_open());
+    }
+
+    #[test]
+    fn settings_filter_paste_uses_atomic_scalar_limits_without_changing_configuration() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let config_before = toml::to_string(&app.config).unwrap();
+        app.settings_panel.toggle();
+        assert_eq!(app.clipboard_paste_target(), PasteTarget::SettingsFilter);
+        assert!(app.paste_clipboard_payload("e\u{301}👩\u{200d}💻"));
+        assert!(app.paste_clipboard_payload("界"));
+        let before = app
+            .settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        assert_eq!(before.filter, "e\u{301}👩\u{200d}💻界");
+        assert_eq!(before.filter_cursor, before.filter.len());
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        for rejected in [
+            "",
+            "\nexecute\n",
+            "\t",
+            "\u{1b}[200~",
+            "\u{2028}",
+            "\u{2029}",
+            &"x".repeat(257),
+            &"x".repeat(4097),
+        ] {
+            assert!(!app.paste_clipboard_payload(rejected));
+            let info = app
+                .settings_panel
+                .build_info(&app.config, &app.shortcut_registry);
+            assert_eq!(info.filter, before.filter);
+            assert_eq!(info.filter_cursor, before.filter_cursor);
+            assert!(app.ime.preedit().is_some());
+        }
+        assert!(app.paste_clipboard_payload(&"🫚".repeat(255 - before.filter.chars().count())));
+        assert!(app.ime.preedit().is_none());
+        let before = app
+            .settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        assert!(!app.paste_clipboard_payload("e\u{301}"));
+        assert_eq!(
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .filter,
+            before.filter
+        );
+        assert!(app.paste_clipboard_payload("🫚"));
+        assert!(!app.paste_clipboard_payload("x"));
+        assert_eq!(
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .filter
+                .chars()
+                .count(),
+            256
+        );
+        assert_eq!(toml::to_string(&app.config).unwrap(), config_before);
+        assert!(app.redraw_scheduler.has_pending());
+    }
+
+    #[test]
+    fn settings_paste_honors_binding_changes_and_dropdown_refuses_clipboard_reads() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let default = Key::Character("v".into());
+        assert!(app.handle_query_paste_key(&default));
+        let rebound = Key::Named(NamedKey::F8);
+        app.shortcut_registry.set_binding(
+            BindableAction::Paste,
+            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+        );
+        assert!(!app.handle_query_paste_key(&default));
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_query_paste_key(&rebound));
+        open_settings_dropdown(&mut app);
+        assert!(app.clipboard_paste_blocked());
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert!(!app.paste_clipboard_payload("must not select an option"));
+        assert!(app.settings_panel.is_dropdown_open());
+        assert!(
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .filter
+                .is_empty()
+        );
+        app.settings_panel.close();
+        app.settings_panel.toggle();
+        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        assert!(!app.handle_query_paste_key(&rebound));
+    }
+
+    #[test]
+    fn settings_paste_retains_lower_fields_and_respects_higher_modal_owners() {
+        for higher in 0..6 {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.search.start();
+            app.commands_panel.toggle();
+            app.commands_panel.start_add();
+            app.session_panel.open_workspaces();
+            app.settings_panel.toggle();
+            assert!(app.paste_clipboard_payload("settings only"));
+            assert!(app.search.query().is_empty());
+            assert!(app.commands_panel.form_name.text().is_empty());
+            match higher {
+                0 => {
+                    app.info_overlay.show("Notice", vec![]);
+                }
+                1 => app.shortcuts_panel.open(),
+                2 => app.command_palette.open(),
+                3 => app.unicode_picker.open(),
+                4 => app.domain_picker.open(&app.config.domains),
+                _ => {
+                    app.tab_rename = Some(TabRenameState {
+                        tab_id: 0,
+                        original: None,
+                        input: String::new(),
+                        max_chars: 80,
+                    });
+                }
+            }
+            assert_eq!(
+                app.paste_clipboard_payload("higher"),
+                (1..=4).contains(&higher)
+            );
+            assert_eq!(
+                app.settings_panel
+                    .build_info(&app.config, &app.shortcut_registry)
+                    .filter,
+                "settings only"
+            );
+            assert!(app.search.query().is_empty());
+            assert!(app.commands_panel.form_name.text().is_empty());
+            match higher {
+                1 => assert_eq!(
+                    app.shortcuts_panel
+                        .build_info(&app.shortcut_registry)
+                        .filter,
+                    "higher"
+                ),
+                2 => assert_eq!(app.command_palette.build_info().input, "higher"),
+                3 => assert_eq!(app.unicode_picker.build_info().input, "higher"),
+                4 => assert_eq!(app.domain_picker.build_info().input, "higher"),
+                _ => assert!(app.clipboard_paste_blocked()),
+            }
+        }
+    }
 
     #[test]
     fn shortcut_filter_paste_is_atomic_at_caret_and_obeys_its_own_scalar_limit() {
@@ -333,7 +498,7 @@ mod tests {
     #[test]
     fn command_form_paste_respects_higher_modal_owners_and_retained_search() {
         for open in [
-            (|app: &mut App| app.settings_panel.toggle()) as fn(&mut App),
+            open_settings_dropdown as fn(&mut App),
             |app| {
                 app.shortcuts_panel.open();
                 app.shortcuts_panel.start_recording(BindableAction::Copy);
@@ -449,7 +614,7 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.search.start();
         for open in [
-            (|app: &mut App| app.settings_panel.toggle()) as fn(&mut App),
+            open_settings_dropdown as fn(&mut App),
             |app| {
                 app.shortcuts_panel.open();
                 app.shortcuts_panel.start_recording(BindableAction::Copy);
@@ -552,6 +717,13 @@ mod tests {
         app.shortcuts_panel.start_recording(BindableAction::Copy);
         assert!(!app.paste_clipboard_payload("recording must not write"));
         app.shortcuts_panel.close_immediately();
+        app.settings_panel.toggle();
+        assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
+        assert!(!app.paste_clipboard_payload("\nexecute\n"));
+        assert!(!app.paste_clipboard_payload(&"x".repeat(257)));
+        open_settings_dropdown(&mut app);
+        assert!(!app.paste_clipboard_payload("dropdown must not write"));
+        app.settings_panel.close();
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));
         wait_for(&mut app, "5a");

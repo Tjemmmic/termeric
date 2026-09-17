@@ -42,11 +42,11 @@ Native IME and visual acceptance remain deferred. Other text surfaces retain
 their existing candidate placement behavior.
 
 The configured Paste shortcut now inserts clipboard text at the caret of the
-focused command/Unicode/domain palette, shortcut filter, or terminal-search query. Query handlers
+focused command/Unicode/domain palette, shortcut or Settings filter, or terminal-search query. Query handlers
 recognize that binding before consuming its character key; rebinding and
 disabling it use the normal shortcut registry. Pasted text is accepted atomically
 only if it is single-line, contains no controls or Unicode line/paragraph
-separators, and fits the existing limit (256 scalars for palettes, 128 scalars
+separators, and fits the existing limit (256 scalars for palettes and Settings, 128 scalars
 for the shortcut filter, 4 KiB for search). Invalid or oversized pastes leave the query unchanged. Palette results
 refresh once per paste; accepted pastes clear stale IME composition.
 Higher-priority dialogs block background query pastes, and busy domain stages
@@ -62,6 +62,15 @@ of retained Settings, command-form, or search fields; higher dialogs, palettes,
 and a retained tab-rename owner keep their existing priority. A rejected filter
 paste preserves the caret and IME preedit; an accepted paste resets filtered
 results once and clears preedit. This does not modify or save shortcut bindings.
+
+Settings paste is likewise confined to its filter, never to the selected setting
+value. An open dropdown blocks clipboard reads and retains its normal key
+handling. Settings owns paste ahead of retained workspace/command/search panels,
+while higher-priority dialogs, palettes, shortcut editing, and tab rename retain
+their existing ownership. Rejected text cannot fall through to a lower field or
+PTY, and pasting does not apply or save configuration. Hermetic shortcut,
+Unicode-limit, modal-routing, and raw-PTY checks cover this boundary; real desktop
+clipboard acceptance remains deferred.
 
 Search query editing uses unmodified Left/Right to cross whole graphemes,
 Home/End to reach either end, and Backspace/Delete to remove whole graphemes.
@@ -364,7 +373,7 @@ filter edits, so typing cannot silently change the list behind a dropdown.
 Native typing clears stale IME preedit only on a successful edit. Model,
 headless-dispatch, and raw-PTY tests cover limits, modifier ownership, and child
 isolation without saving configuration. This does not add Settings-filter
-clipboard, selection, or caret-navigation support; native IME and visual
+selection or caret-navigation support; native IME and visual
 acceptance remain deferred.
 
 Settings-filter rendering now uses a caret-following whole-grapheme viewport,
