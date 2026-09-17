@@ -376,8 +376,17 @@ them. Changed caret/text clears stale IME preedit and requests a redraw, so
 subsequent keyboard or IME text inserts at the displayed position. Unsupported
 modified editing keys are consumed without mutation or PTY delivery. Plain
 Delete still clears the selected binding, not filter text; modified Delete does
-neither. Recording retains exclusive key ownership. Filter selection and pointer
-caret placement are not implemented by this keyboard-editing change.
+neither. Recording retains exclusive key ownership. Filter selection is not
+implemented.
+
+Primary clicks in the shortcut filter place its caret at the nearest visible
+whole-grapheme boundary, using the renderer/IME viewport at the current scale
+and animation position. Left/right padding maps to the visible slice edges,
+not hidden text. Caret placement preserves result selection and scroll; typed
+and IME text then inserts at that position, with no PTY fallback. Recording and
+collapsed input rectangles consume clicks without moving the caret or activating
+a result. Shared-geometry, dispatch, and raw-PTY regressions cover this path;
+native pointer/visual acceptance remains deferred.
 
 The shortcut filter now renders a caret-following whole-grapheme viewport with
 shaped, explicitly clipped text and a clipped placeholder. Its visible caret

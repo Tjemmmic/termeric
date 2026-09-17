@@ -1,10 +1,33 @@
 //! Bounded text and grapheme editing for the shortcut filter, not chord recording.
 
 use super::*;
+use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
 use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// Called only for primary presses after higher-priority modal routing.
+    /// Even a collapsed or recording input consumes its own rectangle.
+    pub(super) fn handle_shortcuts_filter_click(
+        &mut self,
+        x: f32,
+        y: f32,
+        layout: &ShortcutsPanelLayout,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> bool {
+        if !self.shortcuts_panel.is_active() || !layout.input.contains(x, y) {
+            return false;
+        }
+        if self
+            .shortcuts_panel
+            .place_filter_caret_at(x, y, layout, cell_width, cell_height)
+        {
+            self.shortcut_filter_changed();
+        }
+        true
+    }
+
     pub(super) fn handle_shortcuts_filter_key(&mut self, key: &Key) -> bool {
         if !self.shortcuts_panel.is_active() || self.shortcuts_panel.is_recording() {
             return false;
@@ -166,6 +189,21 @@ mod tests {
             "e\u{301}界👩\u{200d}💻"
         );
         assert!(app.handle_shortcuts_filter_key(&Key::Named(NamedKey::Backspace)));
+        let layout = ShortcutsPanelLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 0);
+        assert!(app.handle_shortcuts_filter_click(
+            layout.input.x,
+            layout.input.y,
+            &layout,
+            8.0,
+            16.0
+        ));
+        app.handle_ime_event(winit::event::Ime::Commit("@".into()));
+        assert_eq!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .filter,
+            "@e\u{301}👩\u{200d}💻"
+        );
         app.modifiers = ModifiersState::CONTROL;
         assert!(app.handle_shortcuts_filter_key(&Key::Named(NamedKey::ArrowLeft)));
         app.modifiers = ModifiersState::empty();
@@ -208,6 +246,59 @@ mod tests {
         app.shortcuts_panel.close();
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a");
+    }
+
+    #[test]
+    fn shortcut_filter_pointer_click_clears_preedit_without_changing_recording() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let layout = ShortcutsPanelLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 0);
+        let (x, y) = (layout.input.x, layout.input.y);
+        assert!(!app.handle_shortcuts_filter_click(x, y, &layout, 8.0, 16.0));
+        app.shortcuts_panel.open();
+        assert!(app.shortcuts_panel.insert_filter_text("e\u{301}界"));
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        assert!(app.handle_shortcuts_filter_click(x, y, &layout, 8.0, 16.0));
+        assert!(app.ime.preedit().is_none());
+        assert!(app.redraw_scheduler.has_pending());
+        assert_eq!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .cursor,
+            0
+        );
+        assert!(app.handle_shortcuts_filter_key(&Key::Character("@".into())));
+        assert_eq!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .filter,
+            "@e\u{301}界"
+        );
+        app.shortcuts_panel
+            .start_recording(crate::input::keybindings::BindableAction::Copy);
+        assert!(app.handle_shortcuts_filter_click(x, y, &layout, 8.0, 16.0));
+        assert!(app.shortcuts_panel.is_recording());
+        assert_eq!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .cursor,
+            1
+        );
+        assert!(!app.handle_shortcuts_filter_click(x, y - 1.0, &layout, 8.0, 16.0));
+        let collapsed = ShortcutsPanelLayout::calculate(60.0, 200.0, 8.0, 16.0, 1.0, 0);
+        app.shortcuts_panel.open();
+        assert!(app.handle_shortcuts_filter_click(
+            collapsed.input.x,
+            collapsed.input.y,
+            &collapsed,
+            8.0,
+            16.0
+        ));
+        assert_eq!(
+            app.shortcuts_panel
+                .build_info(&app.shortcut_registry)
+                .cursor,
+            0
+        );
     }
 
     #[test]

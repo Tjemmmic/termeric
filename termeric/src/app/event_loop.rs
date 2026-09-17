@@ -1610,19 +1610,20 @@ impl ApplicationHandler<AppEvent> for App {
                         {
                             use crate::ui::shortcuts_panel::ShortcutsPanelLayout;
                             let (sw, sh) = renderer.window_size();
+                            let (cw, ch) = (renderer.cell_width(), renderer.cell_height());
                             let info = self.shortcuts_panel.build_info(&self.shortcut_registry);
                             let layout = ShortcutsPanelLayout::calculate(
                                 sw as f32,
                                 sh as f32,
-                                renderer.cell_width(),
-                                renderer.cell_height(),
+                                cw,
+                                ch,
                                 info.animation,
                                 info.entries.len(),
                             );
                             let (mx, my) = (pos.0 as f32, pos.1 as f32);
                             if !layout.contains(mx, my) {
                                 self.shortcuts_panel.close();
-                            } else {
+                            } else if !self.handle_shortcuts_filter_click(mx, my, &layout, cw, ch) {
                                 let action = self.shortcuts_panel.handle_click(
                                     mx,
                                     my,

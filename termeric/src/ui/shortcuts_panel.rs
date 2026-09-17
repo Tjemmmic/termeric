@@ -139,6 +139,23 @@ impl ShortcutsPanelLayout {
         )
     }
 
+    /// Resolve only input clicks, using the exact visible whole-grapheme slice.
+    pub fn input_cursor_at(
+        &self,
+        text: &str,
+        cursor: usize,
+        position: (f32, f32),
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<usize> {
+        let (x, y) = position;
+        if !self.input.contains(x, y) {
+            return None;
+        }
+        self.input_viewport(text, cursor, cell_width, cell_height)?
+            .cursor_at(text, x, cell_width)
+    }
+
     pub fn calculate(
         window_width: f32,
         window_height: f32,
@@ -580,6 +597,31 @@ impl ShortcutsPanel {
         changed || self.filter.cursor() != previous_cursor
     }
 
+    /// Place the caret without changing the filter, result selection, or scroll.
+    /// Hidden/recording/collapsed fields cannot acquire a pointer caret.
+    pub fn place_filter_caret_at(
+        &mut self,
+        x: f32,
+        y: f32,
+        layout: &ShortcutsPanelLayout,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> bool {
+        if !self.is_active() || self.recording {
+            return false;
+        }
+        let Some(cursor) = layout.input_cursor_at(
+            self.filter.text(),
+            self.filter.cursor(),
+            (x, y),
+            cell_width,
+            cell_height,
+        ) else {
+            return false;
+        };
+        self.filter.set_cursor_byte(cursor)
+    }
+
     /// Active filter geometry without rebuilding or cloning result rows.
     pub fn input_viewport(
         &self,
@@ -956,6 +998,109 @@ mod tests {
         assert!(!panel.accessibility_set_filter("new"));
         assert!(panel.is_recording());
         assert_eq!(panel.filter.text().chars().count(), 128);
+    }
+
+    #[test]
+    fn filter_pointer_geometry_matches_visible_graphemes_at_scales_and_animation() {
+        use unicode_segmentation::UnicodeSegmentation;
+        for (width, height, cw, ch) in [(1000.0, 700.0, 8.0, 16.0), (500.0, 400.0, 15.0, 30.0)] {
+            for animation in [0.2, 0.7, 1.0] {
+                let layout = ShortcutsPanelLayout::calculate(width, height, cw, ch, animation, 8);
+                for text in [
+                    "e\u{301}界👩\u{200d}💻🇺🇸".to_string(),
+                    "a界e\u{301}👩\u{200d}💻".repeat(16),
+                ] {
+                    let cursor = text.len();
+                    let view = layout.input_viewport(&text, cursor, cw, ch).unwrap();
+                    let mut x = view.text_x;
+                    for (offset, grapheme) in text[view.text_range.clone()].grapheme_indices(true) {
+                        let pixels = termeric_core::unicode::grapheme_width(grapheme) as f32 * cw;
+                        for (fraction, expected) in [
+                            (0.25, view.text_range.start + offset),
+                            (0.75, view.text_range.start + offset + grapheme.len()),
+                        ] {
+                            assert_eq!(
+                                layout.input_cursor_at(
+                                    &text,
+                                    cursor,
+                                    (x + fraction * pixels, view.text_y),
+                                    cw,
+                                    ch
+                                ),
+                                Some(expected)
+                            );
+                        }
+                        x += pixels;
+                    }
+                    assert_eq!(
+                        layout.input_cursor_at(
+                            &text,
+                            cursor,
+                            (layout.input.x, view.text_y),
+                            cw,
+                            ch
+                        ),
+                        Some(view.text_range.start)
+                    );
+                    assert_eq!(
+                        layout.input_cursor_at(
+                            &text,
+                            cursor,
+                            (layout.input.x + layout.input.width, view.text_y),
+                            cw,
+                            ch
+                        ),
+                        Some(view.text_range.end)
+                    );
+                    for position in [
+                        (view.text_x, layout.input.y - 1.0),
+                        (f32::NAN, view.text_y),
+                        (view.text_x, f32::INFINITY),
+                    ] {
+                        assert_eq!(
+                            layout.input_cursor_at(&text, cursor, position, cw, ch),
+                            None
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filter_pointer_caret_preserves_results_and_refuses_recording_or_collapsed_input() {
+        let mut panel = ShortcutsPanel::new();
+        let layout = ShortcutsPanelLayout::calculate(1000.0, 700.0, 8.0, 16.0, 1.0, 8);
+        let (x, y) = (layout.input.x + 2.2 * 8.0, layout.input.y + 8.0);
+        assert!(!panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
+        panel.open();
+        assert!(panel.insert_filter_text("e\u{301}界👩\u{200d}💻"));
+        panel.selected = 2;
+        panel.scroll_offset = 1;
+        assert!(panel.place_filter_caret_at(x + 6.0, y, &layout, 8.0, 16.0));
+        assert_eq!(panel.filter.cursor(), "e\u{301}".len());
+        assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
+        assert_eq!(panel.filter.text(), "e\u{301}界👩\u{200d}💻");
+        assert!(panel.insert_filter_text("@"));
+        assert_eq!(panel.filter.text(), "e\u{301}@界👩\u{200d}💻");
+        let before = panel.filter.cursor();
+        panel.start_recording(BindableAction::Copy);
+        assert!(!panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
+        assert_eq!(panel.filter.cursor(), before);
+        panel.open();
+        assert!(panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
+        assert_eq!(panel.filter.cursor(), 0);
+        let collapsed = ShortcutsPanelLayout::calculate(60.0, 200.0, 8.0, 16.0, 1.0, 0);
+        assert!(collapsed.input.width > 0.0);
+        assert!(!panel.place_filter_caret_at(
+            collapsed.input.x,
+            collapsed.input.y,
+            &collapsed,
+            8.0,
+            16.0
+        ));
+        panel.close_immediately();
+        assert!(!panel.place_filter_caret_at(x, y, &layout, 8.0, 16.0));
     }
 
     #[test]
