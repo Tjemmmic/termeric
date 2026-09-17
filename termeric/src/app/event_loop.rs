@@ -1041,17 +1041,20 @@ impl ApplicationHandler<AppEvent> for App {
                         match &event.logical_key {
                             Key::Named(NamedKey::Backspace) if self.session_panel.is_renaming() => {
                                 self.session_panel.rename_backspace();
+                                self.ime.clear_preedit();
                             }
                             Key::Named(NamedKey::Space) if self.session_panel.is_renaming() => {
-                                self.session_panel.rename_char(' ');
+                                if self.session_panel.insert_rename_text(" ") {
+                                    self.ime.clear_preedit();
+                                }
                             }
                             Key::Character(text)
                                 if self.session_panel.is_renaming()
                                     && !self.modifiers.control_key()
                                     && !self.modifiers.alt_key() =>
                             {
-                                for character in text.chars() {
-                                    self.session_panel.rename_char(character);
+                                if self.session_panel.insert_rename_text(text) {
+                                    self.ime.clear_preedit();
                                 }
                             }
                             key => {

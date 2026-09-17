@@ -398,6 +398,19 @@ visible, and Up/Down, Enter, Delete, F2, and Escape provide complete keyboard
 operation. Accessibility tests inject in-memory entries and never load, rename,
 or delete a persisted workspace or snapshot.
 
+Workspace rename accepts complete keyboard text and IME commits atomically at
+the existing 128-scalar (at most 512-byte) limit. New input rejects controls and
+Unicode line/paragraph separators rather than stripping them or inserting a
+prefix. Backspace removes a whole extended grapheme, including combining marks,
+ZWJ emoji, and flags. Semantic replacement follows the same input limits, moves
+the caret to the end, and clears preedit only on acceptance; rejection preserves
+the draft and composition. Empty drafts are editable, but the unchanged storage
+validator still rejects empty/blank names on explicit Save. Starting, cancelling,
+submitting, and closing rename retire stale composition. This does not migrate
+or rewrite stored names. Model, semantic-tree, and raw-PTY tests use in-memory
+entries and never submit a rename. Native IME acceptance and rename-specific
+candidate positioning remain separate from this editing contract.
+
 The Settings filter accepts complete native character events and IME commits
 atomically, capped at 256 Unicode scalars (at most 1,024 UTF-8 bytes). Controls,
 line/paragraph separators, and over-limit events are rejected without changing

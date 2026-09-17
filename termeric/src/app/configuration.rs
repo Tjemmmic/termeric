@@ -1116,8 +1116,12 @@ impl App {
                 }
                 self.session_panel.refresh_sessions();
             }
-            SessionPanelAction::Rename(id) => self.session_panel.begin_rename(&id),
+            SessionPanelAction::Rename(id) => {
+                self.ime.clear_preedit();
+                self.session_panel.begin_rename(&id);
+            }
             SessionPanelAction::SubmitRename => {
+                self.ime.clear_preedit();
                 if let Some((id, name)) = self.session_panel.take_rename() {
                     match crate::workspace::rename_workspace(&id, &name) {
                         Ok(()) => {
@@ -1128,8 +1132,14 @@ impl App {
                     }
                 }
             }
-            SessionPanelAction::CancelRename => self.session_panel.cancel_rename(),
-            SessionPanelAction::Close => self.session_panel.close(),
+            SessionPanelAction::CancelRename => {
+                self.ime.clear_preedit();
+                self.session_panel.cancel_rename();
+            }
+            SessionPanelAction::Close => {
+                self.ime.clear_preedit();
+                self.session_panel.close();
+            }
             SessionPanelAction::None => {}
         }
     }

@@ -2219,7 +2219,10 @@ impl App {
                         return;
                     };
                     if self.session_panel.accessibility_set_rename(value) {
+                        self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(SESSION_RENAME_INPUT);
+                        self.redraw_scheduler
+                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -7613,12 +7616,38 @@ mod tests {
             app.session_panel.build_info().rename_text.as_deref(),
             Some("New roots 🫚")
         );
+        for value in ["", "e\u{301}👩\u{200d}💻", &"🫚".repeat(128)] {
+            app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SESSION_RENAME_INPUT,
+                data: Some(ActionData::Value(value.into())),
+            });
+            assert!(app.ime.preedit().is_none());
+            let snapshot = app.accessibility_snapshot();
+            assert_eq!(snapshot.focus, SESSION_RENAME_INPUT);
+            let node = &snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SESSION_RENAME_INPUT)
+                .unwrap()
+                .1;
+            assert_eq!(node.value(), Some(value));
+            assert_eq!(
+                node.text_selection().unwrap().focus.character_index,
+                value.chars().count()
+            );
+        }
+        assert!(app.session_panel.accessibility_set_rename("New roots 🫚"));
+        app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
         app.handle_accessibility_action(ActionRequest {
             action: Action::SetValue,
             target_tree: TreeId::ROOT,
             target_node: SESSION_RENAME_INPUT,
             data: Some(ActionData::Value("bad\nname".into())),
         });
+        assert!(app.ime.preedit().is_some());
         assert_eq!(
             app.session_panel.build_info().rename_text.as_deref(),
             Some("New roots 🫚")
@@ -7630,6 +7659,7 @@ mod tests {
             data: None,
         });
         assert!(!app.session_panel.is_renaming());
+        assert!(app.ime.preedit().is_none());
         assert_eq!(app.session_panel.sessions()[0].display_name, "Workspace 0");
     }
 

@@ -149,9 +149,7 @@ impl App {
         } else if self.settings_panel.is_active() {
             self.settings_panel.insert_filter_text(text);
         } else if self.session_panel.is_open() {
-            for character in printable() {
-                self.session_panel.rename_char(character);
-            }
+            self.session_panel.insert_rename_text(text);
         } else if self.commands_panel.is_open() {
             for character in printable() {
                 self.commands_panel.form_char(character);
@@ -1011,7 +1009,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn palette_atomic_commits_never_fall_through_to_a_live_pty() {
+    fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
         let mut tabs = TabManager::new(
             80,
             24,
@@ -1059,6 +1057,36 @@ mod tests {
             app.unicode_picker.close();
             app.unicode_picker.finish_search_for_test();
         }
+        app.session_panel.set_test_entries(
+            vec![crate::session::panel::SessionEntry {
+                id: "workspace-fixture".into(),
+                display_name: "Roots".into(),
+                subtitle: String::new(),
+                last_modified: String::new(),
+            }],
+            true,
+        );
+        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Rename(
+            "workspace-fixture".into(),
+        ));
+        assert!(
+            app.session_panel
+                .accessibility_set_rename(&"界".repeat(127))
+        );
+        app.handle_ime_event(Ime::Commit("xy".into()));
+        app.handle_ime_event(Ime::Commit("bad\ncommit".into()));
+        assert_eq!(
+            app.session_panel.build_info().rename_text,
+            Some("界".repeat(127))
+        );
+        app.handle_ime_event(Ime::Commit("🫚".into()));
+        assert_eq!(
+            app.session_panel.build_info().rename_text,
+            Some(format!("{}🫚", "界".repeat(127)))
+        );
+        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::CancelRename);
+        assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
+        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a");
     }

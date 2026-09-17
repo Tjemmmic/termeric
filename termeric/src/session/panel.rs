@@ -3,7 +3,17 @@
 //! A slide-in panel for listing, loading, and deleting saved sessions.
 
 use crate::ui::animation::PanelAnimation;
-use crate::ui::text_input::TextInput;
+use crate::ui::text_input::{TextInput, TextInputEdit};
+
+const MAX_RENAME_CHARACTERS: usize = 128;
+
+fn valid_rename_text(value: &str) -> bool {
+    value.len() <= MAX_RENAME_CHARACTERS * 4
+        && value.chars().count() <= MAX_RENAME_CHARACTERS
+        && !value
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+}
 
 /// Information about a single session for display
 #[derive(Debug, Clone)]
@@ -417,20 +427,23 @@ impl SessionPanel {
         }
     }
 
-    pub fn rename_char(&mut self, character: char) {
-        if self.is_renaming()
-            && character != '\n'
-            && character != '\r'
-            && character != '\0'
-            && self.rename_input.text().chars().count() < 128
+    /// Commit a whole single-line edit, never a truncated prefix.
+    pub fn insert_rename_text(&mut self, text: &str) -> bool {
+        if !self.is_renaming()
+            || text.is_empty()
+            || !valid_rename_text(text)
+            || self.rename_input.text().chars().count() + text.chars().count()
+                > MAX_RENAME_CHARACTERS
         {
-            self.rename_input.insert_char(character);
+            return false;
         }
+        self.rename_input.insert_text(text);
+        true
     }
 
     pub fn rename_backspace(&mut self) {
         if self.is_renaming() {
-            self.rename_input.backspace();
+            self.rename_input.edit_grapheme(TextInputEdit::Backspace);
         }
     }
 
@@ -447,11 +460,7 @@ impl SessionPanel {
     }
 
     pub fn accessibility_set_rename(&mut self, value: &str) -> bool {
-        if !self.is_renaming()
-            || value.trim().is_empty()
-            || value.chars().count() > 128
-            || value.contains(['\n', '\r', '\0'])
-        {
+        if !self.is_renaming() || !valid_rename_text(value) {
             return false;
         }
         self.rename_input.replace(value);
@@ -653,7 +662,7 @@ mod tests {
         });
         panel.begin_rename("workspace-1");
         assert!(panel.is_renaming());
-        panel.rename_char('!');
+        assert!(panel.insert_rename_text("!"));
         assert_eq!(
             panel.take_rename(),
             Some(("workspace-1".into(), "Roots!".into()))
@@ -696,6 +705,45 @@ mod tests {
             panel.handle_key(SessionPanelKey::Rename),
             SessionPanelAction::Rename("workspace-5".into())
         );
+    }
+
+    #[test]
+    fn rename_text_is_atomic_single_line_and_backspace_removes_whole_graphemes() {
+        let mut panel = SessionPanel::new();
+        panel.set_test_entries(
+            vec![SessionEntry {
+                id: "workspace-test".into(),
+                display_name: "Roots".into(),
+                subtitle: String::new(),
+                last_modified: String::new(),
+            }],
+            true,
+        );
+        panel.begin_rename("workspace-test");
+        assert!(panel.accessibility_set_rename(""));
+        assert!(crate::workspace::validate_workspace_name("").is_err());
+        assert!(panel.insert_rename_text("e\u{301}👩\u{200d}💻🇺🇸"));
+        for expected in ["e\u{301}👩\u{200d}💻", "e\u{301}", ""] {
+            panel.rename_backspace();
+            assert_eq!(panel.build_info().rename_text.as_deref(), Some(expected));
+        }
+        assert!(panel.accessibility_set_rename(&"🫚".repeat(127)));
+        for text in ["xy", "a\nb", "\t", "\x1b", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let before = panel.build_info();
+            assert!(!panel.insert_rename_text(text));
+            assert_eq!(panel.build_info().rename_text, before.rename_text);
+            assert_eq!(panel.build_info().rename_cursor, before.rename_cursor);
+        }
+        assert!(panel.insert_rename_text("界"));
+        assert!(!panel.insert_rename_text("x"));
+        let before = panel.build_info().rename_text;
+        for text in ["\t", "\x1b", "\u{2028}", "\u{2029}", &"x".repeat(129)] {
+            assert!(!panel.accessibility_set_rename(text));
+            assert_eq!(panel.build_info().rename_text, before);
+        }
+        panel.cancel_rename();
+        assert!(!panel.insert_rename_text("hidden"));
+        assert!(!panel.accessibility_set_rename("hidden"));
     }
 
     #[test]
