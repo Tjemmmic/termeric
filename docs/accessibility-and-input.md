@@ -418,7 +418,18 @@ commits through the existing local/live-domain route. Local model and raw-PTY
 tests cover both size policies, Unicode deletion, modifiers, preview/cancel,
 explicit local commit, and a vanished target without connecting to a live
 domain. This remains an append/backspace editor: caret navigation, selection,
-clipboard input, and native IME acceptance are not claimed here.
+and native IME acceptance are not claimed here.
+
+The configured Paste shortcut now appends to the inline tab rename draft
+through that same atomic validator. Local and live-domain scalar limits remain
+distinct; empty, multiline, control-containing, and oversized pastes preserve
+the draft, title preview, and composition. Accepted paste updates only the
+captured tab's preview and clears preedit; it never commits or queues a
+live-domain control request. Escape restores the original override. Higher
+modal owners and the session dropdown retain precedence, while tab rename owns
+paste ahead of a retained search. Hermetic shortcut/rebinding/disabling,
+Unicode-limit, preview-cancellation, and raw-PTY tests use no real clipboard or
+remote connection. Native clipboard/IME acceptance remains deferred.
 
 A retained tab rename sits below the shortcut editor, Settings, workspace
 manager, and command manager for keyboard, IME, and clipboard routing. An

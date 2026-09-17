@@ -1201,7 +1201,11 @@ mod tests {
             }
             app.handle_ime_event(Ime::Commit(" resumed".into()));
             assert_eq!(app.tab_rename.as_ref().unwrap().input, "retained resumed");
-            assert!(!app.paste_clipboard_payload("still unsupported for tab rename"));
+            assert!(app.paste_clipboard_payload(" pasted"));
+            assert_eq!(
+                app.tab_rename.as_ref().unwrap().input,
+                "retained resumed pasted"
+            );
             app.tab_rename = None;
             app.search.cancel();
         }

@@ -390,9 +390,12 @@ atomically at the existing local/live-domain title limits, deletes whole
 graphemes with Backspace, and consumes unsupported modified edits without
 saving/cancelling. Captured-tab preview and Escape restoration retain exact
 ownership. Local model and raw-PTY tests cover both limits and ordinary-tab
-commit/cancel without a live-domain connection; the inline editor still lacks
-caret navigation, selection, and clipboard input, and native IME acceptance
-remains deferred (see [input contract](accessibility-and-input.md)).
+commit/cancel without a live-domain connection. Configured clipboard paste now
+appends atomically under those limits, preserves draft/preview/composition on
+rejection, and never commits or queues a live-domain request. Hermetic shortcut,
+modal-ownership, limit, preview-cancellation, and raw-PTY checks pass. The inline
+editor still lacks caret navigation and selection; native clipboard/IME
+acceptance remains deferred (see [input contract](accessibility-and-input.md)).
 
 Shortcut, Settings, workspace, and command panels consistently precede retained
 tab rename for keyboard, IME/candidate geometry, and paste. Their read-only

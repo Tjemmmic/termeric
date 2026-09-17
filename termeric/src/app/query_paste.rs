@@ -10,6 +10,7 @@ enum PasteTarget {
     Search,
     CommandsForm,
     WorkspaceRename,
+    TabRename,
     ShortcutsFilter,
     SettingsFilter,
     Blocked,
@@ -71,7 +72,7 @@ impl App {
             };
         }
         if self.tab_rename.is_some() {
-            return PasteTarget::Blocked;
+            return PasteTarget::TabRename;
         }
         if self.search.is_active() {
             return PasteTarget::Search;
@@ -134,6 +135,7 @@ impl App {
             PasteTarget::Domain => self.domain_picker.insert_query_text(text),
             PasteTarget::CommandsForm => self.commands_panel.insert_form_text(text),
             PasteTarget::WorkspaceRename => self.session_panel.insert_rename_text(text),
+            PasteTarget::TabRename => self.insert_tab_rename_text(text),
             PasteTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
             PasteTarget::SettingsFilter => self.settings_panel.insert_filter_text(text),
             PasteTarget::Search => {
@@ -170,6 +172,122 @@ mod tests {
     use crate::input::keybindings::{BindableAction, KeyChord};
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
+
+    fn exercise_tab_rename_paste(app: &mut App) {
+        let search_before = app.search.query().to_owned();
+        for max_chars in [128, 256] {
+            let tab = app.tabs.as_ref().and_then(TabManager::active_tab);
+            let tab_id = tab.map_or(usize::MAX, |tab| tab.id);
+            let original_title = tab.and_then(|tab| tab.user_title().map(str::to_owned));
+            app.tab_rename = Some(TabRenameState {
+                tab_id,
+                original: original_title.clone(),
+                input: "Roots".into(),
+                max_chars,
+            });
+            assert_eq!(app.clipboard_paste_target(), PasteTarget::TabRename);
+            app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+            for value in [
+                "",
+                "a\nb",
+                "\r",
+                "\t",
+                "\0",
+                "\x1b[200~",
+                "\u{7f}",
+                "\u{85}",
+                "\u{2028}",
+                "\u{2029}",
+                &"x".repeat(max_chars + 1),
+                &"x".repeat(4097),
+            ] {
+                assert!(!app.paste_clipboard_payload(value));
+                assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+                assert!(app.ime.preedit().is_some());
+                if let Some(tab) = app.tabs.as_ref().and_then(TabManager::active_tab) {
+                    assert_eq!(tab.user_title(), original_title.as_deref());
+                }
+            }
+            app.redraw_scheduler.begin_frame();
+            assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
+            assert!(app.ime.preedit().is_none());
+            assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
+            let draft = app.tab_rename.as_ref().unwrap().input.clone();
+            assert_eq!(draft, "Roots界e\u{301}👩\u{200d}💻");
+            assert!(
+                app.paste_clipboard_payload(&"🫚".repeat(max_chars - 1 - draft.chars().count()))
+            );
+            let almost = app.tab_rename.as_ref().unwrap().input.clone();
+            app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
+            assert!(!app.paste_clipboard_payload("e\u{301}"));
+            assert_eq!(app.tab_rename.as_ref().unwrap().input, almost);
+            assert!(app.ime.preedit().is_some());
+            assert!(app.paste_clipboard_payload("🫚"));
+            assert!(!app.paste_clipboard_payload("x"));
+            assert_eq!(
+                app.tab_rename.as_ref().unwrap().input.chars().count(),
+                max_chars
+            );
+            assert_eq!(app.search.query(), search_before);
+            assert!(app.pending_live_domain_controls.is_empty()); // no commit/request
+            if let Some(tab) = app.tabs.as_ref().and_then(TabManager::active_tab) {
+                assert_eq!(
+                    tab.user_title(),
+                    Some(app.tab_rename.as_ref().unwrap().input.as_str())
+                );
+            }
+            assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
+            assert!(app.tab_rename.is_none());
+            if let Some(tab) = app.tabs.as_ref().and_then(TabManager::active_tab) {
+                assert_eq!(tab.user_title(), original_title.as_deref());
+            }
+        }
+    }
+
+    #[test]
+    fn tab_rename_paste_is_atomic_at_both_title_limits_and_cancel_restores_preview() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.search.start();
+        exercise_tab_rename_paste(&mut app);
+    }
+
+    #[test]
+    fn tab_rename_paste_honors_rebinding_disabling_and_higher_modal_guards() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tab_rename = Some(TabRenameState {
+            tab_id: usize::MAX,
+            original: None,
+            input: "Roots".into(),
+            max_chars: 256,
+        });
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let default = Key::Character("v".into());
+        assert!(app.handle_query_paste_key(&default)); // no OS clipboard in headless mode
+        let rebound = Key::Named(NamedKey::F8);
+        app.shortcut_registry.set_binding(
+            BindableAction::Paste,
+            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+        );
+        assert!(!app.handle_query_paste_key(&default));
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_query_paste_key(&rebound));
+        app.commands_panel.toggle();
+        assert!(app.clipboard_paste_blocked());
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert!(!app.paste_clipboard_payload("hidden"));
+        app.commands_panel.start_add();
+        assert!(app.paste_clipboard_payload("front form"));
+        assert_eq!(app.commands_panel.form_name.text(), "front form");
+        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+        app.commands_panel.close();
+        app.session_dropdown_open = true;
+        assert!(app.clipboard_paste_blocked());
+        assert!(!app.paste_clipboard_payload("hidden"));
+        app.session_dropdown_open = false;
+        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+    }
 
     fn open_workspace_rename(app: &mut App) {
         app.session_panel.set_test_entries(
@@ -890,6 +1008,7 @@ mod tests {
         app.apply_session_panel_action(crate::session::panel::SessionPanelAction::CancelRename);
         assert!(!app.paste_clipboard_payload("browse must not write"));
         app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
+        exercise_tab_rename_paste(&mut app);
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));
         wait_for(&mut app, "5a");
