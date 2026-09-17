@@ -485,24 +485,25 @@ the requested values. Without overrides, the historical common numeric size
 and Termeric line-height multiplier 1.0 are unchanged. There is no implicit DPI
 conversion or automatic claim that glyph metrics match.
 
-On the chosen isolated X11 display, a calibration starting point for the local
-100×30 kitty setup is:
+On the chosen isolated X11 display, the locally verified 100×30 / 901×601
+Termeric/kitty calibration recipe is:
 
 ```bash
 python3 scripts/compare_terminals.py \
   --terminal termeric --terminal kitty \
-  --font-size 12 --termeric-font-size 16 --termeric-line-height 1.3 \
-  --window-width 1001 --window-height 661 \
+  --font-size 11 --termeric-font-size 14.67 --termeric-line-height 1.3 \
+  --window-width 901 --window-height 601 \
   --samples 1 --warmups 0 \
   --output target/terminal-comparison/calibration.json
 ```
 
-These values are a starting point, not a verified portable preset. Inspect the
+These values are verified locally, not a portable preset. Inspect the
 actual initial/final grid and window pixels, retain unsuccessful calibration
 records, then collect full warmup/repeated samples with the chosen settings.
 Overrides never bypass the comparison contract. Even matching grid/window
 dimensions do not prove identical glyph rasterization, chrome/content layout,
 renderer backends, or allocator behavior; report those limits with any ranking.
+See [the calibrated evidence](#calibrated-resource-comparison-at-5e7d4b9).
 
 The runner also replaces inherited Wayland/toolkit display selectors and
 reexecutes itself once under a private `dbus-run-session` before every version
@@ -599,9 +600,14 @@ Parser/contract and mocked launch-path regressions cover these failures without
 launching a real terminal. Re-evaluating the five retained schema-2 native
 reports at `49b3fab`, `d6d5261`, and `4081caa` (50 measured samples) leaves all
 their comparison contracts unchanged. Their actual pixel sizes still differ;
-this fix closes a false-positive path, not the pending calibration work.
+this fix closes a false-positive path without promoting mismatched runs. The
+separate calibrated measurements below establish matching geometry locally.
 
 ### Current local comparison evidence
+
+The initial clean baseline follows. The later
+[calibrated resource comparison](#calibrated-resource-comparison-at-5e7d4b9)
+is the newest local record and also permits RSS/CPU ranking.
 
 On 2026-09-17, clean source `49b3fabf62909e4a58183f61495d19131c68b10d`
 completed a schema-2 comparison against installed kitty 0.48.2 on the Ryzen 9
@@ -634,8 +640,9 @@ kitty. The common numeric font size 12 means logical pixels in Termeric and
 points in kitty, not equal physical glyph size. Raw resource observations are
 retained without a memory-efficiency claim; the overall `comparable` flag is
 false even though the two individual timing contracts pass. Pixel-matched
-resource comparisons, native-hardware repeats, and broader terminal coverage
-remain open.
+resource comparisons are absent from this baseline and are addressed for one
+local profile by the later calibrated run. Native-hardware repeats and broader
+terminal coverage remain open.
 
 The full local evidence is preserved in the ignored archive
 `target/terminal-comparison/2026-09-17-49b3fab-kitty.tar.gz`, SHA-256
@@ -855,6 +862,60 @@ It preserves the launcher plus `termeric-comparison-4081caa-measured/` and
 sidecars, configurations, fixture records, and display/launcher logs. Original
 `/tmp/` paths map to these archive directories. Caches/data/state are excluded;
 this is local unpublished evidence, not a release artifact.
+
+### Calibrated resource comparison at `5e7d4b9`
+
+The explicit calibration controls now permit a locally matched resource
+comparison, without weakening any metric guard. The first one-sample attempt
+used Termeric size 16/line height 1.3 and kitty 12 points in 1001×661 windows:
+Termeric had 29 rows while kitty had 30, so all rankings correctly failed.
+The second attempt used the recipe above and matched both initial/final 100×30
+grids and 901×601 native windows. Both attempts are retained as calibration,
+not mixed into the measured sample distributions.
+
+Two subsequent runs each used one warmup plus five fresh measured processes
+per terminal, rotated order, the shared 1 MiB/8,342-line fixture, 10,000-line
+retention, and two-second post-workload CPU observations. All twenty measured
+samples had matched geometry and complete process-resource observations; every
+startup, PTY, RSS, and CPU comparison contract passed. Source
+`5e7d4b9e4da1914de5727d36e564dde8e0f7b3fc` and Termeric executable SHA-256
+`a05af7c785118613273ea7ced12a254fc2fa7cf2b8e5255c4dcd5630198184a4`
+were clean/unchanged across all four runs. This used the same private
+Sway/Xwayland, llvmpipe software rendering, and kitty 0.48.2 executable as the
+preceding comparisons. No AI-provider workflow ran; private runtimes were
+cleaned up. No application memory optimization was made for this calibration.
+
+| Run | Terminal | RSS median (MiB) | Startup median (ms) | PTY response median (ms) | Post-workload CPU median / max (% of one core) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| First | Termeric | 185.42 | 194.46 | 49.34 | 0.00 / 11.00 |
+| First | kitty | 256.31 | 359.09 | 25.62 | 0.00 / 0.00 |
+| Repeat | Termeric | 185.60 | 194.32 | 52.72 | 0.00 / 12.00 |
+| Repeat | kitty | 258.29 | 356.60 | 23.73 | 0.00 / 0.00 |
+
+Termeric used less summed process-tree RSS and started sooner in this profile;
+kitty answered the byte-stream workload sooner. RSS is resident mappings, not
+PSS/private memory, peak allocation, or GPU memory. This limited software-rendered
+workload does not establish a general memory-efficiency winner. The changed
+font/window configuration also prevents treating these numbers as optimization
+percentages against the earlier unmatched runs.
+
+The CPU tail is important: Termeric's third sample in the first run consumed
+22 CPU ticks during the observation, and its first sample in the repeat consumed
+24 ticks, yielding approximately 11% and 12% of one core. All other measured
+CPU samples were zero at this resolution. Neither burst was discarded. Sampling
+starts after the fixture response, not after verified presentation/quiescence;
+attribution of this post-workload activity remains open. A zero median must not
+be presented as uniformly zero idle CPU or absence of background/GPU work.
+
+The archive `target/terminal-comparison/2026-09-17-5e7d4b9-calibrated-kitty.tar.gz`
+has SHA-256
+`a4d0d9cb7ca35912f399272bd52674625e0ca6b21dc792f545376c1fe1538c6d`.
+It includes the launcher, both `termeric-calibration-5e7d4b9-{first,second}/`
+directories, and both `termeric-comparison-5e7d4b9-calibrated{,-repeat}/`
+directories with original reports, source/binary sidecars, configuration,
+fixture records, and display/launcher logs. Original `/tmp/` paths map to the
+archive directories. Caches/data/state are excluded. This is local unpublished
+diagnostic evidence, not hardware-backed or release-duration acceptance.
 
 ## Profiling recipes
 
