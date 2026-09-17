@@ -437,6 +437,14 @@ once. This remains pattern-based checking, not shell parsing or inspection of
 shell-defined aliases; no real provider was used (see
 [input contract](accessibility-and-input.md)).
 
+Selected Git-completion Enter now checks the completed command against plugin
+guardrails before sending any replacement edits or submission. Confirmation
+captures the exact edit batch and originating pane; changed completion lists
+or focus cannot redirect it. Safe/stale-selection paths, captured approval,
+cancellation, replay, and read-only refusal have inert raw-PTY coverage. Native
+client acceptance, shell-aware quoting, and broader command parsing remain
+outside this change (see [input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected

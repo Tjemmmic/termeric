@@ -1063,20 +1063,35 @@ impl App {
                             crate::git::detect_git_completion(&self.input_line_buffer)
                         {
                             let partial_len = partial.len();
-                            // Send backspaces to erase the partial, then type the branch name
-                            if let Some(tabs) = &mut self.tabs {
+                            let completed = format!(
+                                "{}{}",
+                                &self.input_line_buffer
+                                    [..self.input_line_buffer.len() - partial_len],
+                                branch,
+                            );
+                            let mut wire = vec![0x7f; partial_len];
+                            wire.extend_from_slice(branch.as_bytes());
+                            wire.push(b'\r');
+                            // Completion is one exact-owner edit/submit operation.
+                            // Check the resulting command before sending backspaces,
+                            // replacement text, or Enter, and freeze that wire batch.
+                            let intercepted =
+                                self.active_guarded_pane().is_some_and(|(tab_id, pane_id)| {
+                                    self.guard_plugin_writes(
+                                        &completed,
+                                        vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                                            tab_id,
+                                            pane_id,
+                                            wire.clone(),
+                                        )],
+                                    )
+                                });
+                            if !intercepted && let Some(tabs) = &mut self.tabs {
                                 if let Some(tab) = tabs.active_tab_mut() {
-                                    for _ in 0..partial_len {
-                                        let _ = tab.write(b"\x7f"); // backspace
-                                    }
-                                    let _ = tab.write(branch.as_bytes());
-                                    let _ = tab.write(b"\r"); // then Enter
+                                    let _ = tab.write(&wire);
                                 }
                             }
-                            self.input_line_buffer.clear();
-                            self.git_completions_visible = false;
-                            self.git_completions.clear();
-                            self.git_completion_index = None;
+                            self.clear_terminal_input_tracking();
                             return;
                         }
                     }
@@ -1617,6 +1632,152 @@ mod desktop_io_tests {
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
             assert!(!app.guardrail.is_awaiting_current());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_enter_checks_the_completed_command_before_sending_any_edit() {
+        let typed = "git checkout ; rm -rf /synthetic-never-executed ma";
+        let mut app = raw_command_app(typed.len() + 1);
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let target = (tab.id, tab.single_pane_id());
+        tab.tab_type = crate::tabs::TabType::Plugin {
+            plugin_id: "inert-completion-guard".into(),
+        };
+        app.write_to_pty(typed.as_bytes());
+        app.git_completions = vec!["main".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        app.write_to_pty(b"\r");
+        assert!(
+            app.guardrail.is_awaiting_current(),
+            "completion Enter must not bypass the guardrail"
+        );
+        assert_eq!(
+            app.guardrail.matched.as_ref().unwrap().command,
+            "git checkout ; rm -rf /synthetic-never-executed main"
+        );
+        let writes = app.guardrail.confirm(app.guardrail.request_id()).unwrap();
+        assert_eq!(
+            writes,
+            vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                target.0,
+                target.1,
+                b"\x7f\x7fmain\r".to_vec()
+            )]
+        );
+        assert!(app.git_completions.is_empty());
+        assert!(app.input_line_buffer.is_empty());
+        assert!(!app.git_completions_visible);
+        // Discard the inspected batch and fence the untouched typed line.
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_safe_enter_and_unselected_fallback_preserve_exact_bytes() {
+        for (selected, expected) in [
+            (Some(0), b"git checkout ma\x7f\x7fmain\rZ".as_slice()),
+            (None, b"git checkout ma\rZ".as_slice()),
+            (Some(5), b"git checkout ma\rZ".as_slice()),
+        ] {
+            let mut app = raw_command_app(expected.len());
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "inert-safe-completion".into(),
+            };
+            app.write_to_pty(b"git checkout ma");
+            app.git_completions = vec!["main".into()];
+            app.git_completion_index = selected;
+            app.git_completions_visible = true;
+            app.write_to_pty(b"\r");
+            assert!(!app.guardrail.is_awaiting_current());
+            assert!(app.input_line_buffer.is_empty());
+            assert!(app.git_completions.is_empty());
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, expected);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_confirmation_freezes_selection_and_does_not_follow_focus() {
+        use crate::terminal::guardrails::GuardrailAction;
+        let typed = "git checkout ; rm -rf /synthetic-never-executed ma";
+        let expected = format!("{typed}\x7f\x7fmain\rZ");
+        let mut app = raw_command_app(expected.len());
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .tab_type = crate::tabs::TabType::Plugin {
+            plugin_id: "inert-captured-completion".into(),
+        };
+        app.write_to_pty(typed.as_bytes());
+        app.git_completions = vec!["main".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        app.write_to_pty(b"\r");
+        assert!(app.guardrail.is_awaiting_current());
+        let request_id = app.guardrail.request_id();
+        app.tabs.as_mut().unwrap().new_tab_with_command("/bin/sh", &[
+            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.2".into(),
+        ], None, Some("not-the-completion-owner"), None, Default::default()).unwrap();
+        wait_command_output(&mut app, "READY");
+        app.git_completions = vec!["replacement".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        // Confirming background input must not overwrite the focused completion state.
+        assert_eq!(app.git_completions, ["replacement"]);
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, b"Z");
+        app.tabs.as_mut().unwrap().switch_to(0);
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected.as_bytes());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_cancel_and_read_only_refuse_every_edit_byte() {
+        use crate::terminal::guardrails::GuardrailAction;
+        for cancel in [true, false] {
+            let typed = "git checkout ; rm -rf /synthetic-never-executed ma";
+            let mut app = raw_command_app(typed.len() + 1);
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "inert-refused-completion".into(),
+            };
+            app.write_to_pty(typed.as_bytes());
+            app.git_completions = vec!["main".into()];
+            app.git_completion_index = Some(0);
+            app.git_completions_visible = true;
+            app.write_to_pty(b"\r");
+            assert!(app.guardrail.is_awaiting_current());
+            let request_id = app.guardrail.request_id();
+            if cancel {
+                app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+            } else {
+                app.toggle_focused_pane_read_only();
+            }
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            if !cancel {
+                app.toggle_focused_pane_read_only();
+            }
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
         }
     }
 

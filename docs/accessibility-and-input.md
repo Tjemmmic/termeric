@@ -396,6 +396,17 @@ This uses the existing pattern-based plugin guardrail, not a complete shell
 parser or a claim to inspect aliases defined inside the user's shell. Explicit
 Run remains unexpanded, and active broadcast retains its no-expansion policy.
 
+Enter on a selected Git branch completion now applies the plugin guardrail to
+the completed command line before sending any backspace, replacement, or Enter.
+Approval retains that exact edit batch and originating pane, independently of
+later focus or completion-list changes. Safe completions still submit normally;
+missing/stale selections fall through to the ordinary Enter path. Inert raw-PTY
+tests cover withheld edits, exact safe bytes, fallback, captured selection and
+destination, replay, cancellation, and later read-only refusal. This does not
+extend the pattern matcher into shell parsing, add branch-name quoting, or
+change the Tab-only insertion path. Native Git-client/operator acceptance
+remains deferred; no real provider was invoked.
+
 The command list now accepts vertical wheel/trackpad scrolling in browse and
 form modes. A shared whole-row viewport limits painting, hover, and Run/Delete
 hit targets to visible commands, with absolute indices preserved after scrolling.
