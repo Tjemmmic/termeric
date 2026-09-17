@@ -105,11 +105,14 @@ No newer fixed package has been verified here, and no package was installed,
 downgraded, or replaced during this diagnosis.
 
 After a supported unmodified client emits a complete Sixel frame, rerun the
-full native graphics lane against a clean candidate. All seven clients must
+full native graphics lane against a clean candidate. All eight current clients must
 satisfy the existing oracle; do not skip img2sixel, substitute shimmed output, or
 promote the six successful clients to an overall pass. Initial visibility,
 placement, scrolling, and clipping still need the deferred visual review.
-The [Sixel/iTerm2 support status](feature-support.md) remains **Partial**.
+The added independent `timg -I -ps --frames=1 -g2x1` client can exercise the Sixel
+adapter even while img2sixel emits nothing. It does not replace img2sixel or turn
+a partial run into a pass. The [Sixel/iTerm2 support status](feature-support.md)
+remains **Partial**.
 
 For matching a later bug report to this diagnosis, the fixture SHA-256 was
 `b816fdeb08edae3ec293de3a74cde3209961756ef5014f5cb409f6ba6b1ace73`;

@@ -16,17 +16,19 @@ class GraphicsAcceptanceTests(unittest.TestCase):
                          "version": "fixture 1", "output_bytes": 100,
                          "image_id": FIXED_IDS.get(tool, 12345), "cleanup_observed": True}
                         for tool, protocol in PROTOCOLS.items()]
-        self.records.append({"event": "graphics_clients_complete", "attempted": 7, "failed": 0})
+        self.records.append({"event": "graphics_clients_complete", "attempted": 8, "failed": 0})
         self.log = "\n".join([
             *(f"Accepted Kitty image: id={number}, 64x64 pixels" for number in (1701, 1703, 1704, 12345)),
             "Accepted Kitty Unicode placeholder image: id=1702, 64x64 pixels",
             "Accepted Sixel image: cursor advance 8x4 cells",
             "Accepted iTerm2 inline image: cursor advance 2x1 cells",
+            "Accepted Sixel image: cursor advance 2x1 cells",
         ])
 
     def accepted(self, records=None, log=None):
         return graphics_clients_accepted(self.records if records is None else records,
-                                         (self.log if log is None else log).__contains__)
+                                         (self.log if log is None else log).__contains__,
+                                         (self.log if log is None else log).count)
 
     def test_requires_exact_client_set_ids_versions_protocols_and_cleanup(self):
         self.assertTrue(self.accepted())
@@ -50,46 +52,53 @@ class GraphicsAcceptanceTests(unittest.TestCase):
         self.assertFalse(self.accepted(log=self.log.replace("id=12345,", "id=123456,")))
 
     def test_completion_rejects_mismatched_counts_order_and_duplicate_markers(self):
-        for field, value in [("attempted", 6), ("attempted", True), ("failed", 1), ("failed", False)]:
+        for field, value in [("attempted", 7), ("attempted", True), ("failed", 1), ("failed", False)]:
             records = copy.deepcopy(self.records)
             records[-1][field] = value
             with self.assertRaisesRegex(ValueError, "completion"):
-                graphics_clients_ready(records, self.log.__contains__)
+                graphics_clients_ready(records, self.log.__contains__, self.log.count)
         for records in [self.records + [self.records[-1]],
                         [self.records[-1]] + self.records[:-1],
                         [self.records[1], self.records[0]] + self.records[2:]]:
             with self.assertRaisesRegex(ValueError, "completion"):
-                graphics_clients_ready(records, self.log.__contains__)
+                graphics_clients_ready(records, self.log.__contains__, self.log.count)
 
     def test_pre_emission_error_waits_for_remaining_clients_then_fails(self):
         error = {"event": "graphics_client_error", "tool": "img2sixel", "protocol": "sixel",
                  "stage": "validate-output", "error": "no output", "continuing": True}
         partial = self.records[:5] + [error]
-        self.assertFalse(graphics_clients_ready(partial, self.log.__contains__))
-        completed = partial + [self.records[6], {"event": "graphics_clients_complete", "attempted": 7, "failed": 1}]
+        self.assertFalse(graphics_clients_ready(partial, self.log.__contains__, self.log.count))
+        completed = partial + self.records[6:8] + [{"event": "graphics_clients_complete", "attempted": 8, "failed": 1}]
         self.assertFalse(self.accepted(completed))
         with self.assertRaisesRegex(ValueError, "img2sixel.*validate-output.*no output"):
-            graphics_clients_ready(completed, self.log.__contains__)
+            graphics_clients_ready(completed, self.log.__contains__, self.log.count)
         fatal = {**error, "stage": "emit", "continuing": False}
         with self.assertRaisesRegex(ValueError, "emit"):
-            graphics_clients_ready(self.records[:5] + [fatal], self.log.__contains__)
+            graphics_clients_ready(self.records[:5] + [fatal], self.log.__contains__, self.log.count)
         with self.assertRaisesRegex(ValueError, "emit"):
-            graphics_clients_ready(self.records[:5] + [{**fatal, "continuing": True}], self.log.__contains__)
+            graphics_clients_ready(self.records[:5] + [{**fatal, "continuing": True}], self.log.__contains__, self.log.count)
 
     def test_wayland_graphics_declares_all_clients_and_private_input_tools(self):
         tools = required_tools("wayland", ["graphics"], False, True)
         self.assertEqual(set(tools), {"tic", "kitten", "img2sixel", "timg", "wtype", "sway", "swaymsg"})
 
+    def test_both_sixel_clients_require_two_acceptances_and_old_seven_client_shape_fails(self):
+        for count in [0, 1, 3, True, "2"]:
+            self.assertFalse(graphics_clients_accepted(self.records, self.log.__contains__, lambda _: count))
+        self.assertTrue(graphics_clients_accepted(self.records, self.log.__contains__, lambda _: 2))
+        old = self.records[:7] + [{"event": "graphics_clients_complete", "attempted": 7, "failed": 0}]
+        self.assertFalse(self.accepted(old))
+
     def test_explicit_failure_is_never_accepted_and_stops_polling(self):
         error = {"event": "graphics_client_error", "tool": "img2sixel",
                  "stage": "validate-output", "error": "produced no terminal output"}
         self.assertFalse(self.accepted(self.records + [error]))
-        self.assertFalse(graphics_clients_ready(self.records[:-1], self.log.__contains__))
-        self.assertTrue(graphics_clients_ready(self.records, self.log.__contains__))
+        self.assertFalse(graphics_clients_ready(self.records[:-1], self.log.__contains__, self.log.count))
+        self.assertTrue(graphics_clients_ready(self.records, self.log.__contains__, self.log.count))
         with mock.patch.object(gui_acceptance.time, "sleep") as sleep:
             with self.assertRaisesRegex(ValueError, "img2sixel.*validate-output.*no terminal output"):
                 gui_acceptance.wait_until("graphics", lambda:
-                    graphics_clients_ready(self.records[:5] + [error], self.log.__contains__))
+                    graphics_clients_ready(self.records[:5] + [error], self.log.__contains__, self.log.count))
             sleep.assert_not_called()
 
     def test_failed_wayland_run_retains_partial_results_and_cleans_up(self):

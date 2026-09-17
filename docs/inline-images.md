@@ -114,11 +114,14 @@ pressure, and two-terminal isolation. The dedicated `graphics_protocols` fuzz
 target wraps arbitrary fragmented Sixel DCS and iTerm2 OSC payloads and
 continuously asserts the cache, placement, and ownership bounds.
 
-The native Linux GUI harness additionally requires `img2sixel` from libsixel
-and `timg -pi`, runs both against a real PNG through the PTY, requires both
+The native Linux GUI harness additionally requires `img2sixel` from libsixel,
+independent `timg -I -ps --frames=1` Sixel output, and `timg -pi`, runs all three
+against a real PNG through the PTY, requires each
 commands to reach the protocol adapters, and presents their normalized geometry
 through the WGPU image path. The same `timg` executable is independently invoked
 with `-pk` for the Kitty adapter; its generated image ID is not reused as iTerm2
-evidence. The hermetic fixture test proves that all distinct client commands
+evidence. Both Sixel producers must emit complete frames, and the controlled
+fixture must produce exactly two Sixel adapter acceptance log entries. One
+working client cannot waive a broken producer. The hermetic fixture test proves that all distinct client commands
 execute and emit their protocol streams, but a current accepted native artifact
 and subjective scaling/color review on vendor GPUs remain pending.

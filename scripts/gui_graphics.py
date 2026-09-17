@@ -14,11 +14,12 @@ PROTOCOLS = {
     "timg-kitty": "kitty",
     "img2sixel": "sixel",
     "timg-iterm2": "iterm2",
+    "timg-sixel": "sixel",
 }
 FIXED_IDS = {"kitten-stream": 1701, "kitten-unicode-placeholder": 1702,
              "kitten-file": 1703, "kitten-memory": 1704}
-# Seven bounded version/execute pairs, two cleanup waits, and delivery margin.
-CLIENT_TIMEOUT = 180
+# Eight bounded version/execute pairs, two cleanup waits, and delivery margin.
+CLIENT_TIMEOUT = 200
 
 
 def clients_complete(records):
@@ -36,7 +37,7 @@ def clients_complete(records):
     return True
 
 
-def graphics_clients_accepted(records, log_contains):
+def graphics_clients_accepted(records, log_contains, log_count):
     try:
         if not clients_complete(records):
             return False
@@ -63,10 +64,13 @@ def graphics_clients_accepted(records, log_contains):
     messages = [f"Accepted Kitty image: id={image_id}," for image_id in (1701, 1703, 1704, timg_id)]
     messages += ["Accepted Kitty Unicode placeholder image: id=1702,",
                  "Accepted Sixel image:", "Accepted iTerm2 inline image:"]
-    return all(log_contains(message) for message in messages)
+    # Both independent static Sixel producers must reach the terminal parser.
+    # A single acceptance line cannot stand in for both emitted streams.
+    sixel_count = log_count("Accepted Sixel image:")
+    return type(sixel_count) is int and sixel_count == 2 and all(log_contains(message) for message in messages)
 
 
-def graphics_clients_ready(records, log_contains):
+def graphics_clients_ready(records, log_contains, log_count):
     """Collect independent pre-emission failures; abort unsafe/legacy failures."""
     errors = [row for row in records if row.get("event") == "graphics_client_error"]
     complete = clients_complete(records)
@@ -74,7 +78,7 @@ def graphics_clients_ready(records, log_contains):
         if complete or row.get("continuing") is not True or row.get("stage") not in {"version", "execute", "validate-output"}:
             raise ValueError(f"graphics client {row.get('tool')} failed during "
                              f"{row.get('stage')}: {row.get('error')}")
-    return graphics_clients_accepted(records, log_contains)
+    return graphics_clients_accepted(records, log_contains, log_count)
 
 
 def run_wayland_graphics(gui, binary, run_dir, env):
@@ -82,12 +86,12 @@ def run_wayland_graphics(gui, binary, run_dir, env):
     transcript = run_dir / "pty-transcript.jsonl"
     program, arguments = gui.fixture_command(transcript, external_graphics=True)
     app = gui.AppProcess(binary, run_dir, "wayland", program, arguments, env)
-    report = {"schema": 2, "backend": "wayland", "clients": [],
+    report = {"schema": 3, "backend": "wayland", "clients": [],
               "coverage": "native client acceptance, local-media cleanup, and review-only capture; not pixel or real-desktop acceptance"}
     try:
         app.wait_ready("wayland")
-        gui.wait_until("all seven native graphics clients accepted", lambda:
-            graphics_clients_ready(gui.read_records(transcript), app.log_contains), CLIENT_TIMEOUT)
+        gui.wait_until("all eight native graphics clients accepted", lambda:
+            graphics_clients_ready(gui.read_records(transcript), app.log_contains, app.log_count), CLIENT_TIMEOUT)
         gui.wait_until("native Kitty reply", lambda:
             b"\x1b_Gi=17;OK\x1b\\" in gui.transcript_bytes(transcript), 15)
         starts = [row for row in gui.read_records(transcript) if row.get("event") == "started"]

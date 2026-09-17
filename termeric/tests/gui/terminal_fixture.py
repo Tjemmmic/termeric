@@ -322,6 +322,15 @@ def render_external_graphics_clients(
             ["timg", "-pi", "-g2x1", image],
             None,
         ),
+        (
+            "timg-sixel",
+            "timg",
+            "sixel",
+            31,
+            18,
+            ["timg", "-I", "-ps", "--frames=1", "-g2x1", image],
+            None,
+        ),
     )
     first_error = None
     failed = 0

@@ -247,6 +247,9 @@ case " $* " in
   *" -pk "*)
     printf '\\033[?25l\\033_Ga=T,i=2701,q=2,f=100,m=0;iVBORw0KGgo=\\033\\\\\\033[?25h'
     ;;
+  *" -ps "*)
+    printf '\\033Pq~\\033\\\\'
+    ;;
   *)
     printf '\\033]1337;File=inline=1:AA==\\007'
     ;;
@@ -277,7 +280,7 @@ esac
 
             records = [json.loads(line) for line in transcript.read_text().splitlines()]
             self.assertEqual(records[-1]["event"], "graphics_clients_complete")
-            self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (7, 0))
+            self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (8, 0))
             records = records[:-1]
             self.assertEqual(
                 {record["tool"] for record in records},
@@ -289,6 +292,7 @@ esac
                     "timg-kitty",
                     "img2sixel",
                     "timg-iterm2",
+                    "timg-sixel",
                 },
             )
             self.assertEqual(
@@ -299,7 +303,7 @@ esac
                     "timg fixture 1.0",
                 },
             )
-            self.assertEqual(emit.call_count, 7)
+            self.assertEqual(emit.call_count, 8)
             emitted = [call.args[0] for call in emit.call_args_list]
             self.assertTrue(any(b"i=1701" in payload for payload in emitted))
             self.assertTrue(any(b"U=1" in payload for payload in emitted))
@@ -329,9 +333,11 @@ esac
             )
             self.assertNotIn("graphics-client-", file_arguments)
             timg_arguments = timg_args.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(len(timg_arguments), 2)
+            self.assertEqual(len(timg_arguments), 3)
             self.assertEqual(sum("-pk" in line for line in timg_arguments), 1)
             self.assertEqual(sum("-pi" in line for line in timg_arguments), 1)
+            self.assertEqual(sum("-ps" in line for line in timg_arguments), 1)
+            self.assertTrue(any("-ps --frames=1" in line for line in timg_arguments))
             self.assertTrue(any("--compress=0" in line for line in timg_arguments))
             self.assertTrue(all("-g2x1" in line for line in timg_arguments))
             records_by_tool = {record["tool"]: record for record in records}
@@ -392,11 +398,11 @@ esac
                     if isinstance(result, Exception):
                         self.assertIs(caught.exception, result)
                     emit.assert_not_called()
-                    self.assertEqual(run.call_count, 0 if name == "version" else 7)
+                    self.assertEqual(run.call_count, 0 if name == "version" else 8)
                 records = [json.loads(line) for line in transcript.read_text().splitlines()]
-                self.assertEqual(len(records), 8)
+                self.assertEqual(len(records), 9)
                 self.assertEqual(records[-1]["event"], "graphics_clients_complete")
-                self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (7, 7))
+                self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (8, 8))
                 record = records[0]
                 self.assertEqual(record["event"], "graphics_client_error")
                 self.assertIs(record["continuing"], True)
@@ -436,12 +442,13 @@ esac
             self.assertIs(records[-1]["continuing"], False)
             self.assertNotIn("cleanup_observed", records[-1])
 
-    def test_pre_emission_sixel_failure_still_attempts_iterm2_but_fails_overall(self):
+    def test_pre_emission_sixel_failure_still_attempts_iterm2_and_independent_sixel_but_fails_overall(self):
         payloads = [
             b"\x1b_Ga=T,i=1701;AAAA\x1b\\", b"\x1b_Ga=T,i=1702;AAAA\x1b\\",
             b"\x1b_Ga=T,i=1703,t=t;L3RtcC9raXR0eS10dHktZ3JhcGhpY3MtcHJvdG9jb2wtZmFrZQ==\x1b\\",
             b"\x1b_Ga=T,i=1704,t=s;aWNhdC1mYWtl\x1b\\",
             b"\x1b_Ga=T,i=2701;AAAA\x1b\\", b"", b"\x1b]1337;File=inline=1:AAAA\x07",
+            b"\x1bPq~\x1b\\",
         ]
         with tempfile.TemporaryDirectory() as directory:
             transcript = Path(directory) / "transcript.jsonl"
@@ -453,13 +460,14 @@ esac
                     mock.patch.object(terminal_fixture, "wait_for_media_cleanup"):
                 with self.assertRaisesRegex(RuntimeError, "img2sixel produced no terminal output"):
                     terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800))
-                self.assertEqual(run.call_count, 7)
-                self.assertEqual(emit.call_count, 6)
+                self.assertEqual(run.call_count, 8)
+                self.assertEqual(emit.call_count, 7)
                 self.assertTrue(emit.call_args.args[0].endswith(payloads[-1]))
             records = [json.loads(line) for line in transcript.read_text().splitlines()]
-            self.assertEqual(records[-2]["tool"], "timg-iterm2")
+            self.assertEqual(records[-3]["tool"], "timg-iterm2")
+            self.assertEqual(records[-2]["tool"], "timg-sixel")
             self.assertEqual(records[-2]["event"], "graphics_client")
-            self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (7, 1))
+            self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (8, 1))
             errors = [record for record in records if record["event"] == "graphics_client_error"]
             self.assertEqual([record["tool"] for record in errors], ["img2sixel"])
 

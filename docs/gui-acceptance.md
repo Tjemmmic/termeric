@@ -54,7 +54,7 @@ Termeric binary with `xdotool`. Its workspace scenario asserts:
   removal after PTY delivery;
 - independent `timg -pk` Kitty PNG output with its client-generated image ID
   extracted from the APC stream and bound to an exact acceptance diagnostic;
-- real `img2sixel` and `timg -pi` clients emitting Sixel and iTerm2 PNG output
+- real `img2sixel`, `timg -ps`, and `timg -pi` clients emitting Sixel and iTerm2 PNG output
   through the PTY into the shared, pane-clipped GPU image path;
 - a daemon-owned Kitty image created before closing the first live-domain
   window, followed by protocol-v9 decoded-state restoration and a review-only
@@ -235,9 +235,9 @@ deterministic regression gate for the observed row-at-a-time reveal failure;
 the separate native `graphics-clients.png` remains the compositor-level
 artifact for later review.
 
-The workspace client lane invokes seven external streams: four current
+The workspace client lane invokes eight external streams: four current
 `kitten` modes (classic stream, Unicode-placeholder stream, stdin-backed
-temporary file, and POSIX shared memory), independent `timg` Kitty and iTerm2
+temporary file, and POSIX shared memory), independent `timg` Kitty, Sixel, and iTerm2
 backends, and `img2sixel`. The local-media records are written only after the
 temporary file or shared-memory name is no longer present. This makes cleanup
 and successful parsing machine-checkable, while the retained native capture
@@ -471,7 +471,7 @@ whole-panel pixels, or real-desktop clipboard acceptance.
 
 ## Standalone Wayland graphics clients
 
-The `graphics` scenario runs the seven installed image clients listed above
+The `graphics` scenario runs the eight installed image clients listed above
 inside private Sway without the X11 workspace scenario or access to the user's
 desktop. Run it against a clean, built candidate:
 
@@ -500,7 +500,7 @@ and bounded, control-sanitized stderr. An exit status of zero with no output is
 still a failure; non-Kitty output must contain a complete Sixel or iTerm2 frame.
 Version, execution, and output-validation failures occur before PTY emission:
 the fixture marks them `continuing: true`, retains them, and attempts the later
-clients. It writes one `graphics_clients_complete` record after all seven
+clients. It writes one `graphics_clients_complete` record after all eight
 ordered outcomes, with exact attempted/failure counts, then rethrows the first
 client failure. Both native lanes wait for that completion before reporting
 these independent failures. Missing completion can never produce acceptance.
@@ -508,13 +508,19 @@ these independent failures. Missing completion can never produce acceptance.
 Delivery and local-media cleanup failures still abort immediately, because a
 partial protocol write or unconfirmed resource cleanup is not an independent
 client failure. Errors without the new continuation flag also fail immediately.
-The shared polling deadline is 180 seconds, covering the bounded per-client
-version/execute/cleanup waits and delivery margin. The schema-2 Wayland sidecar
+The shared polling deadline is 200 seconds, covering the bounded per-client
+version/execute/cleanup waits and delivery margin. The schema-3 Wayland sidecar
 retains successful client records, client errors, and completion records even
-when the overall run fails. All-success acceptance requires exactly the seven
+when the overall run fails. All-success acceptance requires exactly the eight
 ordered outcomes followed by one consistent completion marker, plus every
-existing image-ID, protocol, cleanup, and renderer-log check.
-Partial results never satisfy the seven-client oracle, and a failure before
+existing image-ID, protocol, cleanup, and renderer-log check. Both static Sixel
+clients must emit complete frames, and exactly two Sixel acceptance entries must
+appear in the controlled fixture's terminal log. One acceptance cannot satisfy
+both clients, and unexpected extra acceptances fail closed. This is a combined
+protocol-adapter count, not a per-image pixel or placement oracle. The timg
+invocation explicitly limits output to one frame. Older seven-client/schema-2
+runs remain historical evidence, not equivalent acceptance for this lane.
+Partial results never satisfy the eight-client oracle, and a failure before
 capture does not produce a review PNG. This distinguishes a client that emitted
 nothing from a terminal that received output but never accepted it; it does not
 diagnose why an external client failed.

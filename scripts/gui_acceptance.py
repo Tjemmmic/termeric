@@ -891,8 +891,8 @@ def run_workspace_scenario(
         app.wait_ready("x11")
         wait_until("fixture startup record", lambda: len(read_records(transcript)) >= 1)
         wait_until(
-            "kitten stream/local-media, independent timg Kitty, img2sixel, and timg iTerm2 output accepted",
-            lambda: graphics_clients_ready(read_records(transcript), app.log_contains),
+            "kitten stream/local-media, timg Kitty/Sixel/iTerm2, and img2sixel output accepted",
+            lambda: graphics_clients_ready(read_records(transcript), app.log_contains, app.log_count),
             CLIENT_TIMEOUT,
         )
         wait_until(
