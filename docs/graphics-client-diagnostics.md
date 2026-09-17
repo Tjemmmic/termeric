@@ -123,6 +123,16 @@ initial frame available for review without skipping img2sixel or weakening the
 oracle. The screenshot alone does not establish placement/scrolling correctness,
 and unsafe or incomplete transfers still abort without diagnostic capture.
 
+The native capture also exposed a fixture overlap: `kitten icat` prefixes its
+normal output with a carriage return, so placing file and shared-memory cases
+on the same row at different columns does not separate their images. Current
+fixtures reserve separate vertical bands from the reported cell height and
+record `placement_policy: vertical-bands-v1` plus `reserved_rows` on client
+outcomes. This fixes review layout without stripping client bytes or changing
+their options. Historical captures with the old shared row cannot establish
+independent visibility of those two clients. Neither layout metadata nor a
+review screenshot replaces the outstanding per-client visual/scrolling checks.
+
 For matching a later bug report to this diagnosis, the fixture SHA-256 was
 `b816fdeb08edae3ec293de3a74cde3209961756ef5014f5cb409f6ba6b1ace73`;
 `/usr/bin/img2sixel` was

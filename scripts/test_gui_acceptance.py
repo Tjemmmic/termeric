@@ -341,6 +341,12 @@ esac
             self.assertTrue(any("--compress=0" in line for line in timg_arguments))
             self.assertTrue(all("-g2x1" in line for line in timg_arguments))
             records_by_tool = {record["tool"]: record for record in records}
+            bands = terminal_fixture.graphics_client_bands((40, 100, 800, 800), [record["tool"] for record in records])
+            for record, payload in zip(records, emitted):
+                row, col, height = bands[record["tool"]]
+                self.assertTrue(payload.startswith(f"\x1b[{row};{col}H".encode()))
+                self.assertEqual((record["cursor_row"], record["cursor_col"], record["reserved_rows"]), (row, col, height))
+                self.assertEqual(record["placement_policy"], "vertical-bands-v1")
             self.assertEqual(records_by_tool["kitten-stream"]["image_id"], 1701)
             self.assertEqual(
                 records_by_tool["kitten-unicode-placeholder"]["image_id"], 1702
@@ -483,6 +489,29 @@ esac
             self.assertIs(records[-1]["drained"], True)
             errors = [record for record in records if record["event"] == "graphics_client_error"]
             self.assertEqual([record["tool"] for record in errors], ["img2sixel"])
+
+    def test_graphics_review_bands_fit_without_horizontal_alignment_assumptions(self):
+        clients = ["kitten-stream", "kitten-unicode-placeholder", "kitten-file", "kitten-memory", "timg-kitty", "img2sixel", "timg-iterm2", "timg-sixel"]
+        for rows, cols, cell_width, cell_height in [(35, 118, 8, 17), (40, 100, 8, 20), (60, 160, 6, 12), (30, 80, 12, 32)]:
+            bands = terminal_fixture.graphics_client_bands((rows, cols, cols * cell_width, rows * cell_height), clients)
+            end = 8
+            for tool in clients:
+                row, col, height = bands[tool]
+                self.assertGreaterEqual(row, end)
+                self.assertEqual(col, 2)
+                if not tool.startswith("timg"):
+                    self.assertGreaterEqual(height * cell_height, 64)
+                else:
+                    self.assertEqual(height, 2)
+                end = row + height
+            self.assertLessEqual(end, rows) # leave a final cursor/newline row
+            self.assertNotEqual(bands["kitten-file"][0], bands["kitten-memory"][0])
+        for geometry in [(20, 118, 944, 340), (35, 4, 32, 595), (35, 118, 0, 595), (35, 118, 944, 1), (True, 118, 944, 595)]:
+            with self.assertRaises(ValueError):
+                terminal_fixture.graphics_client_bands(geometry, clients)
+        for invalid in [clients + [clients[0]], ["unknown"]]:
+            with self.assertRaisesRegex(ValueError, "distinct known clients"):
+                terminal_fixture.graphics_client_bands((35, 118, 944, 595), invalid)
 
     def test_graphics_failure_hold_is_bounded_signal_interruptible_and_requires_drain(self):
         with mock.patch.object(terminal_fixture.time, "monotonic", side_effect=[0, 0, 9.99, 10]), \

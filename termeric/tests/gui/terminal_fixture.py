@@ -203,6 +203,34 @@ def require_media_target(target: bytes, medium: bytes) -> None:
         raise RuntimeError(f"Kitty {medium.decode()} media target is missing: {name}")
 
 
+def graphics_client_bands(geometry, client_tools):
+    """Non-overlapping vertical review slots, independent of client CR output.
+
+    Keep the header and a final cursor/newline row outside the image bands.
+    Kitty/img2sixel receive the unscaled 64px fixture; timg's 2x1 fit is given
+    two rows, also allowing its protocol-specific cursor advancement.
+    """
+    rows, cols, pixel_width, pixel_height = geometry
+    if any(type(value) is not int or not 1 <= value <= 65535 for value in geometry):
+        raise ValueError("graphics review requires positive bounded terminal geometry")
+    cell_width, cell_height = pixel_width // cols, pixel_height // rows
+    if cell_width < 1 or cell_height < 1 or (cols - 1) * cell_width < 64:
+        raise ValueError("graphics review requires pixel cell metrics and space for a 64px image")
+    small = {"timg-kitty", "timg-iterm2", "timg-sixel"}
+    large = {"kitten-stream", "kitten-unicode-placeholder", "kitten-file", "kitten-memory", "img2sixel"}
+    bands = {}
+    row = 8
+    for tool in client_tools:
+        if tool in bands or tool not in small | large:
+            raise ValueError("graphics review requires distinct known clients")
+        height = 2 if tool in small else (64 + cell_height - 1) // cell_height
+        bands[tool] = (row, 2, height)
+        row += height
+    if row > rows:
+        raise ValueError(f"graphics review needs at least {row} rows at this cell height; got {rows}")
+    return bands
+
+
 def render_external_graphics_clients(
     transcript: str,
     terminal_geometry: tuple[int, int, int, int] | None = None,
@@ -228,8 +256,6 @@ def render_external_graphics_clients(
             "kitten-stream",
             "kitten",
             "kitty",
-            8,
-            2,
             [
                 "kitten",
                 "icat",
@@ -247,8 +273,6 @@ def render_external_graphics_clients(
             "kitten-unicode-placeholder",
             "kitten",
             "kitty-unicode-placeholder",
-            16,
-            2,
             [
                 "kitten",
                 "icat",
@@ -267,8 +291,6 @@ def render_external_graphics_clients(
             "kitten-file",
             "kitten",
             "kitty-temporary-file",
-            24,
-            2,
             [
                 "kitten",
                 "icat",
@@ -285,8 +307,6 @@ def render_external_graphics_clients(
             "kitten-memory",
             "kitten",
             "kitty-shared-memory",
-            24,
-            18,
             [
                 "kitten",
                 "icat",
@@ -304,8 +324,6 @@ def render_external_graphics_clients(
             "timg-kitty",
             "timg",
             "kitty",
-            29,
-            2,
             ["timg", "-I", "-pk", "--compress=0", "-g2x1", image],
             None,
         ),
@@ -313,8 +331,6 @@ def render_external_graphics_clients(
             "img2sixel",
             "img2sixel",
             "sixel",
-            31,
-            2,
             ["img2sixel", image],
             None,
         ),
@@ -322,8 +338,6 @@ def render_external_graphics_clients(
             "timg-iterm2",
             "timg",
             "iterm2",
-            34,
-            18,
             ["timg", "-pi", "-g2x1", image],
             None,
         ),
@@ -331,15 +345,15 @@ def render_external_graphics_clients(
             "timg-sixel",
             "timg",
             "sixel",
-            31,
-            18,
             ["timg", "-I", "-ps", "--frames=1", "-g2x1", image],
             None,
         ),
     )
     first_error = None
     failed = 0
-    for tool, version_key, protocol, cursor_row, cursor_col, command, stdin_data in clients:
+    bands = graphics_client_bands((rows, cols, pixel_width, pixel_height), [client[0] for client in clients])
+    for tool, version_key, protocol, command, stdin_data in clients:
+        cursor_row, cursor_col, reserved_rows = bands[tool]
         result = None
         stage = "version"
         try:
@@ -391,6 +405,8 @@ def render_external_graphics_clients(
                 version=versions.get(version_key), stage=stage,
                 error_type=type(error).__name__, error=graphics_diagnostic(str(error)),
                 returncode=getattr(diagnostic, "returncode", None),
+                cursor_row=cursor_row, cursor_col=cursor_col, reserved_rows=reserved_rows,
+                placement_policy="vertical-bands-v1",
                 output_bytes=len(getattr(diagnostic, "stdout", None) or b""),
                 stderr=graphics_diagnostic(stderr),
                 stderr_bytes=len(stderr), stderr_truncated=len(stderr) > 1024,
@@ -411,6 +427,8 @@ def render_external_graphics_clients(
             output_bytes=len(result.stdout),
             cursor_row=cursor_row,
             cursor_col=cursor_col,
+            reserved_rows=reserved_rows,
+            placement_policy="vertical-bands-v1",
             fixture_width=64,
             fixture_height=64,
             terminal_rows=rows,

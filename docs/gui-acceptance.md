@@ -493,6 +493,19 @@ review-only: protocol acceptance is not a pixel oracle or proof that every
 placement is visible. The sidecar is diagnostic, not an independently sealed
 graphics-publication contract. Real-client visual judgment remains manual.
 
+Client review placement uses `vertical-bands-v1`: five unscaled 64px producers
+(the four kitten cases and img2sixel) reserve enough rows for the reported cell
+height, while each bounded 2x1 timg case reserves two rows. Bands start below
+the fixture header and leave a final cursor/newline row. Invalid pixel metrics
+or a surface too small for the complete layout fail before client execution.
+Every client outcome records its requested cursor row/column and reserved rows.
+These are fixture allocations, not assertions about actual rendered bounds.
+The client commands and output bytes are unchanged. Separate rows matter because
+normal `kitten icat` output begins with a carriage return: the historical
+file/shared-memory cases shared a row and could overpaint one another despite
+different requested columns. The current layout does not rely on horizontal
+cursor placement surviving client output.
+
 Client version, execution, output-validation, delivery, and local-media cleanup
 failures produce a `graphics_client_error` transcript record. The record identifies the client,
 protocol, stage, known version, exit status (when available), output byte count,
