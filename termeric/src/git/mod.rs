@@ -124,14 +124,30 @@ impl GitRepo {
     }
 
     pub(crate) fn branch_names(&self) -> Result<Vec<String>, git2::Error> {
-        let mut names = self.local_branches()?;
-        for remote in self.remote_branches()? {
-            if !names.contains(&remote) {
-                names.push(remote);
-            }
-        }
-        Ok(names)
+        Ok(merge_sorted_branches(
+            self.local_branches()?,
+            self.remote_branches()?,
+        ))
     }
+}
+
+/// Both inputs are sorted and individually unique. Keep locals first, followed
+/// by remote-only names in their existing order. The local cursor only advances:
+/// duplicate checking takes O(local + remote) comparisons, without a second set
+/// or cloning any branch strings. Never compare against the appended suffix,
+/// since the combined local-first result is not necessarily globally sorted.
+fn merge_sorted_branches(mut local: Vec<String>, remote: Vec<String>) -> Vec<String> {
+    let local_count = local.len();
+    let mut cursor = 0;
+    for name in remote {
+        while cursor < local_count && local[cursor] < name {
+            cursor += 1;
+        }
+        if cursor == local_count || local[cursor] != name {
+            local.push(name);
+        }
+    }
+    local
 }
 
 fn filter_branches(branches: &[String], partial: &str) -> Vec<String> {
@@ -209,6 +225,105 @@ pub fn detect_git_completion(input: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_merge_matches_local_first_reference_for_all_small_subsets() {
+        let candidates = ["A", "a", "a/branch", "feature", "main", "é", "界"];
+        for local_mask in 0..1usize << candidates.len() {
+            for remote_mask in 0..1usize << candidates.len() {
+                let subset = |mask: usize| {
+                    candidates
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| mask & (1 << index) != 0)
+                        .map(|(_, name)| name.to_string())
+                        .collect::<Vec<_>>()
+                };
+                let local = subset(local_mask);
+                let remote = subset(remote_mask);
+                let mut expected = local.clone();
+                for name in &remote {
+                    if !expected.contains(name) {
+                        expected.push(name.clone());
+                    }
+                }
+                assert_eq!(merge_sorted_branches(local, remote), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn branch_merge_moves_retained_name_storage_without_cloning() {
+        let local = vec![String::from("main"), String::from("z-local")];
+        let remote = vec![String::from("a-remote"), String::from("main")];
+        let pointers = [local[0].as_ptr(), local[1].as_ptr(), remote[0].as_ptr()];
+        let result = merge_sorted_branches(local, remote);
+        assert_eq!(result, ["main", "z-local", "a-remote"]);
+        for (name, pointer) in result.iter().zip(pointers) {
+            assert_eq!(name.as_ptr(), pointer);
+        }
+    }
+
+    #[test]
+    fn branch_merge_preserves_large_overlapping_lists_and_completion_priority() {
+        let local = (20_000..40_000).map(|i| format!("branch-{i:05}")).collect();
+        let remote = (0..60_000).map(|i| format!("branch-{i:05}")).collect();
+        let result = merge_sorted_branches(local, remote);
+        let expected: Vec<_> = (20_000..40_000)
+            .chain(0..20_000)
+            .chain(40_000..60_000)
+            .map(|i| format!("branch-{i:05}"))
+            .collect();
+        assert_eq!(result, expected);
+        assert_eq!(filter_branches(&result, "BRANCH-20000"), ["branch-20000"]);
+        assert_eq!(filter_branches(&result, "59999"), ["branch-59999"]);
+        assert_eq!(filter_branches(&result, ""), expected);
+    }
+
+    #[test]
+    fn repository_branch_snapshot_preserves_remote_normalization_and_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let repo = Repository::init_bare(directory.path()).unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature =
+            git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(1, 0))
+                .unwrap();
+        let commit = repo
+            .commit(None, &signature, &signature, "fixture", &tree, &[])
+            .unwrap();
+        for reference in [
+            "refs/heads/z-local",
+            "refs/heads/main",
+            "refs/heads/upstream/shared",
+            "refs/remotes/origin/main",
+            "refs/remotes/origin/a-remote",
+            "refs/remotes/origin/upstream/shared",
+            "refs/remotes/upstream/shared",
+            "refs/remotes/upstream/other",
+        ] {
+            repo.reference(reference, commit, false, "fixture").unwrap();
+        }
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+            false,
+            "fixture",
+        )
+        .unwrap();
+        drop(tree);
+        let names = GitRepo { repo }.branch_names().unwrap();
+        assert_eq!(
+            names,
+            [
+                "main",
+                "upstream/shared",
+                "z-local",
+                "a-remote",
+                "upstream/other"
+            ]
+        );
+    }
 
     #[test]
     fn test_detect_git_completion() {

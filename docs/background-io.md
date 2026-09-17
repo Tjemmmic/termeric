@@ -26,6 +26,19 @@ The immutable result contains status and the deduplicated local/remote branch
 list. Branch completion on each keystroke only filters that list in memory; it
 never opens a repository.
 
+The worker combines the already sorted, unique local and remote lists using a
+forward-only local cursor. Duplicate checking is linear in the two list lengths,
+rather than repeatedly searching the growing result. Local names still come
+first, followed by sorted remote-only names; existing `origin/` normalization,
+HEAD exclusion, case sensitivity, and completion ranking are unchanged. Retained
+strings move into the result without cloning or allocating a separate membership
+set. Tests cover every pair of subsets of a mixed-case/Unicode fixture, retained
+string storage, 60,000 distinct names with overlap, and a real temporary libgit2
+repository. This is an algorithmic improvement, not a measured whole-application
+RSS or latency claim. Repository scans, branch caches, and completion results
+still have no explicit branch-count/byte ceiling; libgit2 work and sorting costs
+remain outside the linear merge.
+
 ## Transcript writer
 
 Each active transcript owns one worker and a bounded channel. The terminal path
