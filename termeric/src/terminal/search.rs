@@ -15,6 +15,13 @@ pub(crate) const MAX_RETAINED_SEARCH_MATCHES: usize = 131_072;
 pub(crate) const MAX_SEARCH_RESULT_INDEX_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_SEARCH_QUERY_BYTES: usize = 4 * 1024;
 
+fn valid_query_text(text: &str) -> bool {
+    text.len() <= MAX_SEARCH_QUERY_BYTES
+        && !text
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+}
+
 struct SearchLine {
     text: String,
     byte_to_col: Option<Vec<usize>>,
@@ -357,7 +364,6 @@ impl Search {
     }
 
     /// Get the current query
-    #[cfg(test)]
     pub fn query(&self) -> &str {
         &self.query
     }
@@ -383,6 +389,7 @@ impl Search {
         if cursor <= self.query.len()
             && self.query.is_char_boundary(cursor)
             && self.query.len().saturating_add(text.len()) <= MAX_SEARCH_QUERY_BYTES
+            && valid_query_text(text)
         {
             self.query.insert_str(cursor, text);
             self.compile_regex_if_needed();
@@ -413,7 +420,7 @@ impl Search {
 
     /// Replace the complete query from an accessibility text action.
     pub fn set_query(&mut self, query: &str, grid: &Grid) -> bool {
-        if query.len() > MAX_SEARCH_QUERY_BYTES {
+        if !valid_query_text(query) {
             return false;
         }
         self.query.clear();
@@ -1221,6 +1228,36 @@ mod tests {
         assert_eq!(search.query(), "ac");
         assert!(!search.insert_text(1, &oversized, terminal.grid()));
         assert_eq!(search.query(), "ac");
+    }
+
+    #[test]
+    fn query_text_rejects_controls_atomically_for_replacement_and_insertion() {
+        let mut terminal = termeric_core::Terminal::new(40, 2);
+        terminal.process(b"needle needle");
+        let mut search = Search::new();
+        search.start();
+        assert!(search.set_query("needle", terminal.grid()));
+        search.finish(terminal.grid());
+        let selected = search.current().cloned();
+        for invalid in [
+            "a\nb", "a\rb", "a\tb", "\0", "\x1b", "\u{85}", "\u{2028}", "\u{2029}",
+        ] {
+            assert!(!search.set_query(invalid, terminal.grid()), "{invalid:?}");
+            assert!(
+                !search.insert_text(1, invalid, terminal.grid()),
+                "{invalid:?}"
+            );
+            assert_eq!(search.query(), "needle");
+            assert_eq!(search.current(), selected.as_ref());
+            assert_eq!(search.match_count(), 2);
+            assert!(!search.is_searching());
+        }
+        let maximum = "🫚".repeat(MAX_SEARCH_QUERY_BYTES / 4);
+        assert!(search.set_query(&maximum, terminal.grid()));
+        assert!(!search.insert_text(0, "a", terminal.grid()));
+        assert_eq!(search.query(), maximum);
+        assert!(search.set_query("", terminal.grid()));
+        assert!(search.insert_text(0, "e\u{301}👩\u{200d}💻", terminal.grid()));
     }
 
     #[test]

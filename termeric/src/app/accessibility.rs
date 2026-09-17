@@ -1088,7 +1088,16 @@ impl App {
     fn handle_search_accessibility_action(&mut self, request: ActionRequest) {
         if request.target_node == SEARCH_INPUT {
             match request.action {
-                Action::Focus => self.accessibility.focus_override = Some(SEARCH_INPUT),
+                Action::Focus => {
+                    // Preserve the caret when possible. A recent insertion may
+                    // have joined a grapheme across it; resume at the end then.
+                    let reason = redraw_scheduler::RedrawReason::Accessibility;
+                    if self.focus_search_query_at(self.search_cursor_pos, reason)
+                        || self.focus_search_query_at(self.search.query().len(), reason)
+                    {
+                        self.accessibility.focus_override = Some(SEARCH_INPUT);
+                    }
+                }
                 Action::SetValue if self.search.is_active() => {
                     let Some(ActionData::Value(value)) = request.data.as_ref() else {
                         return;
@@ -1098,7 +1107,10 @@ impl App {
                         .unwrap_or(false)
                     {
                         self.search_cursor_pos = value.len();
+                        self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(SEARCH_INPUT);
+                        self.redraw_scheduler
+                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -6048,6 +6060,155 @@ mod tests {
                 layout.row_height,
             ),
         );
+    }
+
+    #[test]
+    fn search_semantic_focus_resumes_confirmed_input_and_preserves_results() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let mut terminal = termeric_core::Terminal::new(40, 2);
+        terminal.process(b"needle needle");
+        app.search.start();
+        assert!(app.search.set_query("needle", terminal.grid()));
+        app.search.finish(terminal.grid());
+        app.search_cursor_pos = 2;
+        app.search.confirm();
+        let selected = app.search.current().cloned();
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: SEARCH_INPUT,
+            data: None,
+        });
+        assert!(app.search.is_active());
+        assert_eq!(app.search_cursor_pos, 2);
+        assert_eq!(app.search.current(), selected.as_ref());
+        assert_eq!(app.search.match_count(), 2);
+        assert!(!app.search.is_searching());
+        assert!(app.ime.preedit().is_none());
+        assert_eq!(app.accessibility_snapshot().focus, SEARCH_INPUT);
+        assert!(app.search.set_query("e\u{301}", terminal.grid()));
+        app.search_cursor_pos = 1;
+        app.search.confirm();
+        assert!(app.search.is_searching());
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: SEARCH_INPUT,
+            data: None,
+        });
+        assert!(app.search.is_active());
+        assert!(
+            app.search.is_searching(),
+            "resuming does not finish or discard a scan"
+        );
+        assert_eq!(app.search_cursor_pos, "e\u{301}".len());
+        app.search.cancel();
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: SEARCH_INPUT,
+            data: None,
+        });
+        assert!(
+            !app.search.is_active(),
+            "a stale hidden input cannot reopen search"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn search_semantic_replacement_retires_preedit_and_never_writes_to_pty() {
+        let mut tabs = TabManager::new(
+            80,
+            24,
+            crate::config::ShellConfig::default(),
+            100,
+            1024 * 1024,
+        );
+        tabs.new_tab_with_command("/bin/sh", &[
+            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.1".into(),
+        ], None, Some("search-semantic"), None, Default::default()).unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+        let wait_for = |app: &mut App, expected: &str| {
+            let deadline = Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                app.process_pty_events();
+                let output = app.active_terminal().unwrap().rows_text(0, 23);
+                if output.contains(expected) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "missing {expected}: {output}");
+                std::thread::yield_now();
+            }
+        };
+        let replace = |app: &mut App, data| {
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SEARCH_INPUT,
+                data,
+            })
+        };
+        wait_for(&mut app, "READY");
+        app.search.start();
+        for value in ["READY", "e\u{301}👩\u{200d}💻", &"🫚".repeat(1024), ""] {
+            app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+            replace(&mut app, Some(ActionData::Value(value.into())));
+            assert_eq!(app.search.query(), value);
+            assert_eq!(app.search_cursor_pos, value.len());
+            assert!(app.ime.preedit().is_none());
+            let snapshot = app.accessibility_snapshot();
+            assert_eq!(snapshot.focus, SEARCH_INPUT);
+            let input = &snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SEARCH_INPUT)
+                .unwrap()
+                .1;
+            assert_eq!(
+                input.text_selection().unwrap().focus.character_index,
+                value.chars().count()
+            );
+        }
+        app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
+        for data in [
+            None,
+            Some(ActionData::Value("bad\nquery".into())),
+            Some(ActionData::Value("x".repeat(4097).into())),
+        ] {
+            replace(&mut app, data);
+            assert_eq!(app.search.query(), "");
+            assert_eq!(app.search_cursor_pos, 0);
+            assert!(app.ime.preedit().is_some());
+        }
+        app.handle_ime_event(winit::event::Ime::Commit("bad\ncommit".into()));
+        assert_eq!(app.search.query(), "");
+        replace(&mut app, Some(ActionData::Value("READY".into())));
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        app.search.confirm();
+        replace(&mut app, Some(ActionData::Value("stale".into())));
+        assert_eq!(
+            app.search.query(),
+            "READY",
+            "read-only query rejects stale SetValue"
+        );
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: SEARCH_INPUT,
+            data: None,
+        });
+        app.handle_ime_event(winit::event::Ime::Commit("界".into()));
+        assert_eq!(app.search.query(), "READY界");
+        app.command_palette.open();
+        replace(&mut app, Some(ActionData::Value("hidden".into())));
+        assert_eq!(app.search.query(), "READY界", "higher modal owns input");
+        app.command_palette.close();
+        app.search.cancel();
+        app.write_to_pty(b"Z");
+        wait_for(&mut app, "5a");
     }
 
     #[test]

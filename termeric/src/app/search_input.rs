@@ -5,15 +5,18 @@ use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
-    /// Called only after higher-priority pointer owners have intercepted input.
-    pub(super) fn focus_search_query_at(&mut self, cursor: usize) -> bool {
+    /// Called only after higher-priority pointer or semantic owners intercept input.
+    pub(super) fn focus_search_query_at(
+        &mut self,
+        cursor: usize,
+        reason: redraw_scheduler::RedrawReason,
+    ) -> bool {
         if !self.search.resume_input_at(cursor) {
             return false;
         }
         self.search_cursor_pos = cursor;
         self.ime.clear_preedit();
-        self.redraw_scheduler
-            .request(redraw_scheduler::RedrawReason::PointerInput);
+        self.redraw_scheduler.request(reason);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -184,17 +187,17 @@ mod tests {
         let selected = app.search.current_match_index();
         let count = app.search.match_count();
         assert!(count > 0);
-        assert!(app.focus_search_query_at(2));
+        assert!(app.focus_search_query_at(2, redraw_scheduler::RedrawReason::PointerInput));
         assert_eq!(app.search.current_match_index(), selected);
         assert_eq!(app.search.match_count(), count);
         app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
-        assert!(app.focus_search_query_at(3));
+        assert!(app.focus_search_query_at(3, redraw_scheduler::RedrawReason::PointerInput));
         assert!(app.ime.preedit().is_none());
         app.handle_ime_event(winit::event::Ime::Commit("界".into()));
         assert_eq!(app.search.query(), "REA界DY");
         assert_eq!(app.search_cursor_pos, "REA界".len());
         assert!(app.handle_search_key(&Key::Named(NamedKey::Escape)));
-        assert!(!app.focus_search_query_at(0));
+        assert!(!app.focus_search_query_at(0, redraw_scheduler::RedrawReason::PointerInput));
         assert!(!app.handle_search_key(&Key::Named(NamedKey::Delete)));
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a");

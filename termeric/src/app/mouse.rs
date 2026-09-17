@@ -594,7 +594,10 @@ impl App {
                                 );
                                 match click {
                                     SearchBarClick::Query(cursor) => {
-                                        self.focus_search_query_at(cursor);
+                                        self.focus_search_query_at(
+                                            cursor,
+                                            redraw_scheduler::RedrawReason::PointerInput,
+                                        );
                                         return;
                                     }
                                     SearchBarClick::Background => return,

@@ -101,6 +101,18 @@ instead of starting selection in the terminal underneath. Buttons retain their
 existing priority and actions. Geometry, model, and raw-PTY tests cover these
 paths; native pointer/IME acceptance and drag selection remain deferred.
 
+AccessKit focus on a retained, confirmed search query now resumes its actual
+input owner through that same focus path, preserving results and scan progress.
+It retains a valid grapheme caret, or moves to the end if a recent insertion
+joined a cluster across the old caret. Accepted semantic value replacement
+retires stale preedit, sets the caret to the end, and schedules an accessibility
+redraw. Replacement and IME insertion share a 4 KiB single-line model boundary:
+controls (including tabs/newlines) and Unicode line/paragraph separators are
+rejected atomically. Regex escape text such as `\n` remains ordinary printable
+query text. Read-only, hidden, or higher-modal-obscured queries reject stale
+replacement requests. Local model, semantic-tree, and raw-PTY tests cover this;
+native assistive-technology and IME acceptance remain deferred.
+
 Unmodified Left/Right and Home/End now move the palette query caret; Delete
 removes the following grapheme and Backspace removes the preceding one.
 Combining sequences, flags, and ZWJ emoji are edited whole. Typing and accepted
