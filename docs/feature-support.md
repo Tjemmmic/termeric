@@ -428,6 +428,15 @@ and plugin confirmation behavior. Raw-PTY collision and safeguard tests use
 inert byte readers, not real command execution or providers; native operator
 acceptance remains deferred (see [input contract](accessibility-and-input.md)).
 
+Typed application aliases now pass their expanded command and arguments to the
+plugin-tab destructive-command check. Pending confirmation captures the complete
+replacement bytes and exact pane before any rewrite is sent, so config/focus
+changes cannot alter or retarget approval; cancellation, replay, and later
+read-only refusal are covered by raw-PTY tests. Safe typed aliases still expand
+once. This remains pattern-based checking, not shell parsing or inspection of
+shell-defined aliases; no real provider was used (see
+[input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected

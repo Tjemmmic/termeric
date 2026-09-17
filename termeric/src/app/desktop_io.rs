@@ -1087,20 +1087,6 @@ impl App {
                 self.git_completion_index = None;
             }
 
-            // Enter pressed — guardrail check for plugin tabs
-            if let Some((tab_id, pane_id)) = self.active_guarded_pane() {
-                let input = self.input_line_buffer.trim().to_string();
-                let writes = vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                    tab_id,
-                    pane_id,
-                    data.to_vec(),
-                )];
-                if self.guard_plugin_writes(&input, writes) {
-                    self.input_line_buffer.clear();
-                    return;
-                }
-            }
-
             // Enter pressed — check if first word matches a custom command name or alias
             let trimmed = self.input_line_buffer.trim().to_string();
             let (first_word, rest) = match trimmed.find(' ') {
@@ -1116,17 +1102,35 @@ impl App {
             } else {
                 None
             };
+            let expanded = matched_command.map(|command| format!("{command}{rest}"));
+            let input = expanded.as_deref().unwrap_or(&trimmed);
+            let rewrite = expanded
+                .as_ref()
+                .map(|command| format!("\x15{command}\r").into_bytes());
+
+            // Check the text that will actually be sent, not the typed alias.
+            // Freeze the entire rewrite at this exact owner before emitting any
+            // replacement bytes; confirmation must not re-resolve changed config.
+            if let Some((tab_id, pane_id)) = self.active_guarded_pane() {
+                let writes = vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                    tab_id,
+                    pane_id,
+                    rewrite.clone().unwrap_or_else(|| data.to_vec()),
+                )];
+                if self.guard_plugin_writes(input, writes) {
+                    self.input_line_buffer.clear();
+                    return;
+                }
+            }
 
             // If a git command was run, invalidate the watcher to refresh branch state
-            if trimmed.starts_with("git ") {
+            if input.starts_with("git ") {
                 self.git_watcher.invalidate();
             }
 
             self.input_line_buffer.clear();
 
-            if let Some(real_command) = matched_command {
-                // Build expanded command: real_command + any trailing args
-                let expanded = format!("{}{}", real_command, rest);
+            if let Some(rewrite) = rewrite {
                 // Clear the typed alias from the terminal line (Ctrl+U)
                 // then send the real command + Enter
                 if let Some(tabs) = &mut self.tabs {
@@ -1134,9 +1138,7 @@ impl App {
                         if let Some(terminal) = tab.focused_terminal_mut() {
                             terminal.grid_mut().set_scroll_offset(0);
                         }
-                        let _ = tab.write(b"\x15"); // Ctrl+U: clear line
-                        let cmd_with_enter = format!("{}\r", expanded);
-                        let _ = tab.write(cmd_with_enter.as_bytes());
+                        let _ = tab.write(&rewrite);
                     }
                 }
                 return;
@@ -1413,7 +1415,7 @@ mod desktop_io_tests {
     #[cfg(unix)]
     fn raw_command_app(count: usize) -> App {
         let mut tabs = TabManager::new(
-            120,
+            256,
             24,
             crate::config::ShellConfig::default(),
             100,
@@ -1487,14 +1489,134 @@ mod desktop_io_tests {
     #[cfg(unix)]
     #[test]
     fn ordinary_typed_names_and_aliases_still_expand_once() {
-        for name in ["B", "alias"] {
+        for (name, guarded) in [("B", false), ("alias", false), ("B", true), ("alias", true)] {
             let typed = format!("{name} tail");
             let expected = format!("{typed}\x15X tail\r");
             let mut app = raw_command_app(expected.len() + 1);
+            if guarded {
+                app.tabs
+                    .as_mut()
+                    .unwrap()
+                    .active_tab_mut()
+                    .unwrap()
+                    .tab_type = crate::tabs::TabType::Plugin {
+                    plugin_id: "inert-safe-alias".into(),
+                };
+            }
             app.write_to_pty(typed.as_bytes());
             app.write_to_pty(b"\r");
+            assert!(!app.guardrail.is_awaiting_current());
             app.write_to_pty(b"Z");
             assert_command_bytes(&mut app, &[expected.as_bytes(), b"Z"].concat());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_alias_checks_expanded_command_and_withholds_the_entire_rewrite() {
+        for name in ["B", "alias"] {
+            let typed = format!("{name} /synthetic-never-executed");
+            let mut app = raw_command_app(typed.len() + 1);
+            app.config.commands[0].command = "rm -rf".into();
+            let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+            let target = (tab.id, tab.single_pane_id());
+            tab.tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "inert-alias-guard".into(),
+            };
+            app.write_to_pty(typed.as_bytes());
+            app.write_to_pty(b"\r");
+            assert!(
+                app.guardrail.is_awaiting_current(),
+                "expanded destructive alias must await confirmation"
+            );
+            assert_eq!(
+                app.guardrail.matched.as_ref().unwrap().command,
+                "rm -rf /synthetic-never-executed"
+            );
+            let writes = app.guardrail.confirm(app.guardrail.request_id()).unwrap();
+            assert_eq!(
+                writes,
+                vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                    target.0,
+                    target.1,
+                    b"\x15rm -rf /synthetic-never-executed\r".to_vec()
+                )]
+            );
+            // Inspect, then discard the batch: no destructive bytes are delivered.
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
+            assert_eq!(app.input_line_buffer, "Z");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_alias_confirmation_uses_captured_bytes_and_origin_after_config_and_focus_change() {
+        use crate::terminal::guardrails::GuardrailAction;
+        let typed = "alias /synthetic-never-executed";
+        let expected = format!("{typed}\x15rm -rf /synthetic-never-executed\rZ");
+        let mut app = raw_command_app(expected.len());
+        app.config.commands[0].command = "rm -rf".into();
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .tab_type = crate::tabs::TabType::Plugin {
+            plugin_id: "inert-captured-alias".into(),
+        };
+        app.write_to_pty(typed.as_bytes());
+        app.write_to_pty(b"\r");
+        assert!(app.guardrail.is_awaiting_current());
+        let request_id = app.guardrail.request_id();
+        app.config.commands[0].command = "different-after-prompt".into();
+        app.tabs.as_mut().unwrap().new_tab_with_command("/bin/sh", &[
+            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.2".into(),
+        ], None, Some("not-the-alias-owner"), None, Default::default()).unwrap();
+        wait_command_output(&mut app, "READY");
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, b"Z");
+        app.tabs.as_mut().unwrap().switch_to(0);
+        app.write_to_pty(b"Z");
+        // The dangerous-looking text reaches only dd, never an interpreter/provider.
+        assert_command_bytes(&mut app, expected.as_bytes());
+        assert!(!app.guardrail.is_awaiting_current());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_alias_cancellation_and_later_read_only_state_never_emit_replacement_bytes() {
+        use crate::terminal::guardrails::GuardrailAction;
+        for cancel in [true, false] {
+            let typed = "alias /synthetic-never-executed";
+            let mut app = raw_command_app(typed.len() + 1);
+            app.config.commands[0].command = "rm -rf".into();
+            app.tabs
+                .as_mut()
+                .unwrap()
+                .active_tab_mut()
+                .unwrap()
+                .tab_type = crate::tabs::TabType::Plugin {
+                plugin_id: "inert-refused-alias".into(),
+            };
+            app.write_to_pty(typed.as_bytes());
+            app.write_to_pty(b"\r");
+            assert!(app.guardrail.is_awaiting_current());
+            let request_id = app.guardrail.request_id();
+            if cancel {
+                app.apply_guardrail_action(GuardrailAction::Cancel { request_id });
+            } else {
+                app.toggle_focused_pane_read_only();
+            }
+            app.apply_guardrail_action(GuardrailAction::Confirm { request_id });
+            if !cancel {
+                app.toggle_focused_pane_read_only();
+            }
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
+            assert!(!app.guardrail.is_awaiting_current());
         }
     }
 

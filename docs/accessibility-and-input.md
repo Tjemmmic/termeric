@@ -383,6 +383,19 @@ Enter ownership using an inert reader with plugin metadata only. New tests do no
 persist or delete commands or invoke providers. Native keyboard/focus-outline
 and screen-reader acceptance remain deferred.
 
+Typed application aliases in plugin tabs are now expanded before destructive-
+command checking. The confirmation shows the resolved command, including typed
+arguments, and retains the entire line-clear/replacement/Enter batch for the
+exact originating pane; no rewrite bytes are sent before approval. Config
+changes cannot alter that pending payload, and confirmation revalidates the
+original pane and its read-only state without falling back to current focus.
+Cancellation and stale confirmation remain non-delivering. Raw-reader tests
+cover names and aliases, safe expansions, suffixes, captured-config identity,
+cross-tab focus changes, replay, cancellation, and later read-only refusal.
+This uses the existing pattern-based plugin guardrail, not a complete shell
+parser or a claim to inspect aliases defined inside the user's shell. Explicit
+Run remains unexpanded, and active broadcast retains its no-expansion policy.
+
 The command list now accepts vertical wheel/trackpad scrolling in browse and
 form modes. A shared whole-row viewport limits painting, hover, and Run/Delete
 hit targets to visible commands, with absolute indices preserved after scrolling.
