@@ -17,9 +17,31 @@ PROTOCOLS = {
 }
 FIXED_IDS = {"kitten-stream": 1701, "kitten-unicode-placeholder": 1702,
              "kitten-file": 1703, "kitten-memory": 1704}
+# Seven bounded version/execute pairs, two cleanup waits, and delivery margin.
+CLIENT_TIMEOUT = 180
+
+
+def clients_complete(records):
+    completed = [row for row in records if row.get("event") == "graphics_clients_complete"]
+    if not completed:
+        return False
+    outcomes = [row for row in records if row.get("event") in {"graphics_client", "graphics_client_error"}]
+    failed = sum(row["event"] == "graphics_client_error" for row in outcomes)
+    if (len(completed) != 1 or len(outcomes) != len(PROTOCOLS)
+            or [(row.get("tool"), row.get("protocol")) for row in outcomes] != list(PROTOCOLS.items())
+            or type(completed[0].get("attempted")) is not int or completed[0]["attempted"] != len(PROTOCOLS)
+            or type(completed[0].get("failed")) is not int or completed[0]["failed"] != failed
+            or records.index(completed[0]) <= max(records.index(row) for row in outcomes)):
+        raise ValueError("invalid graphics client completion record")
+    return True
 
 
 def graphics_clients_accepted(records, log_contains):
+    try:
+        if not clients_complete(records):
+            return False
+    except ValueError:
+        return False
     if any(row.get("event") == "graphics_client_error" for row in records):
         return False
     clients = [row for row in records if row.get("event") == "graphics_client"]
@@ -45,9 +67,11 @@ def graphics_clients_accepted(records, log_contains):
 
 
 def graphics_clients_ready(records, log_contains):
-    """Fail the polling loop immediately on an explicit fixture failure."""
-    for row in records:
-        if row.get("event") == "graphics_client_error":
+    """Collect independent pre-emission failures; abort unsafe/legacy failures."""
+    errors = [row for row in records if row.get("event") == "graphics_client_error"]
+    complete = clients_complete(records)
+    for row in errors:
+        if complete or row.get("continuing") is not True or row.get("stage") not in {"version", "execute", "validate-output"}:
             raise ValueError(f"graphics client {row.get('tool')} failed during "
                              f"{row.get('stage')}: {row.get('error')}")
     return graphics_clients_accepted(records, log_contains)
@@ -58,12 +82,12 @@ def run_wayland_graphics(gui, binary, run_dir, env):
     transcript = run_dir / "pty-transcript.jsonl"
     program, arguments = gui.fixture_command(transcript, external_graphics=True)
     app = gui.AppProcess(binary, run_dir, "wayland", program, arguments, env)
-    report = {"schema": 1, "backend": "wayland", "clients": [],
+    report = {"schema": 2, "backend": "wayland", "clients": [],
               "coverage": "native client acceptance, local-media cleanup, and review-only capture; not pixel or real-desktop acceptance"}
     try:
         app.wait_ready("wayland")
         gui.wait_until("all seven native graphics clients accepted", lambda:
-            graphics_clients_ready(gui.read_records(transcript), app.log_contains), 30)
+            graphics_clients_ready(gui.read_records(transcript), app.log_contains), CLIENT_TIMEOUT)
         gui.wait_until("native Kitty reply", lambda:
             b"\x1b_Gi=17;OK\x1b\\" in gui.transcript_bytes(transcript), 15)
         starts = [row for row in gui.read_records(transcript) if row.get("event") == "started"]
@@ -95,6 +119,7 @@ def run_wayland_graphics(gui, binary, run_dir, env):
             records = gui.read_records(transcript)
             report["clients"] = [row for row in records if row.get("event") == "graphics_client"]
             report["client_errors"] = [row for row in records if row.get("event") == "graphics_client_error"]
+            report["completion"] = [row for row in records if row.get("event") == "graphics_clients_complete"]
             (run_dir / "graphics-input.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         finally:
             try:

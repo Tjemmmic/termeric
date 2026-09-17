@@ -494,13 +494,26 @@ placement is visible. The sidecar is diagnostic, not an independently sealed
 graphics-publication contract. Real-client visual judgment remains manual.
 
 Client version, execution, output-validation, delivery, and local-media cleanup
-failures produce a `graphics_client_error` transcript record before the fixture
-exits. Both native lanes fail immediately when that record is observed, rather
-than waiting for an acceptance timeout. The record identifies the client,
+failures produce a `graphics_client_error` transcript record. The record identifies the client,
 protocol, stage, known version, exit status (when available), output byte count,
 and bounded, control-sanitized stderr. An exit status of zero with no output is
-still a failure. Later clients are not attempted after a failure; the Wayland
-sidecar retains completed client records and client errors even on failure.
+still a failure; non-Kitty output must contain a complete Sixel or iTerm2 frame.
+Version, execution, and output-validation failures occur before PTY emission:
+the fixture marks them `continuing: true`, retains them, and attempts the later
+clients. It writes one `graphics_clients_complete` record after all seven
+ordered outcomes, with exact attempted/failure counts, then rethrows the first
+client failure. Both native lanes wait for that completion before reporting
+these independent failures. Missing completion can never produce acceptance.
+
+Delivery and local-media cleanup failures still abort immediately, because a
+partial protocol write or unconfirmed resource cleanup is not an independent
+client failure. Errors without the new continuation flag also fail immediately.
+The shared polling deadline is 180 seconds, covering the bounded per-client
+version/execute/cleanup waits and delivery margin. The schema-2 Wayland sidecar
+retains successful client records, client errors, and completion records even
+when the overall run fails. All-success acceptance requires exactly the seven
+ordered outcomes followed by one consistent completion marker, plus every
+existing image-ID, protocol, cleanup, and renderer-log check.
 Partial results never satisfy the seven-client oracle, and a failure before
 capture does not produce a review PNG. This distinguishes a client that emitted
 nothing from a terminal that received output but never accepted it; it does not

@@ -16,6 +16,7 @@ class GraphicsAcceptanceTests(unittest.TestCase):
                          "version": "fixture 1", "output_bytes": 100,
                          "image_id": FIXED_IDS.get(tool, 12345), "cleanup_observed": True}
                         for tool, protocol in PROTOCOLS.items()]
+        self.records.append({"event": "graphics_clients_complete", "attempted": 7, "failed": 0})
         self.log = "\n".join([
             *(f"Accepted Kitty image: id={number}, 64x64 pixels" for number in (1701, 1703, 1704, 12345)),
             "Accepted Kitty Unicode placeholder image: id=1702, 64x64 pixels",
@@ -47,6 +48,33 @@ class GraphicsAcceptanceTests(unittest.TestCase):
             self.assertFalse(self.accepted(log=self.log.replace(message, "")))
         self.assertFalse(self.accepted(log=self.log.replace("id=1701,", "id=17010,")))
         self.assertFalse(self.accepted(log=self.log.replace("id=12345,", "id=123456,")))
+
+    def test_completion_rejects_mismatched_counts_order_and_duplicate_markers(self):
+        for field, value in [("attempted", 6), ("attempted", True), ("failed", 1), ("failed", False)]:
+            records = copy.deepcopy(self.records)
+            records[-1][field] = value
+            with self.assertRaisesRegex(ValueError, "completion"):
+                graphics_clients_ready(records, self.log.__contains__)
+        for records in [self.records + [self.records[-1]],
+                        [self.records[-1]] + self.records[:-1],
+                        [self.records[1], self.records[0]] + self.records[2:]]:
+            with self.assertRaisesRegex(ValueError, "completion"):
+                graphics_clients_ready(records, self.log.__contains__)
+
+    def test_pre_emission_error_waits_for_remaining_clients_then_fails(self):
+        error = {"event": "graphics_client_error", "tool": "img2sixel", "protocol": "sixel",
+                 "stage": "validate-output", "error": "no output", "continuing": True}
+        partial = self.records[:5] + [error]
+        self.assertFalse(graphics_clients_ready(partial, self.log.__contains__))
+        completed = partial + [self.records[6], {"event": "graphics_clients_complete", "attempted": 7, "failed": 1}]
+        self.assertFalse(self.accepted(completed))
+        with self.assertRaisesRegex(ValueError, "img2sixel.*validate-output.*no output"):
+            graphics_clients_ready(completed, self.log.__contains__)
+        fatal = {**error, "stage": "emit", "continuing": False}
+        with self.assertRaisesRegex(ValueError, "emit"):
+            graphics_clients_ready(self.records[:5] + [fatal], self.log.__contains__)
+        with self.assertRaisesRegex(ValueError, "emit"):
+            graphics_clients_ready(self.records[:5] + [{**fatal, "continuing": True}], self.log.__contains__)
 
     def test_wayland_graphics_declares_all_clients_and_private_input_tools(self):
         tools = required_tools("wayland", ["graphics"], False, True)

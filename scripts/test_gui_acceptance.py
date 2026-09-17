@@ -276,6 +276,9 @@ esac
                 )
 
             records = [json.loads(line) for line in transcript.read_text().splitlines()]
+            self.assertEqual(records[-1]["event"], "graphics_clients_complete")
+            self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (7, 0))
+            records = records[:-1]
             self.assertEqual(
                 {record["tool"] for record in records},
                 {
@@ -389,11 +392,14 @@ esac
                     if isinstance(result, Exception):
                         self.assertIs(caught.exception, result)
                     emit.assert_not_called()
-                    self.assertEqual(run.call_count, 0 if name == "version" else 1)
+                    self.assertEqual(run.call_count, 0 if name == "version" else 7)
                 records = [json.loads(line) for line in transcript.read_text().splitlines()]
-                self.assertEqual(len(records), 1)
+                self.assertEqual(len(records), 8)
+                self.assertEqual(records[-1]["event"], "graphics_clients_complete")
+                self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (7, 7))
                 record = records[0]
                 self.assertEqual(record["event"], "graphics_client_error")
+                self.assertIs(record["continuing"], True)
                 self.assertEqual(record["tool"], "kitten-stream")
                 self.assertEqual(record["protocol"], "kitty")
                 self.assertEqual(record["stage"], stage)
@@ -427,7 +433,52 @@ esac
             self.assertEqual([r["event"] for r in records], ["graphics_client", "graphics_client", "graphics_client_error"])
             self.assertEqual(records[-1]["tool"], "kitten-file")
             self.assertEqual(records[-1]["stage"], "cleanup")
+            self.assertIs(records[-1]["continuing"], False)
             self.assertNotIn("cleanup_observed", records[-1])
+
+    def test_pre_emission_sixel_failure_still_attempts_iterm2_but_fails_overall(self):
+        payloads = [
+            b"\x1b_Ga=T,i=1701;AAAA\x1b\\", b"\x1b_Ga=T,i=1702;AAAA\x1b\\",
+            b"\x1b_Ga=T,i=1703,t=t;L3RtcC9raXR0eS10dHktZ3JhcGhpY3MtcHJvdG9jb2wtZmFrZQ==\x1b\\",
+            b"\x1b_Ga=T,i=1704,t=s;aWNhdC1mYWtl\x1b\\",
+            b"\x1b_Ga=T,i=2701;AAAA\x1b\\", b"", b"\x1b]1337;File=inline=1:AAAA\x07",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "transcript.jsonl"
+            with mock.patch.object(terminal_fixture, "command_version", return_value="fixture 1"), \
+                    mock.patch.object(terminal_fixture.subprocess, "run", side_effect=[
+                        subprocess.CompletedProcess([], 0, data, b"") for data in payloads]) as run, \
+                    mock.patch.object(terminal_fixture, "emit") as emit, \
+                    mock.patch.object(terminal_fixture, "require_media_target"), \
+                    mock.patch.object(terminal_fixture, "wait_for_media_cleanup"):
+                with self.assertRaisesRegex(RuntimeError, "img2sixel produced no terminal output"):
+                    terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800))
+                self.assertEqual(run.call_count, 7)
+                self.assertEqual(emit.call_count, 6)
+                self.assertTrue(emit.call_args.args[0].endswith(payloads[-1]))
+            records = [json.loads(line) for line in transcript.read_text().splitlines()]
+            self.assertEqual(records[-2]["tool"], "timg-iterm2")
+            self.assertEqual(records[-2]["event"], "graphics_client")
+            self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (7, 1))
+            errors = [record for record in records if record["event"] == "graphics_client_error"]
+            self.assertEqual([record["tool"] for record in errors], ["img2sixel"])
+
+    def test_emit_failure_aborts_without_attempting_later_clients(self):
+        failure = OSError("partial PTY write")
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "transcript.jsonl"
+            with mock.patch.object(terminal_fixture, "command_version", return_value="fixture 1"), \
+                    mock.patch.object(terminal_fixture.subprocess, "run", return_value=
+                        subprocess.CompletedProcess([], 0, b"\x1b_Gi=1701;AAAA\x1b\\", b"")) as run, \
+                    mock.patch.object(terminal_fixture, "emit", side_effect=failure):
+                with self.assertRaises(OSError) as caught:
+                    terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800))
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(run.call_count, 1)
+            records = [json.loads(line) for line in transcript.read_text().splitlines()]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["stage"], "emit")
+            self.assertIs(records[0]["continuing"], False)
 
     def test_graphics_fixture_extracts_only_explicit_nonzero_kitty_image_ids(self) -> None:
         payload = (

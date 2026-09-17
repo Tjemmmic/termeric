@@ -9,6 +9,7 @@ import binascii
 import fcntl
 import json
 import os
+import re
 import select
 import signal
 import struct
@@ -322,6 +323,8 @@ def render_external_graphics_clients(
             None,
         ),
     )
+    first_error = None
+    failed = 0
     for tool, version_key, protocol, cursor_row, cursor_col, command, stdin_data in clients:
         result = None
         stage = "version"
@@ -342,6 +345,10 @@ def render_external_graphics_clients(
             protocol_fields: dict[str, object] = {}
             if protocol.startswith("kitty"):
                 protocol_fields["image_id"] = kitty_image_id(result.stdout)
+            elif protocol == "sixel" and not re.search(rb"\x1bP[0-9;]*q[^\x1b]*\x1b\\", result.stdout):
+                raise RuntimeError(f"{tool} produced no complete Sixel frame")
+            elif protocol == "iterm2" and not re.search(rb"\x1b\]1337;File=[^\x07\x1b]*:[A-Za-z0-9+/=\r\n]+(?:\x07|\x1b\\)", result.stdout):
+                raise RuntimeError(f"{tool} produced no complete iTerm2 frame")
             target = None
             medium = None
             if protocol in ("kitty-temporary-file", "kitty-shared-memory"):
@@ -360,7 +367,9 @@ def render_external_graphics_clients(
         except Exception as error:
             # Keep subprocess diagnostics separate from protocol bytes. Never
             # emit subprocess-error output into the terminal or call a failed
-            # transfer successful. The original exception remains a failure.
+            # transfer successful. Only pre-emission failures are independent:
+            # partial writes or unconfirmed media cleanup abort the run.
+            continuing = stage in {"version", "execute", "validate-output"}
             diagnostic = result if result is not None else error
             stderr = getattr(diagnostic, "stderr", None) or b""
             write_record(
@@ -371,8 +380,14 @@ def render_external_graphics_clients(
                 output_bytes=len(getattr(diagnostic, "stdout", None) or b""),
                 stderr=graphics_diagnostic(stderr),
                 stderr_bytes=len(stderr), stderr_truncated=len(stderr) > 1024,
+                continuing=continuing,
             )
-            raise
+            if not continuing:
+                raise
+            failed += 1
+            if first_error is None:
+                first_error = error
+            continue
         write_record(
             transcript,
             "graphics_client",
@@ -390,6 +405,9 @@ def render_external_graphics_clients(
             terminal_pixel_height=pixel_height,
             **protocol_fields,
         )
+    write_record(transcript, "graphics_clients_complete", attempted=len(clients), failed=failed)
+    if first_error is not None:
+        raise first_error
 
 
 def graphics_diagnostic(value: str | bytes) -> str:
