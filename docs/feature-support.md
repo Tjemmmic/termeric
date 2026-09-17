@@ -373,6 +373,14 @@ scrolled/animated geometry as painting and IME. Geometry, model, and raw-PTY
 tests pass; native pointer acceptance and text selection remain outstanding
 (see [input contract](accessibility-and-input.md)).
 
+Workspace rename now accepts the configured Paste shortcut at its active
+caret under the existing atomic 128-scalar/512-byte single-line limit. Invalid
+or oversized input preserves the draft, caret, and composition; paste never
+submits or saves a rename. Higher modal owners, the session dropdown, and browse
+mode retain clipboard guards. Hermetic binding, ownership, Unicode-limit, and
+raw-PTY tests pass without a real clipboard or persisted rename; native
+clipboard/IME acceptance remains deferred (see [input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected

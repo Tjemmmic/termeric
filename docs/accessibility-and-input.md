@@ -429,6 +429,17 @@ submitting, and closing rename retire stale composition. This does not migrate
 or rewrite stored names. Model, semantic-tree, and raw-PTY tests use in-memory
 entries and never submit a rename.
 
+The configured Paste shortcut (Ctrl+Shift+V by default) also inserts into the
+workspace rename draft at its active caret. It shares the 128-scalar/512-byte
+atomic insertion policy, rejects empty/multiline/control/oversized text without
+changing the draft, caret, or preedit, and never saves or submits the name.
+Accepted insertion clears composition and requests redraw. Higher modal owners,
+the session dropdown, and the manager's browse mode retain their clipboard
+guards; a retained search or command form cannot receive the rename paste.
+Hermetic binding/rebinding/disabling, modal-priority, Unicode boundary, and
+raw-PTY tests use in-memory entries and no real clipboard or persisted rename.
+Native clipboard/IME acceptance remains deferred.
+
 Rename painting and IME placement now share a horizontally scrolled,
 whole-grapheme viewport. Long names retain their full draft while keeping the
 caret visible; shaped text and glyph overhangs are clipped inside the field.

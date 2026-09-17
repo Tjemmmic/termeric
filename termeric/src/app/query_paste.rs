@@ -9,6 +9,7 @@ enum PasteTarget {
     Domain,
     Search,
     CommandsForm,
+    WorkspaceRename,
     ShortcutsFilter,
     SettingsFilter,
     Blocked,
@@ -55,8 +56,15 @@ impl App {
                 PasteTarget::SettingsFilter
             };
         }
-        if self.session_panel.is_open() || self.session_dropdown_open {
+        if self.session_dropdown_open {
             return PasteTarget::Blocked;
+        }
+        if self.session_panel.is_open() {
+            return if self.session_panel.is_renaming() {
+                PasteTarget::WorkspaceRename
+            } else {
+                PasteTarget::Blocked
+            };
         }
         if self.commands_panel.is_open() {
             return if self.commands_panel.is_editing() {
@@ -125,6 +133,7 @@ impl App {
             PasteTarget::Unicode => self.unicode_picker.insert_query_text(text),
             PasteTarget::Domain => self.domain_picker.insert_query_text(text),
             PasteTarget::CommandsForm => self.commands_panel.insert_form_text(text),
+            PasteTarget::WorkspaceRename => self.session_panel.insert_rename_text(text),
             PasteTarget::ShortcutsFilter => self.shortcuts_panel.insert_filter_text(text),
             PasteTarget::SettingsFilter => self.settings_panel.insert_filter_text(text),
             PasteTarget::Search => {
@@ -161,6 +170,180 @@ mod tests {
     use crate::input::keybindings::{BindableAction, KeyChord};
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
+
+    fn open_workspace_rename(app: &mut App) {
+        app.session_panel.set_test_entries(
+            vec![crate::session::panel::SessionEntry {
+                id: "paste-workspace-fixture".into(),
+                display_name: "Roots".into(),
+                subtitle: String::new(),
+                last_modified: String::new(),
+            }],
+            true,
+        );
+        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Rename(
+            "paste-workspace-fixture".into(),
+        ));
+    }
+
+    fn exercise_workspace_rename_paste(app: &mut App) {
+        open_workspace_rename(app);
+        assert_eq!(app.clipboard_paste_target(), PasteTarget::WorkspaceRename);
+        assert!(app.session_panel.accessibility_set_rename("az"));
+        app.session_panel.rename_edit(TextInputEdit::Left);
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        for rejected in [
+            "",
+            "a\nb",
+            "\r",
+            "\t",
+            "\0",
+            "\x1b[200~",
+            "\u{7f}",
+            "\u{85}",
+            "\u{2028}",
+            "\u{2029}",
+            &"x".repeat(129),
+            &"x".repeat(4097),
+        ] {
+            assert!(!app.paste_clipboard_payload(rejected));
+            let info = app.session_panel.build_info();
+            assert_eq!(info.rename_text.as_deref(), Some("az"));
+            assert_eq!(info.rename_cursor, 1);
+            assert!(app.ime.preedit().is_some());
+        }
+        app.redraw_scheduler.begin_frame();
+        assert!(app.paste_clipboard_payload("界e\u{301}👩\u{200d}💻"));
+        let before = app.session_panel.build_info();
+        let text = before.rename_text.as_deref().unwrap();
+        assert_eq!(text, "a界e\u{301}👩\u{200d}💻z");
+        assert_eq!(before.rename_cursor, text.len() - 1);
+        assert!(app.ime.preedit().is_none());
+        assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
+        assert!(app.paste_clipboard_payload(&"🫚".repeat(127 - text.chars().count())));
+        let almost = app.session_panel.build_info();
+        app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
+        assert!(!app.paste_clipboard_payload("e\u{301}"));
+        assert_eq!(
+            app.session_panel.build_info().rename_text,
+            almost.rename_text
+        );
+        assert_eq!(
+            app.session_panel.build_info().rename_cursor,
+            almost.rename_cursor
+        );
+        assert!(app.ime.preedit().is_some());
+        assert!(app.paste_clipboard_payload("🫚"));
+        assert!(!app.paste_clipboard_payload("x"));
+        let full = app.session_panel.build_info();
+        let text = full.rename_text.unwrap();
+        assert_eq!(text.chars().count(), 128);
+        assert!(text.ends_with('z'));
+        assert_eq!(full.rename_cursor, text.len() - 1);
+        assert!(app.session_panel.is_renaming());
+        assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
+    }
+
+    #[test]
+    fn workspace_rename_paste_is_atomic_at_caret_and_never_submits() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        exercise_workspace_rename_paste(&mut app);
+    }
+
+    #[test]
+    fn workspace_rename_paste_honors_binding_changes_and_blocks_browse_and_dropdown() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        open_workspace_rename(&mut app);
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let default = Key::Character("v".into());
+        // Headless: no OS clipboard is read, but the configured chord is owned.
+        assert!(app.handle_query_paste_key(&default));
+        let rebound = Key::Named(NamedKey::F8);
+        app.shortcut_registry.set_binding(
+            BindableAction::Paste,
+            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+        );
+        assert!(!app.handle_query_paste_key(&default));
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_query_paste_key(&rebound));
+        app.session_dropdown_open = true;
+        assert!(app.clipboard_paste_blocked());
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert!(!app.paste_clipboard_payload("hidden"));
+        app.session_dropdown_open = false;
+        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert_eq!(
+            app.session_panel.build_info().rename_text.as_deref(),
+            Some("Roots")
+        );
+        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::CancelRename);
+        assert!(app.clipboard_paste_blocked());
+        assert!(!app.paste_clipboard_payload("browse"));
+        assert!(!app.session_panel.is_renaming());
+        assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
+    }
+
+    #[test]
+    fn workspace_paste_preserves_lower_fields_and_respects_higher_modal_owners() {
+        for higher in 0..7 {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.search.start();
+            app.commands_panel.toggle();
+            app.commands_panel.start_add();
+            open_workspace_rename(&mut app);
+            assert!(app.paste_clipboard_payload(" workspace"));
+            match higher {
+                0 => {
+                    app.info_overlay.show("Notice", vec![]);
+                }
+                1 => app.settings_panel.toggle(),
+                2 => app.shortcuts_panel.open(),
+                3 => app.command_palette.open(),
+                4 => app.unicode_picker.open(),
+                5 => app.domain_picker.open(&app.config.domains),
+                _ => {
+                    app.tab_rename = Some(TabRenameState {
+                        tab_id: 0,
+                        original: None,
+                        input: String::new(),
+                        max_chars: 80,
+                    })
+                }
+            }
+            assert_eq!(
+                app.paste_clipboard_payload("higher"),
+                (1..=5).contains(&higher)
+            );
+            assert_eq!(
+                app.session_panel.build_info().rename_text.as_deref(),
+                Some("Roots workspace")
+            );
+            assert!(app.search.query().is_empty());
+            assert!(app.commands_panel.form_name.text().is_empty());
+            assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
+            match higher {
+                1 => assert_eq!(
+                    app.settings_panel
+                        .build_info(&app.config, &app.shortcut_registry)
+                        .filter,
+                    "higher"
+                ),
+                2 => assert_eq!(
+                    app.shortcuts_panel
+                        .build_info(&app.shortcut_registry)
+                        .filter,
+                    "higher"
+                ),
+                3 => assert_eq!(app.command_palette.build_info().input, "higher"),
+                4 => assert_eq!(app.unicode_picker.build_info().input, "higher"),
+                5 => assert_eq!(app.domain_picker.build_info().input, "higher"),
+                _ => assert!(app.clipboard_paste_blocked()),
+            }
+            app.unicode_picker.close();
+            app.unicode_picker.finish_search_for_test();
+        }
+    }
 
     fn open_settings_dropdown(app: &mut App) {
         app.settings_panel
@@ -724,6 +907,10 @@ mod tests {
         open_settings_dropdown(&mut app);
         assert!(!app.paste_clipboard_payload("dropdown must not write"));
         app.settings_panel.close();
+        exercise_workspace_rename_paste(&mut app);
+        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::CancelRename);
+        assert!(!app.paste_clipboard_payload("browse must not write"));
+        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));
         wait_for(&mut app, "5a");
