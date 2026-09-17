@@ -442,8 +442,14 @@ guardrails before sending any replacement edits or submission. Confirmation
 captures the exact edit batch and originating pane; changed completion lists
 or focus cannot redirect it. Safe/stale-selection paths, captured approval,
 cancellation, replay, and read-only refusal have inert raw-PTY coverage. Native
-client acceptance, shell-aware quoting, and broader command parsing remain
-outside this change (see [input contract](accessibility-and-input.md)).
+client acceptance and broader command parsing remain outside this change.
+Tab and Enter now share Git-ref validation and literal Bash/Zsh/Fish quoting
+chosen from the focused pane's enabled integration metadata. Unknown dialects
+refuse names needing quotes; complex input stays with native shell completion.
+Partial erasure counts Unicode scalars, not bytes. Inert PTY routing/refusal and
+isolated POSIX argument round trips pass; nested-shell detection, native
+Fish/Zsh/operator acceptance, and grapheme-aware editing remain unverified or
+outside this helper (see [input contract](accessibility-and-input.md)).
 
 Guarded submission cancellation preserves the already-sent editable prefix on
 the unchanged focused route, so retrying Enter rechecks it. Withheld paste and

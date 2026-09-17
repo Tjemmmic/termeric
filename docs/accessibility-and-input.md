@@ -403,9 +403,31 @@ later focus or completion-list changes. Safe completions still submit normally;
 missing/stale selections fall through to the ordinary Enter path. Inert raw-PTY
 tests cover withheld edits, exact safe bytes, fallback, captured selection and
 destination, replay, cancellation, and later read-only refusal. This does not
-extend the pattern matcher into shell parsing, add branch-name quoting, or
-change the Tab-only insertion path. Native Git-client/operator acceptance
-remains deferred; no real provider was invoked.
+extend the pattern matcher into shell parsing. Native Git-client/operator
+acceptance remains deferred; no real provider was invoked.
+
+Tab and Enter now share one literal branch-edit builder. Names are validated
+as Git refs, capped at 4 KiB, and rejected for leading options, control or
+bidirectional formatting characters. Simple ASCII branch words remain bare;
+other names use single-quoted Bash/Zsh or Fish syntax selected from the focused
+pane's enabled shell-integration metadata. Unknown, disabled, Nushell, and
+Elvish integration do not guess a quoting dialect: names requiring quoting are
+refused with a toast and no edit or Enter. Quoted, escaped, compound, or
+multiline input is left to native shell completion. Tab preserves the encoded
+line for later Enter, and neither route can insert into a locked or broadcast
+pane. Partial deletion counts Unicode scalars rather than UTF-8 bytes; this is
+not grapheme-aware shell-editor emulation. The dialect describes the integrated
+launch, not an automatically detected nested/foreground shell.
+
+Inert raw-PTY tests cover literal bytes, apostrophes, Tab-then-Enter, refusal,
+input locks, and focused-pane dialect/destination. Isolated `/bin/sh` `printf`
+round trips preserve valid metacharacter refs as one argument; Fish/Zsh byte
+encoding has unit coverage but native shell/operator acceptance is deferred.
+The encoding follows [Bash single quoting](https://www.gnu.org/s/bash/manual/html_node/Single-Quotes.html),
+[Zsh quoting](https://zsh.sourceforge.io/Doc/Release/Shell-Grammar.html#Quoting),
+and [Fish quoting](https://fishshell.com/docs/4.1/language.html#quotes), with
+[Git reference rules](https://git-scm.com/docs/git-check-ref-format) checked by
+libgit2. This remains input assistance, not a shell security boundary.
 
 Withholding a guarded submission now preserves the tracked prefix already sent
 to the terminal. Cancel does not send an erase command or submission, and a

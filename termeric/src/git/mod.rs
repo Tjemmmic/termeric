@@ -3,8 +3,10 @@
 //! Provides git-aware features: branch detection, auto-completion,
 //! and status tracking. Uses libgit2 via the `git2` crate.
 
+mod completion;
 mod watcher;
 
+pub(crate) use completion::{BranchQuoting, branch_edit};
 pub use watcher::GitWatcher;
 
 use git2::Repository;
@@ -172,6 +174,9 @@ const BRANCH_SUBCOMMANDS: &[&str] = &[
 /// Returns `Some(partial)` if completions should be shown,
 /// where `partial` is the partial branch name typed so far.
 pub fn detect_git_completion(input: &str) -> Option<&str> {
+    if !input.chars().all(completion::simple_command_character) {
+        return None;
+    }
     let trimmed = input.trim_start();
 
     // Must start with "git "

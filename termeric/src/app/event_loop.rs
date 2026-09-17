@@ -1107,31 +1107,7 @@ impl ApplicationHandler<AppEvent> for App {
                             // (e.g., for Claude Code mode switching)
                             if !self.modifiers.shift_key() {
                                 // Accept the selected completion
-                                if let Some(idx) = self.git_completion_index {
-                                    if let Some(branch) = self.git_completions.get(idx).cloned() {
-                                        if let Some(partial) = crate::git::detect_git_completion(
-                                            &self.input_line_buffer,
-                                        ) {
-                                            let partial_len = partial.len();
-                                            if let Some(tabs) = &mut self.tabs {
-                                                if let Some(tab) = tabs.active_tab_mut() {
-                                                    // Erase partial text with backspaces
-                                                    for _ in 0..partial_len {
-                                                        let _ = tab.write(b"\x7f");
-                                                    }
-                                                    // Insert branch name
-                                                    let _ = tab.write(branch.as_bytes());
-                                                }
-                                            }
-                                            // Update input buffer to reflect the accepted completion
-                                            let buf = self.input_line_buffer.clone();
-                                            if let Some(last_space) = buf.rfind(' ') {
-                                                self.input_line_buffer.truncate(last_space + 1);
-                                                self.input_line_buffer.push_str(&branch);
-                                            }
-                                        }
-                                    }
-                                }
+                                self.accept_git_completion(false);
                                 self.git_completions_visible = false;
                                 self.git_completions.clear();
                                 self.git_completion_index = None;

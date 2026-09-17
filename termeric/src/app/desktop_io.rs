@@ -1034,6 +1034,84 @@ impl App {
         }
     }
 
+    /// Tab and Enter must use the same literal encoding and focused-owner route.
+    /// True means a selected completion was handled (including safe refusal).
+    pub(super) fn accept_git_completion(&mut self, submit: bool) -> bool {
+        let Some(branch) = self
+            .git_completion_index
+            .filter(|_| self.git_completions_visible)
+            .and_then(|index| self.git_completions.get(index))
+            .cloned()
+        else {
+            return false;
+        };
+        self.git_completions_visible = false;
+        self.git_completions.clear();
+        self.git_completion_index = None;
+        if self.focused_pane_read_only() || !matches!(self.broadcast, BroadcastState::Inactive) {
+            self.toasts
+                .warning("Completion was not sent while input is locked or broadcasting");
+            return true;
+        }
+        let integration = self
+            .tabs
+            .as_ref()
+            .and_then(TabManager::active_tab)
+            .and_then(|tab| {
+                if let Some(panes) = &tab.pane_manager {
+                    panes.focused_pane().map(|pane| &pane.shell_integration)
+                } else {
+                    Some(&tab.shell_integration)
+                }
+            });
+        use crate::terminal::shell_integration::ShellIntegrationSupport;
+        let quoting = match integration {
+            Some(ShellIntegrationSupport::Enabled("bash" | "zsh")) => {
+                Some(crate::git::BranchQuoting::Posix)
+            }
+            Some(ShellIntegrationSupport::Enabled("fish")) => Some(crate::git::BranchQuoting::Fish),
+            _ => None,
+        };
+        let edit = match crate::git::branch_edit(&self.input_line_buffer, &branch, quoting, submit)
+        {
+            Ok(edit) => edit,
+            Err(message) => {
+                self.toasts.warning(message);
+                return true;
+            }
+        };
+        if submit
+            && self.active_guarded_pane().is_some_and(|(tab_id, pane_id)| {
+                self.guard_plugin_writes(
+                    &edit.line,
+                    vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                        tab_id,
+                        pane_id,
+                        edit.wire.clone(),
+                    )],
+                )
+            })
+        {
+            return true;
+        }
+        if let Some(tab) = self.tabs.as_mut().and_then(TabManager::active_tab_mut) {
+            match tab.write(&edit.wire) {
+                Ok(()) => {
+                    if submit {
+                        self.input_line_buffer.clear();
+                        self.git_watcher.invalidate();
+                    } else {
+                        self.input_line_buffer = edit.line;
+                    }
+                }
+                Err(error) => self
+                    .toasts
+                    .error(format!("Completion was not sent: {error}")),
+            }
+        }
+        true
+    }
+
     fn write_editable_input(&mut self, data: &[u8], expand_aliases: bool) {
         if matches!(self.broadcast, BroadcastState::Armed { .. }) {
             self.toasts
@@ -1057,52 +1135,10 @@ impl App {
         // Track the input line buffer for alias expansion + git completion
         if data == b"\r" {
             // If git completions are visible and a selection is active, accept it
+            if self.accept_git_completion(true) {
+                return;
+            }
             if self.git_completions_visible {
-                if let Some(idx) = self.git_completion_index {
-                    if let Some(branch) = self.git_completions.get(idx).cloned() {
-                        // Determine how many chars of partial text to erase
-                        if let Some(partial) =
-                            crate::git::detect_git_completion(&self.input_line_buffer)
-                        {
-                            let partial_len = partial.len();
-                            let completed = format!(
-                                "{}{}",
-                                &self.input_line_buffer
-                                    [..self.input_line_buffer.len() - partial_len],
-                                branch,
-                            );
-                            let mut wire = vec![0x7f; partial_len];
-                            wire.extend_from_slice(branch.as_bytes());
-                            wire.push(b'\r');
-                            // Completion is one exact-owner edit/submit operation.
-                            // Check the resulting command before sending backspaces,
-                            // replacement text, or Enter, and freeze that wire batch.
-                            let intercepted =
-                                self.active_guarded_pane().is_some_and(|(tab_id, pane_id)| {
-                                    self.guard_plugin_writes(
-                                        &completed,
-                                        vec![crate::terminal::guardrails::GuardedWrite::for_pane(
-                                            tab_id,
-                                            pane_id,
-                                            wire.clone(),
-                                        )],
-                                    )
-                                });
-                            if !intercepted && let Some(tabs) = &mut self.tabs {
-                                if let Some(tab) = tabs.active_tab_mut() {
-                                    let _ = tab.write(&wire);
-                                }
-                            }
-                            if !intercepted {
-                                self.input_line_buffer.clear();
-                            }
-                            self.git_completions_visible = false;
-                            self.git_completions.clear();
-                            self.git_completion_index = None;
-                            return;
-                        }
-                    }
-                }
                 // Dismiss completions
                 self.git_completions_visible = false;
                 self.git_completions.clear();
@@ -1494,12 +1530,177 @@ mod desktop_io_tests {
 
     #[cfg(unix)]
     #[test]
+    fn git_completion_enter_quotes_repository_text_before_pty_delivery() {
+        let expected = b"git checkout to\x7f\x7f'topic;printf${IFS}UNEXPECTED'\rZ";
+        let mut app = raw_command_app(expected.len());
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .shell_integration =
+            crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
+        app.write_to_pty(b"git checkout to");
+        app.git_completions = vec!["topic;printf${IFS}UNEXPECTED".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        app.write_to_pty(b"\r");
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_tab_keeps_quoted_text_for_later_enter() {
+        let expected = b"git checkout a\x7f'a'\\''b'\rZ";
+        let mut app = raw_command_app(expected.len());
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .shell_integration =
+            crate::terminal::shell_integration::ShellIntegrationSupport::Enabled("bash");
+        app.write_to_pty(b"git checkout a");
+        app.git_completions = vec!["a'b".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        assert!(app.accept_git_completion(false));
+        assert_eq!(app.input_line_buffer, "git checkout 'a'\\''b'");
+        assert!(!app.git_completions_visible);
+        app.write_to_pty(b"\r");
+        assert!(app.input_line_buffer.is_empty());
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_refusal_emits_neither_edits_nor_enter() {
+        for submit in [false, true] {
+            for (typed, branch) in [
+                ("git checkout a", "a;b"),
+                ("git checkout 'a", "main"),
+                ("git checkout a", "a\nb"),
+                ("git checkout a", "-flag"),
+            ] {
+                let expected = format!("{typed}Z");
+                let mut app = raw_command_app(expected.len());
+                app.write_to_pty(typed.as_bytes());
+                app.git_completions = vec![branch.into()];
+                app.git_completion_index = Some(0);
+                app.git_completions_visible = true;
+                assert!(app.accept_git_completion(submit));
+                assert_eq!(app.input_line_buffer, typed);
+                assert!(app.git_completions.is_empty());
+                app.write_to_pty(b"Z");
+                assert_command_bytes(&mut app, expected.as_bytes());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_tab_cannot_bypass_read_only_or_broadcast_arming() {
+        for read_only in [true, false] {
+            let expected = b"git checkout maZ";
+            let mut app = raw_command_app(expected.len());
+            app.write_to_pty(b"git checkout ma");
+            app.git_completions = vec!["main".into()];
+            app.git_completion_index = Some(0);
+            app.git_completions_visible = true;
+            if read_only {
+                app.toggle_focused_pane_read_only();
+                // Exercise the mutation boundary even with a stale visible list.
+                app.git_completions = vec!["main".into()];
+                app.git_completion_index = Some(0);
+                app.git_completions_visible = true;
+            } else {
+                app.broadcast = BroadcastState::Armed {
+                    tab_id: 0,
+                    targets: vec![],
+                    expires: Instant::now() + Duration::from_secs(5),
+                };
+            }
+            assert!(app.accept_git_completion(false));
+            if read_only {
+                app.toggle_focused_pane_read_only();
+            } else {
+                app.broadcast = BroadcastState::Inactive;
+            }
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, expected);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_completion_uses_focused_pane_dialect_and_destination() {
+        use crate::terminal::shell_integration::ShellIntegrationSupport;
+        let expected = b"git checkout a\x7f'a\\'b'\rZ";
+        let mut app = raw_command_app(1);
+        let shell = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec![
+                "-c".into(),
+                format!(
+                    "stty raw -echo; printf READY; dd bs=1 count={} 2>/dev/null | od -An -tx1 -v; sleep 0.2",
+                    expected.len()
+                ),
+            ],
+            env: Default::default(),
+        };
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        tab.shell_integration = ShellIntegrationSupport::Enabled("bash");
+        let owner = tab.take_terminal_owner().unwrap();
+        let mut panes =
+            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 1600.0, 480.0, 8.0, 16.0);
+        let original = panes.focused_id();
+        panes.split(SplitDirection::Vertical).unwrap();
+        let second = panes
+            .pane_ids()
+            .into_iter()
+            .find(|id| *id != original)
+            .unwrap();
+        panes.focus(second);
+        tab.pane_manager = Some(panes);
+        wait_command_output(&mut app, "READY");
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        tab.shell_integration = ShellIntegrationSupport::Enabled("bash");
+        tab.pane_manager
+            .as_mut()
+            .unwrap()
+            .focused_pane_mut()
+            .unwrap()
+            .shell_integration = ShellIntegrationSupport::Enabled("fish");
+        app.write_to_pty(b"git checkout a");
+        app.git_completions = vec!["a'b".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        app.write_to_pty(b"\r");
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected);
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .pane_manager
+            .as_mut()
+            .unwrap()
+            .focus(original);
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, b"Z");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn cancelled_guardrail_rechecks_retained_input_without_sending_submission() {
         use crate::terminal::guardrails::GuardrailAction;
         for kind in ["typed", "alias", "completion", "paste", "explicit"] {
             let typed = match kind {
                 "alias" => "alias /synthetic-never-executed",
-                "completion" => "git checkout ; rm -rf /synthetic-never-executed ma",
+                "completion" => "git checkout rm -rf /synthetic-never-executed ma",
                 _ => "rm -rf /synthetic-never-executed",
             };
             let prefix = if kind == "explicit" { "\x15" } else { "" };
@@ -1876,7 +2077,7 @@ mod desktop_io_tests {
     #[cfg(unix)]
     #[test]
     fn git_completion_enter_checks_the_completed_command_before_sending_any_edit() {
-        let typed = "git checkout ; rm -rf /synthetic-never-executed ma";
+        let typed = "git checkout rm -rf /synthetic-never-executed ma";
         let mut app = raw_command_app(typed.len() + 1);
         let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
         let target = (tab.id, tab.single_pane_id());
@@ -1894,7 +2095,7 @@ mod desktop_io_tests {
         );
         assert_eq!(
             app.guardrail.matched.as_ref().unwrap().command,
-            "git checkout ; rm -rf /synthetic-never-executed main"
+            "git checkout rm -rf /synthetic-never-executed main"
         );
         let writes = app.guardrail.confirm(app.guardrail.request_id()).unwrap();
         assert_eq!(
@@ -1947,7 +2148,7 @@ mod desktop_io_tests {
     #[test]
     fn git_completion_confirmation_freezes_selection_and_does_not_follow_focus() {
         use crate::terminal::guardrails::GuardrailAction;
-        let typed = "git checkout ; rm -rf /synthetic-never-executed ma";
+        let typed = "git checkout rm -rf /synthetic-never-executed ma";
         let expected = format!("{typed}\x7f\x7fmain\rZ");
         let mut app = raw_command_app(expected.len());
         app.tabs
@@ -1988,7 +2189,7 @@ mod desktop_io_tests {
     fn git_completion_cancel_and_read_only_refuse_every_edit_byte() {
         use crate::terminal::guardrails::GuardrailAction;
         for cancel in [true, false] {
-            let typed = "git checkout ; rm -rf /synthetic-never-executed ma";
+            let typed = "git checkout rm -rf /synthetic-never-executed ma";
             let mut app = raw_command_app(typed.len() + 1);
             app.tabs
                 .as_mut()
