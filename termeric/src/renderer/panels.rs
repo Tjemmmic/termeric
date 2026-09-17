@@ -208,7 +208,6 @@ impl Renderer {
             let form = layout.form.expect("editing layout includes a form");
             let form_x = form.container.x;
             let form_w = form.container.width;
-            let field_height = form.name_input.height;
 
             // Form background
             let form_bg = [accent[0], accent[1], accent[2], 0.05];
@@ -222,129 +221,90 @@ impl Renderer {
                 6.0,
             );
 
-            let fy = form.name_input.y;
-
-            // "Name:" label + input
-            let name_label = "Name:";
-            let name_label_y = fy + (field_height - cell_height) / 2.0;
-            for (i, c) in name_label.chars().enumerate() {
-                self.text_pipeline.push_char(
-                    c,
-                    form_x + small_pad + i as f32 * ui_cw,
-                    name_label_y,
-                    dim_color,
-                );
-            }
-            // Name input box
-            let input_x = form.name_input.x;
-            let input_w = form.name_input.width;
-            let name_active = info.edit_mode == EditMode::EditingName;
-            let input_border = if name_active { accent } else { separator };
-            self.rect_pipeline.push_rounded_rect(
-                input_x,
-                fy,
-                input_w,
-                field_height,
-                [0.0, 0.0, 0.0, 0.2],
-                4.0,
-            );
-            self.rect_pipeline.push_rect(
-                input_x,
-                fy + field_height - 2.0,
-                input_w,
-                2.0,
-                input_border,
-            );
-            // Name text
-            let name_text_y = fy + (field_height - cell_height) / 2.0;
-            for (i, c) in info.form_name.chars().enumerate() {
-                self.text_pipeline.push_char(
-                    c,
-                    input_x + small_pad + i as f32 * ui_cw,
-                    name_text_y,
-                    text_color,
-                );
-            }
-            // Cursor
-            if name_active {
-                let cursor_x = input_x
-                    + small_pad
-                    + info.form_name[..info.form_cursor].chars().count() as f32 * ui_cw;
-                self.rect_pipeline
-                    .push_rect(cursor_x, fy + 3.0, 1.5, field_height - 6.0, accent);
-            }
-            // Placeholder
-            if info.form_name.is_empty() && !name_active {
-                let ph = "e.g. SSH Production";
-                for (i, c) in ph.chars().enumerate() {
+            for (field, rect, label, text, placeholder) in [
+                (
+                    EditMode::EditingName,
+                    form.name_input,
+                    "Name:",
+                    info.form_name.as_str(),
+                    "e.g. SSH Production",
+                ),
+                (
+                    EditMode::EditingCommand,
+                    form.command_input,
+                    "Command:",
+                    info.form_command.as_str(),
+                    "e.g. ssh admin@prod.app.com",
+                ),
+            ] {
+                let active = info.edit_mode == field;
+                let text_y = rect.y + (rect.height - cell_height) / 2.0;
+                for (i, c) in label.chars().enumerate() {
                     self.text_pipeline.push_char(
                         c,
-                        input_x + small_pad + i as f32 * ui_cw,
-                        name_text_y,
-                        [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5],
+                        form_x + small_pad + i as f32 * ui_cw,
+                        text_y,
+                        dim_color,
                     );
                 }
-            }
-
-            // "Command:" label + input
-            let cmd_fy = form.command_input.y;
-            let cmd_label = "Command:";
-            let cmd_label_y = cmd_fy + (field_height - cell_height) / 2.0;
-            for (i, c) in cmd_label.chars().enumerate() {
-                self.text_pipeline.push_char(
-                    c,
-                    form_x + small_pad + i as f32 * ui_cw,
-                    cmd_label_y,
-                    dim_color,
+                self.rect_pipeline.push_rounded_rect(
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    [0.0, 0.0, 0.0, 0.2],
+                    4.0,
                 );
-            }
-            let cmd_active = info.edit_mode == EditMode::EditingCommand;
-            let cmd_border = if cmd_active { accent } else { separator };
-            self.rect_pipeline.push_rounded_rect(
-                input_x,
-                cmd_fy,
-                input_w,
-                field_height,
-                [0.0, 0.0, 0.0, 0.2],
-                4.0,
-            );
-            self.rect_pipeline.push_rect(
-                input_x,
-                cmd_fy + field_height - 2.0,
-                input_w,
-                2.0,
-                cmd_border,
-            );
-            let cmd_text_y = cmd_fy + (field_height - cell_height) / 2.0;
-            for (i, c) in info.form_command.chars().enumerate() {
-                self.text_pipeline.push_char(
-                    c,
-                    input_x + small_pad + i as f32 * ui_cw,
-                    cmd_text_y,
-                    text_color,
-                );
-            }
-            if cmd_active {
-                let cursor_x = input_x
-                    + small_pad
-                    + info.form_command[..info.form_cursor].chars().count() as f32 * ui_cw;
                 self.rect_pipeline.push_rect(
-                    cursor_x,
-                    cmd_fy + 3.0,
-                    1.5,
-                    field_height - 6.0,
-                    accent,
+                    rect.x,
+                    rect.y + rect.height - 2.0,
+                    rect.width,
+                    2.0,
+                    if active { accent } else { separator },
                 );
-            }
-            if info.form_command.is_empty() && !cmd_active {
-                let ph = "e.g. ssh admin@prod.app.com";
-                for (i, c) in ph.chars().enumerate() {
-                    self.text_pipeline.push_char(
-                        c,
-                        input_x + small_pad + i as f32 * ui_cw,
-                        cmd_text_y,
-                        [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5],
+                if let Some(view) = layout.input_viewport(info, field) {
+                    let clip = super::text::TextClip {
+                        left: view.text_x,
+                        top: rect.y,
+                        right: view.right,
+                        bottom: rect.y + rect.height,
+                    };
+                    self.text_pipeline.push_ui_run(
+                        &text[view.text_range.clone()],
+                        view.text_x,
+                        view.text_y,
+                        text_color,
+                        ui_cw,
+                        clip,
                     );
+                    if active {
+                        self.rect_pipeline.push_rect(
+                            view.cursor_x,
+                            rect.y + 3.0,
+                            1.5_f32.min(view.right - view.cursor_x),
+                            rect.height - 6.0,
+                            accent,
+                        );
+                    } else if text.is_empty()
+                        && let Some(hint) =
+                            crate::ui::text_input_viewport::TextInputViewport::calculate(
+                                placeholder,
+                                0,
+                                view.text_x,
+                                view.text_y,
+                                view.right,
+                                ui_cw,
+                            )
+                    {
+                        self.text_pipeline.push_ui_run(
+                            &placeholder[hint.text_range],
+                            view.text_x,
+                            view.text_y,
+                            [dim_color[0], dim_color[1], dim_color[2], dim_color[3] * 0.5],
+                            ui_cw,
+                            clip,
+                        );
+                    }
                 }
             }
 

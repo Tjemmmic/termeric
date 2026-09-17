@@ -981,6 +981,11 @@ impl App {
     ) {
         use crate::ui::commands::panel::CommandsPanelAction;
 
+        if !matches!(action, CommandsPanelAction::None) {
+            // Focus, dismissal, and form replacement retire composition at
+            // the old caret for pointer and accessibility actions as well.
+            self.ime.clear_preedit();
+        }
         match action {
             CommandsPanelAction::Run(index) => {
                 if let Some(command) = self

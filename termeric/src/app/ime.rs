@@ -223,6 +223,44 @@ impl App {
             && !self.commands_panel.is_open()
     }
 
+    fn commands_owns_ime_text(&self) -> bool {
+        self.commands_panel.is_open()
+            && self.commands_panel.is_editing()
+            && self.accepts_ime_text()
+            && !self.info_overlay.is_active()
+            && !self.command_palette.is_active()
+            && !self.unicode_picker.is_active()
+            && self.tab_rename.is_none()
+            && !self.shortcuts_panel.is_active()
+            && !self.settings_panel.is_active()
+            && !self.session_panel.is_open()
+    }
+
+    fn commands_ime_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        if !self.commands_owns_ime_text() {
+            return None;
+        }
+        // Only form state is needed here; do not clone the command inventory
+        // a second time just to position the input method.
+        let info = self.commands_panel.build_info(&[]);
+        crate::ui::commands::panel::CommandsPanelLayout::calculate(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            info.animation,
+            true,
+            info.commands.len(),
+        )
+        .input_viewport(&info, info.edit_mode.clone())
+    }
+
     fn search_ime_viewport(
         &self,
         layout: &crate::terminal::search::SearchBarLayout,
@@ -286,14 +324,26 @@ impl App {
                 max_width: (row.x + row.width - x).max(layout.char_scale),
             });
         }
-        if self.command_palette.is_active() || self.unicode_picker.is_active() {
+        if self.command_palette.is_active()
+            || self.unicode_picker.is_active()
+            || self.commands_owns_ime_text()
+        {
             let (width, height) = renderer.window_size();
-            let view = self.palette_ime_viewport(
-                width as f32,
-                height as f32,
-                renderer.cell_width(),
-                renderer.cell_height(),
-            )?;
+            let view = if self.commands_owns_ime_text() {
+                self.commands_ime_viewport(
+                    width as f32,
+                    height as f32,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                )
+            } else {
+                self.palette_ime_viewport(
+                    width as f32,
+                    height as f32,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                )
+            }?;
             if let Some(window) = &self.window {
                 window.set_ime_cursor_area(
                     winit::dpi::PhysicalPosition::new(
@@ -397,6 +447,50 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_form_ime_follows_the_active_scrolled_field_and_respects_modal_priority() {
+        use crate::ui::commands::panel::{CommandsPanelLayout, EditMode};
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.commands_panel.set_reduced_motion(true);
+        app.commands_panel.toggle();
+        app.commands_panel.start_add();
+        let text = "界e\u{301}👩\u{200d}💻".repeat(20);
+        app.commands_panel.form_name.replace(&text);
+        app.commands_panel.form_command.replace(&text);
+        app.search.start(); // retained lower-priority query must not win
+        for field in [EditMode::EditingName, EditMode::EditingCommand] {
+            app.commands_panel.edit_mode = field.clone();
+            for (width, cell) in [(800.0, 8.0), (1600.0, 16.0)] {
+                let view = app
+                    .commands_ime_viewport(width, 800.0, cell, cell * 2.0)
+                    .unwrap();
+                let info = app.commands_panel.build_info(&[]);
+                let layout = CommandsPanelLayout::calculate(
+                    width,
+                    800.0,
+                    cell,
+                    cell * 2.0,
+                    info.animation,
+                    true,
+                    0,
+                );
+                assert_eq!(view, layout.input_viewport(&info, field.clone()).unwrap());
+                assert!(view.text_range.start > 0);
+                assert!(view.cursor_x + cell <= view.right + 0.001);
+                assert!(!app.search_owns_ime_text());
+            }
+        }
+        assert!(app.commands_ime_viewport(160.0, 800.0, 8.0, 16.0).is_none());
+        app.command_palette.open();
+        assert!(!app.commands_owns_ime_text());
+        assert!(app.commands_ime_viewport(800.0, 800.0, 8.0, 16.0).is_none());
+        app.command_palette.close();
+        app.info_overlay.show("Notice", vec![]);
+        assert!(!app.commands_owns_ime_text());
+        app.commands_panel.close();
+        assert!(app.commands_ime_viewport(800.0, 800.0, 8.0, 16.0).is_none());
+    }
 
     #[test]
     fn search_ime_caret_uses_query_columns_and_shared_shifted_scaled_layout() {

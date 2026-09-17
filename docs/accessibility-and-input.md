@@ -302,6 +302,19 @@ bounded. Rendering, pointer hit testing, and AccessKit bounds all use the same
 one application path. Automated accessibility tests use inert form strings and
 never submit or execute a custom command.
 
+The custom-command Name and Command fields support whole-grapheme Left/Right,
+Home/End, Backspace/Delete, and Ctrl+Left/Right/Backspace/Delete word edits.
+Typing and IME commits insert at the active caret; unsupported modified editing
+keys are consumed, and Ctrl/Alt/Super shortcuts do not insert their literal
+letters. AltGraph text remains available. Both fields use clipped, shaped text
+and a caret-following whole-grapheme viewport; inactive fields show their start.
+IME candidates/preedit share the active field's animated/scaled geometry, and
+field changes retire stale composition. Existing byte limits and submission
+validation are unchanged. Model, geometry, modifier, and raw-PTY isolation tests
+pass without saving or executing commands. Native visual/IME acceptance remains
+deferred. Query selection, click-to-position within these form fields, and
+clipboard insertion into them are not implemented by this change.
+
 The workspace manager and legacy-snapshot manager share a bounded modal model.
 Each visible entry is a named group with exact Load and Delete actions;
 workspaces additionally expose Rename. Stable actions resolve the saved entry's

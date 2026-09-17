@@ -9,7 +9,8 @@
 
 use crate::config::CustomCommand;
 use crate::ui::animation::PanelAnimation;
-use crate::ui::text_input::TextInput;
+use crate::ui::text_input::{TextInput, TextInputEdit};
+use crate::ui::text_input_viewport::TextInputViewport;
 
 /// Action returned by the commands panel after a click
 #[derive(Debug, Clone)]
@@ -130,6 +131,34 @@ pub struct CommandsPanelLayout {
 }
 
 impl CommandsPanelLayout {
+    /// Whole-grapheme field geometry shared by painting and IME placement.
+    /// Inactive fields show their beginning; only the active caret scrolls.
+    pub fn input_viewport(
+        &self,
+        info: &CommandsPanelInfo,
+        field: EditMode,
+    ) -> Option<TextInputViewport> {
+        let form = self.form?;
+        let (text, rect) = match field {
+            EditMode::EditingName => (&info.form_name, form.name_input),
+            EditMode::EditingCommand => (&info.form_command, form.command_input),
+            EditMode::Browse => return None,
+        };
+        let cursor = if info.edit_mode == field {
+            info.form_cursor
+        } else {
+            0
+        };
+        TextInputViewport::calculate(
+            text,
+            cursor,
+            rect.x + self.small_padding,
+            rect.y + (rect.height - self.cell_height) / 2.0,
+            rect.x + rect.width - self.small_padding,
+            self.cell_width,
+        )
+    }
+
     pub fn calculate(
         window_width: f32,
         window_height: f32,
@@ -405,10 +434,10 @@ impl CommandsPanel {
         }
     }
 
-    /// Handle backspace in the form
-    pub fn form_backspace(&mut self) {
+    /// Edit only the active field, preserving the other field and form limits.
+    pub fn form_edit(&mut self, edit: TextInputEdit) {
         if let Some(input) = self.active_input() {
-            input.backspace();
+            input.edit_grapheme(edit);
         }
     }
 
@@ -498,6 +527,115 @@ mod tests {
             layout.command_row(1).y,
             layout.command_row(0).y + layout.row_height
         );
+    }
+
+    #[test]
+    fn form_edits_keep_clusters_whole_and_change_only_the_active_field() {
+        use TextInputEdit::*;
+        for name in [true, false] {
+            let mut panel = CommandsPanel::new();
+            panel.start_add();
+            panel.form_name.replace("untouched");
+            panel.form_command.replace("untouched");
+            if !name {
+                panel.focus_command();
+            }
+            let input = "a界e\u{301}👩\u{200d}💻🇺🇸z";
+            panel.active_input().unwrap().replace(input);
+            for edit in [Home, Right, Delete, Right] {
+                panel.form_edit(edit);
+            }
+            panel.form_char('X');
+            assert_eq!(
+                panel.active_input().unwrap().text(),
+                "ae\u{301}X👩\u{200d}💻🇺🇸z"
+            );
+            for edit in [Delete, Delete, End, Backspace] {
+                panel.form_edit(edit);
+            }
+            assert_eq!(panel.active_input().unwrap().text(), "ae\u{301}X");
+            panel
+                .active_input()
+                .unwrap()
+                .replace("one e\u{301} 👩\u{200d}💻 tail");
+            for edit in [WordLeft, BackspaceWord, DeleteWord] {
+                panel.form_edit(edit);
+            }
+            assert_eq!(panel.active_input().unwrap().text(), "one e\u{301} ");
+            for edit in [Home, DeleteWord, WordRight, BackspaceWord] {
+                panel.form_edit(edit);
+            }
+            assert_eq!(panel.active_input().unwrap().text(), "  ");
+            let other = if name {
+                &panel.form_command
+            } else {
+                &panel.form_name
+            };
+            assert_eq!(other.text(), "untouched");
+        }
+    }
+
+    #[test]
+    fn form_viewports_follow_whole_graphemes_at_scaled_animated_geometry() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let text = "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(30);
+        let mut panel = CommandsPanel::new();
+        panel.start_add();
+        panel.form_name.replace(&text);
+        panel.form_command.replace(&text);
+        for (width, cell) in [(800.0, 8.0), (1600.0, 16.0), (320.0, 8.0)] {
+            for animation in [0.25, 1.0] {
+                let layout = CommandsPanelLayout::calculate(
+                    width,
+                    800.0,
+                    cell,
+                    cell * 2.0,
+                    animation,
+                    true,
+                    0,
+                );
+                for field in [EditMode::EditingName, EditMode::EditingCommand] {
+                    panel.edit_mode = field.clone();
+                    for cursor in text
+                        .grapheme_indices(true)
+                        .map(|(i, _)| i)
+                        .chain([text.len()])
+                    {
+                        panel.active_input().unwrap().set_cursor_byte(cursor);
+                        let info = panel.build_info(&[]);
+                        let Some(view) = layout.input_viewport(&info, field.clone()) else {
+                            assert_eq!(width, 320.0); // collapsed input: no out-of-box caret
+                            continue;
+                        };
+                        assert!(view.text_range.start <= cursor && cursor <= view.text_range.end);
+                        for edge in [view.text_range.start, view.text_range.end] {
+                            assert!(
+                                edge == text.len()
+                                    || text.grapheme_indices(true).any(|(i, _)| i == edge)
+                            );
+                        }
+                        assert!(
+                            view.cursor_x >= view.text_x
+                                && view.cursor_x + cell <= view.right + 0.001
+                        );
+                        if cursor == text.len() {
+                            assert!(view.text_range.start > 0);
+                        }
+                    }
+                    let other = if field == EditMode::EditingName {
+                        EditMode::EditingCommand
+                    } else {
+                        EditMode::EditingName
+                    };
+                    if let Some(view) = layout.input_viewport(&panel.build_info(&[]), other) {
+                        assert_eq!(view.text_range.start, 0);
+                    }
+                }
+            }
+        }
+        panel.cancel_edit();
+        panel.form_edit(TextInputEdit::Delete);
+        assert!(!panel.is_editing());
     }
 
     #[test]

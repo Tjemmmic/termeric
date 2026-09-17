@@ -1084,35 +1084,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // Handle commands panel inline form input
                 if self.commands_panel.is_open() && self.commands_panel.is_editing() {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
-                            Key::Named(NamedKey::Escape) => {
-                                self.commands_panel.cancel_edit();
-                            }
-                            Key::Named(NamedKey::Tab) => {
-                                self.commands_panel.next_field();
-                            }
-                            Key::Named(NamedKey::Enter) => {
-                                self.apply_commands_panel_action(
-                                    crate::ui::commands::panel::CommandsPanelAction::Submit,
-                                );
-                            }
-                            Key::Named(NamedKey::Backspace) => {
-                                self.commands_panel.form_backspace();
-                            }
-                            Key::Named(NamedKey::Space) => {
-                                self.commands_panel.form_char(' ');
-                            }
-                            Key::Character(c) => {
-                                for ch in c.chars() {
-                                    self.commands_panel.form_char(ch);
-                                }
-                            }
-                            _ => {}
-                        }
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
+                        self.handle_commands_form_key(&event.logical_key);
                     }
                     return;
                 }

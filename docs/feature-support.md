@@ -356,6 +356,13 @@ close/reopen. Exact scalar and curated entries remain synchronous. Automated
 blocked-worker, idle-scheduling, and accessible-status tests cover this lifecycle;
 native responsiveness acceptance remains deferred (see [Unicode policy](unicode-support.md)).
 
+Custom-command Name and Command fields now support whole-grapheme caret/deletion
+and Ctrl word editing, with bounded clipped/shaped caret-following text and
+matching IME candidate geometry. Automated model, geometry, modifier, and raw-PTY
+isolation tests pass; native visual/IME acceptance remains deferred. Selection,
+pointer caret placement, and clipboard insertion in these form fields remain
+unimplemented (see [input contract](accessibility-and-input.md)).
+
 Shared palette query editing supports unmodified Left/Right/Home/End and
 whole-grapheme Backspace/Delete with insertion at the moved caret. Ctrl+Left/Right
 and Ctrl+Backspace/Delete use the same Unicode word-segment editing as search;

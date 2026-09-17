@@ -2,6 +2,7 @@
 
 mod accessibility;
 mod application;
+mod commands_input;
 mod configuration;
 mod copy_mode;
 mod desktop_io;
