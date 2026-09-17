@@ -1078,6 +1078,89 @@ font observations, configurations, fixture records, and display/launcher logs.
 All 178 archived files were verified byte-for-byte against the originals.
 Caches/data/state are excluded; original `/tmp/` paths map to archive names.
 
+### CPU-tail attribution at `f9ad5d2`
+
+Boundary-only diagnostics reproduced the intermittent post-response CPU burst
+without continuous thread polling. Each original resource snapshot was followed
+by one PID/TID/start-time-checked `/proc/PID/task/TID/stat` and `schedstat`
+snapshot. The first `schedstat` field records scheduled CPU time in nanoseconds,
+as specified by the [kernel scheduler documentation](https://docs.kernel.org/scheduler/sched-stats.html).
+Raw counters, snapshot timestamps/durations, errors, and identity sets are
+retained. This is diagnostic instrumentation, not a new comparison distribution;
+the first/last thread observations are not simultaneous with each other or with
+the original process counters.
+
+In the first run's ninth measured Termeric process, the original process
+counter increased by 21 ticks (about 210 ms at this host's 100 Hz accounting).
+Independently summed thread runtime increased by 208.56 ms: 191.81 ms in
+`llvmpipe-*` software-rendering workers, 15.94 ms on the main thread, 0.029 ms
+in `termeric-git`, and 0.780 ms elsewhere. Thread identities were unchanged.
+This attributes that reproduced burst primarily to software-rendering work,
+not Git inspection or a provider workflow; it does not provide function stacks.
+
+Further runs enabled the existing opt-in frame-count file, reading count and
+mtime from the same open file at each boundary. Selected runs also enabled only
+`termeric::app::event_loop=trace` frame reasons. Every run excluded one warmup
+per terminal, rotated Termeric/kitty order, used the installed-Noto geometry
+recipe, and retained two-second post-response observations.
+
+| Diagnostic variant | Payload | Measured Termeric processes | Large-tail observations | Additional frames in affected windows |
+| --- | ---: | ---: | --- | --- |
+| Boundary snapshots only | 1 MiB | 10 | One 21-tick burst | Not observed |
+| Frame counter | 1 MiB | 10 | None | Zero throughout |
+| Frame-counter repeat | 1 MiB | 20 | Four bursts of 21–28 ticks | 17–22 |
+| Counter plus narrow frame trace | 1 MiB | 10 | None | Zero throughout |
+| Counter plus trace, short output | 4 KiB | 5 | All five, 29–34 ticks | 25–27 |
+| Same short output, reduced motion on | 4 KiB | 5 | None; all process deltas zero | Zero throughout |
+
+The four 1 MiB frame-counter bursts finished their last recorded frame
+263–351 ms after the initial resource boundary. Their llvmpipe runtime deltas
+were 190.74–243.94 ms, versus 22.74–26.52 ms on the main thread and only
+0.023–0.039 ms in Git. In the short-output runs, every additional logged frame
+had reason `animation`; the final frames occurred 395–429 ms after the first
+boundary, with 250.18–301.00 ms of llvmpipe CPU per sample. All Termeric thread
+identities stayed stable. Counter/trace non-reproductions are retained alongside
+the reproductions, not substituted for them. The 4 KiB experiments are separate
+workloads and must not be pooled with the 1 MiB results.
+
+The short-output control changed only the generated Termeric configuration to
+`[accessibility] reduce_motion = "on"` while retaining the instrumentation and
+workload. It removed the extra frames and llvmpipe CPU growth in all five
+samples; each still accumulated roughly 1 ms of other thread runtime, below a
+whole process tick. This is an animation diagnostic, **not a recommendation
+to disable animations as the fix or a cross-terminal ranking**.
+
+Source inspection identifies a concrete cursor-timing defect:
+`App::update_cursor_animation()` repeatedly interpolates by
+`min(15 * frame_delta, 1)` until position error falls below 0.01 cells.
+Consequently a frame gap of at least roughly 66.7 ms snaps immediately, while
+shorter gaps can leave a distance-dependent tail spanning hundreds of
+milliseconds. The scheduler requests animation frames while that cursor error
+remains. This violates the project's fixed-duration, `Instant`-based animation
+rule and explains a timing-sensitive post-output animation mechanism consistent
+with the measurements. The next implementation should replace that recurrence
+with a bounded ease-out transition, preserve retargeting/new-tab/visibility and
+reduced-motion behavior, and test equal elapsed-time results across different
+frame schedules. Do not claim that these diagnostics fixed the interpolation,
+explain every historical burst, establish GPU completion, or measure steady
+idle: the current resource window still starts at the parser response and
+includes presentation/animation work. This is not evidence of a sustained
+redraw loop beyond the observed short tails.
+
+All six isolation records have clean/unchanged source
+`f9ad5d2981f9a6188f4f865494a1a0908e70e076` and the unchanged Termeric executable
+SHA-256 `a05af7c785118613273ea7ced12a254fc2fa7cf2b8e5255c4dcd5630198184a4`.
+They used private Sway/Xwayland with llvmpipe, not the operator desktop or a
+hardware-GPU performance lane. No provider workflow ran; private runtimes were
+removed. The local unpublished archive
+`target/terminal-comparison/2026-09-17-f9ad5d2-cpu-attribution.tar.gz` has SHA-256
+`2f4cbd88df25cc019a901350272ec92de01ba6fc4a12cd04b0a42e8029354d2c`.
+It includes the launcher, temporary diagnostic wrapper, recountable summary
+and script, and all six run directories under
+`termeric-cpu-boundary-f9ad5d2.kk7Maa/`. All 1,025 archived files were verified
+byte-for-byte; caches/data/state are excluded. Forced teardown is not
+graceful-close acceptance. Original `/tmp/` paths map to archive names.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic

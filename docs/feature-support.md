@@ -774,6 +774,17 @@ and timing outliers remain retained. This is not an application optimization
 or verified renderer-font-equivalent ranking; see
 [the schema-3 native evidence](performance.md#native-font-control-verification-at-cd801ad).
 
+Clean `f9ad5d2` diagnostics reproduced matching CPU bursts and attributed most
+of their scheduled CPU time to llvmpipe software-rendering workers. Frame
+counters captured 17–22 extra frames over a short post-response tail. Separate
+4 KiB output runs consistently logged 25–27 animation frames; an otherwise
+matching reduced-motion control removed that tail. Source inspection found
+legacy frame-delta cursor interpolation, so replacing it with a fixed-duration
+`Instant` transition is the concrete next fix. This is attribution evidence,
+not an implemented optimization, proof about every historical burst, or a
+steady-idle/hardware-GPU claim; see
+[the CPU-tail evidence](performance.md#cpu-tail-attribution-at-f9ad5d2).
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the
