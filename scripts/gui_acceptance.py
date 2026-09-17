@@ -41,6 +41,7 @@ from scripts.gui_background import run_background_scenario
 from scripts.gui_mouse_routing import run_mouse_ownership_checks
 from scripts.gui_palette_input import run_palette_input_checks
 from scripts.gui_graphics import graphics_clients_ready, run_wayland_graphics
+from scripts.gui_settings_input import run_settings_input_checks
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
 BASELINES = ROOT / "termeric" / "tests" / "gui" / "baselines"
@@ -1624,6 +1625,7 @@ def run_wayland_interaction_scenario(
         )
 
         run_palette_input_checks(sys.modules[__name__], app, transcript, original_pid)
+        run_settings_input_checks(sys.modules[__name__], app, transcript, original_pid)
         run_mouse_ownership_checks(sys.modules[__name__], app, transcript, original_pid)
 
         app.wayland_chord(("alt",), "F4")

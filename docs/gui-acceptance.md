@@ -419,6 +419,25 @@ Missing applications are failures, never silent skips. A developer running a
 partial local command may record the exact tool as unavailable, but the CI
 lane installs and requires the complete declared tool set.
 
+## Wayland Settings-filter interaction
+
+The Wayland `interaction` scenario also includes seven Settings-filter cases:
+clipboard insertion, multiline/oversize rejection, combining/ZWJ Backspace, and
+pointer placement across wide/combining text. Each starts with a non-Size row
+selected so an ignored paste cannot pass through the default Size selection.
+The corrected query must select Size, produce one logged 14→15 font-size change
+with fewer PTY rows/columns, and restore the exact original geometry at 14.
+Exact owner-scoped PTY fences reject leaked filter text/editing keys, and
+unrelated window focus loss fails the case. Clipboard sources run in foreground,
+serve one paste, and are reaped on success or failure. The scenario uses only
+the isolated fixture configuration and never saves user settings.
+
+`interaction/settings-input.json` retains diagnostic per-case geometry and
+delivery results. It is not an independently reconstructed/sealed Settings
+publication proof; the existing palette verifier still covers only its own
+seventeen cases. This lane does not establish IME-client, screen-reader,
+whole-panel pixel, or real-desktop clipboard acceptance.
+
 ## Standalone Wayland graphics clients
 
 The `graphics` scenario runs the seven installed image clients listed above
