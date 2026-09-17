@@ -8672,6 +8672,36 @@ fn headless_settings_apply_scrollback_memory_budget() {
 }
 
 #[test]
+fn headless_font_size_setting_updates_reset_size_and_preserves_other_config() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    for size in [8.0, 15.5, 72.0, 14.0] {
+        let mut expected = app.config.clone();
+        expected.font.size = size;
+        app.apply_settings_action(SettingsAction::SetFontSize(size));
+        assert_eq!(app.config.font.size, size);
+        assert_eq!(app.default_font_size, size);
+        assert_eq!(
+            toml::to_string(&app.config).unwrap(),
+            toml::to_string(&expected).unwrap(),
+        );
+    }
+}
+
+#[test]
+fn headless_font_size_setting_rejects_invalid_values_before_mutation() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.apply_settings_action(SettingsAction::SetFontSize(15.5));
+    let retained = toml::to_string(&app.config).unwrap();
+    let geometry = (app.cols, app.rows);
+    for size in [7.9, 72.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        app.apply_settings_action(SettingsAction::SetFontSize(size));
+        assert_eq!(toml::to_string(&app.config).unwrap(), retained);
+        assert_eq!(app.default_font_size, 15.5);
+        assert_eq!((app.cols, app.rows), geometry);
+    }
+}
+
+#[test]
 fn headless_font_settings_preserve_order_and_apply_without_a_window() {
     let mut app = App::new_headless(Config::default()).unwrap();
     app.apply_settings_action(SettingsAction::SetFontFamily("Fira Mono".into()));

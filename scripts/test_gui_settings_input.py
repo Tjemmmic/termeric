@@ -30,12 +30,14 @@ class SettingsInputTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             settings.verify_settings_delivery({True: b"fence"}, True, b"fence")
 
-    def test_font_state_oracle_collapses_only_identical_adjacent_diagnostics(self):
+    def test_font_state_oracle_preserves_duplicates_and_distinct_transitions(self):
         line = lambda size, cols, rows: f"INFO Font size set to {size}, grid resized to {cols}x{rows}\n"
         raised, restored = line(15, 112, 40), line(14, 126, 42)
-        self.assertEqual(settings.font_changes(raised + raised + restored + restored),
+        self.assertEqual(settings.font_changes(raised + restored),
                          [(15, 112, 40), (14, 126, 42)])
-        for extra in [line(16, 100, 38), line(15, 111, 40), restored + raised]:
+        self.assertEqual(settings.font_changes(raised + raised + restored + restored),
+                         [(15, 112, 40), (15, 112, 40), (14, 126, 42), (14, 126, 42)])
+        for extra in [raised, restored, line(16, 100, 38), line(15, 111, 40), restored + raised]:
             self.assertNotEqual(settings.font_changes(raised + extra + restored),
                                 [(15, 112, 40), (14, 126, 42)])
         self.assertEqual(settings.font_changes(raised.rstrip("\n")), [])

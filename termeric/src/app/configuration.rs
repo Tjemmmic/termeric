@@ -733,7 +733,16 @@ impl App {
                 return;
             }
             SettingsAction::SetFontSize(size) => {
-                self.set_font_size(size);
+                // Validate before touching the live font or geometry. The
+                // shared config path applies the size once; calling the
+                // direct zoom setter first invalidates rows and resizes twice.
+                let mut config = self.config.clone();
+                config.font.size = size;
+                if let Err(error) = self.apply_config(config) {
+                    self.toasts
+                        .error(format!("Setting could not be applied: {error}"));
+                }
+                return;
             }
             SettingsAction::SetFontFamily(family) => {
                 self.set_font_family(family);

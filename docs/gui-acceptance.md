@@ -431,9 +431,11 @@ Exact owner-scoped PTY fences reject leaked filter text/editing keys, and
 unrelated window focus loss fails the case. Clipboard sources run in foreground,
 serve one paste, and are reaped on success or failure. The scenario uses only
 the isolated fixture configuration and never saves user settings.
-The font-state oracle collapses consecutive identical diagnostics from direct
-application and configuration refresh, but rejects additional size/geometry
-transitions and requires each reported grid size to match the actual PTY.
+The font-state oracle requires exactly one application diagnostic per size
+action, rejecting duplicates as well as additional size/geometry transitions.
+Each reported grid size must match the actual PTY. Settings font-size changes
+are validated before mutation and applied through the shared configuration
+path once; direct keyboard zoom retains its separate setter.
 
 `interaction/settings-input.json` retains diagnostic per-case geometry and
 delivery results. It is not an independently reconstructed/sealed Settings

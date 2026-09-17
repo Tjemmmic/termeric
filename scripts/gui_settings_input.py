@@ -41,13 +41,9 @@ def verify_settings_delivery(streams, owner, fence):
 
 
 def font_changes(log):
-    """Collapse repeated identical diagnostics, not distinct state transitions."""
-    states = []
-    for size, cols, rows in re.findall(r"Font size set to ([0-9]+(?:\.[0-9]+)?), grid resized to ([0-9]+)x([0-9]+)\r?\n", log):
-        state = (float(size), int(cols), int(rows))
-        if not states or states[-1] != state:
-            states.append(state)
-    return states
+    """Retain every complete application diagnostic, including duplicates."""
+    return [(float(size), int(cols), int(rows)) for size, cols, rows in
+            re.findall(r"Font size set to ([0-9]+(?:\.[0-9]+)?), grid resized to ([0-9]+)x([0-9]+)\r?\n", log)]
 
 
 def observed_font_changes(app, offset):
