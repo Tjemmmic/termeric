@@ -1565,11 +1565,72 @@ mod desktop_io_tests {
         app.git_completions = vec!["a'b".into()];
         app.git_completion_index = Some(0);
         app.git_completions_visible = true;
-        assert!(app.accept_git_completion(false));
+        assert!(app.handle_git_completion_key(&winit::keyboard::Key::Named(
+            winit::keyboard::NamedKey::Tab,
+        )));
         assert_eq!(app.input_line_buffer, "git checkout 'a'\\''b'");
         assert!(!app.git_completions_visible);
         app.write_to_pty(b"\r");
         assert!(app.input_line_buffer.is_empty());
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completion_popup_does_not_steal_control_tab_or_write_edits() {
+        use winit::keyboard::{Key, NamedKey};
+        for read_only in [false, true] {
+            let typed = "git checkout ma";
+            let mut app = raw_command_app(typed.len() + 1);
+            app.write_to_pty(typed.as_bytes());
+            app.tabs.as_mut().unwrap().new_tab_with_command("/bin/sh", &[
+                "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=1 2>/dev/null | od -An -tx1; sleep 0.2".into(),
+            ], None, Some("shortcut-target-reader"), None, Default::default()).unwrap();
+            wait_command_output(&mut app, "READY");
+            app.tabs.as_mut().unwrap().switch_to(0);
+            if read_only {
+                app.toggle_focused_pane_read_only();
+            }
+            app.input_line_buffer = typed.into();
+            app.git_completions = vec!["main".into()];
+            app.git_completion_index = Some(0);
+            app.git_completions_visible = true;
+            app.modifiers = ModifiersState::CONTROL;
+            let key = Key::Named(NamedKey::Tab);
+            assert!(!app.handle_git_completion_key(&key));
+            let action = app.shortcut_registry.check(&key, app.modifiers).unwrap();
+            assert_eq!(action, crate::input::keybindings::BindableAction::NextTab);
+            assert!(app.handle_action(action.to_action()));
+            assert_eq!(app.tabs.as_ref().unwrap().active_index(), 1);
+            app.modifiers = ModifiersState::empty();
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, b"Z");
+            app.tabs.as_mut().unwrap().switch_to(0);
+            if read_only {
+                app.toggle_focused_pane_read_only();
+            }
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, format!("{typed}Z").as_bytes());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn modified_enter_cannot_accept_a_completion_through_legacy_carriage_return() {
+        use winit::keyboard::{Key, NamedKey};
+        let expected = b"git checkout ma\rZ";
+        let mut app = raw_command_app(expected.len());
+        app.write_to_pty(b"git checkout ma");
+        app.git_completions = vec!["main".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        app.modifiers = ModifiersState::CONTROL;
+        assert!(!app.handle_git_completion_key(&Key::Named(NamedKey::Enter)));
+        // Even if the terminal's keyboard mode encodes this key as legacy CR,
+        // only the user's original line is submitted, without a branch rewrite.
+        app.write_to_pty(b"\r");
+        app.modifiers = ModifiersState::empty();
         app.write_to_pty(b"Z");
         assert_command_bytes(&mut app, expected);
     }

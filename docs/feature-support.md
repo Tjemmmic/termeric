@@ -461,6 +461,14 @@ isolated POSIX argument round trips pass; nested-shell detection, native
 Fish/Zsh/operator acceptance, and grapheme-aware editing remain unverified or
 outside this helper (see [input contract](accessibility-and-input.md)).
 
+Git completion navigation now yields modified/AltGraph keys to the normal
+shortcut and terminal routes after dismissing the popup. Ctrl+Tab retains tab
+navigation, read-only panes do not swallow application shortcuts, and modified
+Enter cannot accept a branch through legacy CR encoding. Broadcast and stale-list
+ownership have model coverage; inert PTYs verify shortcut routing and exact
+input bytes. Native keyboard acceptance remains deferred (see
+[input contract](accessibility-and-input.md)).
+
 Guarded submission cancellation preserves the already-sent editable prefix on
 the unchanged focused route, so retrying Enter rechecks it. Withheld paste and
 replacement bytes are excluded; safe editing and exactly-once broadcast retry

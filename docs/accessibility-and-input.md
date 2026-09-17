@@ -449,6 +449,21 @@ and [Fish quoting](https://fishshell.com/docs/4.1/language.html#quotes), with
 [Git reference rules](https://git-scm.com/docs/git-check-ref-format) checked by
 libgit2. This remains input assistance, not a shell security boundary.
 
+The Git popup's navigation handler owns only unmodified Tab, Up/Down, and
+Escape; plain Enter continues through the guarded submission path above.
+Modified keys and AltGraph dismiss it without editing the tracked line, then continue through
+normal shortcut/terminal routing. This preserves Ctrl+Tab navigation and avoids
+accepting a branch when modified Enter is encoded as legacy CR. Read-only panes
+retire stale completion tracking but do not swallow application shortcuts;
+armed/active broadcast retains its input ownership and tracked line. Empty or
+invalid selections cannot trap navigation or overflow an index. Up/Down clamp
+within the list and can establish an absent selection; Tab without a selection
+falls through to native completion. Model tests cover modifiers/AltGraph,
+broadcast ownership, bounded navigation, and stale lists. Inert two-PTY tests
+verify real shortcut dispatch without completion edits, read-only tab switching,
+plain Tab insertion, and modified-Enter bytes. Native keyboard acceptance
+remains deferred.
+
 Withholding a guarded submission now preserves the tracked prefix already sent
 to the terminal. Cancel does not send an erase command or submission, and a
 subsequent Enter on the unchanged focused route checks that prefix again.

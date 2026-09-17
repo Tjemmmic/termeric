@@ -1092,49 +1092,10 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
 
-                // Handle git completion navigation (Tab to accept, Up/Down to navigate, Escape to dismiss)
-                if self.git_completions_visible
-                    && event.state == winit::event::ElementState::Pressed
+                if event.state == winit::event::ElementState::Pressed
+                    && self.handle_git_completion_key(&event.logical_key)
                 {
-                    if self.focused_pane_read_only() {
-                        self.clear_terminal_input_tracking();
-                        return;
-                    }
-                    use winit::keyboard::Key;
-                    match event.logical_key.as_ref() {
-                        Key::Named(winit::keyboard::NamedKey::Tab) => {
-                            // Let Shift+Tab pass through to the PTY
-                            // (e.g., for Claude Code mode switching)
-                            if !self.modifiers.shift_key() {
-                                // Accept the selected completion
-                                self.accept_git_completion(false);
-                                self.git_completions_visible = false;
-                                self.git_completions.clear();
-                                self.git_completion_index = None;
-                                return;
-                            }
-                        }
-                        Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
-                            if let Some(ref mut idx) = self.git_completion_index {
-                                let max = self.git_completions.len().saturating_sub(1);
-                                *idx = (*idx + 1).min(max);
-                            }
-                            return;
-                        }
-                        Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
-                            if let Some(ref mut idx) = self.git_completion_index {
-                                *idx = idx.saturating_sub(1);
-                            }
-                            return;
-                        }
-                        Key::Named(winit::keyboard::NamedKey::Escape) => {
-                            self.git_completions_visible = false;
-                            self.git_completions.clear();
-                            self.git_completion_index = None;
-                            return;
-                        }
-                        _ => {} // Other keys fall through normally
-                    }
+                    return;
                 }
 
                 // Arming is a safe application mode: only pane navigation,

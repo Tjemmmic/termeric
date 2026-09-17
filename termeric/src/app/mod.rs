@@ -10,6 +10,7 @@ mod domain_picker;
 mod event_loop;
 mod font_feature_editor;
 mod font_range_editor;
+mod git_completion;
 mod ime;
 mod kitty_file_transfer;
 mod mouse;
