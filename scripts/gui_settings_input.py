@@ -86,8 +86,8 @@ def paste_private(gui, app, text):
 
 
 def run_settings_input_checks(gui, app, transcript, owner):
-    report = {"schema": 1, "backend": "wayland", "cases": [],
-              "coverage": "private Settings clipboard/Unicode/pointer routing and font-size effect; not visual, native IME, or independently sealed evidence"}
+    report = {"schema": 2, "backend": "wayland", "cases": [],
+              "coverage": "private Settings clipboard/Unicode/pointer/keyboard routing and font-size effect; not visual or native IME evidence"}
     records = lambda: gui.read_records(transcript)
     try:
         app.renderer_resize("wayland", *SURFACE)
@@ -141,7 +141,8 @@ def run_settings_input_checks(gui, app, transcript, owner):
                         "larger": larger, "restored": gui.latest_terminal_geometry(records(), owner),
                         "actual_hex": {str(pid): data.hex() for pid, data in delta.items() if data},
                         "font_changes": observed_font_changes(app, log_offset),
-                        "unrelated_focus_losses": app.log_count("Window focus changed: false") - loss}
+                        "unrelated_focus_losses": app.log_count("Window focus changed: false") - loss,
+                        "log_range": [log_offset, app.log_path.stat().st_size]}
                 report["cases"].append(case)
                 verify_settings_delivery(delta, owner, fence)
                 if case["font_changes"] != expected_changes:

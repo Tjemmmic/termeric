@@ -13,6 +13,7 @@ from unittest import mock
 
 from scripts import gui_acceptance as gui, gui_candidate, soak_provenance
 from scripts.test_gui_palette_evidence import write_fixture
+from scripts.test_gui_settings_evidence import write_fixture as write_settings_fixture
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux executable descriptors")
@@ -39,6 +40,10 @@ class GuiCandidateTests(unittest.TestCase):
                     write_fixture(artifacts)
                 if mode == "bad-palette":
                     (artifacts / "interaction/palette-input.json").write_text('{}')
+                if mode != "missing-settings":
+                    write_settings_fixture(artifacts, append=True)
+                if mode == "bad-settings":
+                    (artifacts / "interaction/settings-input.json").write_text('{}')
                 if mode == "source":
                     state["commit"] = "b" * 40
                 if mode == "dirty-after":
@@ -92,7 +97,7 @@ class GuiCandidateTests(unittest.TestCase):
 
     def test_clean_run_seals_selected_scenarios_and_pinned_binary(self):
         record, proof, stdout = self.invoke()
-        self.assertEqual(record["schema"], 5)
+        self.assertEqual(record["schema"], 6)
         self.assertEqual(record["candidate"], proof)
         self.assertTrue(proof["candidate_eligible"])
         self.assertEqual(proof["requested_scenarios"], ["interaction"])
@@ -103,6 +108,17 @@ class GuiCandidateTests(unittest.TestCase):
         self.assertEqual(proof["interaction_palette"]["schema"], 3)
         self.assertEqual(proof["interaction_palette"]["case_count"], 17)
         self.assertEqual(len(proof["interaction_palette"]["artifacts"]), 2)
+        self.assertEqual(proof["schema"], 3)
+        self.assertEqual(proof["interaction_settings"]["case_count"], 11)
+        self.assertEqual(len(proof["interaction_settings"]["artifacts"]), 3)
+
+    def test_missing_or_invalid_settings_artifacts_prevent_candidate_promotion(self):
+        for mode in ("missing-settings", "bad-settings"):
+            record, proof, stdout = self.invoke(mode)
+            self.assertFalse(proof["candidate_eligible"])
+            self.assertIsNotNone(proof["interaction_settings_error"])
+            self.assertEqual(record["candidate"], proof)
+            self.assertNotIn("GUI acceptance passed", stdout)
 
     def test_missing_or_invalid_palette_artifacts_prevent_candidate_promotion(self):
         for mode in ("missing-palette", "bad-palette"):

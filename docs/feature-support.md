@@ -464,7 +464,12 @@ configuration. Settings-filter paste uses the same atomic limits, refuses
 clipboard reads while a dropdown is open, and never applies a setting or falls
 through to a retained field or PTY. The private-Wayland interaction lane covers
 eleven clipboard, Unicode, pointer, and keyboard-editing cases with exact PTY
-ownership and reversible font-size effects. Selection and real-desktop
+ownership and reversible font-size effects. Clean candidate publication now
+requires independent reconstruction of those byte fences and native geometry,
+agreement with bounded per-case font/focus log ranges, and seals over all three
+artifacts; old unsealed Settings reports are not equivalent evidence (see
+[native acceptance contract](gui-acceptance.md#wayland-settings-filter-interaction)).
+Selection and real-desktop
 clipboard/IME/visual acceptance for this filter remain separate work.
 
 Settings-filter accessibility replacement is now wired through the same bounded

@@ -137,8 +137,8 @@ def validate_record(path: Path):
     data, _ = read_artifact(path.parent, path.name, 1024 * 1024)
     record = decode_json(data)
     candidate = record.get("candidate", {})
-    if record.get("schema") != 5 or record.get("backend") != "wayland" or candidate.get("schema") != 2:
-        raise ValueError("palette validation requires a schema-5 Wayland candidate record")
+    if (record.get("schema"), candidate.get("schema")) not in {(5, 2), (6, 3)} or record.get("backend") != "wayland":
+        raise ValueError("palette validation requires a schema-5 or schema-6 Wayland candidate record")
     if candidate.get("candidate_eligible") is not True or "interaction" not in candidate.get("requested_scenarios", []):
         raise ValueError("record is not eligible Wayland interaction evidence")
     collected = collect_palette_evidence(path.parent)

@@ -284,7 +284,7 @@ initial identities, and every selected scenario must have passed before the
 CLI prints success. A detected change yields a nonzero exit and retained
 failure evidence even if the functional scenarios themselves passed.
 
-Strict runs emit schema-5 `results.json` with a schema-2 embedded `candidate` object
+Strict runs emit schema-6 `results.json` with a schema-3 embedded `candidate` object
 and a separate `provenance.json`: observed commit, exact requested scenarios,
 the `skip_visual_checks` option, initial/final executable identities, provenance
 checks, and `candidate_eligible`. The visual option records requested policy;
@@ -317,6 +317,8 @@ This command checks the palette evidence subset, not all GUI scenarios or the
 source/compiler provenance. Older schema-4 records lack this sealed contract
 and are rejected by this verifier; they remain historical evidence of their
 original checks rather than equivalent current palette acceptance.
+The palette-only verifier also accepts historical schema-5/schema-2 candidates;
+those records do not carry the required current Settings proof described below.
 
 This detects observed drift, not hostile same-user tampering, signed compiler
 provenance, or proof that an existing binary was freshly built from the named
@@ -438,11 +440,34 @@ Each reported grid size must match the actual PTY. Settings font-size changes
 are validated before mutation and applied through the shared configuration
 path once; direct keyboard zoom retains its separate setter.
 
-`interaction/settings-input.json` retains diagnostic per-case geometry and
-delivery results. It is not an independently reconstructed/sealed Settings
-publication proof; the existing palette verifier still covers only its own
-seventeen cases. This lane does not establish IME-client, screen-reader,
-whole-panel pixel, or real-desktop clipboard acceptance.
+Schema-2 `interaction/settings-input.json` records per-case geometry, delivery,
+and byte ranges into `interaction/termeric.log`. Clean Wayland interaction
+publication also requires an independent Settings verifier: exactly eleven
+ordered cases on the restored original PTY; unique begin/end markers; no input
+between markers except the exact owner fence; and a reconstructed native
+resize sequence that reduces rows/columns and restores the exact baseline.
+Claimed geometry must match the transcript. Each non-overlapping, line-aligned
+log range must contain exactly the matching 15→14 font applications and no focus
+loss. Extra font applications anywhere in the log are rejected. The ranges are
+runner-recorded observation boundaries, not independently timestamp-correlated
+proof of when a compositor delivered a key.
+
+The schema-1 proof in `candidate.interaction_settings` seals the sidecar (64 KiB
+maximum), shared PTY transcript (8 MiB), and application log (16 MiB), using the
+same bounded regular-file, no-symlink, identity-stability checks as palette
+evidence. Missing or inconsistent artifacts fail candidate publication and
+retain `interaction_settings_error`. Old unsealed schema-1 Settings sidecars
+cannot satisfy this contract. Re-check the Settings subset offline:
+
+```bash
+python3 scripts/gui_settings_evidence.py /tmp/termeric-wayland/results.json
+```
+
+The separate palette verifier still covers only its own seventeen cases. These
+checks detect inconsistent or changed evidence; they are not protection against
+a same-user attacker rewriting all artifacts and seals. Neither verifier proves
+all GUI scenarios, source/compiler provenance, IME-client, screen-reader,
+whole-panel pixels, or real-desktop clipboard acceptance.
 
 ## Standalone Wayland graphics clients
 
