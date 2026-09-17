@@ -206,6 +206,8 @@ def require_media_target(target: bytes, medium: bytes) -> None:
 def render_external_graphics_clients(
     transcript: str,
     terminal_geometry: tuple[int, int, int, int] | None = None,
+    *,
+    drain_output: bool = False,
 ) -> None:
     """Emit current Kitty, independent Sixel, and iTerm2 client output."""
     image = os.path.join(
@@ -414,9 +416,38 @@ def render_external_graphics_clients(
             terminal_pixel_height=pixel_height,
             **protocol_fields,
         )
-    write_record(transcript, "graphics_clients_complete", attempted=len(clients), failed=failed)
+    if drain_output:
+        wait_for_graphics_drain(transcript)
+    write_record(transcript, "graphics_clients_complete", attempted=len(clients), failed=failed,
+                 drained=drain_output)
     if first_error is not None:
         raise first_error
+
+
+def wait_for_graphics_drain(transcript: str, timeout: float = 5.0) -> None:
+    """Fence parser processing before publishing completion, including failures.
+
+    This controlled fixture sends no earlier DSR 5 queries. Preserve preceding
+    replies (including the initial Kitty probe) in the normal input transcript.
+    A status reply proves parser progress, not GPU presentation or pixels.
+    """
+    emit(b"\x1b[5n")
+    deadline = time.monotonic() + timeout
+    received = bytearray()
+    descriptor = sys.stdin.fileno()
+    while len(received) < 64 * 1024:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([descriptor], [], [], remaining)[0]:
+            raise RuntimeError("graphics parser-drain reply timed out")
+        data = os.read(descriptor, min(4096, 64 * 1024 - len(received)))
+        if not data:
+            raise RuntimeError("graphics parser-drain input closed")
+        write_record(transcript, "input", base64=base64.b64encode(data).decode(),
+                     hex=data.hex(), text=data.decode("utf-8", "replace"))
+        received.extend(data)
+        if b"\x1b[0n" in received:
+            return
+    raise RuntimeError("graphics parser-drain reply exceeded input limit")
 
 
 def graphics_diagnostic(value: str | bytes) -> str:
@@ -502,7 +533,7 @@ def main() -> int:
     if args.scrollback_fixture:
         render_scrollback_fixture(os.getpid())
     if not args.skip_external_graphics:
-        render_external_graphics_clients(args.transcript)
+        render_external_graphics_clients(args.transcript, drain_output=True)
     exit_deadline = (
         time.monotonic() + args.exit_after if args.exit_after is not None else None
     )

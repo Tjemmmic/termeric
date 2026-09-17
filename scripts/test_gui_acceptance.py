@@ -457,9 +457,11 @@ esac
                         subprocess.CompletedProcess([], 0, data, b"") for data in payloads]) as run, \
                     mock.patch.object(terminal_fixture, "emit") as emit, \
                     mock.patch.object(terminal_fixture, "require_media_target"), \
-                    mock.patch.object(terminal_fixture, "wait_for_media_cleanup"):
+                    mock.patch.object(terminal_fixture, "wait_for_media_cleanup"), \
+                    mock.patch.object(terminal_fixture, "wait_for_graphics_drain") as drain:
                 with self.assertRaisesRegex(RuntimeError, "img2sixel produced no terminal output"):
-                    terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800))
+                    terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800), drain_output=True)
+                drain.assert_called_once_with(str(transcript))
                 self.assertEqual(run.call_count, 8)
                 self.assertEqual(emit.call_count, 7)
                 self.assertTrue(emit.call_args.args[0].endswith(payloads[-1]))
@@ -468,8 +470,35 @@ esac
             self.assertEqual(records[-2]["tool"], "timg-sixel")
             self.assertEqual(records[-2]["event"], "graphics_client")
             self.assertEqual((records[-1]["attempted"], records[-1]["failed"]), (8, 1))
+            self.assertIs(records[-1]["drained"], True)
             errors = [record for record in records if record["event"] == "graphics_client_error"]
             self.assertEqual([record["tool"] for record in errors], ["img2sixel"])
+
+    def test_graphics_drain_preserves_earlier_replies_and_accepts_fragmented_status(self):
+        chunks = [b"\x1b_Gi=17;OK\x1b\\", b"\x1b[", b"0", b"n"]
+        with tempfile.TemporaryDirectory() as directory:
+            transcript = Path(directory) / "transcript.jsonl"
+            with mock.patch.object(terminal_fixture, "emit") as emit, \
+                    mock.patch.object(terminal_fixture.sys, "stdin") as stdin, \
+                    mock.patch.object(terminal_fixture.select, "select", return_value=([99], [], [])), \
+                    mock.patch.object(terminal_fixture.os, "read", side_effect=chunks):
+                stdin.fileno.return_value = 99
+                terminal_fixture.wait_for_graphics_drain(str(transcript))
+                emit.assert_called_once_with(b"\x1b[5n")
+            self.assertEqual(gui_acceptance.transcript_bytes(transcript), b"".join(chunks))
+
+    def test_graphics_drain_fails_on_timeout_eof_and_bounded_input_exhaustion(self):
+        for case, ready, data in [("timed out", False, b""), ("closed", True, b""),
+                                  ("input limit", True, b"x" * 4096)]:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(terminal_fixture, "emit"), \
+                    mock.patch.object(terminal_fixture.sys, "stdin") as stdin, \
+                    mock.patch.object(terminal_fixture.select, "select", return_value=([99] if ready else [], [], [])), \
+                    mock.patch.object(terminal_fixture.os, "read", return_value=data) as read:
+                stdin.fileno.return_value = 99
+                with self.assertRaisesRegex(RuntimeError, case):
+                    terminal_fixture.wait_for_graphics_drain(str(Path(directory) / "transcript.jsonl"))
+                self.assertLessEqual(read.call_count, 16)
 
     def test_emit_failure_aborts_without_attempting_later_clients(self):
         failure = OSError("partial PTY write")

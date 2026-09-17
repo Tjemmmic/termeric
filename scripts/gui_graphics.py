@@ -32,6 +32,7 @@ def clients_complete(records):
             or [(row.get("tool"), row.get("protocol")) for row in outcomes] != list(PROTOCOLS.items())
             or type(completed[0].get("attempted")) is not int or completed[0]["attempted"] != len(PROTOCOLS)
             or type(completed[0].get("failed")) is not int or completed[0]["failed"] != failed
+            or completed[0].get("drained") is not True
             or records.index(completed[0]) <= max(records.index(row) for row in outcomes)):
         raise ValueError("invalid graphics client completion record")
     return True

@@ -502,7 +502,13 @@ Version, execution, and output-validation failures occur before PTY emission:
 the fixture marks them `continuing: true`, retains them, and attempts the later
 clients. It writes one `graphics_clients_complete` record after all eight
 ordered outcomes, with exact attempted/failure counts, then rethrows the first
-client failure. Both native lanes wait for that completion before reporting
+client failure. Before publishing completion, the native fixture sends DSR 5
+and waits at most five seconds/64 KiB for the terminal status reply, recording
+all received bytes (including earlier Kitty replies) in the ordinary transcript.
+Completion requires `drained: true`; the controlled fixture sends no earlier
+DSR 5 queries. This fences parser processing of the final stream before a
+known client failure can trigger harness shutdown. It is not a GPU-presentation
+fence. Both native lanes wait for that completion before reporting
 these independent failures. Missing completion can never produce acceptance.
 
 Delivery and local-media cleanup failures still abort immediately, because a
