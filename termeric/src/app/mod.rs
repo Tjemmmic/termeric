@@ -3130,12 +3130,14 @@ impl App {
             .and_then(TabManager::active_tab)
             .and_then(|tab| tab.working_directory());
         if self.git_watcher.update(working_dir.as_deref()) {
+            if self.git_watcher.completions_limited() {
+                self.dismiss_git_completion_popup();
+            }
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::GitStatus);
         }
         if let Some(error) = self.git_watcher.take_error() {
-            self.toasts
-                .warning(format!("Git inspection failed: {error}"));
+            self.toasts.warning(format!("Git inspection: {error}"));
             self.redraw_scheduler
                 .request(redraw_scheduler::RedrawReason::GitStatus);
         }

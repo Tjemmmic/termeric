@@ -472,6 +472,13 @@ ownership have model coverage; inert PTYs verify shortcut routing and exact
 input bytes. Native keyboard acceptance remains deferred (see
 [input contract](accessibility-and-input.md)).
 
+Git completion collection now shares a 16,384-name / 4 MiB UTF-8 text budget
+across local and remote branches, charged before copying and deduplication.
+Overflow discards the partial suggestion set, retires the open popup, preserves
+Git status and typed input, and warns once to use shell completion. In-budget
+refreshes restore suggestions on subsequent input. These bounds do not cap
+libgit2 internals or whole-process RSS (see [background I/O](background-io.md)).
+
 Guarded submission cancellation preserves the already-sent editable prefix on
 the unchanged focused route, so retrying Enter rechecks it. Withheld paste and
 replacement bytes are excluded; safe editing and exactly-once broadcast retry

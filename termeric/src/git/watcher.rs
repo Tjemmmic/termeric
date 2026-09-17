@@ -1,6 +1,6 @@
 //! Cancellable-generation background Git state watcher.
 
-use super::{GitRepo, GitStatus, filter_branches};
+use super::{GitRepo, GitStatus, MAX_BRANCH_NAME_BYTES, MAX_BRANCH_NAMES, filter_branches};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -24,7 +24,8 @@ struct ScanResult {
 #[derive(Debug)]
 struct GitSnapshot {
     status: Option<GitStatus>,
-    branches: Vec<String>,
+    /// None disables completion after a collection limit; status stays usable.
+    branches: Option<Vec<String>>,
 }
 
 trait GitBackend: Send + 'static {
@@ -39,7 +40,7 @@ impl GitBackend for LibGit2Backend {
         else {
             return Ok(GitSnapshot {
                 status: None,
-                branches: Vec::new(),
+                branches: Some(Vec::new()),
             });
         };
         Ok(GitSnapshot {
@@ -61,6 +62,7 @@ pub struct GitWatcher {
     generation: u64,
     status: Option<GitStatus>,
     cached_completions: Vec<String>,
+    completions_limited: bool,
     last_poll: Instant,
     poll_interval: Duration,
     worker_failed: bool,
@@ -90,6 +92,7 @@ impl GitWatcher {
             generation: 0,
             status: None,
             cached_completions: Vec::new(),
+            completions_limited: false,
             last_poll: Instant::now() - Duration::from_secs(10),
             poll_interval: Duration::from_secs(2),
             worker_failed: false,
@@ -112,6 +115,7 @@ impl GitWatcher {
             self.last_dir = dir.clone();
             changed |= self.status.take().is_some() || !self.cached_completions.is_empty();
             self.cached_completions.clear();
+            self.completions_limited = false;
             self.refresh_pending = dir.is_some();
         }
 
@@ -166,24 +170,44 @@ impl GitWatcher {
             }
             match result.snapshot {
                 Ok(snapshot) => {
+                    let limited = snapshot.branches.is_none();
+                    let branches = snapshot.branches.unwrap_or_default();
                     changed |= self.status != snapshot.status
-                        || self.cached_completions != snapshot.branches;
+                        || self.cached_completions != branches
+                        || self.completions_limited != limited;
                     self.status = snapshot.status;
-                    self.cached_completions = snapshot.branches;
-                    self.last_error = None;
+                    self.cached_completions = branches;
+                    self.completions_limited = limited;
+                    if limited {
+                        self.report_error(format!(
+                            "{}: branch completion disabled: collection exceeds {} names or {} MiB of name text; use shell completion. Git status remains available",
+                            result.path.display(), MAX_BRANCH_NAMES, MAX_BRANCH_NAME_BYTES / (1024 * 1024),
+                        ));
+                    } else {
+                        self.last_error = None;
+                        self.pending_error = None;
+                    }
                 }
                 Err(error) => {
-                    let message = format!("{}: {error}", result.path.display());
-                    if self.last_error.as_deref() != Some(&message) {
-                        self.pending_error = Some(message.clone());
-                    }
-                    self.last_error = Some(message);
+                    self.report_error(format!("{}: {error}", result.path.display()));
                     changed |= self.status.take().is_some() || !self.cached_completions.is_empty();
                     self.cached_completions.clear();
+                    self.completions_limited = false;
                 }
             }
         }
         changed
+    }
+
+    fn report_error(&mut self, message: String) {
+        if self.last_error.as_deref() != Some(&message) {
+            self.pending_error = Some(message.clone());
+        }
+        self.last_error = Some(message);
+    }
+
+    pub fn completions_limited(&self) -> bool {
+        self.completions_limited
     }
 
     pub fn next_poll_deadline(&self) -> Instant {
@@ -265,7 +289,7 @@ mod tests {
                     branch: Some(name.clone()),
                     ..GitStatus::default()
                 }),
-                branches: vec![name],
+                branches: Some(vec![name]),
             })
         }
     }
@@ -357,6 +381,139 @@ mod tests {
     }
 
     struct FailingBackend;
+
+    #[test]
+    fn completion_limits_preserve_status_warn_once_and_recover() {
+        let mut watcher = GitWatcher::with_backend(FailingBackend, None);
+        let (tx, rx) = mpsc::channel();
+        watcher.result_rx = rx;
+        watcher.last_dir = Some(PathBuf::from("/tmp/limited-repository"));
+        let status = GitStatus {
+            branch: Some("main".into()),
+            dirty: true,
+            ahead: 2,
+            behind: 1,
+        };
+        let publish = |branches| {
+            tx.send(ScanResult {
+                generation: 0,
+                path: PathBuf::from("/tmp/limited-repository"),
+                snapshot: Ok(GitSnapshot {
+                    status: Some(status.clone()),
+                    branches,
+                }),
+            })
+            .unwrap();
+        };
+        publish(Some(vec!["main".into()]));
+        assert!(watcher.drain_results());
+        assert_eq!(watcher.complete_branch(""), ["main"]);
+        for repetition in 0..2 {
+            publish(None);
+            assert_eq!(watcher.drain_results(), repetition == 0);
+            assert_eq!(watcher.status(), Some(&status));
+            assert!(watcher.completions_limited());
+            assert!(watcher.complete_branch("").is_empty());
+            assert_eq!(watcher.cached_completions.capacity(), 0);
+            let notice = watcher.take_error();
+            assert_eq!(notice.is_some(), repetition == 0);
+            if let Some(notice) = notice {
+                assert!(notice.contains("/tmp/limited-repository"));
+                assert!(notice.contains("16384 names or 4 MiB"));
+                assert!(notice.contains("use shell completion"));
+            }
+        }
+        publish(Some(vec!["main".into(), "new".into()]));
+        assert!(watcher.drain_results());
+        assert!(!watcher.completions_limited());
+        assert_eq!(watcher.complete_branch("new"), ["new"]);
+        assert!(watcher.take_error().is_none());
+        publish(None);
+        assert!(watcher.drain_results());
+        assert!(watcher.take_error().is_some());
+
+        // A new generation rejects old cap failures just like stale successes.
+        watcher.generation = 1;
+        watcher.completions_limited = false;
+        watcher.cached_completions = vec!["current".into()];
+        publish(None);
+        assert!(!watcher.drain_results());
+        assert!(!watcher.completions_limited());
+        assert_eq!(watcher.complete_branch(""), ["current"]);
+        assert!(watcher.take_error().is_none());
+    }
+
+    #[test]
+    fn real_backend_limits_packed_refs_without_losing_status_and_recovers() {
+        use std::fmt::Write;
+        let directory = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(directory.path()).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature =
+            git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(1, 0))
+                .unwrap();
+        let commit = repo
+            .commit(None, &signature, &signature, "fixture", &tree, &[])
+            .unwrap();
+        let mut refs = String::from("# pack-refs with: sorted\n");
+        for i in 0..=MAX_BRANCH_NAMES {
+            writeln!(refs, "{commit} refs/heads/branch-{i:05}").unwrap();
+        }
+        let packed_refs = repo.path().join("packed-refs");
+        std::fs::write(&packed_refs, refs).unwrap();
+        repo.set_head("refs/heads/branch-00000").unwrap();
+        drop(tree);
+        drop(repo);
+
+        let snapshot = LibGit2Backend.scan(directory.path()).unwrap();
+        let status = snapshot.status.unwrap();
+        assert_eq!(status.branch.as_deref(), Some("branch-00000"));
+        assert!(!status.dirty);
+        assert!(snapshot.branches.is_none());
+
+        // The real asynchronous publication path preserves status too.
+        let (wake_tx, wake_rx) = mpsc::channel();
+        let mut watcher = GitWatcher::with_backend(
+            LibGit2Backend,
+            Some(Arc::new(move || {
+                let _ = wake_tx.send(());
+            })),
+        );
+        let cwd = directory.path().to_str().unwrap();
+        watcher.update(Some(cwd));
+        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(watcher.update(Some(cwd)));
+        assert_eq!(watcher.status(), Some(&status));
+        assert!(watcher.completions_limited());
+        assert!(watcher.complete_branch("").is_empty());
+        assert!(watcher.take_error().is_some());
+
+        // Exceed bytes before reaching the name-count limit. Nested names are
+        // valid packed refs without requiring oversized filesystem components.
+        let mut refs = format!("# pack-refs with: sorted\n{commit} refs/heads/branch-00000\n");
+        let prefix = "part/".repeat(210);
+        for i in 0..4096 {
+            writeln!(refs, "{commit} refs/heads/{prefix}branch-{i:05}").unwrap();
+        }
+        std::fs::write(&packed_refs, refs).unwrap();
+        let byte_limited = LibGit2Backend.scan(directory.path()).unwrap();
+        assert_eq!(byte_limited.status, Some(status.clone()));
+        assert!(byte_limited.branches.is_none());
+
+        std::fs::write(&packed_refs, format!("{commit} refs/heads/branch-00000\n")).unwrap();
+        let recovered = LibGit2Backend.scan(directory.path()).unwrap();
+        assert_eq!(recovered.status, Some(status.clone()));
+        assert_eq!(recovered.branches.unwrap(), ["branch-00000"]);
+        watcher.invalidate();
+        watcher.update(Some(cwd));
+        wake_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(watcher.update(Some(cwd)));
+        assert_eq!(watcher.status(), Some(&status));
+        assert!(!watcher.completions_limited());
+        assert_eq!(watcher.complete_branch(""), ["branch-00000"]);
+        assert!(watcher.take_error().is_none());
+    }
 
     impl GitBackend for FailingBackend {
         fn scan(&self, _path: &Path) -> Result<GitSnapshot, String> {

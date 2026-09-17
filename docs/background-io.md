@@ -35,9 +35,36 @@ strings move into the result without cloning or allocating a separate membership
 set. Tests cover every pair of subsets of a mixed-case/Unicode fixture, retained
 string storage, 60,000 distinct names with overlap, and a real temporary libgit2
 repository. This is an algorithmic improvement, not a measured whole-application
-RSS or latency claim. Repository scans, branch caches, and completion results
-still have no explicit branch-count/byte ceiling; libgit2 work and sorting costs
-remain outside the linear merge.
+RSS or latency claim; libgit2 work and sorting costs remain outside the linear
+merge. The 60,000-name case exercises that merge helper independently of the
+production collection limits below.
+
+### Branch completion resource limits
+
+Each scan admits at most 16,384 collected names and 4 MiB of UTF-8 name text,
+shared across local and remote branches. Names are charged before copying,
+after `origin/` normalization and HEAD exclusion, but before sorting and
+deduplication. Duplicates therefore consume collection budget too. An exact
+limit is accepted; the next name that would exceed either limit stops collection
+and drops the entire partial result. There is no silently truncated suggestion
+set or per-keystroke repository fallback.
+
+On overflow, Git status remains available, the old completion cache is released,
+and an open suggestion popup is dismissed without changing tracked input or
+sending PTY bytes. One path-aware warning explains the limits and directs the
+user to shell completion. Identical over-limit refreshes do not repeat the
+warning. A later in-budget snapshot restores completion on subsequent input;
+a new overflow after recovery can warn again. Generation checks also reject
+stale limit results.
+
+These are per-scan collected-name and text-byte bounds, not a 4 MiB process-memory
+ceiling. Vector/allocator overhead, simultaneous old/new snapshots, filtered and
+rendered copies, lowercasing scratch space, tracked user input, Git status, and
+libgit2's internal repository/index/ref storage are separate. Native RSS and
+large-repository latency still need measurement; collection cannot cancel a
+blocked libgit2 call. Regression fixtures cover exact count/byte limits, UTF-8,
+remote normalization and duplicates, warning/recovery behavior, and real packed
+refs exceeding the production limits without launching Git or a provider.
 
 ## Transcript writer
 

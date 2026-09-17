@@ -12,6 +12,27 @@ pub use watcher::GitWatcher;
 use git2::Repository;
 use std::path::Path;
 
+const MAX_BRANCH_NAMES: usize = 16_384;
+const MAX_BRANCH_NAME_BYTES: usize = 4 * 1024 * 1024;
+
+/// Shared across local and remote collection, before sorting/deduplication.
+/// Charge before copying so a rejected name never becomes an owned String.
+struct BranchBudget {
+    names_left: usize,
+    bytes_left: usize,
+}
+
+impl BranchBudget {
+    fn copy_name(&mut self, name: &str) -> Option<String> {
+        if self.names_left == 0 || name.len() > self.bytes_left {
+            return None;
+        }
+        self.names_left -= 1;
+        self.bytes_left -= name.len();
+        Some(name.to_owned())
+    }
+}
+
 /// Wrapper around a git repository for querying branches, status, etc.
 pub struct GitRepo {
     repo: Repository,
@@ -92,20 +113,29 @@ impl GitRepo {
     }
 
     /// List all local branch names
-    fn local_branches(&self) -> Result<Vec<String>, git2::Error> {
+    fn local_branches(
+        &self,
+        budget: &mut BranchBudget,
+    ) -> Result<Option<Vec<String>>, git2::Error> {
         let mut branches = Vec::new();
         for entry in self.repo.branches(Some(git2::BranchType::Local))? {
             let (branch, _) = entry?;
             if let Some(name) = branch.name()? {
-                branches.push(name.to_string());
+                let Some(name) = budget.copy_name(name) else {
+                    return Ok(None);
+                };
+                branches.push(name);
             }
         }
         branches.sort();
-        Ok(branches)
+        Ok(Some(branches))
     }
 
     /// List all remote branch names (without "origin/" prefix)
-    fn remote_branches(&self) -> Result<Vec<String>, git2::Error> {
+    fn remote_branches(
+        &self,
+        budget: &mut BranchBudget,
+    ) -> Result<Option<Vec<String>>, git2::Error> {
         let mut branches = Vec::new();
         for entry in self.repo.branches(Some(git2::BranchType::Remote))? {
             let (branch, _) = entry?;
@@ -114,20 +144,38 @@ impl GitRepo {
                 let short = name.strip_prefix("origin/").unwrap_or(name);
                 // Skip HEAD pointer
                 if short != "HEAD" {
-                    branches.push(short.to_string());
+                    let Some(name) = budget.copy_name(short) else {
+                        return Ok(None);
+                    };
+                    branches.push(name);
                 }
             }
         }
         branches.sort();
         branches.dedup();
-        Ok(branches)
+        Ok(Some(branches))
     }
 
-    pub(crate) fn branch_names(&self) -> Result<Vec<String>, git2::Error> {
-        Ok(merge_sorted_branches(
-            self.local_branches()?,
-            self.remote_branches()?,
-        ))
+    /// None means completion was disabled by a collection limit, not an empty
+    /// repository. Never publish a partial set as if it were complete.
+    pub(crate) fn branch_names(&self) -> Result<Option<Vec<String>>, git2::Error> {
+        self.branch_names_with_budget(BranchBudget {
+            names_left: MAX_BRANCH_NAMES,
+            bytes_left: MAX_BRANCH_NAME_BYTES,
+        })
+    }
+
+    fn branch_names_with_budget(
+        &self,
+        mut budget: BranchBudget,
+    ) -> Result<Option<Vec<String>>, git2::Error> {
+        let Some(local) = self.local_branches(&mut budget)? else {
+            return Ok(None);
+        };
+        let Some(remote) = self.remote_branches(&mut budget)? else {
+            return Ok(None);
+        };
+        Ok(Some(merge_sorted_branches(local, remote)))
     }
 }
 
@@ -312,7 +360,8 @@ mod tests {
         )
         .unwrap();
         drop(tree);
-        let names = GitRepo { repo }.branch_names().unwrap();
+        let git = GitRepo { repo };
+        let names = git.branch_names().unwrap().unwrap();
         assert_eq!(
             names,
             [
@@ -322,6 +371,95 @@ mod tests {
                 "a-remote",
                 "upstream/other"
             ]
+        );
+        // Eight collected names, including normalized/cross-list duplicates.
+        // origin/HEAD is excluded before charging. Charge normalized names
+        // before sorting and deduplication, across both local and remote lists.
+        let bytes = [
+            "z-local",
+            "main",
+            "upstream/shared",
+            "main",
+            "a-remote",
+            "upstream/shared",
+            "upstream/shared",
+            "upstream/other",
+        ]
+        .iter()
+        .map(|name| name.len())
+        .sum::<usize>();
+        for (names_left, bytes_left, accepted) in [
+            (8, bytes, true),
+            (7, bytes, false),
+            (8, bytes - 1, false),
+            (0, bytes, false),
+            (8, 0, false),
+        ] {
+            let result = git
+                .branch_names_with_budget(BranchBudget {
+                    names_left,
+                    bytes_left,
+                })
+                .unwrap();
+            assert_eq!(result.is_some(), accepted);
+            if let Some(result) = result {
+                assert_eq!(result, names);
+            }
+        }
+    }
+
+    #[test]
+    fn branch_budget_counts_utf8_bytes_and_rejects_without_charging() {
+        let mut budget = BranchBudget {
+            names_left: 2,
+            bytes_left: 5,
+        };
+        assert_eq!(budget.copy_name("é"), Some("é".into()));
+        assert_eq!(budget.copy_name("long"), None);
+        assert_eq!((budget.names_left, budget.bytes_left), (1, 3));
+        assert_eq!(budget.copy_name("界"), Some("界".into()));
+        assert_eq!(budget.copy_name("x"), None);
+        assert_eq!((budget.names_left, budget.bytes_left), (0, 0));
+    }
+
+    #[test]
+    fn production_branch_budget_accepts_exact_limits_then_refuses() {
+        let mut budget = BranchBudget {
+            names_left: MAX_BRANCH_NAMES,
+            bytes_left: MAX_BRANCH_NAME_BYTES,
+        };
+        assert_eq!(
+            budget.copy_name(&"x".repeat(MAX_BRANCH_NAME_BYTES + 1)),
+            None
+        );
+        assert_eq!(budget.bytes_left, MAX_BRANCH_NAME_BYTES);
+        assert_eq!(budget.names_left, MAX_BRANCH_NAMES);
+        let name = "x".repeat(MAX_BRANCH_NAME_BYTES / MAX_BRANCH_NAMES);
+        let names: Vec<_> = (0..MAX_BRANCH_NAMES)
+            .map(|_| budget.copy_name(&name).unwrap())
+            .collect();
+        assert_eq!(names.len(), MAX_BRANCH_NAMES);
+        assert_eq!(
+            names.iter().map(String::len).sum::<usize>(),
+            MAX_BRANCH_NAME_BYTES
+        );
+        assert_eq!(budget.copy_name("x"), None);
+        assert_eq!((budget.names_left, budget.bytes_left), (0, 0));
+    }
+
+    #[test]
+    fn empty_repository_needs_no_branch_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let git = GitRepo {
+            repo: Repository::init_bare(directory.path()).unwrap(),
+        };
+        assert_eq!(
+            git.branch_names_with_budget(BranchBudget {
+                names_left: 0,
+                bytes_left: 0,
+            })
+            .unwrap(),
+            Some(Vec::new())
         );
     }
 

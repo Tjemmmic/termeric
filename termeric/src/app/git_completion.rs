@@ -4,7 +4,7 @@ use super::*;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
-    fn dismiss_git_completion_popup(&mut self) {
+    pub(super) fn dismiss_git_completion_popup(&mut self) {
         self.git_completions_visible = false;
         self.git_completions.clear();
         self.git_completion_index = None;
