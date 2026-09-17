@@ -4,6 +4,7 @@
 
 use crate::ui::animation::PanelAnimation;
 use crate::ui::text_input::{TextInput, TextInputEdit};
+use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_RENAME_CHARACTERS: usize = 128;
 
@@ -41,6 +42,8 @@ pub enum SessionPanelAction {
     SubmitRename,
     /// Cancel the active workspace rename.
     CancelRename,
+    /// Place the active rename caret at a whole-grapheme byte boundary.
+    PlaceRenameCaret { cursor: usize },
     /// Close the panel
     Close,
     /// No action
@@ -119,6 +122,33 @@ pub struct SessionPanelLayout {
 }
 
 impl SessionPanelLayout {
+    /// Hit the painted rename field, clamping padding to visible text edges.
+    /// A collapsed viewport consumes the field click without moving a caret.
+    pub fn rename_input_click(
+        &self,
+        text: &str,
+        cursor: usize,
+        x: f32,
+        y: f32,
+    ) -> Option<SessionPanelAction> {
+        let rename = self.rename?;
+        if !self.panel.contains(x, y)
+            || x > self.window_width
+            || !rename.input.contains(x, y)
+            || rename.save_button.contains(x, y)
+            || rename.cancel_button.contains(x, y)
+        {
+            return None;
+        }
+        Some(
+            self.rename_input_viewport(text, cursor)
+                .and_then(|view| view.cursor_at(text, x, self.cell_width))
+                .map_or(SessionPanelAction::None, |cursor| {
+                    SessionPanelAction::PlaceRenameCaret { cursor }
+                }),
+        )
+    }
+
     pub fn rename_input_viewport(
         &self,
         text: &str,
@@ -448,6 +478,7 @@ impl SessionPanel {
     }
 
     /// Get the sessions list
+    #[cfg(test)]
     pub fn sessions(&self) -> &[SessionEntry] {
         &self.sessions
     }
@@ -496,6 +527,23 @@ impl SessionPanel {
         if self.is_renaming() {
             self.rename_input.edit_grapheme(edit);
         }
+    }
+
+    /// Revalidate pointer placement against the currently open rename draft.
+    pub fn place_rename_caret(&mut self, cursor: usize) -> bool {
+        if !self.is_open() || !self.is_renaming() {
+            return false;
+        }
+        if cursor != self.rename_input.text().len()
+            && !self
+                .rename_input
+                .text()
+                .grapheme_indices(true)
+                .any(|(offset, _)| offset == cursor)
+        {
+            return false;
+        }
+        self.rename_input.set_cursor_byte(cursor)
     }
 
     pub fn cancel_rename(&mut self) {
@@ -856,6 +904,100 @@ mod tests {
             );
             assert!(layout.rename_input_viewport(&text, text.len()).is_none());
         }
+    }
+
+    #[test]
+    fn rename_clicks_follow_visible_graphemes_across_scroll_scale_and_animation() {
+        let text = "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(8);
+        let mut visible_cases = 0;
+        for width in [400.0, 800.0, 1600.0] {
+            for cell in [8.0, 12.0, 20.0] {
+                for animation in [0.2, 0.8, 1.0] {
+                    let layout = SessionPanelLayout::calculate(
+                        width,
+                        600.0,
+                        cell,
+                        cell * 2.0,
+                        animation,
+                        true,
+                        true,
+                        1,
+                    );
+                    let field = layout.rename.unwrap();
+                    for button in [field.save_button, field.cancel_button] {
+                        assert_eq!(
+                            layout.rename_input_click(
+                                &text,
+                                text.len(),
+                                button.x + button.width / 2.0,
+                                button.y + button.height / 2.0
+                            ),
+                            None
+                        );
+                    }
+                    for cursor in [0, text.len()] {
+                        let Some(view) = layout.rename_input_viewport(&text, cursor) else {
+                            continue;
+                        };
+                        visible_cases += 1;
+                        let y = view.text_y + cell;
+                        let hit = |x| layout.rename_input_click(&text, cursor, x, y);
+                        assert_eq!(
+                            hit(field.input.x.max(0.0)),
+                            Some(SessionPanelAction::PlaceRenameCaret {
+                                cursor: view.text_range.start
+                            })
+                        );
+                        assert_eq!(
+                            hit(view.right),
+                            Some(SessionPanelAction::PlaceRenameCaret {
+                                cursor: view.text_range.end
+                            })
+                        );
+                        let mut x = view.text_x;
+                        for (offset, cluster) in
+                            text[view.text_range.clone()].grapheme_indices(true)
+                        {
+                            let pixels =
+                                termeric_core::unicode::grapheme_width(cluster) as f32 * cell;
+                            assert_eq!(
+                                hit(x + pixels * 0.25),
+                                Some(SessionPanelAction::PlaceRenameCaret {
+                                    cursor: view.text_range.start + offset
+                                })
+                            );
+                            assert_eq!(
+                                hit(x + pixels * 0.75),
+                                Some(SessionPanelAction::PlaceRenameCaret {
+                                    cursor: view.text_range.start + offset + cluster.len()
+                                })
+                            );
+                            x += pixels;
+                        }
+                        assert_eq!(hit(f32::NAN), None);
+                        assert_eq!(
+                            layout.rename_input_click(
+                                &text,
+                                cursor,
+                                view.text_x,
+                                field.input.y - 1.0
+                            ),
+                            None
+                        );
+                    }
+                }
+            }
+        }
+        assert!(visible_cases > 10);
+        // Partially revealed fields can be clickable before a single text
+        // cell fits. Such clicks must not move a hidden caret.
+        let layout = SessionPanelLayout::calculate(800.0, 600.0, 8.0, 16.0, 0.06, true, true, 1);
+        let field = layout.rename.unwrap();
+        assert!(layout.rename_input_viewport(&text, text.len()).is_none());
+        assert_eq!(
+            layout.rename_input_click(&text, text.len(), field.input.x + 1.0, field.input.y + 1.0),
+            Some(SessionPanelAction::None)
+        );
     }
 
     #[test]

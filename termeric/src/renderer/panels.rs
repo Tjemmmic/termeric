@@ -910,13 +910,9 @@ impl Renderer {
         &self,
         x: f32,
         y: f32,
-        sessions: &[crate::session::panel::SessionEntry],
-        workspaces: bool,
-        renaming: bool,
-        scroll_offset: usize,
+        info: &crate::session::panel::SessionPanelInfo,
         window_width: f32,
         window_height: f32,
-        animation: f32,
     ) -> crate::session::panel::SessionPanelAction {
         use crate::session::panel::{SessionPanelAction, SessionPanelLayout};
 
@@ -928,10 +924,10 @@ impl Renderer {
             window_height,
             ui_cw,
             cell_height,
-            animation,
-            renaming,
-            workspaces,
-            sessions.len(),
+            info.animation,
+            info.rename_text.is_some(),
+            info.workspaces,
+            info.sessions.len(),
         );
 
         // Click outside panel → close
@@ -951,12 +947,18 @@ impl Renderer {
             if rename.cancel_button.contains(x, y) {
                 return SessionPanelAction::CancelRename;
             }
+            if let Some(text) = &info.rename_text
+                && let Some(action) = layout.rename_input_click(text, info.rename_cursor, x, y)
+            {
+                return action;
+            }
             // The rename form owns input until it is saved or cancelled.
             return SessionPanelAction::None;
         }
 
-        let end = (scroll_offset + layout.visible_count).min(sessions.len());
-        for (visible_index, session) in sessions[scroll_offset.min(sessions.len())..end]
+        let end = (info.scroll_offset + layout.visible_count).min(info.sessions.len());
+        for (visible_index, session) in info.sessions
+            [info.scroll_offset.min(info.sessions.len())..end]
             .iter()
             .enumerate()
         {

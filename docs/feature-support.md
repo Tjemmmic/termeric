@@ -378,8 +378,12 @@ caret under the existing atomic 128-scalar/512-byte single-line limit. Invalid
 or oversized input preserves the draft, caret, and composition; paste never
 submits or saves a rename. Higher modal owners, the session dropdown, and browse
 mode retain clipboard guards. Hermetic binding, ownership, Unicode-limit, and
-raw-PTY tests pass without a real clipboard or persisted rename; native
-clipboard/IME acceptance remains deferred (see [input contract](accessibility-and-input.md)).
+raw-PTY tests pass without a real clipboard or persisted rename. Primary clicks
+place the rename caret at visible whole-grapheme boundaries using the shared
+scrolled/animated viewport; collapsed fields and invalid model positions cannot
+move a hidden or interior-cluster caret. Geometry/model and raw-PTY insertion
+tests pass; native pointer/clipboard/IME acceptance and text selection remain
+deferred (see [input contract](accessibility-and-input.md)).
 
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.

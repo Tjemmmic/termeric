@@ -448,8 +448,16 @@ without cloning the workspace inventory. Animation, window/cell sizing, and the
 Save-button boundary constrain the viewport; a collapsed or vertically hidden
 field supplies no candidate geometry rather than falling back to the terminal.
 Higher-priority modal editors retain ownership. Geometry/ownership tests and the
-software-GPU glyph-clip smoke cover this path. Native IME/visual acceptance,
-pointer caret placement, and text selection remain separate.
+software-GPU glyph-clip smoke cover this path. Primary field clicks now place
+the caret at the nearest visible whole-grapheme boundary using that same
+viewport. Padding selects a visible edge, so a scrolled field does not jump to
+hidden text. Save/Cancel retain hit-test priority; collapsed fields consume
+clicks without moving a hidden caret. The model rejects invalid byte or
+interior-cluster positions and closed/inactive rename owners. Accepted placement
+clears preedit and requests redraw; rejected placement preserves composition.
+Geometry/model and raw-PTY tests cover placement followed by IME insertion with
+in-memory workspace entries. Native pointer/IME/visual acceptance and text
+selection remain separate.
 
 The Settings filter accepts complete native character events and IME commits
 atomically, capped at 256 Unicode scalars (at most 1,024 UTF-8 bytes). Controls,

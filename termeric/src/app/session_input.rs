@@ -106,6 +106,31 @@ mod tests {
     }
 
     #[test]
+    fn rename_pointer_actions_revalidate_boundaries_and_clear_only_accepted_composition() {
+        let mut app = rename_app();
+        let text = "界e\u{301}👩\u{200d}💻🇺🇸z";
+        assert!(app.session_panel.accessibility_set_rename(text));
+        app.handle_ime_event(Ime::Preedit("keep".into(), None));
+        for cursor in [1, 2, 4, 5, 10, 13, 21, text.len() + 1, usize::MAX] {
+            app.apply_session_panel_action(SessionPanelAction::PlaceRenameCaret { cursor });
+            assert_draft(&app, text, text.len());
+            assert!(app.ime.preedit().is_some());
+        }
+        app.redraw_scheduler.begin_frame();
+        app.apply_session_panel_action(SessionPanelAction::PlaceRenameCaret { cursor: 3 });
+        assert_draft(&app, text, 3);
+        assert!(app.ime.preedit().is_none());
+        assert_eq!(app.redraw_scheduler.begin_frame(), "pointer-input");
+        app.handle_ime_event(Ime::Commit("Q".into()));
+        assert_draft(&app, "界Qe\u{301}👩\u{200d}💻🇺🇸z", 4);
+        app.session_panel.close();
+        assert!(!app.session_panel.place_rename_caret(0));
+        app.apply_session_panel_action(SessionPanelAction::CancelRename);
+        assert!(!app.session_panel.place_rename_caret(0));
+        assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
+    }
+
+    #[test]
     fn rename_navigation_and_deletion_use_whole_graphemes_at_the_caret() {
         let mut app = rename_app();
         let text = "a界e\u{301}👩\u{200d}💻🇺🇸z";

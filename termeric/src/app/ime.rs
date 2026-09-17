@@ -1195,6 +1195,26 @@ mod tests {
             app.session_panel.build_info().rename_text.as_deref(),
             Some("ae\u{301}Qz")
         );
+        let info = app.session_panel.build_info();
+        let layout = crate::session::panel::SessionPanelLayout::calculate(
+            800.0, 600.0, 8.0, 16.0, 1.0, true, true, 1,
+        );
+        let text = info.rename_text.as_deref().unwrap();
+        let view = layout
+            .rename_input_viewport(text, info.rename_cursor)
+            .unwrap();
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
+        let action = layout
+            .rename_input_click(text, info.rename_cursor, view.text_x + 8.0, view.text_y)
+            .unwrap();
+        app.apply_session_panel_action(action);
+        assert!(app.ime.preedit().is_none());
+        assert_eq!(app.session_panel.build_info().rename_cursor, 1);
+        app.handle_ime_event(Ime::Commit("R".into()));
+        assert_eq!(
+            app.session_panel.build_info().rename_text.as_deref(),
+            Some("aRe\u{301}Qz")
+        );
         app.modifiers = ModifiersState::empty();
         assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Escape)));
         assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");

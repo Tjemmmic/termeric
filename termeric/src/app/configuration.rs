@@ -1136,6 +1136,16 @@ impl App {
                 self.ime.clear_preedit();
                 self.session_panel.cancel_rename();
             }
+            SessionPanelAction::PlaceRenameCaret { cursor } => {
+                if self.session_panel.place_rename_caret(cursor) {
+                    self.ime.clear_preedit();
+                    self.redraw_scheduler
+                        .request(redraw_scheduler::RedrawReason::PointerInput);
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                }
+            }
             SessionPanelAction::Close => {
                 self.ime.clear_preedit();
                 self.session_panel.close();

@@ -383,13 +383,9 @@ impl App {
                                 let action = renderer.session_panel_hit_test(
                                     px,
                                     py,
-                                    self.session_panel.sessions(),
-                                    info.workspaces,
-                                    info.rename_text.is_some(),
-                                    info.scroll_offset,
+                                    &info,
                                     size.width as f32,
                                     size.height as f32,
-                                    info.animation,
                                 );
                                 self.apply_session_panel_action(action);
                                 if let Some(window) = &self.window {
