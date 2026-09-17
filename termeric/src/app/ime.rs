@@ -147,14 +147,7 @@ impl App {
         } else if self.shortcuts_panel.is_active() {
             self.shortcuts_panel.insert_filter_text(text);
         } else if self.settings_panel.is_active() {
-            for character in printable() {
-                let action = self.settings_panel.handle_key(
-                    crate::ui::settings::SettingsKey::FilterChar(character),
-                    &self.config,
-                    &self.shortcut_registry,
-                );
-                self.apply_settings_action(action);
-            }
+            self.settings_panel.insert_filter_text(text);
         } else if self.session_panel.is_open() {
             for character in printable() {
                 self.session_panel.rename_char(character);

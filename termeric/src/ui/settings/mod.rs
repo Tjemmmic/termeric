@@ -4,6 +4,9 @@ use crate::config::{
     WindowLevelConfig,
 };
 use crate::input::keybindings::ShortcutRegistry;
+use crate::ui::text_input::{TextInputEdit, edit_grapheme};
+
+const MAX_FILTER_CHARACTERS: usize = 256;
 
 /// Default fallback font (always available)
 const DEFAULT_FONT: &str = "monospace";
@@ -1440,6 +1443,13 @@ impl SettingsPanel {
             return self.handle_dropdown_key(key, config, registry);
         }
 
+        // Text edits do not need to rebuild the settings inventory, and a
+        // rejected edit must not alter result selection or scrolling.
+        if matches!(key, SettingsKey::FilterBackspace) {
+            self.backspace_filter();
+            return SettingsAction::None;
+        }
+
         let entries = self.build_entries(config, registry);
         let selectable_count = Self::count_selectable(&entries);
 
@@ -1501,33 +1511,52 @@ impl SettingsPanel {
             SettingsKey::Save => SettingsAction::SaveConfig,
             SettingsKey::Reset => SettingsAction::ResetConfig,
             SettingsKey::Delete => SettingsAction::None,
-            SettingsKey::FilterChar(ch) => {
-                self.filter.insert(self.filter_cursor, ch);
-                self.filter_cursor += ch.len_utf8();
-                self.selected = 0;
-                self.scroll_offset = 0;
-                SettingsAction::None
-            }
-            SettingsKey::FilterBackspace => {
-                if self.filter_cursor > 0 {
-                    let prev = self.filter[..self.filter_cursor]
-                        .char_indices()
-                        .last()
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    self.filter.drain(prev..self.filter_cursor);
-                    self.filter_cursor = prev;
-                    self.selected = 0;
-                    self.scroll_offset = 0;
-                }
-                SettingsAction::None
-            }
+            SettingsKey::FilterBackspace => unreachable!(),
         };
 
         // Keep the selected entry visible after any navigation.
         self.ensure_selection_visible(&entries);
         self.selection_visibility_pending = false;
         action
+    }
+
+    /// Insert one complete text event or reject it without changing any state.
+    pub fn insert_filter_text(&mut self, text: &str) -> bool {
+        if !self.is_active()
+            || self.dropdown_open
+            || text.is_empty()
+            || text.len() > MAX_FILTER_CHARACTERS * 4
+            || self.filter.chars().count() + text.chars().count() > MAX_FILTER_CHARACTERS
+            || text
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+            || !self.filter.is_char_boundary(self.filter_cursor)
+        {
+            return false;
+        }
+        self.filter.insert_str(self.filter_cursor, text);
+        self.filter_cursor += text.len();
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.selection_visibility_pending = false;
+        true
+    }
+
+    pub fn backspace_filter(&mut self) -> bool {
+        if !self.is_active() || self.dropdown_open {
+            return false;
+        }
+        if !edit_grapheme(
+            &mut self.filter,
+            &mut self.filter_cursor,
+            TextInputEdit::Backspace,
+        ) {
+            return false;
+        }
+        self.selected = 0;
+        self.scroll_offset = 0;
+        self.selection_visibility_pending = false;
+        true
     }
 
     /// Find the selectable index of the first item in `section`.
@@ -2149,8 +2178,6 @@ pub enum SettingsKey {
     Tab,
     Save,
     Reset,
-    /// Character typed for filter
-    FilterChar(char),
     /// Backspace in filter
     FilterBackspace,
     /// Delete key
@@ -2240,6 +2267,69 @@ mod tests {
 
     fn default_registry() -> ShortcutRegistry {
         ShortcutRegistry::new()
+    }
+
+    #[test]
+    fn filter_text_events_are_atomic_bounded_and_dropdown_owned() {
+        let mut panel = SettingsPanel::new();
+        assert!(!panel.insert_filter_text("hidden"));
+        panel.open();
+        assert!(panel.insert_filter_text(&"🫚".repeat(255)));
+        panel.selected = 2;
+        panel.scroll_offset = 1;
+        panel.selection_visibility_pending = true;
+        for rejected in [
+            "",
+            "e\u{301}",
+            "\n",
+            "\t",
+            "\u{1b}",
+            "\u{2028}",
+            "\u{2029}",
+            &"x".repeat(1025),
+        ] {
+            assert!(!panel.insert_filter_text(rejected));
+            assert_eq!(panel.filter.chars().count(), 255);
+            assert_eq!(panel.filter_cursor, 255 * 4);
+            assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
+            assert!(panel.selection_visibility_pending);
+        }
+        assert!(panel.insert_filter_text("🫚"));
+        assert_eq!(panel.filter.len(), 1024);
+        assert!(!panel.insert_filter_text("x"));
+        assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
+        panel.dropdown_open = true;
+        assert!(!panel.backspace_filter());
+        assert!(!panel.insert_filter_text("x"));
+        assert_eq!(panel.filter_cursor, 1024);
+        panel.close();
+        assert!(!panel.backspace_filter());
+    }
+
+    #[test]
+    fn filter_backspace_removes_whole_clusters_and_insertion_honors_byte_caret() {
+        let mut panel = SettingsPanel::new();
+        panel.open();
+        for cluster in ["e\u{301}", "👩\u{200d}💻", "🇺🇸"] {
+            assert!(panel.insert_filter_text(cluster));
+            assert!(panel.backspace_filter());
+            assert!(panel.filter.is_empty());
+            assert_eq!(panel.filter_cursor, 0);
+        }
+        panel.selected = 2;
+        panel.scroll_offset = 1;
+        assert!(!panel.backspace_filter());
+        assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
+        assert!(panel.insert_filter_text("a界z"));
+        panel.filter_cursor = 1;
+        assert!(panel.insert_filter_text("e\u{301}"));
+        assert_eq!(panel.filter, "ae\u{301}界z");
+        assert_eq!(panel.filter_cursor, 4);
+        assert!(panel.backspace_filter());
+        assert_eq!(panel.filter, "a界z");
+        panel.filter_cursor = 2;
+        assert!(!panel.insert_filter_text("invalid caret"));
+        assert_eq!(panel.filter, "a界z");
     }
 
     #[test]
@@ -2568,9 +2658,7 @@ mod tests {
         panel.open();
         let config = Config::default();
         let registry = default_registry();
-        for character in "manage third-party".chars() {
-            panel.handle_key(SettingsKey::FilterChar(character), &config, &registry);
-        }
+        assert!(panel.insert_filter_text("manage third-party"));
         assert!(matches!(
             panel.handle_key(SettingsKey::Enter, &config, &registry),
             SettingsAction::ManageRuntimePlugins
@@ -2605,9 +2693,7 @@ mod tests {
         panel.open();
         let config = Config::default();
         let registry = default_registry();
-        for character in "range overrides".chars() {
-            panel.handle_key(SettingsKey::FilterChar(character), &config, &registry);
-        }
+        assert!(panel.insert_filter_text("range overrides"));
         assert!(matches!(
             panel.handle_key(SettingsKey::Enter, &config, &registry),
             SettingsAction::ManageFontRangeOverrides
@@ -2651,9 +2737,7 @@ mod tests {
         panel.open();
         let config = Config::default();
         let registry = default_registry();
-        for character in "opentype features".chars() {
-            panel.handle_key(SettingsKey::FilterChar(character), &config, &registry);
-        }
+        assert!(panel.insert_filter_text("opentype features"));
         assert!(matches!(
             panel.handle_key(SettingsKey::Enter, &config, &registry),
             SettingsAction::ManageFontFeatures
@@ -2738,9 +2822,7 @@ mod tests {
         let registry = default_registry();
 
         // Type "opacity" to filter
-        for ch in "opacity".chars() {
-            panel.handle_key(SettingsKey::FilterChar(ch), &config, &registry);
-        }
+        assert!(panel.insert_filter_text("opacity"));
 
         let entries = panel.build_entries(&config, &registry);
         // Should have Window header + Opacity item (at minimum)
@@ -2760,7 +2842,7 @@ mod tests {
         let registry = default_registry();
 
         // Type something
-        panel.handle_key(SettingsKey::FilterChar('a'), &config, &registry);
+        assert!(panel.insert_filter_text("a"));
         assert!(!panel.filter.is_empty());
 
         // First Escape clears filter, panel stays open

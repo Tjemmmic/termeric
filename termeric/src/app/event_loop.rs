@@ -995,6 +995,9 @@ impl ApplicationHandler<AppEvent> for App {
                             return;
                         }
 
+                        if self.handle_settings_filter_key(&event.logical_key) {
+                            return;
+                        }
                         let settings_key = match &event.logical_key {
                             Key::Named(NamedKey::Escape) => Some(SettingsKey::Escape),
                             Key::Named(NamedKey::ArrowUp) => Some(SettingsKey::Up),
@@ -1010,11 +1013,6 @@ impl ApplicationHandler<AppEvent> for App {
                                 "r" | "R" => Some(SettingsKey::Reset),
                                 _ => None,
                             },
-                            Key::Character(c)
-                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                            {
-                                c.chars().next().map(SettingsKey::FilterChar)
-                            }
                             _ => None,
                         };
 

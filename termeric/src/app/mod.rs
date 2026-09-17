@@ -26,6 +26,7 @@ mod runtime_plugins;
 mod search_input;
 mod session_export;
 mod sessions;
+mod settings_input;
 mod shortcuts_input;
 pub mod state;
 mod system_accessibility;

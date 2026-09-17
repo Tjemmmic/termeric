@@ -443,6 +443,14 @@ surfaces cannot redirect them to a background query or shell. Local routing and
 raw-PTY isolation tests pass. Native clipboard acceptance for these fields is
 still deferred (see [input contract](accessibility-and-input.md)).
 
+Settings-filter keyboard text and IME commits now use atomic insertion under a
+256-scalar/1,024-byte ceiling, reject controls and line separators, and preserve
+complete combining/ZWJ events. Backspace removes whole graphemes; dropdowns
+refuse filter mutation, and AltGraph text cannot trigger the Ctrl+S/Ctrl+R
+actions. Model/dispatch/raw-PTY checks cover this boundary without changing
+configuration. Clipboard, selection, caret navigation, and native IME/visual
+acceptance for this filter remain separate work.
+
 Built-in plugin profile selection distinguishes **Automatic profile** from every
 explicit name, including `default`. Selection/restart prefer a matching owner in
 the active tab; delayed choices retain the original identity. Exact references

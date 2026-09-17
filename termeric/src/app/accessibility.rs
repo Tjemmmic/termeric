@@ -6834,17 +6834,9 @@ mod tests {
 
     #[test]
     fn settings_filter_reports_utf8_cursor_and_empty_results() {
-        use crate::ui::settings::SettingsKey;
-
         let mut app = App::new_headless(Config::default()).unwrap();
         app.settings_panel.toggle();
-        for character in "🫚absent".chars() {
-            app.settings_panel.handle_key(
-                SettingsKey::FilterChar(character),
-                &app.config,
-                &app.shortcut_registry,
-            );
-        }
+        assert!(app.settings_panel.insert_filter_text("🫚absent"));
         let snapshot = app.accessibility_snapshot();
         let input = &snapshot
             .nodes

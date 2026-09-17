@@ -353,6 +353,20 @@ visible, and Up/Down, Enter, Delete, F2, and Escape provide complete keyboard
 operation. Accessibility tests inject in-memory entries and never load, rename,
 or delete a persisted workspace or snapshot.
 
+The Settings filter accepts complete native character events and IME commits
+atomically, capped at 256 Unicode scalars (at most 1,024 UTF-8 bytes). Controls,
+line/paragraph separators, and over-limit events are rejected without changing
+the filter, caret, result selection, or scrolling. Plain/Shift text, named Space,
+and AltGraph text retain every scalar, including combining and ZWJ sequences;
+other modified text is consumed, except explicit Ctrl+S/Ctrl+R Save/Reset actions.
+Plain Backspace removes a whole grapheme. Hidden panels and open dropdowns refuse
+filter edits, so typing cannot silently change the list behind a dropdown.
+Native typing clears stale IME preedit only on a successful edit. Model,
+headless-dispatch, and raw-PTY tests cover limits, modifier ownership, and child
+isolation without saving configuration. This does not add Settings-filter
+clipboard, selection, or caret-navigation support; native IME and visual
+acceptance remain deferred.
+
 The keyboard-shortcut editor is a bounded modal tree with a UTF-8-aware filter,
 category headings, and one stable action button per visible binding. Action
 identity comes from `BindableAction`, never a filtered row number. Activating a
