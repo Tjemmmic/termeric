@@ -368,12 +368,17 @@ line/paragraph separators, and over-limit events are rejected without changing
 the filter, caret, result selection, or scrolling. Plain/Shift text, named Space,
 and AltGraph text retain every scalar, including combining and ZWJ sequences;
 other modified text is consumed, except explicit Ctrl+S/Ctrl+R Save/Reset actions.
-Plain Backspace removes a whole grapheme. Hidden panels and open dropdowns refuse
+Plain Backspace/Delete remove a whole grapheme. Home/End move the filter caret,
+Ctrl+Left/Right move across Unicode word boundaries, and Ctrl+Backspace/Delete
+remove the adjacent word. Plain Left/Right retain their setting-value and
+dropdown behavior; unsupported modified editing keys are consumed without
+changing a setting. Caret-only moves preserve result selection and scroll state.
+Hidden panels and open dropdowns refuse
 filter edits, so typing cannot silently change the list behind a dropdown.
 Native typing clears stale IME preedit only on a successful edit. Model,
 headless-dispatch, and raw-PTY tests cover limits, modifier ownership, and child
 isolation without saving configuration. This does not add Settings-filter
-selection or caret-navigation support; native IME and visual
+selection or reassign plain Left/Right to character navigation; native IME and visual
 acceptance remain deferred.
 
 Settings-filter rendering now uses a caret-following whole-grapheme viewport,

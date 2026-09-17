@@ -445,13 +445,19 @@ still deferred (see [input contract](accessibility-and-input.md)).
 
 Settings-filter keyboard text and IME commits now use atomic insertion under a
 256-scalar/1,024-byte ceiling, reject controls and line separators, and preserve
-complete combining/ZWJ events. Backspace removes whole graphemes; dropdowns
+complete combining/ZWJ events. Backspace/Delete remove whole graphemes;
+Home/End and Ctrl+Left/Right navigate the filter, and Ctrl+Backspace/Delete
+remove adjacent Unicode words. Plain Left/Right still adjust setting values;
+unsupported modified editing keys cannot fall through to those actions. Caret
+moves preserve result selection and scroll. Dropdowns
 refuse filter mutation, and AltGraph text cannot trigger the Ctrl+S/Ctrl+R
 actions. Model/dispatch/raw-PTY checks cover this boundary without changing
 configuration. Settings-filter paste uses the same atomic limits, refuses
 clipboard reads while a dropdown is open, and never applies a setting or falls
-through to a retained field or PTY. Selection, keyboard caret navigation, and native clipboard/IME/visual
-acceptance for this filter remain separate work.
+through to a retained field or PTY. The private-Wayland interaction lane covers
+eleven clipboard, Unicode, pointer, and keyboard-editing cases with exact PTY
+ownership and reversible font-size effects. Selection and real-desktop
+clipboard/IME/visual acceptance for this filter remain separate work.
 
 The Settings filter now shapes and clips a caret-following whole-grapheme slice;
 its renderer, accessibility bounds, and IME candidate/preedit position use the
@@ -463,7 +469,8 @@ Settings-filter pointer placement uses that shared visible-grapheme viewport
 and revalidates active/dropdown state before changing the caret. It preserves
 result selection/scroll and never applies configuration; dropdown dismissal
 does not also place a caret. Geometry, action, paste/IME, and raw-PTY regressions
-cover the path, while native pointer acceptance and drag selection remain open.
+cover the path, including private-Wayland pointer input; real-desktop visual
+acceptance and drag selection remain open.
 
 Built-in plugin profile selection distinguishes **Automatic profile** from every
 explicit name, including `default`. Selection/restart prefer a matching owner in

@@ -8,9 +8,11 @@ from scripts import gui_settings_input as settings
 class SettingsInputTests(unittest.TestCase):
     def test_matrix_covers_paste_rejection_graphemes_and_pointer_placement(self):
         self.assertEqual([case[0] for case in settings.CASES], ["paste", "reject-multiline",
-            "reject-oversize", "combining-backspace", "zwj-backspace", "pointer-wide", "pointer-combining"])
+            "reject-oversize", "combining-backspace", "zwj-backspace", "pointer-wide", "pointer-combining",
+            "home-delete", "end-word-backspace", "word-left-backspace", "word-right-delete"])
         self.assertEqual(settings.CASES[2][2], (("paste", "x" * 257),))
-        self.assertEqual(settings.CASES[-2][2], (("click", 3.75), ("key", "BackSpace")))
+        self.assertEqual(settings.CASES[5][2], (("click", 3.75), ("key", "BackSpace")))
+        self.assertEqual(settings.CASES[-1][2], (("key", "Home"), ("ctrl", "Right"), ("ctrl", "Delete")))
 
     def test_pointer_uses_actual_cells_and_shared_modal_input_metrics(self):
         geometry = (42, 126, 1008, 714)  # 8x17 physical cells

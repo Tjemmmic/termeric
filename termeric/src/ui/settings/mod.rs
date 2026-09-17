@@ -1598,20 +1598,23 @@ impl SettingsPanel {
     }
 
     pub fn backspace_filter(&mut self) -> bool {
+        self.edit_filter(TextInputEdit::Backspace)
+    }
+
+    /// Edit without rebuilding the inventory or resetting results on caret moves.
+    /// Hidden and dropdown-owned fields refuse both text and caret changes.
+    pub fn edit_filter(&mut self, edit: TextInputEdit) -> bool {
         if !self.is_active() || self.dropdown_open {
             return false;
         }
-        if !edit_grapheme(
-            &mut self.filter,
-            &mut self.filter_cursor,
-            TextInputEdit::Backspace,
-        ) {
-            return false;
+        let previous_cursor = self.filter_cursor;
+        let changed = edit_grapheme(&mut self.filter, &mut self.filter_cursor, edit);
+        if changed {
+            self.selected = 0;
+            self.scroll_offset = 0;
+            self.selection_visibility_pending = false;
         }
-        self.selected = 0;
-        self.scroll_offset = 0;
-        self.selection_visibility_pending = false;
-        true
+        changed || self.filter_cursor != previous_cursor
     }
 
     /// Reject hidden/dropdown owners and non-grapheme boundaries before mutation.
@@ -2369,6 +2372,45 @@ mod tests {
 
     fn default_registry() -> ShortcutRegistry {
         ShortcutRegistry::new()
+    }
+
+    #[test]
+    fn filter_edits_preserve_results_on_caret_moves_and_refuse_inactive_owners() {
+        let mut panel = SettingsPanel::new();
+        assert!(!panel.edit_filter(TextInputEdit::Home));
+        panel.open();
+        assert!(panel.insert_filter_text("e\u{301}界👩\u{200d}💻"));
+        panel.selected = 3;
+        panel.scroll_offset = 2;
+        panel.selection_visibility_pending = true;
+        assert!(panel.edit_filter(TextInputEdit::Home));
+        assert_eq!(panel.filter_cursor, 0);
+        assert_eq!((panel.selected, panel.scroll_offset), (3, 2));
+        assert!(panel.selection_visibility_pending);
+        assert!(!panel.edit_filter(TextInputEdit::Home));
+        for expected in ["界👩\u{200d}💻", "👩\u{200d}💻", ""] {
+            assert!(panel.edit_filter(TextInputEdit::Delete));
+            assert_eq!(panel.filter, expected);
+            assert_eq!(panel.filter_cursor, 0);
+            assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
+            assert!(!panel.selection_visibility_pending);
+        }
+        assert!(!panel.edit_filter(TextInputEdit::Delete));
+        assert!(panel.insert_filter_text("draft size"));
+        panel.dropdown_open = true;
+        for edit in [
+            TextInputEdit::Home,
+            TextInputEdit::WordLeft,
+            TextInputEdit::BackspaceWord,
+        ] {
+            assert!(!panel.edit_filter(edit));
+        }
+        assert_eq!((&*panel.filter, panel.filter_cursor), ("draft size", 10));
+        panel.dropdown_open = false;
+        panel.close();
+        assert!(!panel.edit_filter(TextInputEdit::Home));
+        assert!(!panel.edit_filter(TextInputEdit::BackspaceWord));
+        assert_eq!((&*panel.filter, panel.filter_cursor), ("draft size", 10));
     }
 
     #[test]

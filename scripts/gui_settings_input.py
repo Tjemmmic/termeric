@@ -15,6 +15,10 @@ CASES = (
     ("zwj-backspace", "size👩\u200d💻", (("key", "BackSpace"),)),
     ("pointer-wide", "si界ze", (("click", 3.75), ("key", "BackSpace"))),
     ("pointer-combining", "sie\u0301ze", (("click", 2.75), ("key", "BackSpace"))),
+    ("home-delete", "e\u0301size", (("key", "Home"), ("key", "Delete"))),
+    ("end-word-backspace", "size draft", (("key", "Home"), ("key", "End"), ("ctrl", "BackSpace"), ("key", "BackSpace"))),
+    ("word-left-backspace", "draft size", (("ctrl", "Left"), ("ctrl", "BackSpace"))),
+    ("word-right-delete", "size draft", (("key", "Home"), ("ctrl", "Right"), ("ctrl", "Delete"))),
 )
 
 
@@ -107,6 +111,8 @@ def run_settings_input_checks(gui, app, transcript, owner):
                         paste_private(gui, app, value)
                     elif kind == "key":
                         app.wayland_chord((), value)
+                    elif kind == "ctrl":
+                        app.wayland_chord(("ctrl",), value)
                     elif kind == "click":
                         gui.time.sleep(0.25)
                         native_click(gui, app, "wayland", settings_pointer_point(geometry, value), SURFACE)

@@ -421,9 +421,10 @@ lane installs and requires the complete declared tool set.
 
 ## Wayland Settings-filter interaction
 
-The Wayland `interaction` scenario also includes seven Settings-filter cases:
+The Wayland `interaction` scenario also includes eleven Settings-filter cases:
 clipboard insertion, multiline/oversize rejection, combining/ZWJ Backspace, and
-pointer placement across wide/combining text. Each starts with a non-Size row
+pointer placement across wide/combining text, plus Home/Delete, End/word deletion,
+and Ctrl+Left/Right word navigation and deletion. Each starts with a non-Size row
 selected so an ignored paste cannot pass through the default Size selection.
 The corrected query must select Size, produce a logged 14→15 font-size transition
 with fewer PTY rows/columns, and restore the exact original geometry at 14.

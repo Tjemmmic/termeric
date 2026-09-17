@@ -1,6 +1,7 @@
 //! Complete bounded Settings-filter events, separate from setting actions.
 
 use super::*;
+use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
@@ -8,13 +9,46 @@ impl App {
         if !self.settings_panel.is_active() {
             return false;
         }
-        let changed = match key {
-            Key::Named(NamedKey::Backspace) => {
-                if !self.modifiers.is_empty() || self.alt_graph_active {
-                    return true;
-                }
-                self.settings_panel.backspace_filter()
+        let edit = match key {
+            // Plain arrows still adjust the selected setting/dropdown. Modified
+            // arrows must never fall through to those configuration actions.
+            Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowRight)
+                if self.modifiers.is_empty() && !self.alt_graph_active =>
+            {
+                return false;
             }
+            Key::Named(NamedKey::ArrowLeft) => Some(TextInputEdit::WordLeft),
+            Key::Named(NamedKey::ArrowRight) => Some(TextInputEdit::WordRight),
+            Key::Named(NamedKey::Home) => Some(TextInputEdit::Home),
+            Key::Named(NamedKey::End) => Some(TextInputEdit::End),
+            Key::Named(NamedKey::Backspace) => Some(TextInputEdit::Backspace),
+            Key::Named(NamedKey::Delete) => Some(TextInputEdit::Delete),
+            _ => None,
+        };
+        if let Some(edit) = edit {
+            let edit = match (self.modifiers, self.alt_graph_active, edit) {
+                (_, true, _) => return true,
+                (ModifiersState::CONTROL, false, TextInputEdit::Backspace) => {
+                    TextInputEdit::BackspaceWord
+                }
+                (ModifiersState::CONTROL, false, TextInputEdit::Delete) => {
+                    TextInputEdit::DeleteWord
+                }
+                (
+                    ModifiersState::CONTROL,
+                    false,
+                    TextInputEdit::WordLeft | TextInputEdit::WordRight,
+                ) => edit,
+                (modifiers, false, _) if modifiers.is_empty() => edit,
+                // Selection is not implemented; swallow unsupported modifiers.
+                _ => return true,
+            };
+            if self.settings_panel.edit_filter(edit) {
+                self.settings_filter_changed();
+            }
+            return true;
+        }
+        let changed = match key {
             Key::Character(text) => {
                 // Preserve explicit Save/Reset actions, but never interpret
                 // AltGraph-generated text as a Control shortcut.
@@ -46,20 +80,25 @@ impl App {
             _ => return false,
         };
         if changed {
-            self.ime.clear_preedit();
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::KeyboardInput);
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+            self.settings_filter_changed();
         }
         true
+    }
+
+    fn settings_filter_changed(&mut self) {
+        self.ime.clear_preedit();
+        self.redraw_scheduler
+            .request(redraw_scheduler::RedrawReason::KeyboardInput);
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::settings::SettingsKey;
 
     #[test]
     fn settings_text_keeps_complete_events_and_altgraph_without_triggering_actions() {
@@ -84,7 +123,9 @@ mod tests {
         ] {
             app.modifiers = modifier;
             assert!(app.handle_settings_filter_key(&Key::Character("x".into())));
-            assert!(app.handle_settings_filter_key(&Key::Named(NamedKey::Backspace)));
+            if modifier != ModifiersState::CONTROL {
+                assert!(app.handle_settings_filter_key(&Key::Named(NamedKey::Backspace)));
+            }
         }
         app.modifiers = ModifiersState::CONTROL;
         for text in ["s", "S", "r", "R"] {
@@ -195,9 +236,138 @@ mod tests {
             .build_info(&app.config, &app.shortcut_registry);
         assert!(info.filter.contains('@'));
         assert!(info.filter.ends_with('界'));
+        for (modifiers, key) in [
+            (ModifiersState::empty(), NamedKey::Home),
+            (ModifiersState::empty(), NamedKey::Delete),
+            (ModifiersState::CONTROL, NamedKey::ArrowRight),
+            (ModifiersState::CONTROL, NamedKey::ArrowLeft),
+            (ModifiersState::CONTROL, NamedKey::Delete),
+            (ModifiersState::empty(), NamedKey::End),
+            (ModifiersState::CONTROL, NamedKey::Backspace),
+        ] {
+            app.modifiers = modifiers;
+            assert!(app.handle_settings_filter_key(&Key::Named(key)));
+        }
         app.settings_panel.close();
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a");
+    }
+
+    #[test]
+    fn settings_filter_keyboard_navigation_and_deletion_preserve_config() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        let original = toml::to_string(&app.config).unwrap();
+        assert!(app.settings_panel.insert_filter_text("e\u{301} draft size"));
+        for (modifiers, key, text, cursor) in [
+            (
+                ModifiersState::empty(),
+                NamedKey::Home,
+                "e\u{301} draft size",
+                0,
+            ),
+            (ModifiersState::empty(), NamedKey::Delete, " draft size", 0),
+            (ModifiersState::empty(), NamedKey::Delete, "draft size", 0),
+            (
+                ModifiersState::CONTROL,
+                NamedKey::ArrowRight,
+                "draft size",
+                5,
+            ),
+            (
+                ModifiersState::CONTROL,
+                NamedKey::ArrowLeft,
+                "draft size",
+                0,
+            ),
+            (ModifiersState::CONTROL, NamedKey::Delete, " size", 0),
+            (ModifiersState::empty(), NamedKey::Delete, "size", 0),
+            (ModifiersState::empty(), NamedKey::End, "size", 4),
+            (ModifiersState::CONTROL, NamedKey::Backspace, "", 0),
+        ] {
+            app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+            app.modifiers = modifiers;
+            assert!(app.handle_settings_filter_key(&Key::Named(key)));
+            let info = app
+                .settings_panel
+                .build_info(&app.config, &app.shortcut_registry);
+            assert_eq!((info.filter.as_str(), info.filter_cursor), (text, cursor));
+            assert!(app.ime.preedit().is_none());
+            assert_eq!(toml::to_string(&app.config).unwrap(), original);
+        }
+        assert!(app.redraw_scheduler.has_pending());
+        app.modifiers = ModifiersState::empty();
+        for key in [NamedKey::ArrowLeft, NamedKey::ArrowRight] {
+            assert!(!app.handle_settings_filter_key(&Key::Named(key)));
+        }
+    }
+
+    #[test]
+    fn settings_filter_rejects_modified_edits_and_dropdown_mutation() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.settings_panel.toggle();
+        assert!(app.settings_panel.insert_filter_text("size"));
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        for modifiers in [
+            ModifiersState::SHIFT,
+            ModifiersState::ALT,
+            ModifiersState::SUPER,
+            ModifiersState::CONTROL | ModifiersState::SHIFT,
+        ] {
+            app.modifiers = modifiers;
+            for key in [
+                NamedKey::ArrowLeft,
+                NamedKey::ArrowRight,
+                NamedKey::Home,
+                NamedKey::End,
+                NamedKey::Backspace,
+                NamedKey::Delete,
+            ] {
+                assert!(app.handle_settings_filter_key(&Key::Named(key)));
+            }
+        }
+        app.alt_graph_active = true;
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::ALT;
+        for key in [
+            NamedKey::ArrowLeft,
+            NamedKey::ArrowRight,
+            NamedKey::Backspace,
+            NamedKey::Delete,
+        ] {
+            assert!(app.handle_settings_filter_key(&Key::Named(key)));
+        }
+        let info = app
+            .settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        assert_eq!((info.filter.as_str(), info.filter_cursor), ("size", 4));
+        assert!(app.ime.preedit().is_some());
+
+        app.alt_graph_active = false;
+        app.settings_panel
+            .handle_key(SettingsKey::Escape, &app.config, &app.shortcut_registry);
+        app.settings_panel
+            .handle_key(SettingsKey::Down, &app.config, &app.shortcut_registry);
+        app.settings_panel
+            .handle_key(SettingsKey::Right, &app.config, &app.shortcut_registry);
+        assert!(app.settings_panel.is_dropdown_open());
+        for modifiers in [ModifiersState::empty(), ModifiersState::CONTROL] {
+            app.modifiers = modifiers;
+            for key in [
+                NamedKey::Home,
+                NamedKey::End,
+                NamedKey::Backspace,
+                NamedKey::Delete,
+            ] {
+                assert!(app.handle_settings_filter_key(&Key::Named(key)));
+            }
+        }
+        assert!(app.settings_panel.is_dropdown_open());
+        assert!(
+            app.settings_panel
+                .build_info(&app.config, &app.shortcut_registry)
+                .filter
+                .is_empty()
+        );
     }
 
     #[test]
