@@ -1016,6 +1016,68 @@ and a recountable `summary.json` plus `summarize.py`. All 419 archived files
 were verified byte-for-byte against their originals. Caches/data/state are
 excluded; original `/tmp/` paths map to the archive directory names.
 
+### Native font-control verification at `cd801ad`
+
+The schema-3 gate was exercised under the same private Sway/Xwayland and
+llvmpipe setup in three clean-source runs. A one-sample/no-warmup negative run
+requested absent DejaVu Sans Mono. Both terminals completed their workloads,
+but their retained observations reported the missing family and Noto Sans Mono
+substitution; **every ranking was blocked**, despite matching geometry and
+matching substituted font fingerprints. This record is not pooled into the
+installed-font distributions.
+
+Two subsequent runs each used one excluded warmup and five measured fresh
+processes per terminal, rotated order, explicitly requested Noto Sans Mono,
+and used the numeric geometry recipe above. All twenty measured samples
+matched initial/final 100×30 PTY grids and 901×601 native windows, with complete
+resource observations and the common fixture excluded. Every Fontconfig probe
+found the requested family and selected face index 0 of
+`/usr/share/fonts/noto/NotoSansMono-Regular.ttf`, SHA-256
+`65b5e2b2c4a1fba9ae8be1f026cb35b03dcb8886d9b2a4147054fde12f7e767d`.
+All recorded comparison controls passed; all reports still explicitly mark
+terminal-renderer face equivalence **not verified**.
+
+| Run | Terminal | RSS median (MiB) | Startup median (ms) | PTY response median (ms) | Post-workload CPU median / max (% of one core) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| First | Termeric | 183.46 | 269.43 | 64.93 | 0.00 / 10.00 |
+| First | kitty | 253.20 | 377.43 | 32.37 | 0.00 / 0.50 |
+| Repeat | Termeric | 183.57 | 212.42 | 53.43 | 0.00 / 10.00 |
+| Repeat | kitty | 257.99 | 361.27 | 28.17 | 0.00 / 0.00 |
+
+These are local observations, not an application optimization or a
+renderer-font-equivalent/hardware-backed winner claim. The first run was
+particularly variable: PTY response ranged 58.26–170.41 ms for Termeric and
+27.10–176.94 ms for kitty. No outliers were discarded and their cause was not
+established. In measured sample order, Termeric's process CPU tick deltas were
+`[0, 17, 0, 0, 20]` and `[0, 0, 1, 20, 0]` over two-second post-response
+windows; kitty's were `[0, 0, 0, 0, 1]` and five zeros. The negative run also
+retained a 21-tick Termeric observation. Thus the larger CPU activity recurred
+in the normal runner even though the earlier thread-sampling diagnostics did
+not reproduce it; attribution remains open. Neither font probing nor the
+zero medians demonstrate that the activity was fixed. RSS is summed resident
+mappings, not PSS/private/peak/GPU memory. Pre-launch font probes and the new
+explicit family prevent treating changes from older results as optimization
+percentages.
+
+Source `cd801ad07e3c6bf056f9298538ad4f8867bdf0fa` and the release executable
+were clean/unchanged across all three runs. Termeric retained executable SHA-256
+`a05af7c785118613273ea7ced12a254fc2fa7cf2b8e5255c4dcd5630198184a4`;
+kitty 0.48.2 retained
+`940cbe42c8cf1dcb342f20b32ee35f51818bbcd8deffc11029f5766d844783a4`.
+The summaries/contracts were independently recomputed from retained samples,
+and RSS totals were recounted from their process rows. No AI-provider workflow
+ran; all private runtimes were cleaned up. These forced-window-teardown runs
+do not qualify graceful-close behavior.
+
+The local unpublished archive
+`target/terminal-comparison/2026-09-17-cd801ad-font-controls.tar.gz` has SHA-256
+`7183e266d91ee2a986327b01b5b5be57f9b9d9249c55195c0c2f95c197bae60d`.
+It retains the launcher and all three `termeric-font-control-cd801ad-*`
+directories, including original reports, source/binary sidecars, per-sample
+font observations, configurations, fixture records, and display/launcher logs.
+All 178 archived files were verified byte-for-byte against the originals.
+Caches/data/state are excluded; original `/tmp/` paths map to archive names.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic

@@ -764,6 +764,16 @@ claiming the probes observe renderer selection. The probes run before timing
 and may warm font caches, so new startup results are not directly comparable
 with the older methodology.
 
+Clean `cd801ad` native evidence verifies both sides of that gate: the absent
+DejaVu request completed its workloads but blocked every ranking, while two
+installed-Noto runs passed the recorded controls with matched grids/windows
+and a common face fingerprint. Their median RSS observations were
+183.46/183.57 MiB for Termeric and 253.20/257.99 MiB for kitty. The larger
+Termeric post-workload CPU activity recurred (up to roughly 10% of one core),
+and timing outliers remain retained. This is not an application optimization
+or verified renderer-font-equivalent ranking; see
+[the schema-3 native evidence](performance.md#native-font-control-verification-at-cd801ad).
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the
