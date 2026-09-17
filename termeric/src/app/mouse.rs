@@ -363,11 +363,9 @@ impl App {
                                 let action = renderer.commands_panel_hit_test(
                                     px,
                                     py,
-                                    &self.config.commands,
+                                    &info,
                                     size.width as f32,
                                     size.height as f32,
-                                    info.animation,
-                                    &info.edit_mode,
                                 );
                                 self.apply_commands_panel_action(action);
                                 if let Some(window) = &self.window {

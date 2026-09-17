@@ -363,8 +363,10 @@ isolation tests pass; native visual/IME acceptance remains deferred. Configured
 clipboard paste inserts atomically at the active form caret under the existing
 256-byte Name and 16 KiB Command limits, rejects multiline/control/oversized
 input without terminal fallback, and never submits the form. Hermetic clipboard
-routing tests pass; real-desktop clipboard acceptance is separate. Selection and
-pointer caret placement remain unimplemented
+routing tests pass; real-desktop clipboard acceptance is separate. Primary field
+clicks now position the caret at visible whole-grapheme boundaries using the same
+scrolled/animated geometry as painting and IME. Geometry, model, and raw-PTY
+tests pass; native pointer acceptance and text selection remain outstanding
 (see [input contract](accessibility-and-input.md)).
 
 Shared palette query editing supports unmodified Left/Right/Home/End and

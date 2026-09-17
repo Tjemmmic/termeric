@@ -11,6 +11,7 @@ use crate::config::CustomCommand;
 use crate::ui::animation::PanelAnimation;
 use crate::ui::text_input::{TextInput, TextInputEdit};
 use crate::ui::text_input_viewport::TextInputViewport;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Action returned by the commands panel after a click
 #[derive(Debug, Clone)]
@@ -23,10 +24,12 @@ pub enum CommandsPanelAction {
     StartAdd,
     /// Submit the inline add-command form.
     Submit,
-    /// User clicked the Name field
+    /// Focus the Name field (for semantic focus actions).
     ClickName,
-    /// User clicked the Command field
+    /// Focus the Command field (for semantic focus actions).
     ClickCommand,
+    /// Place the caret at a visible whole-grapheme boundary in one field.
+    PlaceCaret { field: EditMode, cursor: usize },
     /// Cancel the inline form without closing the panel.
     CancelEdit,
     /// Close the panel
@@ -131,7 +134,37 @@ pub struct CommandsPanelLayout {
 }
 
 impl CommandsPanelLayout {
-    /// Whole-grapheme field geometry shared by painting and IME placement.
+    /// Resolve a field click from the exact viewport used for painting.
+    /// A collapsed field consumes its click without moving a hidden caret.
+    pub fn input_click(
+        &self,
+        info: &CommandsPanelInfo,
+        x: f32,
+        y: f32,
+    ) -> Option<CommandsPanelAction> {
+        let form = self.form?;
+        for (field, rect, text) in [
+            (EditMode::EditingName, form.name_input, &info.form_name),
+            (
+                EditMode::EditingCommand,
+                form.command_input,
+                &info.form_command,
+            ),
+        ] {
+            if rect.contains(x, y) {
+                return Some(
+                    self.input_viewport(info, field.clone())
+                        .and_then(|view| view.cursor_at(text, x, self.cell_width))
+                        .map_or(CommandsPanelAction::None, |cursor| {
+                            CommandsPanelAction::PlaceCaret { field, cursor }
+                        }),
+                );
+            }
+        }
+        None
+    }
+
+    /// Whole-grapheme field geometry shared by painting, pointer, and IME placement.
     /// Inactive fields show their beginning; only the active caret scrolls.
     pub fn input_viewport(
         &self,
@@ -441,6 +474,32 @@ impl CommandsPanel {
         }
     }
 
+    /// Reject hidden forms and invalid/interior-cluster positions before
+    /// changing either field focus or caret. Text and form limits are untouched.
+    pub fn place_form_caret(&mut self, field: EditMode, cursor: usize) -> bool {
+        if !self.is_open() || !self.is_editing() {
+            return false;
+        }
+        let input = match field {
+            EditMode::EditingName => &mut self.form_name,
+            EditMode::EditingCommand => &mut self.form_command,
+            EditMode::Browse => return false,
+        };
+        if cursor != input.text().len()
+            && !input
+                .text()
+                .grapheme_indices(true)
+                .any(|(offset, _)| offset == cursor)
+        {
+            return false;
+        }
+        if !input.set_cursor_byte(cursor) {
+            return false;
+        }
+        self.edit_mode = field;
+        true
+    }
+
     /// Atomic clipboard insertion into the open form. Never truncate a
     /// command, execute it, or change focus when the paste is rejected.
     pub fn insert_form_text(&mut self, text: &str) -> bool {
@@ -554,6 +613,149 @@ mod tests {
             layout.command_row(1).y,
             layout.command_row(0).y + layout.row_height
         );
+    }
+
+    #[test]
+    fn form_clicks_choose_visible_grapheme_boundaries_in_both_scaled_fields() {
+        let text = "a界e\u{301}👩\u{200d}💻🇺🇸z";
+        let mut panel = CommandsPanel::new();
+        panel.toggle();
+        panel.start_add();
+        panel.form_name.replace(text);
+        panel.form_command.replace(text);
+        for (width, cell) in [(800.0, 8.0), (1600.0, 16.0), (900.0, 10.0)] {
+            for animation in [0.25, 1.0] {
+                let layout = CommandsPanelLayout::calculate(
+                    width,
+                    800.0,
+                    cell,
+                    cell * 2.0,
+                    animation,
+                    true,
+                    0,
+                );
+                for field in [EditMode::EditingName, EditMode::EditingCommand] {
+                    assert!(panel.place_form_caret(field.clone(), 0));
+                    let info = panel.build_info(&[]);
+                    let rect = if field == EditMode::EditingName {
+                        layout.form.unwrap().name_input
+                    } else {
+                        layout.form.unwrap().command_input
+                    };
+                    let view = layout.input_viewport(&info, field.clone()).unwrap();
+                    for (column, expected) in [
+                        (0.25, 0),
+                        (0.75, 1),
+                        (1.25, 1),
+                        (2.25, "a界".len()),
+                        (3.25, "a界".len()),
+                        (3.75, "a界e\u{301}".len()),
+                        (4.25, "a界e\u{301}".len()),
+                        (5.25, "a界e\u{301}👩\u{200d}💻".len()),
+                    ] {
+                        let action = layout
+                            .input_click(
+                                &info,
+                                view.text_x + column * cell,
+                                rect.y + rect.height / 2.0,
+                            )
+                            .unwrap();
+                        let CommandsPanelAction::PlaceCaret {
+                            field: target,
+                            cursor,
+                        } = action
+                        else {
+                            panic!("not a caret action");
+                        };
+                        assert_eq!(target, field);
+                        assert_eq!(cursor, expected);
+                        assert!(panel.place_form_caret(target, cursor));
+                        assert_eq!(panel.active_input().unwrap().text(), text);
+                    }
+                    for (x, expected) in [(rect.x, 0), (rect.x + rect.width, text.len())] {
+                        assert!(matches!(layout.input_click(&info, x, rect.y),
+                            Some(CommandsPanelAction::PlaceCaret { cursor, .. }) if cursor == expected));
+                    }
+                    assert!(
+                        layout
+                            .input_click(&info, view.text_x, rect.y - 1.0)
+                            .is_none()
+                    );
+                    assert!(layout.input_click(&info, f32::NAN, rect.y).is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn form_clicks_use_scrolled_active_and_unscrolled_inactive_text_and_consume_collapsed_fields() {
+        let mut panel = CommandsPanel::new();
+        panel.toggle();
+        panel.start_add();
+        let text = "a界e\u{301}👩\u{200d}💻".repeat(8);
+        panel.form_name.replace(&text);
+        panel.form_command.replace(&text);
+        let layout = CommandsPanelLayout::calculate(800.0, 800.0, 8.0, 16.0, 1.0, true, 0);
+        for field in [EditMode::EditingName, EditMode::EditingCommand] {
+            assert!(panel.place_form_caret(field.clone(), text.len()));
+            let info = panel.build_info(&[]);
+            let view = layout.input_viewport(&info, field.clone()).unwrap();
+            assert!(view.text_range.start > 0);
+            let rect = if field == EditMode::EditingName {
+                layout.form.unwrap().name_input
+            } else {
+                layout.form.unwrap().command_input
+            };
+            assert!(matches!(layout.input_click(&info, rect.x, rect.y),
+                Some(CommandsPanelAction::PlaceCaret { cursor, .. }) if cursor == view.text_range.start));
+            let other = if field == EditMode::EditingName {
+                EditMode::EditingCommand
+            } else {
+                EditMode::EditingName
+            };
+            let other_view = layout.input_viewport(&info, other.clone()).unwrap();
+            assert_eq!(other_view.text_range.start, 0);
+            let CommandsPanelAction::PlaceCaret {
+                field: target,
+                cursor,
+            } = layout
+                .input_click(&info, other_view.text_x + 0.75 * 8.0, other_view.text_y)
+                .unwrap()
+            else {
+                panic!("not a caret action");
+            };
+            assert_eq!(target, other);
+            assert_eq!(cursor, 1);
+            assert!(panel.place_form_caret(target, cursor));
+            assert_eq!(panel.active_input().unwrap().text(), text);
+        }
+        let layout = CommandsPanelLayout::calculate(260.0, 800.0, 8.0, 16.0, 1.0, true, 0);
+        let rect = layout.form.unwrap().name_input;
+        assert!(rect.width > 0.0);
+        assert!(matches!(
+            layout.input_click(&panel.build_info(&[]), rect.x, rect.y),
+            Some(CommandsPanelAction::None)
+        ));
+    }
+
+    #[test]
+    fn form_caret_rejects_closed_browse_and_non_grapheme_positions_without_changing_focus() {
+        let mut panel = CommandsPanel::new();
+        panel.start_add();
+        assert!(!panel.place_form_caret(EditMode::EditingCommand, 0));
+        panel.toggle();
+        assert!(!panel.place_form_caret(EditMode::EditingCommand, 0));
+        panel.start_add();
+        panel.form_command.replace("界e\u{301}👩\u{200d}💻");
+        let end = panel.form_command.cursor();
+        for cursor in [1, 4, end + 1, usize::MAX] {
+            assert!(!panel.place_form_caret(EditMode::EditingCommand, cursor));
+            assert_eq!(panel.edit_mode, EditMode::EditingName);
+            assert_eq!(panel.form_command.cursor(), end);
+        }
+        assert!(!panel.place_form_caret(EditMode::Browse, 0));
+        assert!(panel.place_form_caret(EditMode::EditingCommand, 3));
+        assert_eq!(panel.form_command.text(), "界e\u{301}👩\u{200d}💻");
     }
 
     #[test]

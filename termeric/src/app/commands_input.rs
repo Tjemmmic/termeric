@@ -206,6 +206,27 @@ mod tests {
             assert!(app.handle_commands_form_key(&Key::Named(key)));
         }
         assert_eq!(app.commands_panel.form_command.text(), "one e\u{301} ");
+        // Route a field click through the same layout/action path as native
+        // mouse input, then insert IME text at that exact visible boundary.
+        let info = app.commands_panel.build_info(&[]);
+        let layout = crate::ui::commands::panel::CommandsPanelLayout::calculate(
+            800.0, 800.0, 8.0, 16.0, 1.0, true, 0,
+        );
+        let view = layout
+            .input_viewport(&info, crate::ui::commands::panel::EditMode::EditingName)
+            .unwrap();
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        let action = layout
+            .input_click(&info, view.text_x + 8.0, view.text_y)
+            .unwrap();
+        app.apply_commands_panel_action(action);
+        assert!(app.ime.preedit().is_none());
+        app.handle_ime_event(winit::event::Ime::Commit("R".into()));
+        assert_eq!(
+            app.commands_panel.form_name.text(),
+            "aRe\u{301}Q👩\u{200d}💻z"
+        );
+        assert_eq!(app.commands_panel.form_command.text(), "one e\u{301} ");
         app.modifiers = ModifiersState::empty();
         assert!(app.handle_commands_form_key(&Key::Named(NamedKey::Escape)));
         assert!(!app.commands_panel.is_editing());

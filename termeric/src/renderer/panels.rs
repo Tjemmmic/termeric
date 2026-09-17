@@ -526,11 +526,9 @@ impl Renderer {
         &self,
         x: f32,
         y: f32,
-        commands: &[crate::config::CustomCommand],
+        info: &crate::ui::commands::panel::CommandsPanelInfo,
         window_width: f32,
         window_height: f32,
-        animation: f32,
-        edit_mode: &crate::ui::commands::panel::EditMode,
     ) -> crate::ui::commands::panel::CommandsPanelAction {
         use crate::ui::commands::panel::{CommandsPanelAction, CommandsPanelLayout, EditMode};
 
@@ -542,9 +540,9 @@ impl Renderer {
             window_height,
             ui_cw,
             cell_height,
-            animation,
-            *edit_mode != EditMode::Browse,
-            commands.len(),
+            info.animation,
+            info.edit_mode != EditMode::Browse,
+            info.commands.len(),
         );
 
         // Click outside panel = close
@@ -564,14 +562,8 @@ impl Renderer {
 
         // Hit-test form fields if editing
         if let Some(form) = layout.form {
-            // Name field click
-            if form.name_input.contains(x, y) {
-                return CommandsPanelAction::ClickName;
-            }
-
-            // Command field click
-            if form.command_input.contains(x, y) {
-                return CommandsPanelAction::ClickCommand;
+            if let Some(action) = layout.input_click(info, x, y) {
+                return action;
             }
 
             // Save button
@@ -586,7 +578,7 @@ impl Renderer {
         }
 
         // Command rows
-        for i in 0..commands.len() {
+        for i in 0..info.commands.len() {
             if layout.command_delete(i).contains(x, y) {
                 return CommandsPanelAction::Delete(i);
             }

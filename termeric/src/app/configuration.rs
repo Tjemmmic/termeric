@@ -1036,6 +1036,9 @@ impl App {
             }
             CommandsPanelAction::ClickName => self.commands_panel.focus_name(),
             CommandsPanelAction::ClickCommand => self.commands_panel.focus_command(),
+            CommandsPanelAction::PlaceCaret { field, cursor } => {
+                self.commands_panel.place_form_caret(field, cursor);
+            }
             CommandsPanelAction::CancelEdit => self.commands_panel.cancel_edit(),
             CommandsPanelAction::Close => self.commands_panel.close(),
             CommandsPanelAction::None => {}

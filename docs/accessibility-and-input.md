@@ -312,8 +312,14 @@ IME candidates/preedit share the active field's animated/scaled geometry, and
 field changes retire stale composition. Existing byte limits and submission
 validation are unchanged. Model, geometry, modifier, and raw-PTY isolation tests
 pass without saving or executing commands. Native visual/IME acceptance remains
-deferred. Selection and click-to-position within these form fields remain
-unimplemented.
+deferred. Primary clicks place the caret at the nearest visible whole-grapheme
+boundary using that same animated/scaled viewport. Padding selects a visible
+edge; a scrolled field does not jump to hidden text. Clicking an inactive field
+uses its displayed unscrolled text before changing focus. Collapsed fields
+consume clicks without moving a hidden caret, and invalid byte/interior-cluster
+positions cannot change form focus. Geometry/model and raw-PTY tests cover
+placement followed by IME insertion; native pointer acceptance remains deferred.
+Selection remains unimplemented.
 
 The configured Paste shortcut (Ctrl+Shift+V by default) inserts clipboard text
 at the active form caret without saving or executing it. Name retains its
