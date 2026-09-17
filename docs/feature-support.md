@@ -451,6 +451,12 @@ actions. Model/dispatch/raw-PTY checks cover this boundary without changing
 configuration. Clipboard, selection, caret navigation, and native IME/visual
 acceptance for this filter remain separate work.
 
+The Settings filter now shapes and clips a caret-following whole-grapheme slice;
+its renderer, accessibility bounds, and IME candidate/preedit position use the
+same scaled/animated input geometry. Dropdowns and collapsed fields expose no
+editable candidate area. Pure geometry/ownership and software-GPU glyph-clipping
+checks cover this boundary, not whole-panel or native IME acceptance.
+
 Built-in plugin profile selection distinguishes **Automatic profile** from every
 explicit name, including `default`. Selection/restart prefer a matching owner in
 the active tab; delayed choices retain the original identity. Exact references

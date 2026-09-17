@@ -55,6 +55,11 @@ pub(crate) fn headless_palette_input_smoke(
                 )
                 .input_viewport(&query, query.len(), 10.0, 24.0)
                 .unwrap(),
+                crate::ui::settings::SettingsModalLayout::calculate(
+                    width, 600.0, 10.0, 24.0, 1.0, 0,
+                )
+                .input_viewport(&query, query.len(), 24.0)
+                .unwrap(),
             ] {
                 let clip = TextClip {
                     left: view.text_x,

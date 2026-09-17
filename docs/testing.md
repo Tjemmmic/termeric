@@ -462,8 +462,8 @@ release and retained texture counts, not actual driver allocation usage or
 full native UI layering; see [background evidence](background-images.md).
 The software lane also asserts that adapter diagnostics report a CPU device, so
 a changed WGPU selection policy cannot make the fallback lane pass on hardware.
-Its query-input glyph check includes command-palette, terminal-search, and
-shortcut-filter viewports with long ASCII and mixed-script text. It requires
+Its query-input glyph check includes command-palette, terminal-search,
+shortcut-filter, and Settings-filter viewports with long ASCII and mixed-script text. It requires
 nonempty shaped geometry and every generated glyph vertex within the declared
 clip; this is not whole-panel pixel comparison or native IME acceptance.
 

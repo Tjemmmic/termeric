@@ -4649,14 +4649,6 @@ impl App {
         root.set_bounds(rect(0.0, 0.0, window_width, window_height));
         root.set_children([SETTINGS_DIALOG]);
 
-        let title_y = layout.panel_y + layout.padding;
-        let input_y = title_y
-            + self
-                .renderer
-                .as_ref()
-                .map_or(16.0, |renderer| renderer.cell_height())
-                * 1.4
-            + layout.gap;
         let mut input = Node::new(Role::SearchInput);
         input.set_label("Filter settings");
         input.set_placeholder("Filter settings...");
@@ -4682,10 +4674,10 @@ impl App {
             focus: cursor_position,
         });
         input.set_bounds(rect(
-            layout.panel_x + layout.padding,
-            input_y,
-            layout.panel_width - layout.padding * 2.0,
-            layout.input_height,
+            layout.input.x,
+            layout.input.y,
+            layout.input.width,
+            layout.input.height,
         ));
         input.set_controls([SETTINGS_LIST]);
         input.add_action(Action::Focus);

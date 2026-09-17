@@ -89,9 +89,9 @@ impl Renderer {
         }
 
         // ── Search input ──
-        let input_y = title_y + cell_height * 1.4 + layout.gap;
-        let input_x = layout.panel_x + layout.padding;
-        let input_w = layout.panel_width - layout.padding * 2.0;
+        let input_y = layout.input.y;
+        let input_x = layout.input.x;
+        let input_w = layout.input.width;
         let input_bg = adjust_alpha(self.ui.palette_input_bg, 0.8 * anim);
         self.rect_pipeline.push_rounded_rect(
             input_x,
@@ -108,33 +108,42 @@ impl Renderer {
         self.text_pipeline
             .push_char('/', input_x + cell_width * 0.8, text_y, prompt_color);
 
-        // Filter text
-        let text_start_x = input_x + cell_width * 2.2;
-        let mut text_x = text_start_x;
-        let text_color = adjust_alpha(self.ui.palette_text, anim);
-        for (byte_idx, c) in info.filter.char_indices() {
-            if byte_idx == info.filter_cursor {
-                let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-                self.rect_pipeline
-                    .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
+        if let Some(view) = layout.input_viewport(&info.filter, info.filter_cursor, cell_height) {
+            let clip = super::text::TextClip {
+                left: view.text_x,
+                top: layout.input.y,
+                right: view.right,
+                bottom: layout.input.y + layout.input.height,
+            };
+            self.text_pipeline.push_ui_run(
+                &info.filter[view.text_range.clone()],
+                view.text_x,
+                view.text_y,
+                adjust_alpha(self.ui.palette_text, anim),
+                cell_width,
+                clip,
+            );
+            if !info.dropdown_open {
+                self.rect_pipeline.push_rect(
+                    view.cursor_x,
+                    view.text_y,
+                    2.0_f32.min(view.right - view.cursor_x),
+                    cell_height,
+                    adjust_alpha(self.ui.palette_accent, 0.9 * anim),
+                );
             }
-            self.text_pipeline.push_char(c, text_x, text_y, text_color);
-            text_x += cell_width;
-        }
-        if info.filter_cursor >= info.filter.len() {
-            let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-            self.rect_pipeline
-                .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
-        }
-
-        // Placeholder
-        if info.filter.is_empty() {
-            let hint = "Filter settings...";
-            let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
-            let mut hx = text_start_x;
-            for c in hint.chars() {
-                self.text_pipeline.push_char(c, hx, text_y, hint_color);
-                hx += cell_width;
+            if info.filter.is_empty() {
+                let hint = "Filter settings...";
+                if let Some(hint_view) = layout.input_viewport(hint, 0, cell_height) {
+                    self.text_pipeline.push_ui_run(
+                        &hint[hint_view.text_range],
+                        view.text_x,
+                        view.text_y,
+                        adjust_alpha(self.ui.palette_text_dim, 0.6 * anim),
+                        cell_width,
+                        clip,
+                    );
+                }
             }
         }
 

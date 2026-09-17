@@ -5,6 +5,7 @@ use crate::config::{
 };
 use crate::input::keybindings::ShortcutRegistry;
 use crate::ui::text_input::{TextInputEdit, edit_grapheme};
+use crate::ui::text_input_viewport::TextInputViewport;
 
 const MAX_FILTER_CHARACTERS: usize = 256;
 
@@ -40,6 +41,7 @@ fn font_fallback_index(label: &str) -> Option<usize> {
 /// by the renderer, hit-testing, scroll, and hover code paths.
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsModalLayout {
+    pub input: SettingsInputRect,
     pub panel_x: f32,
     pub panel_y: f32,
     pub panel_width: f32,
@@ -59,7 +61,31 @@ pub struct SettingsModalLayout {
     pub cell_width: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SettingsInputRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
 impl SettingsModalLayout {
+    pub fn input_viewport(
+        &self,
+        text: &str,
+        cursor: usize,
+        cell_height: f32,
+    ) -> Option<TextInputViewport> {
+        TextInputViewport::calculate(
+            text,
+            cursor,
+            self.input.x + self.cell_width * 2.2,
+            self.input.y + (self.input.height - cell_height) / 2.0,
+            self.input.x + self.input.width - self.cell_width * 0.8,
+            self.cell_width,
+        )
+    }
+
     /// Compute the modal geometry. `entry_count` is the length of
     /// `SettingsPanelInfo::entries`; it controls `visible_count` and the
     /// final `panel_height` so a short list doesn't render a giant empty
@@ -97,6 +123,12 @@ impl SettingsModalLayout {
         let value_x = panel_x + panel_width * 0.50;
 
         Self {
+            input: SettingsInputRect {
+                x: panel_x + padding,
+                y: panel_y + padding + cell_height * 1.4 + gap,
+                width: panel_width - padding * 2.0,
+                height: input_height,
+            },
             panel_x,
             panel_y,
             panel_width,
@@ -1559,6 +1591,28 @@ impl SettingsPanel {
         true
     }
 
+    /// Candidate geometry needs only filter state, never a rebuilt settings list.
+    pub fn input_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<TextInputViewport> {
+        if !self.is_active() || self.dropdown_open {
+            return None;
+        }
+        SettingsModalLayout::calculate(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            self.animation_progress(),
+            0,
+        )
+        .input_viewport(&self.filter, self.filter_cursor, cell_height)
+    }
+
     /// Find the selectable index of the first item in `section`.
     fn first_selectable_in_section(
         entries: &[SettingEntry],
@@ -2267,6 +2321,50 @@ mod tests {
 
     fn default_registry() -> ShortcutRegistry {
         ShortcutRegistry::new()
+    }
+
+    #[test]
+    fn filter_viewport_is_clipped_grapheme_safe_and_independent_of_result_count() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let text = "界e\u{301}👩\u{200d}💻".repeat(25);
+        for (width, height, cw, ch) in [(320.0, 500.0, 8.0, 16.0), (1600.0, 1000.0, 16.0, 32.0)] {
+            for animation in [0.2, 0.7, 1.0] {
+                let layout = SettingsModalLayout::calculate(width, height, cw, ch, animation, 100);
+                let empty = SettingsModalLayout::calculate(width, height, cw, ch, animation, 0);
+                for cursor in [0, "界".len(), text.len()] {
+                    let view = layout.input_viewport(&text, cursor, ch).unwrap();
+                    assert_eq!(Some(view.clone()), empty.input_viewport(&text, cursor, ch));
+                    assert!(view.cursor_x >= view.text_x);
+                    assert!(view.cursor_x + cw <= view.right + 0.001);
+                    assert!(view.text_x >= layout.input.x);
+                    assert!(view.right <= layout.input.x + layout.input.width);
+                    assert_eq!(
+                        view.text_y,
+                        layout.input.y + (layout.input.height - ch) / 2.0
+                    );
+                    for edge in [view.text_range.start, view.text_range.end] {
+                        assert!(
+                            edge == text.len()
+                                || text
+                                    .grapheme_indices(true)
+                                    .any(|(offset, _)| offset == edge)
+                        );
+                    }
+                    if cursor == text.len() {
+                        assert!(view.text_range.start > 0);
+                    }
+                }
+                assert!(layout.input_viewport(&text, 1, ch).is_none());
+            }
+        }
+        let mut panel = SettingsPanel::new();
+        assert!(panel.input_viewport(800.0, 600.0, 8.0, 16.0).is_none());
+        panel.open();
+        assert!(panel.insert_filter_text(&text));
+        assert!(panel.input_viewport(40.0, 600.0, 8.0, 16.0).is_none());
+        assert!(panel.input_viewport(800.0, 600.0, 8.0, 16.0).is_some());
+        panel.dropdown_open = true;
+        assert!(panel.input_viewport(800.0, 600.0, 8.0, 16.0).is_none());
     }
 
     #[test]

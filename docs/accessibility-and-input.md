@@ -367,6 +367,16 @@ isolation without saving configuration. This does not add Settings-filter
 clipboard, selection, or caret-navigation support; native IME and visual
 acceptance remain deferred.
 
+Settings-filter rendering now uses a caret-following whole-grapheme viewport,
+shaped text, explicit glyph clipping, and a clipped placeholder. Rendering,
+AccessKit input bounds, and native IME candidate/preedit placement share
+`SettingsModalLayout` input geometry across scale and animation. Computing the
+candidate position does not rebuild the settings inventory. A collapsed field
+has no candidate position, and an open dropdown exposes neither an editable
+filter caret nor IME preedit. Geometry and ownership tests plus the opt-in
+software-GPU glyph-clipping smoke cover this path; real desktop presentation
+and IME-client acceptance remain deferred.
+
 The keyboard-shortcut editor is a bounded modal tree with a UTF-8-aware filter,
 category headings, and one stable action button per visible binding. Action
 identity comes from `BindableAction`, never a filtered row number. Activating a

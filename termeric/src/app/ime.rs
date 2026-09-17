@@ -98,7 +98,7 @@ impl App {
             return !self.shortcuts_panel.is_recording();
         }
         if self.settings_panel.is_active() {
-            return true;
+            return !self.settings_panel.is_dropdown_open();
         }
         if self.session_panel.is_open() {
             return self.session_panel.is_renaming();
@@ -233,6 +233,32 @@ impl App {
             && self.tab_rename.is_none()
     }
 
+    fn settings_owns_ime_text(&self) -> bool {
+        self.settings_panel.is_active()
+            && !self.settings_panel.is_dropdown_open()
+            && self.accepts_ime_text()
+            && !self.info_overlay.is_active()
+            && !self.command_palette.is_active()
+            && !self.unicode_picker.is_active()
+            && self.tab_rename.is_none()
+            && !self.shortcuts_panel.is_active()
+    }
+
+    fn settings_ime_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        self.settings_owns_ime_text()
+            .then(|| {
+                self.settings_panel
+                    .input_viewport(width, height, cell_width, cell_height)
+            })
+            .flatten()
+    }
+
     fn shortcuts_ime_viewport(
         &self,
         width: f32,
@@ -340,6 +366,7 @@ impl App {
             || self.unicode_picker.is_active()
             || self.commands_owns_ime_text()
             || self.shortcuts_owns_ime_text()
+            || self.settings_owns_ime_text()
         {
             let (width, height) = renderer.window_size();
             let view = if self.commands_owns_ime_text() {
@@ -351,6 +378,13 @@ impl App {
                 )
             } else if self.shortcuts_owns_ime_text() {
                 self.shortcuts_ime_viewport(
+                    width as f32,
+                    height as f32,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                )
+            } else if self.settings_owns_ime_text() {
+                self.settings_ime_viewport(
                     width as f32,
                     height as f32,
                     renderer.cell_width(),
@@ -467,6 +501,67 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_ime_matches_scrolled_filter_and_refuses_dropdown_or_higher_owners() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.search.start();
+        app.commands_panel.toggle();
+        app.commands_panel.start_add();
+        app.settings_panel.set_reduced_motion(true);
+        app.settings_panel.toggle();
+        assert!(
+            app.settings_panel
+                .insert_filter_text(&"界e\u{301}👩\u{200d}💻".repeat(25))
+        );
+        for (width, cell) in [(800.0, 8.0), (1600.0, 16.0)] {
+            let info = app
+                .settings_panel
+                .build_info(&app.config, &app.shortcut_registry);
+            let layout = crate::ui::settings::SettingsModalLayout::calculate(
+                width,
+                800.0,
+                cell,
+                cell * 2.0,
+                info.animation,
+                info.entries.len(),
+            );
+            let view = app
+                .settings_ime_viewport(width, 800.0, cell, cell * 2.0)
+                .unwrap();
+            assert_eq!(
+                Some(view.clone()),
+                layout.input_viewport(&info.filter, info.filter_cursor, cell * 2.0)
+            );
+            assert!(view.text_range.start > 0);
+            assert!(!app.commands_owns_ime_text());
+            assert!(!app.search_owns_ime_text());
+        }
+        assert!(app.settings_ime_viewport(40.0, 800.0, 8.0, 16.0).is_none());
+        app.command_palette.open();
+        assert!(!app.settings_owns_ime_text());
+        app.command_palette.close();
+        app.shortcuts_panel.open();
+        assert!(!app.settings_owns_ime_text());
+        app.shortcuts_panel.close_immediately();
+        app.settings_panel.close();
+        app.settings_panel
+            .open_to_section(crate::ui::settings::SettingsSection::Theme);
+        app.settings_panel
+            .build_info(&app.config, &app.shortcut_registry);
+        app.settings_panel.handle_key(
+            crate::ui::settings::SettingsKey::Enter,
+            &app.config,
+            &app.shortcut_registry,
+        );
+        assert!(app.settings_panel.is_dropdown_open());
+        assert!(!app.accepts_ime_text());
+        assert!(app.settings_ime_viewport(800.0, 800.0, 8.0, 16.0).is_none());
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
+        assert!(app.ime.preedit().is_none());
+        app.settings_panel.close();
+        assert!(!app.settings_owns_ime_text());
+    }
 
     #[test]
     fn shortcut_ime_uses_scrolled_filter_geometry_and_recording_blocks_retained_settings() {
