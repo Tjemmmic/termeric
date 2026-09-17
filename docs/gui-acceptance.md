@@ -519,6 +519,11 @@ capture does not produce a review PNG. This distinguishes a client that emitted
 nothing from a terminal that received output but never accepted it; it does not
 diagnose why an external client failed.
 
+For the locally reproduced `img2sixel` success-with-zero-output failure, see
+[graphics client diagnostics](graphics-client-diagnostics.md). It includes an
+optional decoder probe and distinguishes the installed producer/library issue
+from terminal rendering and deferred visual acceptance.
+
 ## What remains manual
 
 Only policy- or perception-dependent checks remain manual: real-compositor
