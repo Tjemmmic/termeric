@@ -16,6 +16,7 @@ from scripts.compare_terminals import (
     build_launch_spec,
     comparison_contract,
     direct_children,
+    font_environment,
     idle_cpu_measurement,
     main,
     parse_resource_status,
@@ -42,6 +43,15 @@ SETTINGS = BenchmarkSettings(
 )
 
 
+def font_observation() -> dict:
+    return {
+        "requested_family": SETTINGS.font_family, "status": "exact", "errors": [],
+        "requested_family_installed": True,
+        "renderer_face": {"status": "not_observed"},
+        "match": {"families": [SETTINGS.font_family], "file": "/fixture/font.ttf", "index": 0, "sha256": "a" * 64},
+    }
+
+
 def sample(
     *,
     columns: int = 100,
@@ -53,6 +63,7 @@ def sample(
     output_lines: int = 8_000,
 ) -> dict:
     return {
+        "font_environment": font_observation(),
         "fixture": {
             "columns": columns,
             "rows": rows,
@@ -79,6 +90,90 @@ def terminal(name: str, run_sample: dict) -> dict:
 
 
 class CrossTerminalBenchmarkTests(unittest.TestCase):
+    def test_font_probe_checks_inventory_and_hashes_exact_face_in_isolated_environment(self):
+        environment = {"XDG_CONFIG_HOME": "/isolated/config", "XDG_CACHE_HOME": "/isolated/cache"}
+        replies = [
+            {"status": "complete", "output": "Other\nDejaVu Sans Mono,Alias"},
+            {"status": "complete", "output": "DejaVu Sans Mono,Alias\n/fixture/font.ttf\n2"},
+        ]
+        with patch("scripts.compare_terminals.command_capture", side_effect=replies) as probe, \
+                patch("scripts.compare_terminals.file_sha256", return_value="a" * 64) as digest:
+            result = font_environment(SETTINGS.font_family, environment)
+        self.assertEqual(result["status"], "exact")
+        self.assertTrue(result["requested_family_installed"])
+        self.assertEqual(result["match"]["index"], 2)
+        self.assertEqual(result["match"]["sha256"], "a" * 64)
+        self.assertEqual(result["renderer_face"], {"status": "not_observed"})
+        self.assertEqual([call.args[0][0] for call in probe.call_args_list], ["fc-list", "fc-match"])
+        self.assertTrue(all(call.args[1] == environment for call in probe.call_args_list))
+        digest.assert_called_once_with("/fixture/font.ttf")
+
+    def test_font_probe_does_not_accept_silent_substitution_or_inventory_alone(self):
+        for inventory, match in [("Noto Sans Mono", "Noto Sans Mono"), (SETTINGS.font_family, "Noto Sans Mono"), ("Other", SETTINGS.font_family)]:
+            with self.subTest(inventory=inventory, match=match), \
+                    patch("scripts.compare_terminals.command_capture", side_effect=[
+                        {"status": "complete", "output": inventory},
+                        {"status": "complete", "output": f"{match}\n/fixture/font.ttf\n0"},
+                    ]), patch("scripts.compare_terminals.file_sha256", return_value="a" * 64):
+                result = font_environment(SETTINGS.font_family, {})
+            self.assertEqual(result["status"], "substituted")
+            self.assertTrue(result["errors"])
+
+    def test_font_probe_failures_are_explicit_and_do_not_prevent_raw_measurements(self):
+        cases = [
+            [{"status": "unavailable"}, {"status": "complete", "output": ""}],
+            [{"status": "failed"}, {"status": "failed"}],
+        ]
+        cases += [[{"status": "complete", "output": SETTINGS.font_family}, {"status": "complete", "output": value}]
+                  for value in ("", "Family\nrelative.ttf\n0", "Family\n/font.ttf\n-1", "Family\n/font.ttf\nnan", "Family\n/font.ttf\n0\nextra")]
+        for replies in cases:
+            with self.subTest(replies=replies), patch("scripts.compare_terminals.command_capture", side_effect=replies):
+                result = font_environment(SETTINGS.font_family, {})
+            self.assertEqual(result["status"], "unavailable")
+            self.assertTrue(result["errors"])
+        for error in (FileNotFoundError("missing"), PermissionError("denied")):
+            with self.subTest(error=error), patch("scripts.compare_terminals.command_capture", side_effect=error):
+                self.assertEqual(font_environment(SETTINGS.font_family, {})["status"], "unavailable")
+        with patch("scripts.compare_terminals.command_capture", side_effect=[
+            {"status": "complete", "output": SETTINGS.font_family},
+            {"status": "complete", "output": f"{SETTINGS.font_family}\n/font.ttf\n0"},
+        ]), patch("scripts.compare_terminals.file_sha256", side_effect=PermissionError("denied")):
+            self.assertEqual(font_environment(SETTINGS.font_family, {})["status"], "unavailable")
+
+    def test_font_patterns_and_empty_names_are_not_misrepresented_as_literal_families(self):
+        for name in ("", " ", "Missing:family=Installed", "One,Two", "Font\\Name", "Font\nName"):
+            with self.subTest(name=name), patch("scripts.compare_terminals.command_capture") as probe:
+                self.assertEqual(font_environment(name, {})["status"], "unavailable")
+                probe.assert_not_called()
+
+    def test_missing_substituted_and_malformed_font_observations_block_all_rankings(self):
+        bad = [None, {}, {**font_observation(), "status": "substituted"},
+               {**font_observation(), "requested_family_installed": 1},
+               {**font_observation(), "requested_family": "Different"},
+               {**font_observation(), "errors": ["failed"]}]
+        bad += [{**font_observation(), "match": {**font_observation()["match"], key: value}}
+                for key, value in (("families", []), ("families", [None]), ("families", ["Other"]),
+                                   ("index", True), ("index", -1), ("sha256", "invalid"), ("file", "relative"))]
+        for observation in bad:
+            with self.subTest(observation=observation):
+                first = sample(); first["font_environment"] = observation
+                report = comparison_contract([terminal("termeric", first), terminal("kitty", sample())], SETTINGS)
+                self.assertTrue(all(not value for value in report["ranking_permitted"].values()))
+        old = sample(); del old["font_environment"]
+        self.assertFalse(comparison_contract([terminal("termeric", old), terminal("kitty", old)], SETTINGS)["comparable"])
+
+    def test_font_fingerprints_are_checked_for_every_sample_without_claiming_renderer_equivalence(self):
+        for key, value in (("sha256", "b" * 64), ("index", 1)):
+            with self.subTest(key=key):
+                first = terminal("termeric", sample())
+                later = sample(); later["font_environment"]["match"][key] = value
+                first["samples"].append(later)
+                report = comparison_contract([first, terminal("kitty", sample())], SETTINGS)
+                self.assertTrue(all(not value for value in report["ranking_permitted"].values()))
+        report = comparison_contract([terminal("termeric", sample()), terminal("kitty", sample())], SETTINGS)
+        self.assertTrue(report["comparable"])
+        self.assertEqual(report["font_control"]["renderer_face_equivalence"], "not_verified")
+
     def test_termeric_calibration_overrides_are_explicit_and_do_not_change_other_adapters(self):
         calibrated = replace(SETTINGS, termeric_font_size=16.0, termeric_line_height=1.3)
         with tempfile.TemporaryDirectory() as temporary:
@@ -143,6 +238,8 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
                     patch("sys.stdout", new_callable=io.StringIO):
                 self.assertEqual(main(), 1)  # Selected executable unavailable, not a false pass.
             report = json.loads(output.read_text())
+            self.assertEqual(report["schema"], 3)
+            self.assertEqual(report["comparison_contract"]["font_control"]["renderer_face_equivalence"], "not_verified")
             self.assertEqual(report["settings"]["font_size"], 12.0)
             self.assertEqual(report["settings"]["termeric_font_size"], 16.0)
             self.assertEqual(report["settings"]["termeric_line_height"], 1.3)
@@ -560,6 +657,7 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
         }
         ready = {**sample()["fixture_ready"], "pid": 124}
         with tempfile.TemporaryDirectory() as temporary, \
+                patch("scripts.compare_terminals.font_environment", return_value={"status": "unavailable", "errors": ["missing font"]}) as fonts, \
                 patch("scripts.compare_terminals.subprocess.Popen") as launch, \
                 patch("scripts.compare_terminals.wait_for_file", side_effect=[ready, sample()["fixture"]]), \
                 patch("scripts.compare_terminals.find_window", return_value=("42", 123, 10.5)), \
@@ -575,6 +673,8 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
                 1024, 20.0, 1.0, {"DISPLAY": ":99"},
             )
         self.assertEqual(result["startup_to_visible_ms"], 500.0)
+        self.assertEqual(result["font_environment"]["status"], "unavailable")
+        self.assertIn("xdg-config", fonts.call_args.args[1]["XDG_CONFIG_HOME"])
         self.assertEqual(result["fixture"]["pty_response_ms"], 1.0)
         self.assertEqual(result["resources"]["rss_kib"], 100)
         self.assertIsNone(result["resources"]["idle_cpu_percent_one_core"])
@@ -592,6 +692,7 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
         }
         ready = {**sample()["fixture_ready"], "pid": 124}
         with tempfile.TemporaryDirectory() as temporary, \
+                patch("scripts.compare_terminals.font_environment", return_value=font_observation()), \
                 patch("scripts.compare_terminals.subprocess.Popen") as launch, \
                 patch("scripts.compare_terminals.subprocess.run", side_effect=subprocess.TimeoutExpired(["xdotool"], 5)), \
                 patch("scripts.compare_terminals.wait_for_file", side_effect=[ready, sample()["fixture"]]), \

@@ -158,6 +158,78 @@ def command_capture(command: list[str], environment: dict[str, str]) -> dict[str
     }
 
 
+def font_environment(family: str, environment: dict[str, str]) -> dict[str, Any]:
+    """Observe Fontconfig controls, not the face a terminal renderer selected.
+
+    Run outside the timed interval, using the participant's isolated environment.
+    Query the inventory separately: fc-match alone silently substitutes fonts.
+    """
+    result: dict[str, Any] = {
+        "requested_family": family, "status": "unavailable", "errors": [],
+        "requested_family_installed": False,
+        "renderer_face": {"status": "not_observed"},
+    }
+    requested = family.strip()
+    if not requested or any(ord(char) < 32 or char in ":,\\" for char in requested):
+        result["errors"].append("font probe requires a literal named family, not a Fontconfig pattern")
+        return result
+    try:
+        inventory = command_capture(["fc-list", "--format=%{family}\\n"], environment)
+        match = command_capture(["fc-match", "--format=%{family}\\n%{file}\\n%{index}\\n", requested], environment)
+        result.update({"inventory_probe": inventory, "match_probe": match})
+        if inventory.get("status") != "complete" or match.get("status") != "complete":
+            raise ValueError("Fontconfig inventory or match probe failed/unavailable")
+        installed = {
+            alias.strip().casefold()
+            for line in inventory["output"].splitlines()
+            for alias in line.split(",") if alias.strip()
+        }
+        result["requested_family_installed"] = requested.casefold() in installed
+        fields = match["output"].splitlines()
+        if len(fields) != 3 or not re.fullmatch(r"[0-9]+", fields[2]) or not Path(fields[1]).is_absolute():
+            raise ValueError("malformed Fontconfig face observation")
+        families = [name.strip() for name in fields[0].split(",") if name.strip()]
+        if not families:
+            raise ValueError("Fontconfig face has no family")
+        result["match"] = {
+            "families": families, "file": fields[1], "index": int(fields[2]),
+            "sha256": file_sha256(fields[1]),
+        }
+        if not result["requested_family_installed"]:
+            result["errors"].append("requested font family is not installed")
+        if requested.casefold() not in {name.casefold() for name in families}:
+            result["errors"].append("Fontconfig substituted a different family")
+        result["status"] = "substituted" if result["errors"] else "exact"
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        result["errors"].append(f"font observation unavailable: {error}")
+    return result
+
+
+def font_control_identity(observation: Any, family: str) -> tuple[str, int] | None:
+    """Fail closed for old, partial, malformed, or substituted observations."""
+    if not isinstance(observation, dict) or observation.get("status") != "exact":
+        return None
+    if observation.get("requested_family") != family or observation.get("requested_family_installed") is not True or observation.get("errors") != []:
+        return None
+    match = observation.get("match")
+    if not isinstance(match, dict):
+        return None
+    families = match.get("families")
+    digest = match.get("sha256")
+    index = match.get("index")
+    path = match.get("file")
+    if (
+        not isinstance(families, list) or not families
+        or not all(isinstance(name, str) and name.strip() for name in families)
+        or family.strip().casefold() not in {name.casefold() for name in families}
+        or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or type(index) is not int or index < 0
+        or not isinstance(path, str) or not Path(path).is_absolute()
+    ):
+        return None
+    return digest, index
+
+
 def cpu_model() -> str:
     try:
         for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
@@ -779,8 +851,14 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
     pixel_reasons = []
     grid_reasons = []
     retention_reasons = []
+    font_identities = set()
     for terminal in completed:
         for sample in terminal["samples"]:
+            font_identity = font_control_identity(sample.get("font_environment"), settings.font_family)
+            if font_identity is None:
+                common_reasons.append(f"{terminal['terminal']}: missing, invalid, unavailable, or substituted font control")
+            else:
+                font_identities.add(font_identity)
             grid = (sample["fixture"]["columns"], sample["fixture"]["rows"])
             observed_grids.add(grid)
             ready_grid = (
@@ -813,6 +891,8 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
                 )
     if len(observed_grids) > 1:
         grid_reasons.append("observed PTY grids differ across samples")
+    if len(font_identities) > 1:
+        common_reasons.append("Fontconfig face fingerprints differ across samples")
     startup_reasons = list(common_reasons)
     if len(initial_grids) > 1:
         startup_reasons.append("initial PTY grids differ across samples")
@@ -867,6 +947,11 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
         "initial_grids": [list(value) for value in sorted(initial_grids)],
         "observed_grids": [list(value) for value in sorted(observed_grids)],
         "observed_window_pixels": [list(value) for value in sorted(observed_pixels, key=str)],
+        "font_control": {
+            "boundary": "installed named family and matching Fontconfig face fingerprints; not terminal-renderer face verification",
+            "observed_faces": [list(value) for value in sorted(font_identities)],
+            "renderer_face_equivalence": "not_verified",
+        },
     }
 
 
@@ -886,6 +971,7 @@ def run_sample(
     spec = build_launch_spec(
         name, executable, run_dir, title, fixture, settings, inherited_environment
     )
+    font_observation = font_environment(settings.font_family, spec.environment)
     stdout = (run_dir / "launcher.stdout").open("wb")
     stderr = (run_dir / "launcher.stderr").open("wb")
     started = time.monotonic()
@@ -935,6 +1021,7 @@ def run_sample(
         clock_ticks = os.sysconf("SC_CLK_TCK")
         idle_cpu, cpu_errors = idle_cpu_measurement(before, after, elapsed, clock_ticks)
         sample = {
+            "font_environment": font_observation,
             "startup_to_visible_ms": (visible_at - started) * 1000.0,
             "fixture": fixture_result,
             "fixture_ready": ready,
@@ -1150,7 +1237,7 @@ def main() -> int:
 
     contract = comparison_contract(terminals, settings)
     report = {
-        "schema": 2,
+        "schema": 3,
         "run_id": run_id,
         "run_artifacts": str(run_root),
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1185,6 +1272,7 @@ def main() -> int:
             "git_status": command_capture(["git", "status", "--porcelain"], environment),
         },
         "metric_boundaries": {
+            "font_environment": "pre-launch Fontconfig inventory, resolved face file SHA-256 and face index in each participant's isolated environment; probes may warm font caches and do not observe terminal-renderer face selection",
             "startup_to_visible_ms": "process launch through a visible X11 window containing the unique OSC 2 title marker; includes child startup and title parsing",
             "pty_response_ms": "child begins exact byte stream through receipt of CSI 6 n response; excludes proof of compositor presentation",
             "rss_kib": "sum of completely observed terminal process-tree RSS after workload, excluding the common fixture; incomplete observations are unavailable, never zero or partial totals",
@@ -1197,7 +1285,7 @@ def main() -> int:
     output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote cross-terminal evidence: {output}")
     if contract["comparable"]:
-        print("PASS: selected results satisfy the exact comparison contract")
+        print("PASS: selected results satisfy the recorded comparison controls; renderer font-face equivalence remains unverified")
     else:
         for metric, status in contract["metrics"].items():
             if status["comparable"]:

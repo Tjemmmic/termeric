@@ -461,7 +461,9 @@ xvfb-run -a -s "-screen 0 1280x900x24" \
 ```
 
 Only name terminals that are intentionally participating. The runner requires
-Linux `/proc`, X11, and `xdotool`. It uses a fresh process and isolated XDG
+Linux `/proc`, X11, and `xdotool`; ranking additionally requires working
+Fontconfig `fc-list`/`fc-match` probes and a literal installed font family.
+It uses a fresh process and isolated XDG
 configuration per sample, requests the same font family, numeric size, grid,
 opacity, padding, retention controls, warmups, and byte stream, and records
 every executable and version plus its SHA-256 digest. The artifact records each
@@ -477,6 +479,29 @@ controls: kitty sessions are disabled, WezTerm uses
 mode, and Konsole uses `--separate --builtin-profile`. No personal terminal
 configuration participates.
 
+Schema 3 adds a per-sample `font_environment` observation, collected in that
+participant's isolated XDG environment before starting the process/timer. It
+records the requested family's presence in the installed-family inventory,
+Fontconfig's resolved family aliases/file/face index, and the font file's
+SHA-256. `fc-match` alone is insufficient because it silently substitutes
+missing families. Missing tools, probe failures, unreadable files, malformed
+records, substitutions, or inconsistent face fingerprints block **all four
+rankings**, without discarding otherwise valid raw timing/resource samples.
+A bad later sample cannot be hidden behind the first good sample. Generic
+aliases or Fontconfig patterns are not proof of a literal installed family.
+Schema-1/2 samples lack this evidence and fail the current font-control gate;
+historical contract results below describe the runner version used then.
+
+The gate establishes a shared installed/Fontconfig-resolved face, **not proof
+that every terminal renderer chose that face**. Every sample explicitly marks
+its renderer face `not_observed`; the comparison reports renderer-face
+equivalence `not_verified`, even when other controls pass. Renderer-selected
+faces and fallback glyphs still need independent evidence before claiming a
+font-equivalent ranking. The pre-launch probes may warm font caches: new
+startup timings must not be treated as directly interchangeable with older
+runs lacking those probes. No package is installed or user font configuration
+changed by the runner.
+
 For pixel/grid calibration, `--termeric-font-size` overrides only Termeric's
 logical-pixel size (8–72); the other adapters keep `--font-size` in their
 recorded units. `--termeric-line-height` sets Termeric's font-size multiplier
@@ -485,19 +510,21 @@ the requested values. Without overrides, the historical common numeric size
 and Termeric line-height multiplier 1.0 are unchanged. There is no implicit DPI
 conversion or automatic claim that glyph metrics match.
 
-On the chosen isolated X11 display, the locally verified 100×30 / 901×601
-Termeric/kitty calibration recipe is:
+On the chosen isolated X11 display, this is a starting point based on the
+previously calibrated 100×30 / 901×601 geometry, now explicitly requesting
+the installed Noto Sans Mono family:
 
 ```bash
 python3 scripts/compare_terminals.py \
   --terminal termeric --terminal kitty \
+  --font-family 'Noto Sans Mono' \
   --font-size 11 --termeric-font-size 14.67 --termeric-line-height 1.3 \
   --window-width 901 --window-height 601 \
   --samples 1 --warmups 0 \
   --output target/terminal-comparison/calibration.json
 ```
 
-These values are verified locally, not a portable preset. Inspect the
+These values are not a portable preset. Inspect the font observations and the
 actual initial/final grid and window pixels, retain unsuccessful calibration
 records, then collect full warmup/repeated samples with the chosen settings.
 Overrides never bypass the comparison contract. Even matching grid/window
@@ -869,7 +896,8 @@ The explicit calibration controls now permit a locally matched resource
 comparison, without weakening any metric guard. The first one-sample attempt
 used Termeric size 16/line height 1.3 and kitty 12 points in 1001×661 windows:
 Termeric had 29 rows while kitty had 30, so all rankings correctly failed.
-The second attempt used the recipe above and matched both initial/final 100×30
+The second attempt used the numeric geometry recipe above, still requesting
+the historical default DejaVu Sans Mono, and matched both initial/final 100×30
 grids and 901×601 native windows. Both attempts are retained as calibration,
 not mixed into the measured sample distributions.
 

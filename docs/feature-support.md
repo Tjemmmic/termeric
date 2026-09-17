@@ -754,6 +754,16 @@ fully controlled font-equivalent rankings. Font-resolution controls and CPU
 attribution remain open; see
 [the diagnostic evidence](performance.md#post-workload-cpu-diagnostic-at-c9dadca).
 
+The schema-3 comparison runner now records each isolated sample's installed
+font-family inventory check and Fontconfig-resolved face file/index/fingerprint.
+Missing, substituted, unreadable, malformed, or inconsistent font observations
+block every ranking; raw measurements remain available. Schema-1/2 history
+does not satisfy this new gate. A passing Fontconfig control still explicitly
+leaves actual terminal-renderer face equivalence unverified, rather than
+claiming the probes observe renderer selection. The probes run before timing
+and may warm font caches, so new startup results are not directly comparable
+with the older methodology.
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the
