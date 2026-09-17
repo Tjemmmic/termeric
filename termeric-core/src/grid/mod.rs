@@ -337,16 +337,26 @@ impl Grid {
     /// normal BCE blank so a later cell can never resolve into stale content.
     pub(crate) fn repair_multicells(&mut self, blank: &Cell) {
         let mut valid = HashSet::new();
+        let mut has_descriptors = false;
         for row in 0..self.rows {
-            for col in 0..self.cols {
-                if self
-                    .cell(row, col)
-                    .is_some_and(|cell| cell.multicell.is_leader())
+            let Some(cells) = self.row(row) else {
+                continue;
+            };
+            for (col, cell) in cells.iter_enumerated().take(self.cols) {
+                has_descriptors |= cell.multicell.is_present();
+                if cell.multicell.is_leader()
                     && let Some(region) = self.multicell_region_at(row, col)
                 {
                     valid.insert((region.top, region.left));
                 }
             }
+        }
+        // Ordinary scrolling calls this after every line. If the first pass
+        // found no descriptors, there is nothing to repair: avoid a second
+        // full-screen scan. Do not use `valid.is_empty()` here, since orphaned
+        // or malformed descriptors must still be erased even without a leader.
+        if !has_descriptors {
+            return;
         }
         for row in 0..self.rows {
             for col in 0..self.cols {
@@ -674,6 +684,121 @@ fn is_bare_prompt(trimmed: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multicell_repair_leaves_ordinary_rows_clean_and_unchanged() {
+        let mut grid = Grid::new(8, 4);
+        for row in 0..4 {
+            grid.cell_mut(row, 0).unwrap().set_grapheme("e\u{301}");
+            grid.cell_mut(row, 1).unwrap().set_char('界');
+            grid.cell_mut(row, 1)
+                .unwrap()
+                .flags
+                .insert(CellFlags::WIDE_CHAR);
+            grid.cell_mut(row, 2)
+                .unwrap()
+                .flags
+                .insert(CellFlags::WIDE_CHAR_SPACER);
+            grid.row_mut(row).unwrap().set_clean();
+        }
+        let before: Vec<_> = (0..4)
+            .map(|row| grid.row(row).unwrap().iter().cloned().collect::<Vec<_>>())
+            .collect();
+        grid.repair_multicells(&Cell::default());
+        for (row, cells) in before.iter().enumerate() {
+            assert!(!grid.row(row).unwrap().is_dirty());
+            assert_eq!(
+                grid.row(row).unwrap().iter().collect::<Vec<_>>(),
+                cells.iter().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn multicell_repair_matches_two_pass_reference_for_every_block_subset() {
+        // Frozen pre-optimization algorithm. Every subset of a 4x2 block
+        // includes empty grids, intact blocks, missing leaders, and holes.
+        fn reference(grid: &mut Grid, blank: &Cell) {
+            let mut valid = HashSet::new();
+            for row in 0..grid.rows {
+                for col in 0..grid.cols {
+                    if grid
+                        .cell(row, col)
+                        .is_some_and(|cell| cell.multicell.is_leader())
+                        && let Some(region) = grid.multicell_region_at(row, col)
+                    {
+                        valid.insert((region.top, region.left));
+                    }
+                }
+            }
+            for row in 0..grid.rows {
+                for col in 0..grid.cols {
+                    let keep = grid.cell(row, col).is_none_or(|cell| {
+                        !cell.multicell.is_present()
+                            || row
+                                .checked_sub(cell.multicell.relative_row())
+                                .zip(col.checked_sub(cell.multicell.relative_col()))
+                                .is_some_and(|anchor| valid.contains(&anchor))
+                    });
+                    if !keep && let Some(cell) = grid.cell_mut(row, col) {
+                        *cell = blank.clone();
+                        cell.flags.insert(CellFlags::DIRTY);
+                    }
+                }
+            }
+        }
+        let descriptor = MultiCell::new(
+            2,
+            2,
+            0,
+            0,
+            MultiCellAlignment::Start,
+            MultiCellAlignment::Start,
+            0,
+            0,
+        )
+        .unwrap();
+        let blank = Cell {
+            bg: Color::rgb(17, 31, 59),
+            ..Cell::default()
+        };
+        for mask in 0..256 {
+            for empty_leader in [false, true] {
+                let mut actual = Grid::new(8, 4);
+                let mut expected = Grid::new(8, 4);
+                for grid in [&mut actual, &mut expected] {
+                    grid.cell_mut(0, 0).unwrap().set_char('x');
+                    for offset in 0..8 {
+                        if mask & (1 << offset) != 0 {
+                            let cell = grid.cell_mut(1 + offset / 4, 2 + offset % 4).unwrap();
+                            if offset == 0 && !empty_leader {
+                                cell.set_grapheme("large");
+                            }
+                            cell.multicell = descriptor.at(offset % 4, offset / 4).unwrap();
+                        }
+                    }
+                    for row in 0..4 {
+                        grid.row_mut(row).unwrap().set_clean();
+                    }
+                }
+                actual.repair_multicells(&blank);
+                reference(&mut expected, &blank);
+                for row in 0..4 {
+                    assert_eq!(
+                        actual.row(row).unwrap().is_dirty(),
+                        expected.row(row).unwrap().is_dirty()
+                    );
+                    for col in 0..8 {
+                        assert_eq!(
+                            actual.cell(row, col),
+                            expected.cell(row, col),
+                            "mask={mask} empty_leader={empty_leader} row={row} col={col}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_grid_creation() {

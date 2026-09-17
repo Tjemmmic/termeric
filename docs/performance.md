@@ -635,6 +635,45 @@ full local artifact is
 release evidence should preserve an equivalent artifact from a clean candidate
 and intentionally selected terminal versions.
 
+### Core replay follow-up: multicell repair
+
+Replaying the comparison fixture directly through the release core established
+that parser/grid work alone takes substantial time: it does not require PTY
+transport or a renderer to reproduce a roughly 63–66 ms workload. Inspection
+found that every scrolling line called multicell repair, which scanned the
+entire active grid twice even when no OSC 66 descriptors existed. Repair now
+walks each row directly on the first pass and skips the second only when no
+descriptor exists. An empty set of valid leaders is deliberately insufficient:
+orphan and malformed descriptors must still receive the original BCE cleanup.
+
+A local paired replay compared clean `4cacd7d` with this change using the exact
+1 MiB Python comparison fixture, a 100×30 core, and 10,000-line/64 MiB retention.
+Three process pairs alternated implementation order; each process discarded
+one warmup round and retained five rounds with rotated chunk order. Medians
+over 15 samples per implementation/chunk size, in milliseconds:
+
+| Input chunk size | Before | After |
+| --- | ---: | ---: |
+| 4 KiB | 66.86 | 63.27 |
+| 64 KiB | 67.78 | 62.85 |
+| Entire 1 MiB payload | 68.79 | 62.03 |
+
+Construction, file reads, and destruction are outside timing; parsing the final
+CSI-6n query and draining replies are inside. Every replay produced the same
+cursor, 8,313 retained rows, and reply. Separate regressions compare all cells
+and dirty-row state against the frozen two-pass repair for 512 block-subset /
+leader-content cases, and preserve clean ordinary Unicode/wide-cell rows.
+This is a roughly 5–10% local core-workload improvement, not an end-to-end PTY,
+memory, or cross-terminal gain. It does not explain the entire kitty gap.
+
+The local archive
+`target/terminal-comparison/2026-09-17-multicell-repair-replay.tar.gz` retains
+the diagnostic source/executables, payload, raw logs, summary, exact source
+patch, Cargo artifact paths, and method/hash record. Its SHA-256 is
+`b78a3b9d42579fc735b728e185dd642188968a85d1c6736e3e417c549bd64365`.
+It is an opt-in local diagnostic, not a new metric in the versioned release
+benchmark contract or a published release artifact.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic
