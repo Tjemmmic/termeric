@@ -1173,7 +1173,32 @@ mod tests {
             app.session_panel.build_info().rename_text,
             Some(format!("{}🫚", "界".repeat(127)))
         );
-        app.apply_session_panel_action(crate::session::panel::SessionPanelAction::CancelRename);
+        use winit::keyboard::{Key, NamedKey};
+        assert!(
+            app.session_panel
+                .accessibility_set_rename("a界e\u{301}👩\u{200d}💻z")
+        );
+        for key in [
+            NamedKey::Home,
+            NamedKey::ArrowRight,
+            NamedKey::Delete,
+            NamedKey::ArrowRight,
+        ] {
+            assert!(app.handle_session_rename_key(&Key::Named(key)));
+        }
+        assert!(app.handle_session_rename_key(&Key::Character("Q".into())));
+        assert_eq!(
+            app.session_panel.build_info().rename_text.as_deref(),
+            Some("ae\u{301}Q👩\u{200d}💻z")
+        );
+        app.modifiers = ModifiersState::CONTROL;
+        assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Delete)));
+        assert_eq!(
+            app.session_panel.build_info().rename_text.as_deref(),
+            Some("ae\u{301}Qz")
+        );
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Escape)));
         assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
         app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
         app.write_to_pty(b"Z");

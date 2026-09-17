@@ -401,8 +401,15 @@ or delete a persisted workspace or snapshot.
 Workspace rename accepts complete keyboard text and IME commits atomically at
 the existing 128-scalar (at most 512-byte) limit. New input rejects controls and
 Unicode line/paragraph separators rather than stripping them or inserting a
-prefix. Backspace removes a whole extended grapheme, including combining marks,
-ZWJ emoji, and flags. Semantic replacement follows the same input limits, moves
+prefix. Left/Right move by whole extended graphemes, Home/End move to the draft
+edges, and Backspace/Delete remove whole graphemes at the caret, including
+combining marks, ZWJ emoji, and flags. Ctrl+Left/Right and
+Ctrl+Backspace/Delete navigate or delete Unicode word-boundary segments, matching
+the other single-line editors. Plain Enter submits and Escape cancels; modified
+Enter/Escape and unsupported modified edits are consumed without changing the
+draft or composition. Shift text and explicitly identified AltGraph text remain
+typeable. Accepted edits retire preedit and request redraw, including caret-only
+movement. Semantic replacement follows the same input limits, moves
 the caret to the end, and clears preedit only on acceptance; rejection preserves
 the draft and composition. Empty drafts are editable, but the unchanged storage
 validator still rejects empty/blank names on explicit Save. Starting, cancelling,

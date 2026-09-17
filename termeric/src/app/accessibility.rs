@@ -7616,6 +7616,32 @@ mod tests {
             app.session_panel.build_info().rename_text.as_deref(),
             Some("New roots 🫚")
         );
+        // Keyboard caret moves are reflected as scalar positions in the
+        // semantic tree, even though the editor tracks UTF-8 byte offsets.
+        assert!(
+            app.session_panel
+                .accessibility_set_rename("e\u{301}👩\u{200d}💻z")
+        );
+        for (key, expected_index) in [
+            (winit::keyboard::NamedKey::Home, 0),
+            (winit::keyboard::NamedKey::ArrowRight, 2),
+            (winit::keyboard::NamedKey::ArrowRight, 5),
+            (winit::keyboard::NamedKey::ArrowLeft, 2),
+        ] {
+            assert!(app.handle_session_rename_key(&winit::keyboard::Key::Named(key)));
+            let snapshot = app.accessibility_snapshot();
+            assert_eq!(snapshot.focus, SESSION_RENAME_INPUT);
+            let node = &snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SESSION_RENAME_INPUT)
+                .unwrap()
+                .1;
+            let selection = node.text_selection().unwrap();
+            assert_eq!(selection.anchor.character_index, expected_index);
+            assert_eq!(selection.focus.character_index, expected_index);
+            assert_eq!(node.value(), Some("e\u{301}👩\u{200d}💻z"));
+        }
         for value in ["", "e\u{301}👩\u{200d}💻", &"🫚".repeat(128)] {
             app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
             app.handle_accessibility_action(ActionRequest {

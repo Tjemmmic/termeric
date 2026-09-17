@@ -1038,40 +1038,21 @@ impl ApplicationHandler<AppEvent> for App {
                     if event.state == winit::event::ElementState::Pressed {
                         use crate::session::panel::SessionPanelKey;
                         use winit::keyboard::{Key, NamedKey};
-                        match &event.logical_key {
-                            Key::Named(NamedKey::Backspace) if self.session_panel.is_renaming() => {
-                                self.session_panel.rename_backspace();
-                                self.ime.clear_preedit();
-                            }
-                            Key::Named(NamedKey::Space) if self.session_panel.is_renaming() => {
-                                if self.session_panel.insert_rename_text(" ") {
-                                    self.ime.clear_preedit();
-                                }
-                            }
-                            Key::Character(text)
-                                if self.session_panel.is_renaming()
-                                    && !self.modifiers.control_key()
-                                    && !self.modifiers.alt_key() =>
-                            {
-                                if self.session_panel.insert_rename_text(text) {
-                                    self.ime.clear_preedit();
-                                }
-                            }
-                            key => {
-                                let panel_key = match key {
-                                    Key::Named(NamedKey::Escape) => Some(SessionPanelKey::Escape),
-                                    Key::Named(NamedKey::ArrowUp) => Some(SessionPanelKey::Up),
-                                    Key::Named(NamedKey::ArrowDown) => Some(SessionPanelKey::Down),
-                                    Key::Named(NamedKey::Enter) => Some(SessionPanelKey::Enter),
-                                    Key::Named(NamedKey::Delete) => Some(SessionPanelKey::Delete),
-                                    Key::Named(NamedKey::F2) => Some(SessionPanelKey::Rename),
-                                    _ => None,
-                                };
-                                if let Some(key) = panel_key {
-                                    let action = self.session_panel.handle_key(key);
-                                    self.apply_session_panel_action(action);
-                                }
-                            }
+                        if self.handle_session_rename_key(&event.logical_key) {
+                            return;
+                        }
+                        let panel_key = match &event.logical_key {
+                            Key::Named(NamedKey::Escape) => Some(SessionPanelKey::Escape),
+                            Key::Named(NamedKey::ArrowUp) => Some(SessionPanelKey::Up),
+                            Key::Named(NamedKey::ArrowDown) => Some(SessionPanelKey::Down),
+                            Key::Named(NamedKey::Enter) => Some(SessionPanelKey::Enter),
+                            Key::Named(NamedKey::Delete) => Some(SessionPanelKey::Delete),
+                            Key::Named(NamedKey::F2) => Some(SessionPanelKey::Rename),
+                            _ => None,
+                        };
+                        if let Some(key) = panel_key {
+                            let action = self.session_panel.handle_key(key);
+                            self.apply_session_panel_action(action);
                         }
                         if let Some(window) = &self.window {
                             window.request_redraw();

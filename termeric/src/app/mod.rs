@@ -25,6 +25,7 @@ mod renderer_recovery;
 mod runtime_plugins;
 mod search_input;
 mod session_export;
+mod session_input;
 mod sessions;
 mod settings_input;
 mod shortcuts_input;

@@ -492,9 +492,9 @@ impl SessionPanel {
         true
     }
 
-    pub fn rename_backspace(&mut self) {
+    pub fn rename_edit(&mut self, edit: TextInputEdit) {
         if self.is_renaming() {
-            self.rename_input.edit_grapheme(TextInputEdit::Backspace);
+            self.rename_input.edit_grapheme(edit);
         }
     }
 
@@ -775,7 +775,7 @@ mod tests {
         assert!(crate::workspace::validate_workspace_name("").is_err());
         assert!(panel.insert_rename_text("e\u{301}👩\u{200d}💻🇺🇸"));
         for expected in ["e\u{301}👩\u{200d}💻", "e\u{301}", ""] {
-            panel.rename_backspace();
+            panel.rename_edit(TextInputEdit::Backspace);
             assert_eq!(panel.build_info().rename_text.as_deref(), Some(expected));
         }
         assert!(panel.accessibility_set_rename(&"🫚".repeat(127)));
