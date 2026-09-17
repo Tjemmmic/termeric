@@ -244,7 +244,7 @@ pub struct AccessibilityConfig {
 }
 
 /// A user-defined custom command (e.g. SSH into a box)
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct CustomCommand {
     /// Display name (e.g. "SSH Production")
     pub name: String,

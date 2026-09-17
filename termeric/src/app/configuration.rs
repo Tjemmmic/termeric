@@ -407,6 +407,16 @@ impl App {
         Theme::resolve(&config.theme.name, config.theme.path.as_deref())
             .map_err(|error| format!("theme rejected: {error:#}"))?;
         let keyboard_type_changed = config.keyboard.xterm_type != self.config.keyboard.xterm_type;
+        if config.commands != self.config.commands {
+            // Revoke ambiguous row authority before replacing the inventory or
+            // accepting any queued keyboard/assistive actions for the old list.
+            let retained = crate::ui::commands::navigation::retained_command_keys(
+                &self.config.commands,
+                &config.commands,
+            );
+            self.commands_panel.retain_browse_targets(&retained);
+            self.retain_commands_accessibility_rows(&retained);
+        }
         self.config = config;
         self.apply_config_side_effects();
         if keyboard_type_changed && let Some(tabs) = &mut self.tabs {

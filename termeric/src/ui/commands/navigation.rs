@@ -1,6 +1,9 @@
 //! Stable command identities and keyboard/assistive browse focus.
 
 use crate::config::CustomCommand;
+use std::collections::{HashMap, HashSet};
+
+type CommandTuple<'a> = (&'a str, &'a str, Option<&'a str>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CommandKey {
@@ -11,6 +14,10 @@ pub struct CommandKey {
 }
 
 impl CommandKey {
+    fn tuple(&self) -> CommandTuple<'_> {
+        (&self.name, &self.command, self.alias.as_deref())
+    }
+
     fn matches(&self, command: &CustomCommand) -> bool {
         self.name == command.name && self.command == command.command && self.alias == command.alias
     }
@@ -29,6 +36,34 @@ impl CommandKey {
             .count();
         Some(key)
     }
+}
+
+/// Preserve exact command identities across reorder/unrelated changes, but not
+/// across a changed duplicate count: occurrence zero might now be a different
+/// identical entry. Count borrowed tuples in linear passes, only on replacement.
+pub fn retained_command_keys(
+    before: &[CustomCommand],
+    after: &[CustomCommand],
+) -> HashSet<CommandKey> {
+    fn counts(commands: &[CustomCommand]) -> HashMap<CommandTuple<'_>, usize> {
+        let mut counts = HashMap::new();
+        for command in commands {
+            *counts
+                .entry((
+                    command.name.as_str(),
+                    command.command.as_str(),
+                    command.alias.as_deref(),
+                ))
+                .or_insert(0) += 1;
+        }
+        counts
+    }
+    let old_counts = counts(before);
+    let new_counts = counts(after);
+    command_keys(before)
+        .into_iter()
+        .filter(|key| old_counts.get(&key.tuple()) == new_counts.get(&key.tuple()))
+        .collect()
 }
 
 pub fn command_keys(commands: &[CustomCommand]) -> Vec<CommandKey> {
@@ -101,6 +136,13 @@ pub(super) struct CommandNavigation {
 }
 
 impl CommandNavigation {
+    pub fn retain(&mut self, keys: &HashSet<CommandKey>) {
+        if matches!(&self.target, StoredControl::Run(key) | StoredControl::Delete(key) if !keys.contains(key))
+        {
+            self.target = StoredControl::New;
+        }
+    }
+
     pub fn resolve(&self, commands: &[CustomCommand]) -> Option<CommandControl> {
         Some(match &self.target {
             StoredControl::New => CommandControl::New,
@@ -186,6 +228,40 @@ mod tests {
             command: "inert".into(),
             alias: None,
         }
+    }
+
+    #[test]
+    fn reload_retention_preserves_reorders_but_revokes_changed_multiplicities_and_values() {
+        let before = vec![command("same"), command("same"), command("unique")];
+        let keys = command_keys(&before);
+        let reordered = vec![command("unique"), command("same"), command("same")];
+        let retained = retained_command_keys(&before, &reordered);
+        assert_eq!(retained.len(), 3);
+        let mut navigation = CommandNavigation::default();
+        assert!(navigation.focus(CommandControl::Run(2), &before));
+        navigation.retain(&retained);
+        assert_eq!(navigation.resolve(&reordered), Some(CommandControl::Run(0)));
+        for count in [0, 1, 3] {
+            let mut after = vec![command("same"); count];
+            after.push(command("unique"));
+            let retained = retained_command_keys(&before, &after);
+            assert_eq!(retained, HashSet::from([keys[2].clone()]));
+            assert!(navigation.focus(CommandControl::Delete(0), &before));
+            navigation.retain(&retained);
+            assert_eq!(navigation.resolve(&after), Some(CommandControl::New));
+        }
+        for field in ["name", "command", "alias"] {
+            let mut after = before.clone();
+            match field {
+                "name" => after[2].name = "changed".into(),
+                "command" => after[2].command = "changed".into(),
+                _ => after[2].alias = Some("changed".into()),
+            }
+            let retained = retained_command_keys(&before, &after);
+            assert_eq!(retained, HashSet::from([keys[0].clone(), keys[1].clone()]));
+        }
+        let unique = vec![command("same")];
+        assert!(retained_command_keys(&unique, &before).is_empty());
     }
 
     #[test]

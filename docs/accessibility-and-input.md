@@ -373,9 +373,19 @@ browse mode selects New, while an open form retains its draft and active field.
 Deletion immediately retires all published command-row action IDs, so queued
 Run/Delete/Focus requests cannot target a duplicate that shifts into the deleted
 occurrence; the next semantic frame allocates fresh row IDs. Fixed form/footer
-IDs remain available. This is the explicit Delete lifecycle, not a claim about
-arbitrary external configuration replacement. Pointer hover is independent of
-this focus. Model, geometry, modifier, and semantic
+IDs remain available. Validated configuration replacement separately preserves
+exact command tuples whose duplicate counts are unchanged, including reordered
+rows. Changed/removed values or changed duplicate counts retire the affected
+Run/Delete/Focus IDs before queued actions or the next semantic frame can use
+them; ambiguous browse focus moves to New, while open form text/caret remain.
+Unrelated command identities and fixed form/footer controls remain stable.
+Invalid configuration is rejected before this reconciliation. Linear borrowed-
+tuple counts run only when the command inventory changes, not on every frame.
+Pure model and headless replacement tests cover multiplicity changes, exact
+name/command/alias identity, stale actions before/after rebuilding, preserved
+focus/IDs, retained drafts, no-op reload, and rejected configuration. These
+reload tests neither persist commands nor execute them. Pointer hover is
+independent of this focus. Model, geometry, modifier, and semantic
 transition tests pass; raw-PTY tests prove navigation isolation and exact Run
 delivery to an inert byte reader (not a command interpreter). Explicit Run
 uses the selected text without another saved-command name/alias expansion;

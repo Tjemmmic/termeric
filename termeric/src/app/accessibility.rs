@@ -2080,6 +2080,32 @@ impl App {
         self.accessibility.commands_targets.clear();
     }
 
+    pub(super) fn retain_commands_accessibility_rows(
+        &mut self,
+        keys: &HashSet<CustomCommandSemanticKey>,
+    ) {
+        let retained = |target: &CommandsSemanticTarget| {
+            let (CommandsSemanticTarget::Group(key)
+            | CommandsSemanticTarget::Run(key)
+            | CommandsSemanticTarget::Delete(key)) = target;
+            keys.contains(key)
+        };
+        if self.accessibility.focus_override.is_some_and(|id| {
+            self.accessibility
+                .commands_targets
+                .get(&id)
+                .is_some_and(|target| !retained(target))
+        }) {
+            self.accessibility.focus_override = None;
+        }
+        self.accessibility
+            .commands_nodes
+            .retain(|target, _| retained(target));
+        self.accessibility
+            .commands_targets
+            .retain(|_, target| retained(target));
+    }
+
     fn handle_commands_accessibility_action(&mut self, request: ActionRequest) {
         use crate::ui::commands::panel::CommandsPanelAction;
 
@@ -7455,6 +7481,169 @@ mod tests {
             assert!(app.commands_panel.is_open());
             assert_eq!(app.config.commands.len(), remaining);
         }
+    }
+
+    #[test]
+    fn command_reload_retires_ambiguous_duplicates_before_queued_actions() {
+        use winit::keyboard::{Key, NamedKey};
+        for editing in [false, true] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            let duplicate = crate::config::CustomCommand {
+                name: "same".into(),
+                command: "inert: never run".into(),
+                alias: None,
+            };
+            app.config.commands = vec![duplicate.clone(), duplicate];
+            app.commands_panel.set_reduced_motion(true);
+            app.commands_panel.toggle();
+            app.accessibility_snapshot();
+            let key = custom_command_keys(&app.config.commands).remove(0);
+            let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key.clone())];
+            let delete = app.accessibility.commands_nodes[&CommandsSemanticTarget::Delete(key)];
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: run,
+                data: None,
+            });
+            if editing {
+                app.commands_panel.start_add();
+                app.commands_panel.form_name.replace("retained");
+                app.commands_panel.form_command.replace("retained command");
+                app.commands_panel.focus_command();
+            }
+            let mut replacement = app.config.clone();
+            replacement.commands.remove(0);
+            app.apply_config(replacement).unwrap();
+            // Assert revocation before dispatch: a failing regression must never
+            // invoke Delete's real configuration persistence path.
+            assert!(
+                !app.accessibility.commands_targets.contains_key(&delete),
+                "reload retained a stale duplicate Delete identity"
+            );
+            assert!(!app.accessibility.commands_targets.contains_key(&run));
+            assert_eq!(
+                app.commands_panel
+                    .build_info(&app.config.commands)
+                    .browse_focus,
+                (!editing).then_some(CommandControl::New)
+            );
+            for rebuild in [false, true] {
+                if rebuild {
+                    app.accessibility_snapshot();
+                }
+                for target_node in [run, delete] {
+                    assert!(
+                        !app.accessibility
+                            .commands_targets
+                            .contains_key(&target_node)
+                    );
+                    for action in [Action::Click, Action::Focus] {
+                        app.handle_accessibility_action(ActionRequest {
+                            action,
+                            target_tree: TreeId::ROOT,
+                            target_node,
+                            data: None,
+                        });
+                    }
+                }
+                assert!(app.commands_panel.is_open());
+                assert_eq!(app.config.commands.len(), 1);
+            }
+            assert_eq!(
+                app.accessibility_snapshot().focus,
+                if editing {
+                    COMMANDS_COMMAND
+                } else {
+                    COMMANDS_NEW
+                }
+            );
+            if editing {
+                assert_eq!(app.commands_panel.form_name.text(), "retained");
+                assert_eq!(app.commands_panel.form_command.text(), "retained command");
+            } else {
+                assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+                assert!(app.commands_panel.is_editing());
+            }
+        }
+    }
+
+    #[test]
+    fn command_reload_preserves_unambiguous_ids_focus_and_noop_inventory() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let duplicate = crate::config::CustomCommand {
+            name: "same".into(),
+            command: "inert".into(),
+            alias: None,
+        };
+        let unique = crate::config::CustomCommand {
+            name: "unique".into(),
+            command: "never run".into(),
+            alias: Some("stable".into()),
+        };
+        app.config.commands = vec![duplicate.clone(), duplicate.clone(), unique.clone()];
+        app.commands_panel.set_reduced_motion(true);
+        app.commands_panel.toggle();
+        app.accessibility_snapshot();
+        let keys = custom_command_keys(&app.config.commands);
+        let stable =
+            app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(keys[2].clone())];
+        let ambiguous =
+            app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(keys[0].clone())];
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: stable,
+            data: None,
+        });
+        let mut replacement = app.config.clone();
+        replacement.commands = vec![unique, duplicate];
+        app.apply_config(replacement).unwrap();
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::Run(0))
+        );
+        assert!(app.accessibility.commands_targets.contains_key(&stable));
+        assert!(!app.accessibility.commands_targets.contains_key(&ambiguous));
+        assert_eq!(app.accessibility_snapshot().focus, stable);
+        let nodes = app.accessibility.commands_nodes.clone();
+        app.apply_config(app.config.clone()).unwrap();
+        assert_eq!(app.accessibility_snapshot().focus, stable);
+        assert_eq!(app.accessibility.commands_nodes, nodes);
+    }
+
+    #[test]
+    fn rejected_command_reload_does_not_revoke_current_focus_or_actions() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        let duplicate = crate::config::CustomCommand {
+            name: "same".into(),
+            command: "inert".into(),
+            alias: None,
+        };
+        app.config.commands = vec![duplicate.clone(), duplicate];
+        app.commands_panel.set_reduced_motion(true);
+        app.commands_panel.toggle();
+        app.accessibility_snapshot();
+        let key = custom_command_keys(&app.config.commands).remove(0);
+        let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key)];
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: run,
+            data: None,
+        });
+        let nodes = app.accessibility.commands_nodes.clone();
+        let mut invalid = app.config.clone();
+        invalid.commands.remove(0);
+        invalid.font.size = 0.0;
+        assert!(app.apply_config(invalid).is_err());
+        assert_eq!(app.config.commands.len(), 2);
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::Run(0))
+        );
+        assert_eq!(app.accessibility_snapshot().focus, run);
+        assert_eq!(app.accessibility.commands_nodes, nodes);
     }
 
     #[test]

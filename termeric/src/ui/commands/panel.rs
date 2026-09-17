@@ -528,6 +528,15 @@ impl CommandsPanel {
             .flatten()
     }
 
+    /// Configuration replacement may make duplicate occurrences ambiguous.
+    /// Retire only those browse targets; keep open form text and its caret.
+    pub fn retain_browse_targets(
+        &mut self,
+        keys: &std::collections::HashSet<super::navigation::CommandKey>,
+    ) {
+        self.navigation.retain(keys);
+    }
+
     pub fn focus_browse_control(
         &mut self,
         control: CommandControl,

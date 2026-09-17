@@ -418,7 +418,12 @@ Deletion now synchronizes pointer/keyboard/assistive focus on New in browse mode
 or preserves the active form field, and retires published row IDs before a
 shifted duplicate can receive stale Run/Delete/Focus actions. An isolated Linux
 subprocess regression exercises deletion and persistence only under a temporary
-configuration root, including the final row and retained drafts. Model,
+configuration root, including the final row and retained drafts.
+Validated configuration reload also retires changed or duplicate-count-ambiguous
+row identities before queued actions, while keeping unchanged tuples, focus,
+and form drafts stable across reordering. Headless/model tests cover replacement,
+stale actions, no-op reload, and invalid-config preservation without executing
+or saving commands. Model,
 modifier, geometry, semantic-transition,
 and raw-PTY tests cover navigation isolation and exact Run bytes delivered to an
 inert reader, without executing a shell command or provider. Native keyboard,
