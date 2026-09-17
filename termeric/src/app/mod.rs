@@ -2546,6 +2546,11 @@ impl App {
         }
 
         renderer.set_tab_bar_hover(self.tab_bar_hover, self.tab_bar_hover_progress);
+        if !renderer.git_completion_fits(search_info.is_some()) {
+            self.git_completions_visible = false;
+            self.git_completions.clear();
+            self.git_completion_index = None;
+        }
         renderer.set_git_completions(
             if self.git_completions_visible && !self.git_completions.is_empty() {
                 Some(crate::renderer::GitCompletionInfo {

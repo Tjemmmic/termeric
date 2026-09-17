@@ -1037,6 +1037,10 @@ impl App {
     /// Tab and Enter must use the same literal encoding and focused-owner route.
     /// True means a selected completion was handled (including safe refusal).
     pub(super) fn accept_git_completion(&mut self, submit: bool) -> bool {
+        if !self.git_completion_has_room() {
+            self.dismiss_git_completion_popup();
+            return false;
+        }
         let Some(branch) = self
             .git_completion_index
             .filter(|_| self.git_completions_visible)
@@ -1232,6 +1236,7 @@ impl App {
         // Explicit Run text is already resolved; it must neither build nor
         // accept interactive suggestions between its edit and submit chunks.
         if interactive_assistance
+            && self.git_completion_has_room()
             && let Some(partial) = crate::git::detect_git_completion(&self.input_line_buffer)
         {
             let completions = self.git_watcher.complete_branch(partial);

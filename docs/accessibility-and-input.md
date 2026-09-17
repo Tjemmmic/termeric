@@ -469,6 +469,26 @@ verify real shortcut dispatch without completion edits, read-only tab switching,
 plain Tab insertion, and modified-Enter bytes. Native keyboard acceptance
 remains deferred.
 
+The Git popup now budgets its header, up to eight complete item rows, and an
+overflow footer in the background height. Its selected item remains within the
+visible range; selecting the eighth of eight items no longer scrolls the first
+one away. The footer reports the visible range and total, including when only
+earlier items are hidden. Layout prefers space below the cursor, flips above
+when appropriate, and reduces visible rows to fit the content viewport. Very
+short views can omit the header/footer and show one item over the cursor area.
+Text is queued only for visible scalar cells, reserving an ellipsis on overflow,
+and glyph overhangs are clipped to the popup interior. This does not change
+Unicode display-width or grapheme handling.
+
+When the entire content viewport cannot fit one complete item and its text
+margins, suggestions are not created; existing popup state is retired on redraw
+and rechecked before navigation or Tab/Enter acceptance. The typed line is not
+cleared and normal shortcut/terminal input continues. Geometry tests cover
+header/footer accounting, all-visible and overflow selection, edge flipping,
+one-row fallback, tiny windows, fractional font metrics, invalid geometry, and
+bounded Unicode/large-label text queuing. Native visual acceptance remains
+deferred; the tests do not constitute screenshot or screen-reader acceptance.
+
 Withholding a guarded submission now preserves the tracked prefix already sent
 to the terminal. Cancel does not send an erase command or submission, and a
 subsequent Enter on the unchanged focused route checks that prefix again.

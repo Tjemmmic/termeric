@@ -4,6 +4,14 @@ use super::*;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    pub(super) fn git_completion_has_room(&self) -> bool {
+        self.renderer.as_ref().is_none_or(|renderer| {
+            renderer.git_completion_fits(
+                self.search.is_active() || self.search.has_results() || self.search.is_searching(),
+            )
+        })
+    }
+
     pub(super) fn dismiss_git_completion_popup(&mut self) {
         self.git_completions_visible = false;
         self.git_completions.clear();
@@ -13,6 +21,10 @@ impl App {
     /// Called for pressed keys after modal/chrome owners and before shortcuts.
     pub(super) fn handle_git_completion_key(&mut self, key: &Key) -> bool {
         if !self.git_completions_visible {
+            return false;
+        }
+        if !self.git_completion_has_room() {
+            self.dismiss_git_completion_popup();
             return false;
         }
         if self.focused_pane_read_only() {

@@ -485,6 +485,12 @@ width each frame. Storage/lifetime regressions cover full-budget lists,
 replacement, and Unicode scalar sizing; native performance gains are not yet
 measured (see [background I/O](background-io.md)).
 
+The Git popup now includes header/footer rows in its height, keeps the selection
+visible, and fits complete rows within the available content viewport. Labels
+are bounded and clipped; views too small for one item retire completion instead
+of consuming keys for an invisible popup. Geometry/text regressions pass; native
+visual acceptance remains deferred (see [input contract](accessibility-and-input.md)).
+
 Guarded submission cancellation preserves the already-sent editable prefix on
 the unchanged focused route, so retrying Enter rechecks it. Withheld paste and
 replacement bytes are excluded; safe editing and exactly-once broadcast retry
