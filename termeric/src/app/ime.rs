@@ -121,7 +121,6 @@ impl App {
             return;
         }
 
-        let printable = || text.chars().filter(|c| !c.is_control());
         if self.info_overlay.input_focused() {
             let request_id = self.info_overlay.request_id();
             self.info_overlay.insert_input_text(request_id, text);
@@ -131,19 +130,8 @@ impl App {
             self.command_palette.insert_query_text(text);
         } else if self.unicode_picker.is_active() {
             self.unicode_picker.insert_query_text(text);
-        } else if let Some(rename) = &mut self.tab_rename {
-            for character in printable() {
-                if rename.input.chars().count() < rename.max_chars {
-                    rename.input.push(character);
-                }
-            }
-            if let Some(tab) = self.tabs.as_mut().and_then(|tabs| {
-                tabs.all_tabs_mut()
-                    .iter_mut()
-                    .find(|tab| tab.id == rename.tab_id)
-            }) {
-                tab.set_user_title(Some(rename.input.clone()));
-            }
+        } else if self.tab_rename.is_some() {
+            self.insert_tab_rename_text(text);
         } else if self.shortcuts_panel.is_active() {
             self.shortcuts_panel.insert_filter_text(text);
         } else if self.settings_panel.is_active() {
@@ -1219,6 +1207,84 @@ mod tests {
         assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Escape)));
         assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
         app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
+        app.tabs
+            .as_mut()
+            .unwrap()
+            .active_tab_mut()
+            .unwrap()
+            .set_user_title(Some("Roots".into()));
+        app.begin_tab_rename();
+        assert!(app.handle_tab_rename_key(&Key::Character("e\u{301}👩\u{200d}💻".into())));
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .user_title(),
+            Some("Rootse\u{301}👩\u{200d}💻")
+        );
+        assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .user_title(),
+            Some("Rootse\u{301}")
+        );
+        app.handle_ime_event(Ime::Commit("bad\ncommit".into()));
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .user_title(),
+            Some("Rootse\u{301}")
+        );
+        assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .user_title(),
+            Some("Roots")
+        );
+        app.begin_tab_rename();
+        app.handle_ime_event(Ime::Commit(" 🫚".into()));
+        assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Enter)));
+        assert!(app.tab_rename.is_none());
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .user_title(),
+            Some("Roots 🫚")
+        );
+        // A vanished captured owner cannot preview into the focused tab.
+        app.tab_rename = Some(TabRenameState {
+            tab_id: usize::MAX,
+            original: None,
+            input: String::new(),
+            max_chars: 128,
+        });
+        app.handle_ime_event(Ime::Commit("wrong owner".into()));
+        assert_eq!(
+            app.tabs
+                .as_ref()
+                .unwrap()
+                .active_tab()
+                .unwrap()
+                .user_title(),
+            Some("Roots 🫚")
+        );
+        assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a");
     }

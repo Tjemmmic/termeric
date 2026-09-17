@@ -43,18 +43,25 @@ pub(super) fn validate_ordinary_tab_creation_capacity(
 
 fn bounded_tab_rename_text(text: &str, max_chars: usize) -> String {
     text.chars()
-        .filter(|character| !character.is_control())
+        .filter(|character| {
+            !character.is_control() && !matches!(character, '\u{2028}' | '\u{2029}')
+        })
         .take(max_chars)
         .collect()
 }
 
-fn append_tab_rename_text(input: &mut String, text: &str, max_chars: usize) {
-    let remaining = max_chars.saturating_sub(input.chars().count());
-    input.extend(
-        text.chars()
-            .filter(|character| !character.is_control())
-            .take(remaining),
-    );
+fn append_tab_rename_text(input: &mut String, text: &str, max_chars: usize) -> bool {
+    if text.is_empty()
+        || text.len() > max_chars.saturating_mul(4)
+        || text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        || input.chars().count().saturating_add(text.chars().count()) > max_chars
+    {
+        return false;
+    }
+    input.push_str(text);
+    true
 }
 
 impl App {
@@ -147,6 +154,7 @@ impl App {
             input: bounded_tab_rename_text(tab.user_title().unwrap_or(&tab.title), max_chars),
             max_chars,
         });
+        self.ime.clear_preedit();
         self.toasts
             .info("Rename tab: type a title, Enter saves, Escape cancels");
     }
@@ -158,35 +166,69 @@ impl App {
         if event.state != winit::event::ElementState::Pressed {
             return true;
         }
+        self.handle_tab_rename_key(&event.logical_key)
+    }
+
+    fn update_tab_rename_preview(&mut self) {
+        let Some(rename) = &self.tab_rename else {
+            return;
+        };
+        if let Some(tab) = self.tabs.as_mut().and_then(|tabs| {
+            tabs.all_tabs_mut()
+                .iter_mut()
+                .find(|tab| tab.id == rename.tab_id)
+        }) {
+            tab.set_user_title(Some(rename.input.clone()));
+        }
+    }
+
+    pub(super) fn insert_tab_rename_text(&mut self, text: &str) -> bool {
+        let Some(rename) = &mut self.tab_rename else {
+            return false;
+        };
+        if !append_tab_rename_text(&mut rename.input, text, rename.max_chars) {
+            return false;
+        }
+        self.update_tab_rename_preview();
+        true
+    }
+
+    pub(super) fn handle_tab_rename_key(&mut self, key: &winit::keyboard::Key) -> bool {
+        if self.tab_rename.is_none() {
+            return false;
+        }
         use winit::keyboard::{Key, NamedKey};
         let mut commit = false;
         let mut cancel = false;
-        if let Some(rename) = &mut self.tab_rename {
-            match &event.logical_key {
-                Key::Named(NamedKey::Enter) => commit = true,
-                Key::Named(NamedKey::Escape) => cancel = true,
-                Key::Named(NamedKey::Backspace) => {
-                    rename.input.pop();
-                }
-                Key::Named(NamedKey::Space) => {
-                    append_tab_rename_text(&mut rename.input, " ", rename.max_chars);
-                }
-                Key::Character(text)
-                    if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                {
-                    append_tab_rename_text(&mut rename.input, text, rename.max_chars);
-                }
-                _ => {}
+        let plain = self.modifiers.is_empty() && !self.alt_graph_active;
+        let text_allowed = self.alt_graph_active
+            || !self
+                .modifiers
+                .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER);
+        match key {
+            Key::Named(NamedKey::Enter) if plain => commit = true,
+            Key::Named(NamedKey::Escape) if plain => cancel = true,
+            Key::Named(NamedKey::Backspace) if plain => {
+                let rename = self.tab_rename.as_mut().expect("rename checked above");
+                let mut cursor = rename.input.len();
+                crate::ui::text_input::edit_grapheme(
+                    &mut rename.input,
+                    &mut cursor,
+                    crate::ui::text_input::TextInputEdit::Backspace,
+                );
+                self.update_tab_rename_preview();
             }
-            if !commit && !cancel {
-                if let Some(tab) = self.tabs.as_mut().and_then(|tabs| {
-                    tabs.all_tabs_mut()
-                        .iter_mut()
-                        .find(|tab| tab.id == rename.tab_id)
-                }) {
-                    tab.set_user_title(Some(rename.input.clone()));
+            Key::Named(NamedKey::Space) if text_allowed => {
+                if !self.insert_tab_rename_text(" ") {
+                    return true;
                 }
             }
+            Key::Character(text) if text_allowed => {
+                if !self.insert_tab_rename_text(text) {
+                    return true;
+                }
+            }
+            _ => return true,
         }
         if commit {
             if let Some(rename) = self.tab_rename.take() {
@@ -226,6 +268,8 @@ impl App {
             }
             self.toasts.info("Tab rename cancelled");
         }
+        self.ime.clear_preedit();
+        self.redraw_scheduler.request(RedrawReason::KeyboardInput);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -4003,10 +4047,132 @@ mod workspace_control_tests {
         assert_eq!(bounded_tab_rename_text("界🙂abc", 3), "界🙂a");
 
         let mut title = "x".repeat(3);
-        append_tab_rename_text(&mut title, " \nmore", 5);
-        assert_eq!(title, "xxx m");
-        append_tab_rename_text(&mut title, "ignored", 5);
-        assert_eq!(title, "xxx m");
+        assert!(!append_tab_rename_text(&mut title, " \nmore", 5));
+        assert_eq!(title, "xxx");
+        assert!(append_tab_rename_text(&mut title, "界🙂", 5));
+        assert_eq!(title, "xxx界🙂");
+        assert!(!append_tab_rename_text(&mut title, "ignored", 5));
+        assert_eq!(title, "xxx界🙂");
+        assert_eq!(bounded_tab_rename_text("a\u{2028}b\u{2029}c", 20), "abc");
+    }
+
+    #[test]
+    fn tab_rename_keyboard_and_ime_are_atomic_at_local_and_domain_limits() {
+        use winit::{
+            event::Ime,
+            keyboard::{Key, NamedKey},
+        };
+        for max_chars in [128, 256] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            let original = "界".repeat(max_chars - 1);
+            app.tab_rename = Some(TabRenameState {
+                tab_id: 0,
+                original: None,
+                input: original.clone(),
+                max_chars,
+            });
+            for value in [
+                "",
+                "xy",
+                "a\nb",
+                "\r",
+                "\t",
+                "\0",
+                "\x1b",
+                "\u{85}",
+                "\u{2028}",
+                "\u{2029}",
+                &"x".repeat(max_chars + 1),
+            ] {
+                app.handle_ime_event(Ime::Preedit("keep".into(), None));
+                assert!(app.handle_tab_rename_key(&Key::Character(value.into())));
+                assert_eq!(app.tab_rename.as_ref().unwrap().input, original);
+                assert!(app.ime.preedit().is_some());
+                app.handle_ime_event(Ime::Commit(value.into()));
+                assert_eq!(app.tab_rename.as_ref().unwrap().input, original);
+                assert!(app.ime.preedit().is_none());
+            }
+            app.handle_ime_event(Ime::Commit("🫚".into()));
+            assert_eq!(
+                app.tab_rename.as_ref().unwrap().input,
+                format!("{original}🫚")
+            );
+            app.handle_ime_event(Ime::Preedit("keep".into(), None));
+            assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Space)));
+            assert_eq!(
+                app.tab_rename.as_ref().unwrap().input.chars().count(),
+                max_chars
+            );
+            assert!(app.ime.preedit().is_some());
+            app.tab_rename.as_mut().unwrap().input = "e\u{301}👩\u{200d}💻🇺🇸".into();
+            for expected in ["e\u{301}👩\u{200d}💻", "e\u{301}", "", ""] {
+                assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
+                assert_eq!(app.tab_rename.as_ref().unwrap().input, expected);
+                assert!(app.ime.preedit().is_none());
+            }
+            assert!(app.handle_tab_rename_key(&Key::Character("e\u{301}👩\u{200d}💻".into())));
+            assert_eq!(
+                app.tab_rename.as_ref().unwrap().input,
+                "e\u{301}👩\u{200d}💻"
+            );
+            assert!(app.pending_live_domain_controls.is_empty());
+        }
+    }
+
+    #[test]
+    fn tab_rename_modified_keys_cannot_delete_commit_or_cancel() {
+        use winit::{
+            event::Ime,
+            keyboard::{Key, NamedKey},
+        };
+        let mut app = App::new_headless(Config::default()).unwrap();
+        assert!(!app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
+        app.tab_rename = Some(TabRenameState {
+            tab_id: 0,
+            original: None,
+            input: "Roots".into(),
+            max_chars: 256,
+        });
+        app.handle_ime_event(Ime::Preedit("keep".into(), None));
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::ALT,
+            ModifiersState::SUPER,
+            ModifiersState::SHIFT,
+            ModifiersState::CONTROL | ModifiersState::ALT,
+        ] {
+            app.modifiers = modifiers;
+            for key in [
+                NamedKey::Backspace,
+                NamedKey::Enter,
+                NamedKey::Escape,
+                NamedKey::ArrowLeft,
+                NamedKey::Delete,
+            ] {
+                assert!(app.handle_tab_rename_key(&Key::Named(key)));
+                assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+                assert!(app.ime.preedit().is_some());
+            }
+            if modifiers != ModifiersState::SHIFT {
+                assert!(app.handle_tab_rename_key(&Key::Character("x".into())));
+                assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Space)));
+                assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+                assert!(app.ime.preedit().is_some());
+            }
+        }
+        app.alt_graph_active = true;
+        assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Backspace)));
+        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots");
+        assert!(app.handle_tab_rename_key(&Key::Character("@".into())));
+        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots@");
+        assert!(app.ime.preedit().is_none());
+        app.alt_graph_active = false;
+        app.modifiers = ModifiersState::SHIFT;
+        assert!(app.handle_tab_rename_key(&Key::Character("A".into())));
+        assert_eq!(app.tab_rename.as_ref().unwrap().input, "Roots@A");
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_tab_rename_key(&Key::Named(NamedKey::Escape)));
+        assert!(app.tab_rename.is_none());
     }
 
     #[test]

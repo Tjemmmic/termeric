@@ -398,6 +398,23 @@ do not rewrite stored commands or change explicit Save/Run behavior. Model,
 keyboard/IME, semantic-tree, and raw-PTY tests cover both field limits without
 saving or executing a command.
 
+Inline tab renaming accepts complete keyboard text and IME commits atomically,
+using the existing 256-scalar local and 128-scalar live-domain title limits.
+New input rejects controls, Unicode line/paragraph separators, and oversized
+events rather than keeping a prefix. Backspace removes a complete extended
+grapheme; modified Backspace/Enter/Escape and unsupported editing keys are
+consumed unchanged. Shift and explicitly identified AltGraph text remain
+typeable. Accepted keyboard edits and beginning/ending rename retire preedit;
+rejected keyboard text preserves it, while a native IME Commit ends composition
+even if its text is rejected. Existing-title initialization remains a bounded,
+sanitized draft, not an edit of the saved title. Preview updates resolve only
+the captured tab ID; Escape restores its original override and plain Enter
+commits through the existing local/live-domain route. Local model and raw-PTY
+tests cover both size policies, Unicode deletion, modifiers, preview/cancel,
+explicit local commit, and a vanished target without connecting to a live
+domain. This remains an append/backspace editor: caret navigation, selection,
+clipboard input, and native IME acceptance are not claimed here.
+
 The workspace manager and legacy-snapshot manager share a bounded modal model.
 Each visible entry is a named group with exact Load and Delete actions;
 workspaces additionally expose Rename. Stable actions resolve the saved entry's

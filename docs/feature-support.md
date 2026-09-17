@@ -385,6 +385,15 @@ move a hidden or interior-cluster caret. Geometry/model and raw-PTY insertion
 tests pass; native pointer/clipboard/IME acceptance and text selection remain
 deferred (see [input contract](accessibility-and-input.md)).
 
+Inline tab rename keyboard/IME input now rejects invalid or oversized events
+atomically at the existing local/live-domain title limits, deletes whole
+graphemes with Backspace, and consumes unsupported modified edits without
+saving/cancelling. Captured-tab preview and Escape restoration retain exact
+ownership. Local model and raw-PTY tests cover both limits and ordinary-tab
+commit/cancel without a live-domain connection; the inline editor still lacks
+caret navigation, selection, and clipboard input, and native IME acceptance
+remains deferred (see [input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected
