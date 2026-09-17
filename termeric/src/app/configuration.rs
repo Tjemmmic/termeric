@@ -1002,6 +1002,7 @@ impl App {
         use crate::ui::commands::panel::CommandsPanelAction;
 
         if !matches!(action, CommandsPanelAction::None) {
+            self.clear_commands_accessibility_focus();
             // Focus, dismissal, and form replacement retire composition at
             // the old caret for pointer and accessibility actions as well.
             self.ime.clear_preedit();

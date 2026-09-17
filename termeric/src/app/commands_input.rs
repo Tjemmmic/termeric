@@ -73,14 +73,48 @@ impl App {
         if self.commands_panel.is_editing() {
             return self.handle_commands_form_key(key);
         }
-        if matches!(key, Key::Named(NamedKey::Escape)) {
-            self.commands_panel.close();
-            self.ime.clear_preedit();
-            self.redraw_scheduler
-                .request(redraw_scheduler::RedrawReason::KeyboardInput);
-            if let Some(window) = &self.window {
-                window.request_redraw();
+        use crate::ui::commands::navigation::CommandNavigationKey;
+        if self.alt_graph_active {
+            return true;
+        }
+        let plain = self.modifiers.is_empty();
+        let navigation = match key {
+            Key::Named(NamedKey::Tab) if self.modifiers == ModifiersState::SHIFT => {
+                Some(CommandNavigationKey::Previous)
             }
+            Key::Named(NamedKey::Tab | NamedKey::ArrowDown | NamedKey::ArrowRight) if plain => {
+                Some(CommandNavigationKey::Next)
+            }
+            Key::Named(NamedKey::ArrowUp | NamedKey::ArrowLeft) if plain => {
+                Some(CommandNavigationKey::Previous)
+            }
+            Key::Named(NamedKey::Home) if plain => Some(CommandNavigationKey::First),
+            Key::Named(NamedKey::End) if plain => Some(CommandNavigationKey::Last),
+            _ => None,
+        };
+        let layout = self.commands_panel_layout();
+        if let Some(navigation) = navigation {
+            self.commands_panel
+                .navigate_browse(navigation, &self.config.commands, layout);
+        } else {
+            let action = match key {
+                Key::Named(NamedKey::Escape) if plain => CommandsPanelAction::Close,
+                Key::Named(NamedKey::Enter | NamedKey::Space) if plain => self
+                    .commands_panel
+                    .activate_browse(&self.config.commands, layout),
+                Key::Character(text) if plain && text == " " => self
+                    .commands_panel
+                    .activate_browse(&self.config.commands, layout),
+                _ => return true,
+            };
+            self.apply_commands_panel_action(action);
+        }
+        self.clear_commands_accessibility_focus();
+        self.ime.clear_preedit();
+        self.redraw_scheduler
+            .request(redraw_scheduler::RedrawReason::KeyboardInput);
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
         true
     }
@@ -149,6 +183,7 @@ impl App {
                 _ => return true,
             }
         }
+        self.clear_commands_accessibility_focus();
         self.ime.clear_preedit();
         self.redraw_scheduler
             .request(redraw_scheduler::RedrawReason::KeyboardInput);
@@ -162,6 +197,101 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exercise_browse_navigation(app: &mut App) {
+        use crate::ui::commands::navigation::CommandControl;
+        let original = std::mem::take(&mut app.config.commands);
+        app.config.commands = (0..20)
+            .map(|index| crate::config::CustomCommand {
+                name: format!("Command {index}"),
+                command: "inert: never run".into(),
+                alias: None,
+            })
+            .collect();
+        app.commands_panel.close();
+        app.commands_panel.toggle();
+        app.modifiers = ModifiersState::empty();
+        app.redraw_scheduler.begin_frame();
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Tab)));
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::Run(0))
+        );
+        assert_eq!(app.redraw_scheduler.begin_frame(), "keyboard-input");
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::ArrowRight)));
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::Delete(0))
+        );
+        app.modifiers = ModifiersState::SHIFT;
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Tab)));
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::Run(0))
+        );
+        for modifiers in [
+            ModifiersState::CONTROL,
+            ModifiersState::ALT,
+            ModifiersState::SUPER,
+            ModifiersState::SHIFT,
+        ] {
+            app.modifiers = modifiers;
+            for key in [
+                NamedKey::Enter,
+                NamedKey::Space,
+                NamedKey::Escape,
+                NamedKey::ArrowDown,
+                NamedKey::Home,
+                NamedKey::End,
+                NamedKey::Delete,
+            ] {
+                assert!(app.handle_commands_panel_key(&Key::Named(key)));
+                assert_eq!(
+                    app.commands_panel.browse_focus(&app.config.commands),
+                    Some(CommandControl::Run(0))
+                );
+                assert!(app.commands_panel.is_open());
+                assert!(!app.commands_panel.is_editing());
+            }
+        }
+        app.modifiers = ModifiersState::empty();
+        app.alt_graph_active = true;
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+        app.alt_graph_active = false;
+        // Plain Delete is not a destructive shortcut; only activation of the Delete button is.
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Delete)));
+        assert_eq!(app.config.commands.len(), 20);
+        app.config.commands[0].command = "replacement".into();
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+        assert!(app.commands_panel.is_open());
+        assert!(!app.commands_panel.is_editing());
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::New)
+        );
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+        assert!(app.commands_panel.is_editing());
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Escape)));
+        assert!(!app.commands_panel.is_editing());
+        // Space activates the New button through the same application action path.
+        assert!(app.handle_commands_panel_key(&Key::Character(" ".into())));
+        assert!(app.commands_panel.is_editing());
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Escape)));
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::End)));
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::Close)
+        );
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+        assert!(!app.commands_panel.is_open());
+        app.config.commands = original;
+    }
+
+    #[test]
+    fn command_keyboard_navigation_modifiers_and_safe_actions_stay_modal() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        exercise_browse_navigation(&mut app);
+    }
 
     fn exercise_command_scrolling(app: &mut App) {
         use winit::dpi::PhysicalPosition;
@@ -322,7 +452,6 @@ mod tests {
         app.commands_panel.toggle();
         for key in [
             Key::Character("x".into()),
-            Key::Named(NamedKey::Enter),
             Key::Named(NamedKey::Backspace),
             Key::Named(NamedKey::ArrowDown),
         ] {
@@ -404,6 +533,53 @@ mod tests {
             app.commands_panel.build_info(&[]).edit_mode,
             crate::ui::commands::panel::EditMode::EditingCommand
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keyboard_run_activates_only_the_selected_command_in_an_inert_raw_pty() {
+        let mut tabs = TabManager::new(
+            80,
+            24,
+            crate::config::ShellConfig::default(),
+            100,
+            1024 * 1024,
+        );
+        tabs.new_tab_with_command("/bin/sh", &[
+            "-c".into(), "stty raw -echo; printf READY; dd bs=1 count=3 2>/dev/null | od -An -tx1; sleep 0.1".into(),
+        ], None, Some("command-navigation"), None, Default::default()).unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+        let wait_for = |app: &mut App, expected: &str| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                app.process_pty_events();
+                let output = app.active_terminal().unwrap().rows_text(0, 23);
+                if output.contains(expected) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "missing {expected}: {output}");
+                std::thread::yield_now();
+            }
+        };
+        wait_for(&mut app, "READY");
+        app.config.commands = ["A", "B"]
+            .into_iter()
+            .map(|text| crate::config::CustomCommand {
+                name: format!("Entry {text}"),
+                command: text.into(),
+                alias: None,
+            })
+            .collect();
+        app.commands_panel.toggle();
+        for _ in 0..3 {
+            assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Tab)));
+        }
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+        assert!(!app.commands_panel.is_open());
+        // These bytes go to `dd`, not a shell command interpreter: clear line, B, Enter.
+        wait_for(&mut app, "15 42 0d");
+        assert_eq!(app.config.commands.len(), 2);
     }
 
     #[cfg(unix)]
@@ -490,6 +666,7 @@ mod tests {
         assert!(app.commands_panel.is_open());
         app.commands_panel.set_reduced_motion(true);
         exercise_command_scrolling(&mut app);
+        exercise_browse_navigation(&mut app);
         app.commands_panel.close();
         app.write_to_pty(b"Z");
         wait_for(&mut app, "5a"); // first raw byte: no editing/IME bytes leaked

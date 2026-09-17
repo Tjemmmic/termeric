@@ -2,11 +2,12 @@
 //!
 //! Provides a right-side slide-in panel where users can:
 //! - View all custom commands with name + command preview
-//! - Click a command to run it (opens in a new tab)
+//! - Run a command in the focused terminal
 //! - Add new commands via an inline form
 //! - Delete commands with a small (×) button
 //! - Close via scrim click, × button, or Escape
 
+use super::navigation::{CommandControl, CommandNavigation, CommandNavigationKey};
 use crate::config::CustomCommand;
 use crate::ui::animation::PanelAnimation;
 use crate::ui::text_input::{TextInput, TextInputEdit};
@@ -55,6 +56,7 @@ pub struct CommandsPanel {
     animation: PanelAnimation,
     /// First requested list row; geometry clamps this after resize/config changes.
     scroll_offset: usize,
+    navigation: CommandNavigation,
     /// Mouse-hovered command index (None if not hovering a row)
     pub hovered_index: Option<usize>,
     /// Whether hovering the "Add Command" button
@@ -75,6 +77,7 @@ pub struct CommandsPanelInfo {
     /// Animation progress (0.0 = hidden, 1.0 = fully visible)
     pub animation: f32,
     pub scroll_offset: usize,
+    pub browse_focus: Option<CommandControl>,
     /// List of commands to display
     pub commands: Vec<CustomCommand>,
     /// Mouse-hovered command row index
@@ -355,6 +358,20 @@ impl CommandsPanelLayout {
         }
     }
 
+    pub fn control_rect(self, control: CommandControl) -> Option<CommandsPanelRect> {
+        match control {
+            CommandControl::New => Some(self.new_button),
+            CommandControl::Close => Some(self.close_button),
+            CommandControl::Run(index) if self.visible_range().contains(&index) => {
+                Some(self.command_run(index))
+            }
+            CommandControl::Delete(index) if self.visible_range().contains(&index) => {
+                Some(self.command_delete(index))
+            }
+            _ => None,
+        }
+    }
+
     pub fn command_run(self, index: usize) -> CommandsPanelRect {
         let row = self.command_row(index);
         let delete = self.command_delete(index);
@@ -384,6 +401,7 @@ impl CommandsPanel {
         Self {
             animation: PanelAnimation::with_duration(0.25),
             scroll_offset: 0,
+            navigation: CommandNavigation::default(),
             hovered_index: None,
             hovered_add: false,
             hovered_delete: None,
@@ -504,6 +522,76 @@ impl CommandsPanel {
         true
     }
 
+    pub fn browse_focus(&self, commands: &[CustomCommand]) -> Option<CommandControl> {
+        (!self.is_editing())
+            .then(|| self.navigation.resolve(commands))
+            .flatten()
+    }
+
+    pub fn focus_browse_control(
+        &mut self,
+        control: CommandControl,
+        commands: &[CustomCommand],
+        layout: CommandsPanelLayout,
+    ) -> bool {
+        if !self.is_open() || self.is_editing() {
+            return false;
+        }
+        if let Some(index) = control.row()
+            && !self.reveal_row(index, layout)
+        {
+            return false;
+        }
+        self.navigation.focus(control, commands)
+    }
+
+    pub fn navigate_browse(
+        &mut self,
+        key: CommandNavigationKey,
+        commands: &[CustomCommand],
+        layout: CommandsPanelLayout,
+    ) {
+        if !self.is_open() || self.is_editing() {
+            return;
+        }
+        let control = self.navigation.navigate(key, commands);
+        if let Some(index) = control.row() {
+            self.reveal_row(index, layout);
+        }
+    }
+
+    /// Revalidate exact command identity before returning a mutating action.
+    /// An off-screen target is revealed on the first activation, never run blind.
+    pub fn activate_browse(
+        &mut self,
+        commands: &[CustomCommand],
+        layout: CommandsPanelLayout,
+    ) -> CommandsPanelAction {
+        if !self.is_open() || self.is_editing() {
+            return CommandsPanelAction::None;
+        }
+        let Some(control) = self.navigation.resolve(commands) else {
+            self.navigation.focus(CommandControl::New, commands);
+            return CommandsPanelAction::None;
+        };
+        if let Some(index) = control.row()
+            && !layout.visible_range().contains(&index)
+        {
+            self.reveal_row(index, layout);
+            return CommandsPanelAction::None;
+        }
+        match control {
+            CommandControl::New => CommandsPanelAction::StartAdd,
+            CommandControl::Close => CommandsPanelAction::Close,
+            CommandControl::Run(index) => CommandsPanelAction::Run(index),
+            CommandControl::Delete(index) => {
+                // Holding Enter must not delete the row that shifts into this slot.
+                self.navigation.focus(CommandControl::New, commands);
+                CommandsPanelAction::Delete(index)
+            }
+        }
+    }
+
     // ── Inline form editing ──
 
     /// Start adding a new command
@@ -515,6 +603,7 @@ impl CommandsPanel {
 
     /// Cancel the inline form
     pub fn cancel_edit(&mut self) {
+        self.navigation = CommandNavigation::default();
         self.edit_mode = EditMode::Browse;
         self.form_name.clear();
         self.form_command.clear();
@@ -664,6 +753,11 @@ impl CommandsPanel {
         CommandsPanelInfo {
             animation: self.animation_progress(),
             scroll_offset: self.scroll_offset,
+            browse_focus: self
+                .navigation
+                .visible
+                .then(|| self.browse_focus(commands))
+                .flatten(),
             commands: commands.to_vec(),
             hovered_index: self.hovered_index,
             hovered_add: self.hovered_add,
@@ -683,6 +777,91 @@ impl CommandsPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_browse_navigation_reveals_and_revalidates_before_activation() {
+        let mut commands: Vec<_> = (0..100)
+            .map(|index| CustomCommand {
+                name: format!("Command {index}"),
+                command: "inert".into(),
+                alias: None,
+            })
+            .collect();
+        let mut panel = CommandsPanel::new();
+        panel.set_reduced_motion(true);
+        let layout = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        assert!(matches!(
+            panel.activate_browse(&commands, layout),
+            CommandsPanelAction::None
+        ));
+        panel.toggle();
+        assert_eq!(panel.build_info(&commands).browse_focus, None);
+        for _ in 0..199 {
+            let layout = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+            panel.navigate_browse(CommandNavigationKey::Next, &commands, layout);
+        }
+        let layout = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        assert_eq!(
+            panel.build_info(&commands).browse_focus,
+            Some(CommandControl::Run(99))
+        );
+        assert!(layout.visible_range().contains(&99));
+        assert_eq!(
+            layout.control_rect(CommandControl::Run(99)),
+            Some(layout.command_run(99))
+        );
+        assert_eq!(layout.control_rect(CommandControl::Run(0)), None);
+        assert!(matches!(
+            panel.activate_browse(&commands, layout),
+            CommandsPanelAction::Run(99)
+        ));
+        panel.scroll_rows(isize::MIN, layout);
+        let hidden = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        assert!(matches!(
+            panel.activate_browse(&commands, hidden),
+            CommandsPanelAction::None
+        ));
+        assert!(
+            panel
+                .layout(800.0, 600.0, 8.0, 16.0, commands.len())
+                .visible_range()
+                .contains(&99)
+        );
+        let tiny = panel.layout(800.0, 100.0, 8.0, 16.0, commands.len());
+        assert!(matches!(
+            panel.activate_browse(&commands, tiny),
+            CommandsPanelAction::None
+        ));
+        let visible = panel.layout(800.0, 600.0, 8.0, 16.0, commands.len());
+        assert!(panel.focus_browse_control(CommandControl::Delete(99), &commands, visible));
+        assert_eq!(
+            visible.control_rect(CommandControl::Delete(99)),
+            Some(visible.command_delete(99))
+        );
+        assert!(matches!(
+            panel.activate_browse(&commands, visible),
+            CommandsPanelAction::Delete(99)
+        ));
+        assert_eq!(panel.browse_focus(&commands), Some(CommandControl::New));
+        assert!(panel.focus_browse_control(CommandControl::Run(99), &commands, visible));
+        commands[99].command = "changed".into();
+        assert_eq!(panel.build_info(&commands).browse_focus, None);
+        assert!(matches!(
+            panel.activate_browse(&commands, visible),
+            CommandsPanelAction::None
+        ));
+        assert_eq!(panel.browse_focus(&commands), Some(CommandControl::New));
+        panel.start_add();
+        assert!(matches!(
+            panel.activate_browse(&commands, visible),
+            CommandsPanelAction::None
+        ));
+        panel.cancel_edit();
+        assert_eq!(panel.browse_focus(&commands), Some(CommandControl::New));
+        panel.close();
+        panel.toggle();
+        assert_eq!(panel.build_info(&commands).browse_focus, None);
+    }
 
     #[test]
     fn scrolled_rows_share_visible_run_delete_geometry_at_all_panel_sizes() {

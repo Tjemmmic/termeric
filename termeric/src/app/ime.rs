@@ -1181,7 +1181,7 @@ mod tests {
                 _ => {
                     app.commands_panel.cancel_edit();
                     assert!(app.handle_commands_panel_key(&Key::Character("blocked".into())));
-                    assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+                    assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Backspace)));
                 }
             }
             assert!(!app.accepts_ime_text());

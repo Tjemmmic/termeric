@@ -354,10 +354,28 @@ bounded. Rendering, pointer hit testing, and AccessKit bounds all use the same
 one application path. Automated accessibility tests use inert form strings and
 never submit or execute a custom command.
 
-The command manager consumes ordinary keyboard input in browse mode as well
-as in its inline form. Escape closes it; other browse keys cannot reach a
-retained search, tab rename, or terminal. Existing pointer and accessibility
-Run/Delete/New actions are unchanged.
+The command manager owns ordinary keyboard input in browse mode as well as in
+its inline form. Tab/Shift+Tab and forward/backward arrows cycle New, each row's
+Run and Delete buttons, then Close; Home/End choose New/Close. Enter or Space
+activates the focused control through the shared application action path, and
+Escape closes the panel. The existing form keeps Tab field switching, Enter
+save, and Escape cancel. Unsupported modifiers and unrelated browse keys are
+consumed without reaching retained search, tab rename, or terminal input.
+
+Keyboard and assistive browse focus share the complete command tuple plus
+duplicate occurrence used for semantic identity. Focus has a visible outline
+and reveals the row in the shared viewport. Changed/removed identities reject
+activation and return focus to New; a focused row hidden by wheel scrolling
+must be revealed before a subsequent activation can Run/Delete it. A viewport
+too short for a whole row never activates that hidden command. Delete returns
+keyboard focus to New instead of leaving it on the next shifted row. Pointer
+hover is independent of this focus. Model, geometry, modifier, and semantic
+transition tests pass; raw-PTY tests prove navigation isolation and exact Run
+delivery of non-alias fixture text to an inert byte reader (not a command
+interpreter). Run retains the existing editable-line command-name/alias
+expansion and terminal-input policies. New tests do not
+persist or delete commands or invoke providers. Native keyboard/focus-outline
+and screen-reader acceptance remain deferred.
 
 The command list now accepts vertical wheel/trackpad scrolling in browse and
 form modes. A shared whole-row viewport limits painting, hover, and Run/Delete
@@ -371,8 +389,7 @@ off-screen commands remain discoverable without fictitious visible bounds, and
 Focus reveals the exact identity after revalidation. Automated geometry,
 state, semantic-focus, and raw-PTY isolation tests cover these paths without
 running, saving, or deleting commands. Native pointer/trackpad and screen-reader
-acceptance remain deferred; keyboard-only browse action navigation is not yet
-implemented.
+acceptance remain deferred.
 
 The custom-command Name and Command fields support whole-grapheme Left/Right,
 Home/End, Backspace/Delete, and Ctrl+Left/Right/Backspace/Delete word edits.

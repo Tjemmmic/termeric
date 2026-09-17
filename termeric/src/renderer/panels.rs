@@ -65,6 +65,28 @@ impl Renderer {
             self.ui.settings_bg,
         );
 
+        // Keyboard and assistive focus use the same visible control geometry as clicks.
+        if let Some(rect) = info
+            .browse_focus
+            .and_then(|control| layout.control_rect(control))
+        {
+            let inset = 2.0;
+            let left = rect.x + inset;
+            let top = rect.y + inset;
+            let right = rect.x + rect.width - inset;
+            let bottom = rect.y + rect.height - inset;
+            if right > left && bottom > top {
+                for (x1, y1, x2, y2) in [
+                    (left, top, right, top),
+                    (right, top, right, bottom),
+                    (right, bottom, left, bottom),
+                    (left, bottom, left, top),
+                ] {
+                    self.rect_pipeline.push_line(x1, y1, x2, y2, 2.0, accent);
+                }
+            }
+        }
+
         // ── HEADER: " ⚡ Custom Commands                × " ──
         let header_height = layout.header_height;
         let header_text_y = (header_height - cell_height) / 2.0;

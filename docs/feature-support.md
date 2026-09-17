@@ -410,8 +410,15 @@ command indices. Resize/form/config changes clamp the effective range, reopening
 resets it, and scrolling preserves drafts and composition. Accessible list
 scrolling and exact-identity focus reveal are covered alongside geometry/model
 and raw-PTY isolation tests, without executing or persisting commands. Native
-trackpad/screen-reader acceptance remains deferred; keyboard-only browse action
-navigation remains absent (see [input contract](accessibility-and-input.md)).
+trackpad/screen-reader acceptance remains deferred. Browse controls now support
+Tab/Shift+Tab and arrow cycling, Home/End, Enter/Space activation, and Escape
+close, with shared exact-identity keyboard/assistive focus and visible-row
+reveal. Stale or hidden targets cannot activate a replacement/invisible command;
+Delete returns focus to New. Model, modifier, geometry, semantic-transition,
+and raw-PTY tests cover navigation isolation and exact Run bytes delivered to an
+inert reader, without executing a shell command or provider. Native keyboard,
+focus-outline, and screen-reader acceptance remain deferred (see
+[input contract](accessibility-and-input.md)).
 
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.

@@ -10,6 +10,10 @@ use accesskit_winit::WindowEvent;
 use termeric_core::{Cell, CellAttrs, CellFlags, Grid, Selection};
 
 use super::*;
+use crate::ui::commands::navigation::{
+    CommandControl, CommandKey as CustomCommandSemanticKey, command_index as custom_command_index,
+    command_keys as custom_command_keys,
+};
 
 const ROOT: NodeId = NodeId(1);
 const TAB_LIST: NodeId = NodeId(2);
@@ -116,14 +120,6 @@ enum SettingsSemanticTarget {
         label: &'static str,
         value: String,
     },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct CustomCommandSemanticKey {
-    name: String,
-    command: String,
-    alias: Option<String>,
-    occurrence: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -2065,6 +2061,16 @@ impl App {
         )
     }
 
+    pub(super) fn clear_commands_accessibility_focus(&mut self) {
+        if self
+            .accessibility
+            .focus_override
+            .is_some_and(|id| self.accessibility.is_commands_node(id))
+        {
+            self.accessibility.focus_override = None;
+        }
+    }
+
     fn handle_commands_accessibility_action(&mut self, request: ActionRequest) {
         use crate::ui::commands::panel::CommandsPanelAction;
 
@@ -2079,7 +2085,15 @@ impl App {
                     self.apply_commands_panel_action(CommandsPanelAction::StartAdd);
                     self.accessibility.focus_override = Some(COMMANDS_NAME);
                 }
-                Action::Focus => self.accessibility.focus_override = Some(COMMANDS_NEW),
+                Action::Focus => {
+                    let layout = self.commands_panel_layout();
+                    self.commands_panel.focus_browse_control(
+                        CommandControl::New,
+                        &self.config.commands,
+                        layout,
+                    );
+                    self.accessibility.focus_override = Some(COMMANDS_NEW);
+                }
                 _ => {}
             },
             COMMANDS_CLOSE => match request.action {
@@ -2087,7 +2101,15 @@ impl App {
                     self.apply_commands_panel_action(CommandsPanelAction::Close);
                     self.accessibility.focus_override = None;
                 }
-                Action::Focus => self.accessibility.focus_override = Some(COMMANDS_CLOSE),
+                Action::Focus => {
+                    let layout = self.commands_panel_layout();
+                    self.commands_panel.focus_browse_control(
+                        CommandControl::Close,
+                        &self.config.commands,
+                        layout,
+                    );
+                    self.accessibility.focus_override = Some(COMMANDS_CLOSE);
+                }
                 _ => {}
             },
             COMMANDS_NAME | COMMANDS_COMMAND if self.commands_panel.is_editing() => {
@@ -2169,11 +2191,21 @@ impl App {
                         self.accessibility.focus_override = Some(COMMANDS_NEW);
                     }
                     (
-                        CommandsSemanticTarget::Run(_) | CommandsSemanticTarget::Delete(_),
+                        target @ (CommandsSemanticTarget::Run(_)
+                        | CommandsSemanticTarget::Delete(_)),
                         Action::Focus,
                     ) => {
                         let layout = self.commands_panel_layout();
-                        if self.commands_panel.reveal_row(index, layout) {
+                        let control = if matches!(target, CommandsSemanticTarget::Run(_)) {
+                            CommandControl::Run(index)
+                        } else {
+                            CommandControl::Delete(index)
+                        };
+                        if self.commands_panel.focus_browse_control(
+                            control,
+                            &self.config.commands,
+                            layout,
+                        ) {
                             self.accessibility.focus_override = Some(request.target_node);
                         }
                     }
@@ -5129,7 +5161,18 @@ impl App {
         let default_focus = match info.edit_mode {
             EditMode::EditingName => COMMANDS_NAME,
             EditMode::EditingCommand => COMMANDS_COMMAND,
-            EditMode::Browse => COMMANDS_NEW,
+            EditMode::Browse => match self.commands_panel.browse_focus(&info.commands) {
+                Some(CommandControl::Close) => COMMANDS_CLOSE,
+                Some(CommandControl::Run(index)) => {
+                    self.accessibility.commands_nodes
+                        [&CommandsSemanticTarget::Run(keys[index].clone())]
+                }
+                Some(CommandControl::Delete(index)) => {
+                    self.accessibility.commands_nodes
+                        [&CommandsSemanticTarget::Delete(keys[index].clone())]
+                }
+                _ => COMMANDS_NEW,
+            },
         };
         let requested_focus = self.accessibility.focus_override.filter(|node| {
             self.accessibility.is_commands_node(*node)
@@ -5431,43 +5474,6 @@ fn bounded_semantic_text(value: &str, max_chars: usize) -> String {
         bounded.push('…');
     }
     bounded
-}
-
-fn custom_command_keys(commands: &[crate::config::CustomCommand]) -> Vec<CustomCommandSemanticKey> {
-    let mut occurrences = HashMap::new();
-    commands
-        .iter()
-        .map(|command| {
-            let identity = (
-                command.name.clone(),
-                command.command.clone(),
-                command.alias.clone(),
-            );
-            let occurrence = occurrences.entry(identity.clone()).or_insert(0);
-            let key = CustomCommandSemanticKey {
-                name: identity.0,
-                command: identity.1,
-                alias: identity.2,
-                occurrence: *occurrence,
-            };
-            *occurrence += 1;
-            key
-        })
-        .collect()
-}
-
-fn custom_command_index(
-    commands: &[crate::config::CustomCommand],
-    key: &CustomCommandSemanticKey,
-) -> Option<usize> {
-    commands
-        .iter()
-        .enumerate()
-        .filter(|(_, command)| {
-            command.name == key.name && command.command == key.command && command.alias == key.alias
-        })
-        .nth(key.occurrence)
-        .map(|(index, _)| index)
 }
 
 fn command_rect(rectangle: crate::ui::commands::panel::CommandsPanelRect) -> Rect {
@@ -7287,6 +7293,71 @@ mod tests {
         });
         assert!(app.settings_panel.is_active());
         assert!(!app.command_palette.is_active());
+    }
+
+    #[test]
+    fn command_keyboard_and_assistive_focus_share_controls_and_form_transitions() {
+        use winit::keyboard::{Key, NamedKey};
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.config.commands = vec![crate::config::CustomCommand {
+            name: "inert".into(),
+            command: "never run".into(),
+            alias: None,
+        }];
+        app.commands_panel.set_reduced_motion(true);
+        app.commands_panel.toggle();
+        app.accessibility_snapshot();
+        let key = custom_command_keys(&app.config.commands).remove(0);
+        let run = app.accessibility.commands_nodes[&CommandsSemanticTarget::Run(key.clone())];
+        let delete = app.accessibility.commands_nodes[&CommandsSemanticTarget::Delete(key)];
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: run,
+            data: None,
+        });
+        assert_eq!(
+            app.commands_panel
+                .build_info(&app.config.commands)
+                .browse_focus,
+            Some(CommandControl::Run(0))
+        );
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Tab)));
+        assert_eq!(app.accessibility_snapshot().focus, delete);
+        assert_eq!(
+            app.commands_panel
+                .build_info(&app.config.commands)
+                .browse_focus,
+            Some(CommandControl::Delete(0))
+        );
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: COMMANDS_CLOSE,
+            data: None,
+        });
+        assert_eq!(
+            app.commands_panel.browse_focus(&app.config.commands),
+            Some(CommandControl::Close)
+        );
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Home)));
+        assert_eq!(app.accessibility_snapshot().focus, COMMANDS_NEW);
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+        assert_eq!(app.accessibility_snapshot().focus, COMMANDS_NAME);
+        app.handle_accessibility_action(ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: COMMANDS_NAME,
+            data: None,
+        });
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Tab)));
+        assert_eq!(app.accessibility_snapshot().focus, COMMANDS_COMMAND);
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Escape)));
+        assert_eq!(app.accessibility_snapshot().focus, COMMANDS_NEW);
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::End)));
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Space)));
+        assert!(!app.commands_panel.is_open());
+        assert_eq!(app.config.commands.len(), 1);
     }
 
     #[test]
