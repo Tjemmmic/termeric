@@ -116,33 +116,46 @@ impl Renderer {
         self.text_pipeline
             .push_char('/', input_x + cell_width * 0.8, text_y, prompt_color);
 
-        // Filter text
-        let text_start_x = input_x + cell_width * 2.2;
-        let mut text_x = text_start_x;
-        let text_color = adjust_alpha(self.ui.palette_text, anim);
-        for (byte_idx, c) in info.filter.char_indices() {
-            if byte_idx == info.cursor {
+        // Whole-grapheme scrolling, shaping, and clipping share the IME caret.
+        if let Some(view) =
+            layout.input_viewport(&info.filter, info.cursor, cell_width, cell_height)
+        {
+            let clip = super::text::TextClip {
+                left: view.text_x,
+                top: layout.input.y,
+                right: view.right,
+                bottom: layout.input.y + layout.input.height,
+            };
+            self.text_pipeline.push_ui_run(
+                &info.filter[view.text_range.clone()],
+                view.text_x,
+                view.text_y,
+                adjust_alpha(self.ui.palette_text, anim),
+                cell_width,
+                clip,
+            );
+            if !info.recording {
                 let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-                self.rect_pipeline
-                    .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
+                self.rect_pipeline.push_rect(
+                    view.cursor_x,
+                    view.text_y,
+                    2.0_f32.min(view.right - view.cursor_x),
+                    cell_height,
+                    cursor_color,
+                );
             }
-            self.text_pipeline.push_char(c, text_x, text_y, text_color);
-            text_x += cell_width;
-        }
-        if info.cursor >= info.filter.len() {
-            let cursor_color = adjust_alpha(self.ui.palette_accent, 0.9 * anim);
-            self.rect_pipeline
-                .push_rect(text_x, text_y, 2.0, cell_height, cursor_color);
-        }
-
-        // Placeholder
-        if info.filter.is_empty() {
-            let hint = "Filter shortcuts...";
-            let hint_color = adjust_alpha(self.ui.palette_text_dim, 0.6 * anim);
-            let mut hx = text_start_x;
-            for c in hint.chars() {
-                self.text_pipeline.push_char(c, hx, text_y, hint_color);
-                hx += cell_width;
+            if info.filter.is_empty() {
+                let hint = "Filter shortcuts...";
+                if let Some(hint_view) = layout.input_viewport(hint, 0, cell_width, cell_height) {
+                    self.text_pipeline.push_ui_run(
+                        &hint[hint_view.text_range],
+                        view.text_x,
+                        view.text_y,
+                        adjust_alpha(self.ui.palette_text_dim, 0.6 * anim),
+                        cell_width,
+                        clip,
+                    );
+                }
             }
         }
 

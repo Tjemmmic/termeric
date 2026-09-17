@@ -375,6 +375,12 @@ Complete Unicode input events are retained, oversized commits are rejected
 atomically, and Backspace removes whole graphemes. Modifier/recording guards and
 raw-PTY tests cover ownership without persisting bindings; native IME/visual
 acceptance remains deferred (see [input contract](accessibility-and-input.md)).
+Shortcut filter text and its placeholder now use shaped, clipped,
+whole-grapheme scrolling; the native IME candidate follows the same visible
+caret without rebuilding results. Recording suppresses the filter caret and
+preedit, including over retained Settings. Geometry/priority and opt-in
+GPU-backed glyph-clipping checks cover the path, not real-desktop IME or visual
+acceptance.
 
 Shared palette query editing supports unmodified Left/Right/Home/End and
 whole-grapheme Backspace/Delete with insertion at the moved caret. Ctrl+Left/Right

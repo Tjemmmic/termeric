@@ -5,6 +5,7 @@
 
 use super::animation::OverlayAnimation;
 use super::text_input::{TextInput, TextInputEdit};
+use super::text_input_viewport::TextInputViewport;
 use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
 
 const MAX_FILTER_CHARACTERS: usize = 128;
@@ -120,6 +121,24 @@ pub struct ShortcutsPanelLayout {
 }
 
 impl ShortcutsPanelLayout {
+    /// The editable text area excludes the prompt and keeps one caret column.
+    pub fn input_viewport(
+        &self,
+        text: &str,
+        cursor: usize,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<TextInputViewport> {
+        TextInputViewport::calculate(
+            text,
+            cursor,
+            self.input.x + cell_width * 2.2,
+            self.input.y + (self.input.height - cell_height) / 2.0,
+            self.input.x + self.input.width - cell_width * 0.8,
+            cell_width,
+        )
+    }
+
     pub fn calculate(
         window_width: f32,
         window_height: f32,
@@ -549,6 +568,34 @@ impl ShortcutsPanel {
         true
     }
 
+    /// Active filter geometry without rebuilding or cloning result rows.
+    pub fn input_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<TextInputViewport> {
+        if !self.is_active() || self.recording {
+            return None;
+        }
+        // Result count changes panel height, never the filter rectangle.
+        ShortcutsPanelLayout::calculate(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            self.animation.eased(),
+            0,
+        )
+        .input_viewport(
+            self.filter.text(),
+            self.filter.cursor(),
+            cell_width,
+            cell_height,
+        )
+    }
+
     /// Enter recording mode for a stable action identity.
     pub fn start_recording(&mut self, action: BindableAction) {
         self.recording = true;
@@ -804,6 +851,55 @@ mod tests {
         assert_eq!(info.entries.len(), 5);
         assert_eq!(info.scroll_offset, info.total_rows - 5);
         assert!(info.scroll_offset + info.entries.len() <= info.total_rows);
+    }
+
+    #[test]
+    fn filter_viewport_keeps_graphemes_and_caret_inside_scaled_animated_input() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let text = "界e\u{301}👩\u{200d}💻".repeat(20);
+        for (width, cell) in [(240.0, 8.0), (800.0, 8.0), (1600.0, 16.0)] {
+            for animation in [0.25, 1.0] {
+                let layout =
+                    ShortcutsPanelLayout::calculate(width, 800.0, cell, cell * 2.0, animation, 5);
+                assert_eq!(
+                    layout.input,
+                    ShortcutsPanelLayout::calculate(width, 800.0, cell, cell * 2.0, animation, 0)
+                        .input
+                );
+                for cursor in text
+                    .grapheme_indices(true)
+                    .map(|(i, _)| i)
+                    .chain([text.len()])
+                {
+                    let view = layout
+                        .input_viewport(&text, cursor, cell, cell * 2.0)
+                        .unwrap();
+                    assert!(view.text_range.start <= cursor && cursor <= view.text_range.end);
+                    assert!(view.text_x > layout.input.x);
+                    assert!(
+                        view.cursor_x >= view.text_x && view.cursor_x + cell <= view.right + 0.001
+                    );
+                    assert!(view.right < layout.input.x + layout.input.width);
+                    assert_eq!(view.text_y, layout.input.y + cell);
+                    for edge in [view.text_range.start, view.text_range.end] {
+                        assert!(
+                            edge == text.len()
+                                || text.grapheme_indices(true).any(|(i, _)| i == edge)
+                        );
+                    }
+                    if cursor == text.len() {
+                        assert!(view.text_range.start > 0);
+                    }
+                }
+                assert!(layout.input_viewport(&text, 1, cell, cell * 2.0).is_none());
+            }
+        }
+        let layout = ShortcutsPanelLayout::calculate(40.0, 800.0, 8.0, 16.0, 1.0, 0);
+        assert!(
+            layout
+                .input_viewport(&text, text.len(), 8.0, 16.0)
+                .is_none()
+        );
     }
 
     #[test]

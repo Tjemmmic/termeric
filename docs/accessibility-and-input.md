@@ -369,6 +369,16 @@ is consumed without insertion. Chord recording still owns its input and rejects
 filter mutations. Model, dispatch, and raw-PTY isolation tests pass without
 saving user bindings; native IME/visual acceptance remains deferred.
 
+The shortcut filter now renders a caret-following whole-grapheme viewport with
+shaped, explicitly clipped text and a clipped placeholder. Its visible caret
+and native IME candidate/preedit position share `ShortcutsPanelLayout`, including
+animation and scaled cells. Candidate geometry does not rebuild the result list;
+collapsed inputs have no candidate position and recording shows no editable
+filter caret. Recording also blocks preedit when a Settings panel is retained
+underneath. Geometry/priority regressions and the opt-in GPU-backed query glyph
+clipping smoke cover this boundary; native IME and pixel-level presentation
+acceptance remain separate.
+
 Application information, errors, and plugin notices share a request-scoped
 information dialog. Titles are capped at 256 characters; stored notice content
 is capped at 512 lines and 4,096 characters per line with visible omission

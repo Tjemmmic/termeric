@@ -88,10 +88,7 @@ impl App {
         {
             return false;
         }
-        if self.command_palette.is_active()
-            || self.unicode_picker.is_active()
-            || self.settings_panel.is_active()
-        {
+        if self.command_palette.is_active() || self.unicode_picker.is_active() {
             return true;
         }
         if self.tab_rename.is_some() {
@@ -99,6 +96,9 @@ impl App {
         }
         if self.shortcuts_panel.is_active() {
             return !self.shortcuts_panel.is_recording();
+        }
+        if self.settings_panel.is_active() {
+            return true;
         }
         if self.session_panel.is_open() {
             return self.session_panel.is_renaming();
@@ -230,6 +230,31 @@ impl App {
             && !self.session_panel.is_open()
     }
 
+    fn shortcuts_owns_ime_text(&self) -> bool {
+        self.shortcuts_panel.is_active()
+            && !self.shortcuts_panel.is_recording()
+            && self.accepts_ime_text()
+            && !self.info_overlay.is_active()
+            && !self.command_palette.is_active()
+            && !self.unicode_picker.is_active()
+            && self.tab_rename.is_none()
+    }
+
+    fn shortcuts_ime_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        self.shortcuts_owns_ime_text()
+            .then(|| {
+                self.shortcuts_panel
+                    .input_viewport(width, height, cell_width, cell_height)
+            })
+            .flatten()
+    }
+
     fn commands_ime_viewport(
         &self,
         width: f32,
@@ -321,10 +346,18 @@ impl App {
         if self.command_palette.is_active()
             || self.unicode_picker.is_active()
             || self.commands_owns_ime_text()
+            || self.shortcuts_owns_ime_text()
         {
             let (width, height) = renderer.window_size();
             let view = if self.commands_owns_ime_text() {
                 self.commands_ime_viewport(
+                    width as f32,
+                    height as f32,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                )
+            } else if self.shortcuts_owns_ime_text() {
+                self.shortcuts_ime_viewport(
                     width as f32,
                     height as f32,
                     renderer.cell_width(),
@@ -441,6 +474,63 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_ime_uses_scrolled_filter_geometry_and_recording_blocks_retained_settings() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.search.start();
+        app.commands_panel.toggle();
+        app.commands_panel.start_add();
+        app.settings_panel.toggle();
+        app.shortcuts_panel.set_reduced_motion(true);
+        app.shortcuts_panel.open();
+        assert!(
+            app.shortcuts_panel
+                .insert_filter_text(&"界e\u{301}👩\u{200d}💻".repeat(20))
+        );
+        for (width, cell) in [(800.0, 8.0), (1600.0, 16.0)] {
+            let info = app.shortcuts_panel.build_info(&app.shortcut_registry);
+            let layout = crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
+                width,
+                800.0,
+                cell,
+                cell * 2.0,
+                info.animation,
+                info.entries.len(),
+            );
+            let view = app
+                .shortcuts_ime_viewport(width, 800.0, cell, cell * 2.0)
+                .unwrap();
+            assert_eq!(
+                view,
+                layout
+                    .input_viewport(&info.filter, info.cursor, cell, cell * 2.0)
+                    .unwrap()
+            );
+            assert!(view.text_range.start > 0);
+            assert!(view.cursor_x + cell <= view.right + 0.001);
+            assert!(!app.search_owns_ime_text());
+            assert!(!app.commands_owns_ime_text());
+        }
+        assert!(app.shortcuts_ime_viewport(40.0, 800.0, 8.0, 16.0).is_none());
+        app.command_palette.open();
+        assert!(
+            app.shortcuts_ime_viewport(800.0, 800.0, 8.0, 16.0)
+                .is_none()
+        );
+        app.command_palette.close();
+        app.shortcuts_panel
+            .start_recording(crate::input::keybindings::BindableAction::Copy);
+        assert!(!app.accepts_ime_text());
+        assert!(!app.shortcuts_owns_ime_text());
+        app.handle_ime_event(Ime::Preedit("draft".into(), None));
+        assert!(app.ime.preedit().is_none());
+        app.shortcuts_panel.close();
+        assert!(
+            app.shortcuts_ime_viewport(800.0, 800.0, 8.0, 16.0)
+                .is_none()
+        );
+    }
 
     #[test]
     fn command_form_ime_follows_the_active_scrolled_field_and_respects_modal_priority() {

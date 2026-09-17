@@ -50,6 +50,11 @@ pub(crate) fn headless_palette_input_smoke(
             for view in [
                 layout.input_viewport(&query, query.len()).unwrap(),
                 search_layout.input_viewport(&info, 10.0).unwrap(),
+                crate::ui::shortcuts_panel::ShortcutsPanelLayout::calculate(
+                    width, 600.0, 10.0, 24.0, 1.0, 0,
+                )
+                .input_viewport(&query, query.len(), 10.0, 24.0)
+                .unwrap(),
             ] {
                 let clip = TextClip {
                     left: view.text_x,
