@@ -101,6 +101,7 @@ pub struct SessionEntryLayout {
 /// accessibility bounds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SessionPanelLayout {
+    window_width: f32,
     pub panel: SessionPanelRect,
     pub padding_x: f32,
     pub padding_y: f32,
@@ -118,6 +119,31 @@ pub struct SessionPanelLayout {
 }
 
 impl SessionPanelLayout {
+    pub fn rename_input_viewport(
+        &self,
+        text: &str,
+        cursor: usize,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        let rename = self.rename?;
+        let input = rename.input;
+        if input.y < 0.0 || input.y + input.height > self.panel.height {
+            return None;
+        }
+        // Narrow layouts can put the minimum-sized input beneath Save.
+        // Do not paint query glyphs or native candidates over that control.
+        let right = (input.x + input.width)
+            .min(rename.save_button.x - self.cell_width * 0.5)
+            .min(self.window_width);
+        crate::ui::text_input_viewport::TextInputViewport::calculate(
+            text,
+            cursor,
+            input.x.max(0.0) + self.cell_width * 0.5,
+            input.y + (input.height - self.cell_height) / 2.0,
+            right - self.cell_width * 0.5,
+            self.cell_width,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn calculate(
         window_width: f32,
@@ -177,6 +203,7 @@ impl SessionPanelLayout {
             .floor()
             .max(1.0) as usize;
         Self {
+            window_width,
             panel: SessionPanelRect {
                 x: panel_x,
                 y: 0.0,
@@ -389,6 +416,30 @@ impl SessionPanel {
             selected_index: self.selected_index,
             scroll_offset: self.scroll_offset,
         }
+    }
+
+    /// Borrow just the rename state; positioning IME must not clone inventory.
+    pub fn rename_input_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        if !self.is_open() || !self.is_renaming() {
+            return None;
+        }
+        SessionPanelLayout::calculate(
+            width,
+            height,
+            cell_width,
+            cell_height,
+            self.animation_progress(),
+            true,
+            self.workspaces,
+            self.sessions.len(),
+        )
+        .rename_input_viewport(self.rename_input.text(), self.rename_input.cursor())
     }
 
     /// Update hover state from mouse position
@@ -744,6 +795,67 @@ mod tests {
         panel.cancel_rename();
         assert!(!panel.insert_rename_text("hidden"));
         assert!(!panel.accessibility_set_rename("hidden"));
+    }
+
+    #[test]
+    fn rename_viewport_keeps_graphemes_and_caret_inside_visible_field() {
+        use unicode_segmentation::UnicodeSegmentation;
+        let text = "a界e\u{301}👩\u{200d}💻🇺🇸".repeat(8);
+        for width in [400.0, 800.0, 1600.0] {
+            for cell in [8.0, 12.0, 20.0] {
+                for animation in [0.2, 0.8, 1.0] {
+                    let layout = SessionPanelLayout::calculate(
+                        width,
+                        600.0,
+                        cell,
+                        cell * 2.0,
+                        animation,
+                        true,
+                        true,
+                        0,
+                    );
+                    let field = layout.rename.unwrap();
+                    for cursor in [0, "a界e\u{301}".len(), text.len()] {
+                        let Some(view) = layout.rename_input_viewport(&text, cursor) else {
+                            continue;
+                        };
+                        assert!(view.text_range.start <= cursor && cursor <= view.text_range.end);
+                        assert!(text.is_char_boundary(view.text_range.start));
+                        assert!(
+                            view.text_range.end == text.len()
+                                || text
+                                    .grapheme_indices(true)
+                                    .any(|(i, _)| i == view.text_range.end)
+                        );
+                        let columns: usize = text[view.text_range.start..cursor]
+                            .graphemes(true)
+                            .map(termeric_core::unicode::grapheme_width)
+                            .sum();
+                        assert!(
+                            (view.cursor_x - (view.text_x + columns as f32 * cell)).abs() < 0.01
+                        );
+                        assert!(view.cursor_x + cell <= view.right + 0.01);
+                        assert!(view.right <= width && view.right < field.save_button.x);
+                        assert!(view.text_x >= field.input.x);
+                        assert!(view.text_y >= field.input.y);
+                        if cursor == text.len() {
+                            assert!(view.text_range.start > 0);
+                        }
+                    }
+                }
+            }
+        }
+        for (width, height, animation, renaming) in [
+            (40.0, 600.0, 1.0, true),
+            (800.0, 20.0, 1.0, true),
+            (800.0, 600.0, 0.0, true),
+            (800.0, 600.0, 1.0, false),
+        ] {
+            let layout = SessionPanelLayout::calculate(
+                width, height, 10.0, 20.0, animation, renaming, true, 0,
+            );
+            assert!(layout.rename_input_viewport(&text, text.len()).is_none());
+        }
     }
 
     #[test]

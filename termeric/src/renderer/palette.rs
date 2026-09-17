@@ -60,6 +60,18 @@ pub(crate) fn headless_palette_input_smoke(
                 )
                 .input_viewport(&query, query.len(), 24.0)
                 .unwrap(),
+                crate::session::panel::SessionPanelLayout::calculate(
+                    width.max(800.0),
+                    600.0,
+                    10.0,
+                    24.0,
+                    1.0,
+                    true,
+                    true,
+                    0,
+                )
+                .rename_input_viewport(&query, query.len())
+                .unwrap(),
             ] {
                 let clip = TextClip {
                     left: view.text_x,

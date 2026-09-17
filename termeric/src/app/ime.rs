@@ -266,6 +266,34 @@ impl App {
             .flatten()
     }
 
+    fn session_owns_ime_text(&self) -> bool {
+        self.session_panel.is_open()
+            && self.session_panel.is_renaming()
+            && self.accepts_ime_text()
+            && !self.info_overlay.is_active()
+            && !self.domain_picker.is_active()
+            && !self.command_palette.is_active()
+            && !self.unicode_picker.is_active()
+            && self.tab_rename.is_none()
+            && !self.shortcuts_panel.is_active()
+            && !self.settings_panel.is_active()
+    }
+
+    fn session_ime_viewport(
+        &self,
+        width: f32,
+        height: f32,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<crate::ui::text_input_viewport::TextInputViewport> {
+        self.session_owns_ime_text()
+            .then(|| {
+                self.session_panel
+                    .rename_input_viewport(width, height, cell_width, cell_height)
+            })
+            .flatten()
+    }
+
     fn shortcuts_ime_viewport(
         &self,
         width: f32,
@@ -375,6 +403,7 @@ impl App {
             || self.commands_owns_ime_text()
             || self.shortcuts_owns_ime_text()
             || self.settings_owns_ime_text()
+            || self.session_owns_ime_text()
         {
             let (width, height) = renderer.window_size();
             let view = if self.commands_owns_ime_text() {
@@ -393,6 +422,13 @@ impl App {
                 )
             } else if self.settings_owns_ime_text() {
                 self.settings_ime_viewport(
+                    width as f32,
+                    height as f32,
+                    renderer.cell_width(),
+                    renderer.cell_height(),
+                )
+            } else if self.session_owns_ime_text() {
+                self.session_ime_viewport(
                     width as f32,
                     height as f32,
                     renderer.cell_width(),
@@ -805,6 +841,59 @@ mod tests {
             );
             std::thread::yield_now();
         }
+    }
+
+    #[test]
+    fn workspace_rename_ime_matches_paint_geometry_without_a_terminal() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.session_panel.set_reduced_motion(true);
+        app.session_panel.set_test_entries(
+            vec![crate::session::panel::SessionEntry {
+                id: "workspace-test".into(),
+                display_name: "Roots".into(),
+                subtitle: String::new(),
+                last_modified: String::new(),
+            }],
+            true,
+        );
+        app.session_panel.begin_rename("workspace-test");
+        let name = "界e\u{301}👩\u{200d}💻".repeat(16);
+        assert!(app.session_panel.accessibility_set_rename(&name));
+        for (width, cell) in [(800.0, 8.0), (1400.0, 16.0)] {
+            let info = app.session_panel.build_info();
+            let layout = crate::session::panel::SessionPanelLayout::calculate(
+                width,
+                800.0,
+                cell,
+                cell * 2.0,
+                info.animation,
+                true,
+                true,
+                info.sessions.len(),
+            );
+            let expected = layout.rename_input_viewport(&name, name.len()).unwrap();
+            assert_eq!(
+                app.session_ime_viewport(width, 800.0, cell, cell * 2.0),
+                Some(expected.clone())
+            );
+            assert!(expected.text_range.start > 0);
+        }
+        assert!(app.session_ime_viewport(40.0, 600.0, 10.0, 20.0).is_none());
+        app.search.start();
+        assert!(!app.search_owns_ime_text());
+        app.command_palette.open();
+        assert!(app.session_ime_viewport(800.0, 600.0, 10.0, 20.0).is_none());
+        app.command_palette.close();
+        app.domain_picker.open(&app.config.domains);
+        assert!(app.session_ime_viewport(800.0, 600.0, 10.0, 20.0).is_none());
+        app.close_domain_picker();
+        app.settings_panel.toggle();
+        assert!(app.session_ime_viewport(800.0, 600.0, 10.0, 20.0).is_none());
+        app.settings_panel.toggle();
+        app.session_panel.cancel_rename();
+        assert!(app.session_ime_viewport(800.0, 600.0, 10.0, 20.0).is_none());
+        assert!(app.active_terminal().is_none());
+        assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
     }
 
     #[test]

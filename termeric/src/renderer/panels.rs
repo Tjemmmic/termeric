@@ -666,27 +666,24 @@ impl Renderer {
                 rename.input.height,
                 [0.0, 0.0, 0.0, 0.2],
             );
-            let text_y = rename.input.y + (rename.input.height - cell_height) / 2.0;
-            let text_x = rename.input.x + ui_cw * 0.5;
-            for (index, character) in name.chars().enumerate() {
-                let x = text_x + index as f32 * ui_cw;
-                if x + ui_cw > rename.input.x + rename.input.width {
-                    break;
-                }
-                self.text_pipeline
-                    .push_char(character, x, text_y, self.ui.settings_text);
-            }
-            let cursor_chars = name
-                .get(..info.rename_cursor)
-                .map(str::chars)
-                .map(Iterator::count)
-                .unwrap_or_else(|| name.chars().count());
-            let cursor_x = text_x + cursor_chars as f32 * ui_cw;
-            if cursor_x <= rename.input.x + rename.input.width {
+            if let Some(view) = layout.rename_input_viewport(name, info.rename_cursor) {
+                self.text_pipeline.push_ui_run(
+                    &name[view.text_range.clone()],
+                    view.text_x,
+                    view.text_y,
+                    self.ui.settings_text,
+                    ui_cw,
+                    super::text::TextClip {
+                        left: view.text_x,
+                        top: rename.input.y,
+                        right: view.right,
+                        bottom: rename.input.y + rename.input.height,
+                    },
+                );
                 self.rect_pipeline.push_rect(
-                    cursor_x,
+                    view.cursor_x,
                     rename.input.y + 2.0,
-                    1.5,
+                    1.5_f32.min(view.right - view.cursor_x),
                     rename.input.height - 4.0,
                     self.ui.settings_accent,
                 );
