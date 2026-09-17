@@ -40,6 +40,7 @@ from scripts.gui_tab_placement import run_tab_overflow_scenario, run_tab_placeme
 from scripts.gui_background import run_background_scenario
 from scripts.gui_mouse_routing import run_mouse_ownership_checks
 from scripts.gui_palette_input import run_palette_input_checks
+from scripts.gui_graphics import graphics_clients_accepted, run_wayland_graphics
 
 FIXTURE = ROOT / "termeric" / "tests" / "gui" / "terminal_fixture.py"
 BASELINES = ROOT / "termeric" / "tests" / "gui" / "baselines"
@@ -899,56 +900,9 @@ def run_workspace_scenario(
             15,
         )
 
-        def graphics_clients_accepted() -> bool:
-            client_records = [
-                record
-                for record in read_records(transcript)
-                if record.get("event") == "graphics_client"
-            ]
-            expected_protocols = {
-                "kitten-stream": "kitty",
-                "kitten-unicode-placeholder": "kitty-unicode-placeholder",
-                "kitten-file": "kitty-temporary-file",
-                "kitten-memory": "kitty-shared-memory",
-                "timg-kitty": "kitty",
-                "img2sixel": "sixel",
-                "timg-iterm2": "iterm2",
-            }
-            if len(client_records) != len(expected_protocols) or {
-                str(record.get("tool")): record.get("protocol")
-                for record in client_records
-            } != expected_protocols:
-                return False
-            timg_record = next(
-                record for record in client_records if record.get("tool") == "timg-kitty"
-            )
-            try:
-                timg_image_id = int(timg_record["image_id"])
-            except (KeyError, TypeError, ValueError):
-                return False
-            if timg_image_id <= 0 or timg_image_id in {17, 1701, 1702, 1703, 1704}:
-                return False
-            records_by_tool = {
-                str(record.get("tool")): record for record in client_records
-            }
-            if any(
-                records_by_tool[tool].get("cleanup_observed") is not True
-                for tool in ("kitten-file", "kitten-memory")
-            ):
-                return False
-            return (
-                app.log_contains("Accepted Kitty image: id=1701")
-                and app.log_contains("Accepted Kitty Unicode placeholder image: id=1702")
-                and app.log_contains("Accepted Kitty image: id=1703")
-                and app.log_contains("Accepted Kitty image: id=1704")
-                and app.log_contains(f"Accepted Kitty image: id={timg_image_id}")
-                and app.log_contains("Accepted Sixel image")
-                and app.log_contains("Accepted iTerm2 inline image")
-            )
-
         wait_until(
             "kitten stream/local-media, independent timg Kitty, img2sixel, and timg iTerm2 output accepted",
-            graphics_clients_accepted,
+            lambda: graphics_clients_accepted(read_records(transcript), app.log_contains),
             15,
         )
         app.snapshot("graphics-clients", update, review_only=True)
@@ -2128,8 +2082,10 @@ def required_tools(
         if start_window_manager:
             tools.append("openbox")
     else:
-        if set(scenarios) & {"fullscreen", "interaction", "tab-placement", "tab-overflow", "background"}:
+        if set(scenarios) & {"fullscreen", "interaction", "tab-placement", "tab-overflow", "background", "graphics"}:
             tools.append("wtype")
+        if "graphics" in scenarios:
+            tools.extend(["kitten", "img2sixel", "timg"])
         if "interaction" in scenarios:
             tools.extend(["wl-copy", "wl-paste"])
         elif "tab-overflow" in scenarios:
@@ -2165,6 +2121,7 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             "tab-placement",
             "tab-overflow",
             "background",
+            "graphics",
             "fullscreen",
             "cli",
             "domain",
@@ -2230,6 +2187,8 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
     if "background" in scenarios and args.skip_visual_checks:
         raise AcceptanceError("background acceptance cannot skip its pixel checks")
     if args.backend == "x11":
+        if "graphics" in scenarios:
+            raise AcceptanceError("standalone graphics acceptance requires private Sway; X11 uses workspace")
         if "background" in scenarios:
             raise AcceptanceError("background pixel acceptance currently requires private Sway")
         if "launch" in scenarios:
@@ -2240,10 +2199,10 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             raise AcceptanceError("Wayland compositor launchers require --backend wayland")
     else:
         scenarios = args.scenario or ["launch"]
-        invalid = sorted(set(scenarios) - {"launch", "interaction", "fullscreen", "tab-placement", "tab-overflow", "background"})
+        invalid = sorted(set(scenarios) - {"launch", "interaction", "fullscreen", "tab-placement", "tab-overflow", "background", "graphics"})
         if invalid:
             raise AcceptanceError(
-                "Wayland supports only launch/interaction/fullscreen/tab-placement/tab-overflow/background scenarios, got "
+                "Wayland supports only launch/interaction/fullscreen/tab-placement/tab-overflow/background/graphics scenarios, got "
                 + ", ".join(invalid)
             )
         if args.start_weston and args.start_sway:
@@ -2256,7 +2215,7 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             or args.force_device_loss
         ) and not args.start_sway:
             raise AcceptanceError("Wayland renderer-failure injection requires --start-sway")
-        sway_scenarios = sorted(set(scenarios) & {"interaction", "fullscreen", "tab-placement", "tab-overflow", "background"})
+        sway_scenarios = sorted(set(scenarios) & {"interaction", "fullscreen", "tab-placement", "tab-overflow", "background", "graphics"})
         if sway_scenarios and not args.start_sway:
             raise AcceptanceError(
                 "Wayland " + ", ".join(sway_scenarios) + " requires --start-sway"
@@ -2379,6 +2338,9 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
                     elif scenario == "background":
                         run_background_scenario(sys.modules[__name__], scenario_binary,
                                                 artifacts / scenario, environment)
+                    elif scenario == "graphics":
+                        run_wayland_graphics(sys.modules[__name__], scenario_binary,
+                                             artifacts / scenario, environment)
                     elif scenario == "tab-overflow":
                         run_tab_overflow_scenario(
                             sys.modules[__name__], scenario_binary, artifacts / scenario,

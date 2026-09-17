@@ -419,6 +419,30 @@ Missing applications are failures, never silent skips. A developer running a
 partial local command may record the exact tool as unavailable, but the CI
 lane installs and requires the complete declared tool set.
 
+## Standalone Wayland graphics clients
+
+The `graphics` scenario runs the seven installed image clients listed above
+inside private Sway without the X11 workspace scenario or access to the user's
+desktop. Run it against a clean, built candidate:
+
+```bash
+WGPU_BACKEND=gl python3 scripts/gui_acceptance.py \
+  --backend wayland --start-sway --require-clean --scenario graphics \
+  --binary target/debug/termeric --artifacts /tmp/termeric-wayland-graphics
+```
+
+The shared X11/Wayland oracle requires the exact client/protocol set, nonempty
+versions/output, exact fixed Kitty IDs, a distinct valid timg ID, observed
+temporary-file/shared-memory removal, and protocol-specific acceptance logs.
+IDs in log checks include their delimiter, so accepting image 17010 cannot
+satisfy image 1701. The standalone lane also requires the fixture's exact Kitty
+reply, post-image native keyboard delivery to its sole PTY, and native close.
+It retains `graphics-input.json`, the PTY transcript, logs, and a hashed
+`graphics-clients.png` captured before injected input or scrolling. The PNG is
+review-only: protocol acceptance is not a pixel oracle or proof that every
+placement is visible. The sidecar is diagnostic, not an independently sealed
+graphics-publication contract. Real-client visual judgment remains manual.
+
 ## What remains manual
 
 Only policy- or perception-dependent checks remain manual: real-compositor
