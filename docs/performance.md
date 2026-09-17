@@ -477,6 +477,33 @@ controls: kitty sessions are disabled, WezTerm uses
 mode, and Konsole uses `--separate --builtin-profile`. No personal terminal
 configuration participates.
 
+For pixel/grid calibration, `--termeric-font-size` overrides only Termeric's
+logical-pixel size (8–72); the other adapters keep `--font-size` in their
+recorded units. `--termeric-line-height` sets Termeric's font-size multiplier
+(0.8–3.0). Both the report settings and Termeric's per-terminal controls retain
+the requested values. Without overrides, the historical common numeric size
+and Termeric line-height multiplier 1.0 are unchanged. There is no implicit DPI
+conversion or automatic claim that glyph metrics match.
+
+On the chosen isolated X11 display, a calibration starting point for the local
+100×30 kitty setup is:
+
+```bash
+python3 scripts/compare_terminals.py \
+  --terminal termeric --terminal kitty \
+  --font-size 12 --termeric-font-size 16 --termeric-line-height 1.3 \
+  --window-width 1001 --window-height 661 \
+  --samples 1 --warmups 0 \
+  --output target/terminal-comparison/calibration.json
+```
+
+These values are a starting point, not a verified portable preset. Inspect the
+actual initial/final grid and window pixels, retain unsuccessful calibration
+records, then collect full warmup/repeated samples with the chosen settings.
+Overrides never bypass the comparison contract. Even matching grid/window
+dimensions do not prove identical glyph rasterization, chrome/content layout,
+renderer backends, or allocator behavior; report those limits with any ranking.
+
 The runner also replaces inherited Wayland/toolkit display selectors and
 reexecutes itself once under a private `dbus-run-session` before every version
 probe and launch. The Wayland display and socket variables are deliberately

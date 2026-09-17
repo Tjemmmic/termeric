@@ -60,6 +60,8 @@ class BenchmarkSettings:
     scrollback_lines: int
     window_width: int
     window_height: int
+    termeric_font_size: float | None = None
+    termeric_line_height: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -230,6 +232,11 @@ def build_launch_spec(
     history = settings.scrollback_lines
 
     if name == "termeric":
+        if settings.termeric_font_size is not None:
+            size = settings.termeric_font_size
+        controls["font_size_requested"] = size
+        controls["line_height_requested"] = settings.termeric_line_height
+        controls["line_height_unit"] = "font-size multiplier"
         controls["display_backend_control"] = "empty Wayland selectors; DISPLAY selected"
         controls["font_size_unit"] = "Termeric logical pixels before display scaling"
         config = run_dir / "xdg-config" / "termeric" / "config.toml"
@@ -238,7 +245,7 @@ def build_launch_spec(
             f"""[font]
 family = {quote_toml(font)}
 size = {size}
-line_height = 1.0
+line_height = {settings.termeric_line_height}
 ligatures = false
 
 [scrollback]
@@ -993,12 +1000,28 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=20.0)
     parser.add_argument("--font-family", default="DejaVu Sans Mono")
     parser.add_argument("--font-size", type=float, default=12.0)
+    parser.add_argument(
+        "--termeric-font-size", type=float,
+        help="override only Termeric's logical-pixel font size (8–72); other adapters retain --font-size in their recorded units",
+    )
+    parser.add_argument(
+        "--termeric-line-height", type=float, default=1.0,
+        help="Termeric line-height multiplier (0.8–3.0); calibrate using observed grid and window pixels",
+    )
     parser.add_argument("--columns", type=int, default=100)
     parser.add_argument("--rows", type=int, default=30)
     parser.add_argument("--scrollback-lines", type=int, default=10_000)
     parser.add_argument("--window-width", type=int, default=1000)
     parser.add_argument("--window-height", type=int, default=700)
     args = parser.parse_args()
+    if any(not math.isfinite(value) or value <= 0 for value in (args.idle_seconds, args.timeout_seconds, args.font_size)):
+        parser.error("idle duration, timeout, and font size must be finite and positive")
+    if args.termeric_font_size is not None and not 8 <= args.termeric_font_size <= 72:
+        parser.error("Termeric font size must be finite and between 8 and 72 logical pixels")
+    if "termeric" in args.terminal and args.termeric_font_size is None and not 8 <= args.font_size <= 72:
+        parser.error("Termeric requires a font size between 8 and 72 logical pixels; use --termeric-font-size to override the common value")
+    if not 0.8 <= args.termeric_line_height <= 3.0:
+        parser.error("Termeric line height must be finite and between 0.8 and 3.0")
     if platform.system() != "Linux" or not Path("/proc/self/status").is_file():
         parser.error("cross-terminal benchmarking currently requires Linux /proc")
     if not os.environ.get("DISPLAY"):
@@ -1007,10 +1030,8 @@ def main() -> int:
         parser.error("cross-terminal benchmarking requires xdotool")
     if args.samples < 1 or args.warmups < 0:
         parser.error("samples must be positive and warmups must be nonnegative")
-    if min(args.payload_bytes, args.columns, args.rows, args.scrollback_lines) < 1:
-        parser.error("payload, grid, and scrollback values must be positive")
-    if min(args.idle_seconds, args.timeout_seconds, args.font_size) <= 0:
-        parser.error("idle duration, timeout, and font size must be positive")
+    if min(args.payload_bytes, args.columns, args.rows, args.scrollback_lines, args.window_width, args.window_height) < 1:
+        parser.error("payload, grid, scrollback, and window dimensions must be positive")
     enter_private_session_bus(parser)
     selected = list(dict.fromkeys(args.terminal))
     output = args.output.resolve()
@@ -1026,6 +1047,8 @@ def main() -> int:
         args.scrollback_lines,
         args.window_width,
         args.window_height,
+        args.termeric_font_size,
+        args.termeric_line_height,
     )
     environment = x11_environment(dict(os.environ))
     records: dict[str, dict[str, Any]] = {}

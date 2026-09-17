@@ -1,5 +1,8 @@
 import os
+import io
+import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +17,7 @@ from scripts.compare_terminals import (
     comparison_contract,
     direct_children,
     idle_cpu_measurement,
+    main,
     parse_resource_status,
     process_tree_sample,
     run_sample,
@@ -75,6 +79,77 @@ def terminal(name: str, run_sample: dict) -> dict:
 
 
 class CrossTerminalBenchmarkTests(unittest.TestCase):
+    def test_termeric_calibration_overrides_are_explicit_and_do_not_change_other_adapters(self):
+        calibrated = replace(SETTINGS, termeric_font_size=16.0, termeric_line_height=1.3)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in SUPPORTED_TERMINALS:
+                with self.subTest(terminal=name):
+                    run_dir = root / name
+                    spec = build_launch_spec(name, f"/fixture/{name}", run_dir, "title", ["fixture"], calibrated, {"DISPLAY": ":99"})
+                    expected = 16.0 if name == "termeric" else 12.0
+                    self.assertEqual(spec.controls["font_size_requested"], expected)
+                    if name == "termeric":
+                        config = (run_dir / "xdg-config/termeric/config.toml").read_text()
+                        self.assertIn("\nsize = 16.0\nline_height = 1.3\n", config)
+                        self.assertEqual(spec.controls["line_height_requested"], 1.3)
+                        self.assertEqual(spec.controls["line_height_unit"], "font-size multiplier")
+                    else:
+                        self.assertNotIn("line_height_requested", spec.controls)
+                        original_dir = root / f"original-{name}"
+                        original = build_launch_spec(name, f"/fixture/{name}", original_dir, "title", ["fixture"], SETTINGS, {"DISPLAY": ":99"})
+                        self.assertEqual(spec.controls, original.controls)
+                        self.assertEqual(
+                            [arg.replace(str(run_dir), "CONFIG") for arg in spec.command],
+                            [arg.replace(str(original_dir), "CONFIG") for arg in original.command],
+                        )
+                        for path in run_dir.rglob("*"):
+                            if path.is_file():
+                                self.assertEqual(path.read_bytes(), (original_dir / path.relative_to(run_dir)).read_bytes())
+            default_dir = root / "default-termeric"
+            default = build_launch_spec("termeric", "/fixture/termeric", default_dir, "title", ["fixture"], SETTINGS, {})
+            self.assertEqual(default.controls["font_size_requested"], 12.0)
+            self.assertEqual(default.controls["line_height_requested"], 1.0)
+
+    def test_invalid_calibration_values_fail_before_any_external_command(self):
+        cases = [("--termeric-font-size", value) for value in ("7", "73", "nan", "inf", "-inf")]
+        cases += [("--termeric-line-height", value) for value in ("0.7", "3.1", "nan", "inf", "-inf")]
+        cases += [("--font-size", value) for value in ("7", "73", "nan", "inf", "-inf")]
+        cases += [(flag, value) for flag in ("--idle-seconds", "--timeout-seconds") for value in ("0", "nan", "inf")]
+        for flag, value in cases:
+            with self.subTest(flag=flag, value=value), \
+                    patch("sys.argv", ["compare_terminals.py", "--terminal", "termeric", f"{flag}={value}"]), \
+                    patch("sys.stderr", new_callable=io.StringIO), \
+                    patch("scripts.compare_terminals.enter_private_session_bus") as bus, \
+                    patch("scripts.compare_terminals.subprocess.run") as command:
+                with self.assertRaises(SystemExit) as error:
+                    main()
+                self.assertEqual(error.exception.code, 2)
+                bus.assert_not_called()
+                command.assert_not_called()
+
+    def test_calibration_cli_records_settings_without_implicitly_selecting_terminals(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "report.json"
+            with patch("sys.argv", ["compare_terminals.py", "--terminal", "termeric", "--termeric-font-size=16", "--termeric-line-height=1.3", "--output", str(output)]), \
+                    patch.dict(os.environ, {"DISPLAY": ":99"}), \
+                    patch("scripts.compare_terminals.platform.system", return_value="Linux"), \
+                    patch("scripts.compare_terminals.Path.is_file", return_value=True), \
+                    patch("scripts.compare_terminals.shutil.which", return_value="/fixture/xdotool"), \
+                    patch("scripts.compare_terminals.enter_private_session_bus"), \
+                    patch("scripts.compare_terminals.executable_for", return_value=None) as executable, \
+                    patch("scripts.compare_terminals.command_capture", return_value={}), \
+                    patch("scripts.compare_terminals.run_sample") as launch, \
+                    patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(main(), 1)  # Selected executable unavailable, not a false pass.
+            report = json.loads(output.read_text())
+            self.assertEqual(report["settings"]["font_size"], 12.0)
+            self.assertEqual(report["settings"]["termeric_font_size"], 16.0)
+            self.assertEqual(report["settings"]["termeric_line_height"], 1.3)
+            self.assertEqual([row["terminal"] for row in report["terminals"]], ["termeric"])
+            executable.assert_called_once()
+            launch.assert_not_called()
+
     def test_x11_environment_removes_parent_wayland_and_toolkit_overrides(self):
         environment = x11_environment(
             {
