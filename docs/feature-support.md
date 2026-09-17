@@ -394,6 +394,13 @@ commit/cancel without a live-domain connection; the inline editor still lacks
 caret navigation, selection, and clipboard input, and native IME acceptance
 remains deferred (see [input contract](accessibility-and-input.md)).
 
+Shortcut, Settings, workspace, and command panels consistently precede retained
+tab rename for keyboard, IME/candidate geometry, and paste. Their read-only
+states consume input, and command-manager browse keys no longer fall through to
+the shell or retained editors. Headless and raw-PTY tests cover frontmost input,
+blocked transitions, draft preservation, and rename resumption after dismissal;
+native desktop acceptance remains separate (see [input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected

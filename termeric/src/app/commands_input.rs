@@ -6,6 +6,27 @@ use crate::ui::text_input::TextInputEdit;
 use winit::keyboard::{Key, NamedKey};
 
 impl App {
+    /// The command manager is modal in browse mode too. A retained rename
+    /// or search, and the PTY behind them, must never receive its keystrokes.
+    pub(super) fn handle_commands_panel_key(&mut self, key: &Key) -> bool {
+        if !self.commands_panel.is_open() {
+            return false;
+        }
+        if self.commands_panel.is_editing() {
+            return self.handle_commands_form_key(key);
+        }
+        if matches!(key, Key::Named(NamedKey::Escape)) {
+            self.commands_panel.close();
+            self.ime.clear_preedit();
+            self.redraw_scheduler
+                .request(redraw_scheduler::RedrawReason::KeyboardInput);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        true
+    }
+
     pub(super) fn handle_commands_form_key(&mut self, key: &Key) -> bool {
         if !self.commands_panel.is_open() || !self.commands_panel.is_editing() {
             return false;
@@ -178,6 +199,28 @@ mod tests {
         let mut app = App::new_headless(Config::default()).unwrap();
         app.commands_panel.toggle();
         exercise_atomic_form_input(&mut app);
+    }
+
+    #[test]
+    fn browse_panel_consumes_text_and_navigation_without_mutating_retained_fields() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        assert!(!app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+        app.search.start();
+        app.commands_panel.toggle();
+        for key in [
+            Key::Character("x".into()),
+            Key::Named(NamedKey::Enter),
+            Key::Named(NamedKey::Backspace),
+            Key::Named(NamedKey::ArrowDown),
+        ] {
+            assert!(app.handle_commands_panel_key(&key));
+            assert!(app.commands_panel.is_open());
+            assert!(!app.commands_panel.is_editing());
+            assert!(app.search.query().is_empty());
+        }
+        assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Escape)));
+        assert!(!app.commands_panel.is_open());
+        assert!(app.search.is_active());
     }
 
     #[test]

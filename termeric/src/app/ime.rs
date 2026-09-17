@@ -93,9 +93,6 @@ impl App {
         if self.command_palette.is_active() || self.unicode_picker.is_active() {
             return true;
         }
-        if self.tab_rename.is_some() {
-            return true;
-        }
         if self.shortcuts_panel.is_active() {
             return !self.shortcuts_panel.is_recording();
         }
@@ -107,6 +104,9 @@ impl App {
         }
         if self.commands_panel.is_open() {
             return self.commands_panel.is_editing();
+        }
+        if self.tab_rename.is_some() {
+            return true;
         }
         if self.search.is_active() {
             return true;
@@ -130,8 +130,6 @@ impl App {
             self.command_palette.insert_query_text(text);
         } else if self.unicode_picker.is_active() {
             self.unicode_picker.insert_query_text(text);
-        } else if self.tab_rename.is_some() {
-            self.insert_tab_rename_text(text);
         } else if self.shortcuts_panel.is_active() {
             self.shortcuts_panel.insert_filter_text(text);
         } else if self.settings_panel.is_active() {
@@ -140,6 +138,8 @@ impl App {
             self.session_panel.insert_rename_text(text);
         } else if self.commands_panel.is_open() {
             self.commands_panel.insert_form_text(text);
+        } else if self.tab_rename.is_some() {
+            self.insert_tab_rename_text(text);
         } else if self.search.is_active() {
             let cursor = self.search_cursor_pos;
             if self
@@ -208,7 +208,6 @@ impl App {
             && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
-            && self.tab_rename.is_none()
             && !self.shortcuts_panel.is_active()
             && !self.settings_panel.is_active()
             && !self.session_panel.is_open()
@@ -222,7 +221,6 @@ impl App {
             && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
-            && self.tab_rename.is_none()
     }
 
     fn settings_owns_ime_text(&self) -> bool {
@@ -233,7 +231,6 @@ impl App {
             && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
-            && self.tab_rename.is_none()
             && !self.shortcuts_panel.is_active()
     }
 
@@ -260,7 +257,6 @@ impl App {
             && !self.domain_picker.is_active()
             && !self.command_palette.is_active()
             && !self.unicode_picker.is_active()
-            && self.tab_rename.is_none()
             && !self.shortcuts_panel.is_active()
             && !self.settings_panel.is_active()
     }
@@ -1082,6 +1078,142 @@ mod tests {
         assert_eq!(state.preedit().unwrap().cursor, None);
     }
 
+    fn exercise_retained_rename_modal_ownership(app: &mut App) {
+        use crate::session::panel::{SessionEntry, SessionPanelAction};
+        use winit::keyboard::{Key, NamedKey};
+        for owner in ["settings", "shortcuts", "session", "commands"] {
+            app.tab_rename = Some(TabRenameState {
+                tab_id: app
+                    .tabs
+                    .as_ref()
+                    .and_then(TabManager::active_tab_id)
+                    .unwrap_or(usize::MAX),
+                original: None,
+                input: "retained".into(),
+                max_chars: 256,
+            });
+            app.search.start();
+            match owner {
+                "settings" => {
+                    app.settings_panel.set_reduced_motion(true);
+                    app.settings_panel.toggle();
+                }
+                "shortcuts" => {
+                    app.shortcuts_panel.set_reduced_motion(true);
+                    app.shortcuts_panel.open();
+                }
+                "session" => {
+                    app.session_panel.set_reduced_motion(true);
+                    app.session_panel.set_test_entries(
+                        vec![SessionEntry {
+                            id: "modal-owner-fixture".into(),
+                            display_name: "Roots".into(),
+                            subtitle: String::new(),
+                            last_modified: String::new(),
+                        }],
+                        true,
+                    );
+                    app.apply_session_panel_action(SessionPanelAction::Rename(
+                        "modal-owner-fixture".into(),
+                    ));
+                    assert!(app.session_panel.accessibility_set_rename(""));
+                }
+                _ => {
+                    app.commands_panel.set_reduced_motion(true);
+                    app.commands_panel.toggle();
+                    app.commands_panel.start_add();
+                }
+            }
+            let key = Key::Character("K".into());
+            assert!(match owner {
+                "settings" => app.handle_settings_filter_key(&key),
+                "shortcuts" => app.handle_shortcuts_filter_key(&key),
+                "session" => app.handle_session_rename_key(&key),
+                _ => app.handle_commands_panel_key(&key),
+            });
+            app.handle_ime_event(Ime::Preedit("draft".into(), None));
+            assert!(app.ime.preedit().is_some());
+            let view = match owner {
+                "settings" => app.settings_ime_viewport(1000.0, 800.0, 8.0, 16.0),
+                "shortcuts" => app.shortcuts_ime_viewport(1000.0, 800.0, 8.0, 16.0),
+                "session" => app.session_ime_viewport(1000.0, 800.0, 8.0, 16.0),
+                _ => app.commands_ime_viewport(1000.0, 800.0, 8.0, 16.0),
+            };
+            assert!(view.is_some(), "missing {owner} candidate viewport");
+            app.handle_ime_event(Ime::Commit("I".into()));
+            assert!(app.paste_clipboard_payload("P"));
+            let text = match owner {
+                "settings" => {
+                    app.settings_panel
+                        .build_info(&app.config, &app.shortcut_registry)
+                        .filter
+                }
+                "shortcuts" => {
+                    app.shortcuts_panel
+                        .build_info(&app.shortcut_registry)
+                        .filter
+                }
+                "session" => app.session_panel.build_info().rename_text.unwrap(),
+                _ => app.commands_panel.form_name.text().to_owned(),
+            };
+            assert_eq!(text, "KIP", "wrong {owner} input destination");
+            assert_eq!(app.tab_rename.as_ref().unwrap().input, "retained");
+            assert!(app.search.query().is_empty());
+            // A frontmost read-only state must consume input, not expose
+            // the retained rename behind it as an IME or paste destination.
+            match owner {
+                "settings" => {
+                    app.settings_panel
+                        .open_to_section(crate::ui::settings::SettingsSection::Theme);
+                    app.settings_panel
+                        .build_info(&app.config, &app.shortcut_registry);
+                    app.settings_panel.handle_key(
+                        crate::ui::settings::SettingsKey::Right,
+                        &app.config,
+                        &app.shortcut_registry,
+                    );
+                    assert!(app.settings_panel.is_dropdown_open());
+                }
+                "shortcuts" => app
+                    .shortcuts_panel
+                    .start_recording(crate::input::keybindings::BindableAction::Copy),
+                "session" => app.apply_session_panel_action(SessionPanelAction::CancelRename),
+                _ => {
+                    app.commands_panel.cancel_edit();
+                    assert!(app.handle_commands_panel_key(&Key::Character("blocked".into())));
+                    assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Enter)));
+                }
+            }
+            assert!(!app.accepts_ime_text());
+            app.handle_ime_event(Ime::Preedit("blocked".into(), None));
+            assert!(app.ime.preedit().is_none());
+            app.handle_ime_event(Ime::Commit("blocked".into()));
+            assert!(!app.paste_clipboard_payload("blocked"));
+            assert_eq!(app.tab_rename.as_ref().unwrap().input, "retained");
+            assert!(app.search.query().is_empty());
+            match owner {
+                "settings" => app.settings_panel.close(),
+                "shortcuts" => app.shortcuts_panel.close_immediately(),
+                "session" => app.apply_session_panel_action(SessionPanelAction::Close),
+                _ => {
+                    assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Escape)));
+                }
+            }
+            app.handle_ime_event(Ime::Commit(" resumed".into()));
+            assert_eq!(app.tab_rename.as_ref().unwrap().input, "retained resumed");
+            assert!(!app.paste_clipboard_payload("still unsupported for tab rename"));
+            app.tab_rename = None;
+            app.search.cancel();
+        }
+        assert!(app.config.commands.is_empty());
+    }
+
+    #[test]
+    fn frontmost_panels_own_keyboard_ime_geometry_and_paste_ahead_of_retained_tab_rename() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        exercise_retained_rename_modal_ownership(&mut app);
+    }
+
     #[cfg(unix)]
     #[test]
     fn modal_atomic_commits_never_fall_through_to_a_live_pty() {
@@ -1207,6 +1339,7 @@ mod tests {
         assert!(app.handle_session_rename_key(&Key::Named(NamedKey::Escape)));
         assert_eq!(app.session_panel.sessions()[0].display_name, "Roots");
         app.apply_session_panel_action(crate::session::panel::SessionPanelAction::Close);
+        exercise_retained_rename_modal_ownership(&mut app);
         app.tabs
             .as_mut()
             .unwrap()

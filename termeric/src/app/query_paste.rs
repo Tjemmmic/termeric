@@ -39,9 +39,6 @@ impl App {
         if self.command_palette.is_active() {
             return PasteTarget::Command;
         }
-        if self.tab_rename.is_some() {
-            return PasteTarget::Blocked;
-        }
         if self.shortcuts_panel.is_active() {
             return if self.shortcuts_panel.is_recording() {
                 PasteTarget::Blocked
@@ -72,6 +69,9 @@ impl App {
             } else {
                 PasteTarget::Blocked
             };
+        }
+        if self.tab_rename.is_some() {
+            return PasteTarget::Blocked;
         }
         if self.search.is_active() {
             return PasteTarget::Search;
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn workspace_paste_preserves_lower_fields_and_respects_higher_modal_owners() {
-        for higher in 0..7 {
+        for higher in 0..6 {
             let mut app = App::new_headless(Config::default()).unwrap();
             app.search.start();
             app.commands_panel.toggle();
@@ -302,14 +302,7 @@ mod tests {
                 3 => app.command_palette.open(),
                 4 => app.unicode_picker.open(),
                 5 => app.domain_picker.open(&app.config.domains),
-                _ => {
-                    app.tab_rename = Some(TabRenameState {
-                        tab_id: 0,
-                        original: None,
-                        input: String::new(),
-                        max_chars: 80,
-                    })
-                }
+                _ => unreachable!(),
             }
             assert_eq!(
                 app.paste_clipboard_payload("higher"),
@@ -450,7 +443,7 @@ mod tests {
 
     #[test]
     fn settings_paste_retains_lower_fields_and_respects_higher_modal_owners() {
-        for higher in 0..6 {
+        for higher in 0..5 {
             let mut app = App::new_headless(Config::default()).unwrap();
             app.search.start();
             app.commands_panel.toggle();
@@ -468,14 +461,7 @@ mod tests {
                 2 => app.command_palette.open(),
                 3 => app.unicode_picker.open(),
                 4 => app.domain_picker.open(&app.config.domains),
-                _ => {
-                    app.tab_rename = Some(TabRenameState {
-                        tab_id: 0,
-                        original: None,
-                        input: String::new(),
-                        max_chars: 80,
-                    });
-                }
+                _ => unreachable!(),
             }
             assert_eq!(
                 app.paste_clipboard_payload("higher"),
@@ -588,7 +574,7 @@ mod tests {
 
     #[test]
     fn shortcut_filter_paste_retains_lower_fields_and_respects_higher_owners() {
-        for higher in 0..6 {
+        for higher in 0..5 {
             let mut app = App::new_headless(Config::default()).unwrap();
             app.search.start();
             app.commands_panel.toggle();
@@ -608,14 +594,7 @@ mod tests {
                 4 => {
                     app.shortcuts_panel.start_recording(BindableAction::Copy);
                 }
-                _ => {
-                    app.tab_rename = Some(TabRenameState {
-                        tab_id: 0,
-                        original: None,
-                        input: String::new(),
-                        max_chars: 80,
-                    });
-                }
+                _ => unreachable!(),
             }
             assert_eq!(
                 app.paste_clipboard_payload("higher"),

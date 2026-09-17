@@ -61,15 +61,15 @@ acceptance for these query destinations remains deferred.
 
 Shortcut chord recording blocks clipboard reads and leaves the configured Paste
 chord for the recording handler. Outside recording, the filter owns paste ahead
-of retained Settings, command-form, or search fields; higher dialogs, palettes,
-and a retained tab-rename owner keep their existing priority. A rejected filter
+of retained Settings, command-form, tab-rename, or search fields; higher dialogs
+and palettes keep their existing priority. A rejected filter
 paste preserves the caret and IME preedit; an accepted paste resets filtered
 results once and clears preedit. This does not modify or save shortcut bindings.
 
 Settings paste is likewise confined to its filter, never to the selected setting
 value. An open dropdown blocks clipboard reads and retains its normal key
 handling. Settings owns paste ahead of retained workspace/command/search panels,
-while higher-priority dialogs, palettes, shortcut editing, and tab rename retain
+while higher-priority dialogs, palettes, and shortcut editing retain
 their existing ownership. Rejected text cannot fall through to a lower field or
 PTY, and pasting does not apply or save configuration. Hermetic shortcut,
 Unicode-limit, modal-routing, and raw-PTY checks cover this boundary; real desktop
@@ -354,6 +354,11 @@ bounded. Rendering, pointer hit testing, and AccessKit bounds all use the same
 one application path. Automated accessibility tests use inert form strings and
 never submit or execute a custom command.
 
+The command manager consumes ordinary keyboard input in browse mode as well
+as in its inline form. Escape closes it; other browse keys cannot reach a
+retained search, tab rename, or terminal. Existing pointer and accessibility
+Run/Delete/New actions are unchanged.
+
 The custom-command Name and Command fields support whole-grapheme Left/Right,
 Home/End, Backspace/Delete, and Ctrl+Left/Right/Backspace/Delete word edits.
 Typing and IME commits insert at the active caret; unsupported modified editing
@@ -414,6 +419,16 @@ tests cover both size policies, Unicode deletion, modifiers, preview/cancel,
 explicit local commit, and a vanished target without connecting to a live
 domain. This remains an append/backspace editor: caret navigation, selection,
 clipboard input, and native IME acceptance are not claimed here.
+
+A retained tab rename sits below the shortcut editor, Settings, workspace
+manager, and command manager for keyboard, IME, and clipboard routing. An
+editable frontmost panel owns all three paths and its own IME candidate
+viewport; shortcut recording, Settings dropdowns, and manager browse modes
+consume input without exposing the hidden rename. Closing that panel allows
+rename input to resume. Search remains below tab rename. Headless ownership and
+raw-PTY tests cover editable/read-only transitions, candidate geometry, retained
+drafts, and resumption without real clipboard access, workspace persistence,
+command execution, or provider calls. Native desktop acceptance remains separate.
 
 The workspace manager and legacy-snapshot manager share a bounded modal model.
 Each visible entry is a named group with exact Load and Delete actions;

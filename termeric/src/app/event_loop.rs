@@ -1061,26 +1061,12 @@ impl ApplicationHandler<AppEvent> for App {
                     return;
                 }
 
-                // Handle commands panel inline form input
-                if self.commands_panel.is_open() && self.commands_panel.is_editing() {
-                    if event.state == winit::event::ElementState::Pressed {
-                        self.handle_commands_form_key(&event.logical_key);
-                    }
-                    return;
-                }
-
-                // Handle commands panel Escape to close
+                // Both browse mode and the inline form own modal input.
                 if self.commands_panel.is_open() {
                     if event.state == winit::event::ElementState::Pressed {
-                        use winit::keyboard::{Key, NamedKey};
-                        if let Key::Named(NamedKey::Escape) = &event.logical_key {
-                            self.commands_panel.close();
-                            if let Some(window) = &self.window {
-                                window.request_redraw();
-                            }
-                            return;
-                        }
+                        self.handle_commands_panel_key(&event.logical_key);
                     }
+                    return;
                 }
 
                 if self.handle_tab_rename_input(&event) {
