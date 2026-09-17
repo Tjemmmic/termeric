@@ -443,6 +443,14 @@ surfaces cannot redirect them to a background query or shell. Local routing and
 raw-PTY isolation tests pass. Native clipboard acceptance for these fields is
 still deferred (see [input contract](accessibility-and-input.md)).
 
+Shortcut-filter accessibility now advertises the same recording ownership as
+keyboard input: the field is read-only while capturing a chord, stale filter
+edit/focus requests are rejected, and focus cannot fall back to that field if
+the selected binding scrolls away. Cancel, timeout, and capture restore editing.
+Accepted semantic replacement clears preedit without changing bindings; inactive
+owners refuse replacement. Model/action/tree regressions cover this boundary;
+native screen-reader acceptance remains deferred.
+
 Settings-filter keyboard text and IME commits now use atomic insertion under a
 256-scalar/1,024-byte ceiling, reject controls and line separators, and preserve
 complete combining/ZWJ events. Backspace/Delete remove whole graphemes;

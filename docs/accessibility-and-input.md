@@ -436,6 +436,16 @@ is consumed without insertion. Chord recording still owns its input and rejects
 filter mutations. Model, dispatch, and raw-PTY isolation tests pass without
 saving user bindings; native IME/visual acceptance remains deferred.
 
+During chord recording the semantic filter is read-only and advertises neither
+`Focus` nor `SetValue`; retained requests cannot move focus, replace the query,
+or restart the recording deadline. Focus falls back to the selected binding,
+or the dialog if that row has scrolled out of view. Cancellation, timeout, and
+chord capture restore the filter actions. Outside recording, accepted semantic
+replacement clears old IME preedit, reports the end caret, and requests an
+accessibility redraw without changing bindings; invalid payloads and inactive
+owners are rejected unchanged. In-process model/action/tree tests cover these
+transitions, not native screen-reader acceptance.
+
 The filter supports whole-grapheme Left/Right, Home/End, and Backspace, plus
 Ctrl+Left/Right word navigation and Ctrl+Backspace word deletion. Caret-only
 movement preserves the selected result and scroll position; text deletion resets

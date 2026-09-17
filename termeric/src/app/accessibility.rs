@@ -1925,6 +1925,9 @@ impl App {
         use crate::ui::shortcuts_panel::ShortcutsAction;
 
         if request.target_node == SHORTCUTS_INPUT {
+            if self.shortcuts_panel.is_recording() {
+                return;
+            }
             match request.action {
                 Action::Focus => {
                     self.accessibility.focus_override = Some(SHORTCUTS_INPUT);
@@ -1934,7 +1937,10 @@ impl App {
                         return;
                     };
                     if self.shortcuts_panel.accessibility_set_filter(value) {
+                        self.ime.clear_preedit();
                         self.accessibility.focus_override = Some(SHORTCUTS_INPUT);
+                        self.redraw_scheduler
+                            .request(redraw_scheduler::RedrawReason::Accessibility);
                     }
                 }
                 _ => {}
@@ -4533,8 +4539,12 @@ impl App {
         });
         input.set_bounds(shortcuts_rect(layout.input));
         input.set_controls([SHORTCUTS_LIST]);
-        input.add_action(Action::Focus);
-        input.add_action(Action::SetValue);
+        if info.recording {
+            input.set_read_only();
+        } else {
+            input.add_action(Action::Focus);
+            input.add_action(Action::SetValue);
+        }
 
         let mut list_children = Vec::with_capacity(info.entries.len());
         let mut selected_node = None;
@@ -4632,9 +4642,14 @@ impl App {
         nodes.push((SHORTCUTS_DIALOG, dialog));
         nodes.push((ROOT, root));
 
-        let default_focus = selected_node.unwrap_or(SHORTCUTS_INPUT);
+        let default_focus = selected_node.unwrap_or(if info.recording {
+            SHORTCUTS_DIALOG
+        } else {
+            SHORTCUTS_INPUT
+        });
         let requested_focus = self.accessibility.focus_override.filter(|node| {
-            self.accessibility.is_shortcuts_node(*node)
+            (!info.recording || *node != SHORTCUTS_INPUT)
+                && self.accessibility.is_shortcuts_node(*node)
                 && nodes.iter().any(|(current, _)| current == node)
         });
         let focus = requested_focus.unwrap_or(default_focus);
@@ -7524,6 +7539,189 @@ mod tests {
         ] {
             assert!((actual - expected).abs() < 0.1, "{actual} != {expected}");
         }
+    }
+
+    #[test]
+    fn shortcut_filter_semantic_edits_retire_preedit_without_changing_bindings() {
+        use crate::input::keybindings::BindableAction;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.shortcuts_panel.open();
+        let bindings = |app: &App| {
+            BindableAction::all()
+                .iter()
+                .map(|action| app.shortcut_registry.binding_for(*action).cloned())
+                .collect::<Vec<_>>()
+        };
+        let original_bindings = bindings(&app);
+        let original_config = toml::to_string(&app.config).unwrap();
+        for value in ["copy", "e\u{301}👩\u{200d}💻", &"🫚".repeat(128), ""] {
+            app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SHORTCUTS_INPUT,
+                data: Some(ActionData::Value(value.into())),
+            });
+            let snapshot = app.accessibility_snapshot();
+            let input = &snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SHORTCUTS_INPUT)
+                .unwrap()
+                .1;
+            assert_eq!(input.value(), Some(value));
+            assert_eq!(
+                input.text_selection().unwrap().focus.character_index,
+                value.chars().count()
+            );
+            assert!(input.supports_action(Action::SetValue));
+            assert!(!input.is_read_only());
+            assert_eq!(snapshot.focus, SHORTCUTS_INPUT);
+            assert!(app.ime.preedit().is_none());
+            assert!(app.redraw_scheduler.has_pending());
+        }
+        app.handle_ime_event(winit::event::Ime::Preedit("keep".into(), None));
+        for data in [
+            None,
+            Some(ActionData::Value("bad\nquery".into())),
+            Some(ActionData::Value("x".repeat(129).into())),
+        ] {
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SHORTCUTS_INPUT,
+                data,
+            });
+            assert!(
+                app.shortcuts_panel
+                    .build_info(&app.shortcut_registry)
+                    .filter
+                    .is_empty()
+            );
+            assert!(app.ime.preedit().is_some());
+        }
+        assert_eq!(bindings(&app), original_bindings);
+        assert_eq!(toml::to_string(&app.config).unwrap(), original_config);
+    }
+
+    #[test]
+    fn shortcut_recording_rejects_filter_focus_and_restores_editability_on_every_exit() {
+        use crate::input::keybindings::{BindableAction, KeyChord};
+        use crate::ui::shortcuts_panel::{ShortcutsAction, ShortcutsKey};
+        for exit in ["cancel", "timeout", "capture"] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.shortcuts_panel.open();
+            app.accessibility.focus_override = Some(SHORTCUTS_INPUT);
+            app.apply_shortcuts_action(ShortcutsAction::StartRecording(BindableAction::Copy));
+            let deadline = app
+                .shortcuts_panel
+                .recording_deadline(Duration::from_secs(30));
+            let snapshot = app.accessibility_snapshot();
+            let copy = *app
+                .accessibility
+                .shortcuts_nodes
+                .get(&ShortcutsSemanticTarget::Action(BindableAction::Copy))
+                .unwrap();
+            assert_eq!(snapshot.focus, copy);
+            let input = &snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SHORTCUTS_INPUT)
+                .unwrap()
+                .1;
+            assert!(input.is_read_only());
+            assert!(!input.supports_action(Action::SetValue));
+            assert!(!input.supports_action(Action::Focus));
+            for action in [Action::Focus, Action::SetValue] {
+                app.handle_accessibility_action(ActionRequest {
+                    action,
+                    target_tree: TreeId::ROOT,
+                    target_node: SHORTCUTS_INPUT,
+                    data: Some(ActionData::Value("paste".into())),
+                });
+                assert_eq!(app.accessibility_snapshot().focus, copy);
+                assert!(
+                    app.shortcuts_panel
+                        .build_info(&app.shortcut_registry)
+                        .filter
+                        .is_empty()
+                );
+                assert_eq!(
+                    app.shortcuts_panel
+                        .recording_deadline(Duration::from_secs(30)),
+                    deadline
+                );
+                assert!(app.shortcuts_panel.is_recording());
+            }
+            match exit {
+                "cancel" => {
+                    app.shortcuts_panel
+                        .handle_key(ShortcutsKey::Escape, &app.shortcut_registry);
+                }
+                "timeout" => {
+                    assert!(app.shortcuts_panel.tick_recording_timeout(Duration::ZERO));
+                }
+                "capture" => {
+                    let chord = KeyChord::new("F24", true, true, true, false);
+                    assert_eq!(
+                        app.shortcuts_panel.handle_key(
+                            ShortcutsKey::RecordedChord(chord.clone()),
+                            &app.shortcut_registry
+                        ),
+                        ShortcutsAction::SetShortcut {
+                            action: BindableAction::Copy,
+                            chord: Some(chord)
+                        }
+                    );
+                }
+                _ => unreachable!(),
+            }
+            assert!(!app.shortcuts_panel.is_recording());
+            let snapshot = app.accessibility_snapshot();
+            let input = &snapshot
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == SHORTCUTS_INPUT)
+                .unwrap()
+                .1;
+            assert!(!input.is_read_only());
+            assert!(input.supports_action(Action::SetValue));
+            assert!(input.supports_action(Action::Focus));
+            app.handle_accessibility_action(ActionRequest {
+                action: Action::SetValue,
+                target_tree: TreeId::ROOT,
+                target_node: SHORTCUTS_INPUT,
+                data: Some(ActionData::Value("paste".into())),
+            });
+            assert_eq!(app.accessibility_snapshot().focus, SHORTCUTS_INPUT);
+            assert_eq!(
+                app.shortcuts_panel
+                    .build_info(&app.shortcut_registry)
+                    .filter,
+                "paste"
+            );
+        }
+    }
+
+    #[test]
+    fn shortcut_recording_never_falls_back_to_read_only_filter_when_target_scrolls_away() {
+        use crate::input::keybindings::BindableAction;
+        use crate::ui::shortcuts_panel::ShortcutsAction;
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.shortcuts_panel.open();
+        app.apply_shortcuts_action(ShortcutsAction::StartRecording(BindableAction::Copy));
+        app.accessibility.focus_override = Some(SHORTCUTS_INPUT);
+        app.shortcuts_panel
+            .scroll_down(usize::MAX, &app.shortcut_registry);
+        let snapshot = app.accessibility_snapshot();
+        assert_eq!(snapshot.focus, SHORTCUTS_DIALOG);
+        assert!(app.shortcuts_panel.is_recording());
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .any(|(id, node)| *id == SHORTCUTS_STATUS && node.live() == Some(Live::Polite))
+        );
     }
 
     #[test]

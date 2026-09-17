@@ -556,7 +556,7 @@ impl ShortcutsPanel {
     }
 
     pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
-        if self.recording || !valid_filter_text(value) {
+        if !self.is_active() || self.recording || !valid_filter_text(value) {
             return false;
         }
         self.filter.replace(value);
@@ -1180,11 +1180,16 @@ mod tests {
     #[test]
     fn semantic_filter_replacement_is_utf8_aware_single_line_and_bounded() {
         let mut panel = ShortcutsPanel::new();
+        assert!(!panel.accessibility_set_filter("hidden"));
+        panel.open();
         assert!(panel.accessibility_set_filter("copy 🫚"));
         assert_eq!(panel.filter.text(), "copy 🫚");
         assert!(!panel.accessibility_set_filter("copy\npaste"));
         assert_eq!(panel.filter.text(), "copy 🫚");
         assert!(!panel.accessibility_set_filter(&"x".repeat(129)));
+        assert_eq!(panel.filter.text(), "copy 🫚");
+        panel.close_immediately();
+        assert!(!panel.accessibility_set_filter(""));
         assert_eq!(panel.filter.text(), "copy 🫚");
     }
 }
