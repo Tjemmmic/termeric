@@ -371,9 +371,15 @@ too short for a whole row never activates that hidden command. Delete returns
 keyboard focus to New instead of leaving it on the next shifted row. Pointer
 hover is independent of this focus. Model, geometry, modifier, and semantic
 transition tests pass; raw-PTY tests prove navigation isolation and exact Run
-delivery of non-alias fixture text to an inert byte reader (not a command
-interpreter). Run retains the existing editable-line command-name/alias
-expansion and terminal-input policies. New tests do not
+delivery to an inert byte reader (not a command interpreter). Explicit Run
+uses the selected text without another saved-command name/alias expansion;
+ordinary typed command names and aliases still expand once on Enter. This
+distinction also applies to configured RunCommand keybindings. The shared
+input path retains focused-terminal routing, read-only and armed-broadcast
+refusal, active broadcast, and plugin-tab destructive-command confirmation.
+Raw-PTY regressions cover colliding names/aliases, suffixes, ordinary typed
+expansion, refused prefixes, broadcast delivery, and exact pending plugin
+Enter ownership using an inert reader with plugin metadata only. New tests do not
 persist or delete commands or invoke providers. Native keyboard/focus-outline
 and screen-reader acceptance remain deferred.
 

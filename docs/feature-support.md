@@ -420,6 +420,14 @@ inert reader, without executing a shell command or provider. Native keyboard,
 focus-outline, and screen-reader acceptance remain deferred (see
 [input contract](accessibility-and-input.md)).
 
+Explicit custom-command Run and RunCommand keybindings no longer expand the
+selected payload into another saved command when its first word collides with
+a configured name or alias. Ordinary typed aliases still expand on Enter.
+The shared terminal-input policy retains read-only, armed/active broadcast,
+and plugin confirmation behavior. Raw-PTY collision and safeguard tests use
+inert byte readers, not real command execution or providers; native operator
+acceptance remains deferred (see [input contract](accessibility-and-input.md)).
+
 Shortcut-editor filter typing, native character events, IME commits, and
 semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
 Complete Unicode input events are retained, oversized commits are rejected

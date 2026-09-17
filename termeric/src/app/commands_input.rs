@@ -571,6 +571,12 @@ mod tests {
                 alias: None,
             })
             .collect();
+        // The selected payload collides with another configured command name.
+        app.config.commands.push(crate::config::CustomCommand {
+            name: "B".into(),
+            command: "wrong".into(),
+            alias: None,
+        });
         app.commands_panel.toggle();
         for _ in 0..3 {
             assert!(app.handle_commands_panel_key(&Key::Named(NamedKey::Tab)));
@@ -579,7 +585,7 @@ mod tests {
         assert!(!app.commands_panel.is_open());
         // These bytes go to `dd`, not a shell command interpreter: clear line, B, Enter.
         wait_for(&mut app, "15 42 0d");
-        assert_eq!(app.config.commands.len(), 2);
+        assert_eq!(app.config.commands.len(), 3);
     }
 
     #[cfg(unix)]

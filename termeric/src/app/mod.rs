@@ -4218,9 +4218,7 @@ impl App {
     /// Run a custom command in the current terminal tab
     fn run_custom_command(&mut self, command: &str) {
         log::info!("Running custom command: {}", command);
-        for chunk in command_keystrokes(command) {
-            self.write_to_pty(&chunk);
-        }
+        self.write_saved_command(command);
     }
 
     /// Re-sync the command palette with currently registered plugins.

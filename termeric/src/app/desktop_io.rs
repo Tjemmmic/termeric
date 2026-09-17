@@ -1021,6 +1021,18 @@ impl App {
 
     /// Write input to the active tab's PTY, with custom command alias expansion
     pub(super) fn write_to_pty(&mut self, data: &[u8]) {
+        self.write_editable_input(data, true);
+    }
+
+    /// Explicitly chosen command text is already resolved. Preserve normal input
+    /// policy, but do not reinterpret its first word as another saved command.
+    pub(super) fn write_saved_command(&mut self, command: &str) {
+        for chunk in command_keystrokes(command) {
+            self.write_editable_input(&chunk, false);
+        }
+    }
+
+    fn write_editable_input(&mut self, data: &[u8], expand_aliases: bool) {
         if matches!(self.broadcast, BroadcastState::Armed { .. }) {
             self.toasts
                 .warning("Input was not sent while broadcast is armed");
@@ -1095,12 +1107,15 @@ impl App {
                 Some(pos) => (trimmed[..pos].to_string(), trimmed[pos..].to_string()),
                 None => (trimmed.clone(), String::new()),
             };
-            let matched_command = self
-                .config
-                .commands
-                .iter()
-                .find(|cmd| cmd.name == first_word || cmd.alias.as_deref() == Some(&first_word))
-                .map(|cmd| cmd.command.clone());
+            let matched_command = if expand_aliases {
+                self.config
+                    .commands
+                    .iter()
+                    .find(|cmd| cmd.name == first_word || cmd.alias.as_deref() == Some(&first_word))
+                    .map(|cmd| cmd.command.clone())
+            } else {
+                None
+            };
 
             // If a git command was run, invalidate the watcher to refresh branch state
             if trimmed.starts_with("git ") {
@@ -1394,6 +1409,202 @@ fn set_clipboard_text(
 #[cfg(test)]
 mod desktop_io_tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn raw_command_app(count: usize) -> App {
+        let mut tabs = TabManager::new(
+            120,
+            24,
+            crate::config::ShellConfig::default(),
+            100,
+            1024 * 1024,
+        );
+        tabs.new_tab_with_command("/bin/sh", &[
+            "-c".into(), format!("stty raw -echo; printf READY; dd bs=1 count={count} 2>/dev/null | od -An -tx1 -v; sleep 0.2"),
+        ], None, Some("saved-command-bytes"), None, Default::default()).unwrap();
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.tabs = Some(tabs);
+        wait_command_output(&mut app, "READY");
+        app.config.commands = vec![crate::config::CustomCommand {
+            name: "B".into(),
+            command: "X".into(),
+            alias: Some("alias".into()),
+        }];
+        app
+    }
+
+    #[cfg(unix)]
+    fn wait_command_output(app: &mut App, expected: &str) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut last = String::new();
+        loop {
+            app.process_pty_events();
+            let Some(terminal) = app.active_terminal() else {
+                panic!("reader exited before {expected:?}; last output: {last:?}");
+            };
+            last = terminal.rows_text(0, 23);
+            // od can wrap bytes onto multiple rows; preserve order but not whitespace.
+            if last
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains(expected)
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "missing {expected:?}: {last:?}");
+            std::thread::yield_now();
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_command_bytes(app: &mut App, expected: &[u8]) {
+        let expected = expected
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        wait_command_output(app, &expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_run_preserves_text_when_saved_names_or_aliases_collide() {
+        for (command, expected) in [
+            ("B", b"\x15B\r".as_slice()),
+            ("B tail", b"\x15B tail\r".as_slice()),
+            ("alias tail\n", b"\x15alias tail\r".as_slice()),
+        ] {
+            let mut app = raw_command_app(expected.len() + 1);
+            app.run_custom_command(command);
+            assert!(app.input_line_buffer.is_empty());
+            app.write_to_pty(b"Z");
+            // A following byte fences the operation, rejecting duplicate trailing input.
+            assert_command_bytes(&mut app, &[expected, b"Z"].concat());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_typed_names_and_aliases_still_expand_once() {
+        for name in ["B", "alias"] {
+            let typed = format!("{name} tail");
+            let expected = format!("{typed}\x15X tail\r");
+            let mut app = raw_command_app(expected.len() + 1);
+            app.write_to_pty(typed.as_bytes());
+            app.write_to_pty(b"\r");
+            app.write_to_pty(b"Z");
+            assert_command_bytes(&mut app, &[expected.as_bytes(), b"Z"].concat());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_run_keeps_read_only_and_armed_broadcast_guards() {
+        let mut app = raw_command_app(1);
+        app.toggle_focused_pane_read_only();
+        app.input_line_buffer = "stale".into();
+        app.git_completions = vec!["stale".into()];
+        app.git_completion_index = Some(0);
+        app.git_completions_visible = true;
+        app.run_custom_command("B");
+        assert!(app.input_line_buffer.is_empty());
+        assert!(app.git_completions.is_empty());
+        assert!(!app.git_completions_visible);
+        app.toggle_focused_pane_read_only();
+        let tab = app.tabs.as_ref().unwrap().active_tab().unwrap();
+        app.broadcast = BroadcastState::Armed {
+            tab_id: tab.id,
+            targets: vec![tab.single_pane_id()],
+            expires: Instant::now() + Duration::from_secs(10),
+        };
+        app.run_custom_command("B");
+        app.broadcast = BroadcastState::Inactive;
+        app.write_to_pty(b"Z");
+        // Even the line-clear prefix must not reach a refused destination.
+        assert_command_bytes(&mut app, b"Z");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_run_keeps_plugin_confirmation_bound_to_the_real_terminal() {
+        let command = "rm -rf /synthetic-never-executed";
+        let expected = format!("\x15{command}Z");
+        let mut app = raw_command_app(expected.len());
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let target = (tab.id, tab.single_pane_id());
+        // Metadata only: the existing child remains the local raw dd reader.
+        tab.tab_type = crate::tabs::TabType::Plugin {
+            plugin_id: "inert-guard-fixture".into(),
+        };
+        app.run_custom_command(command);
+        assert!(app.guardrail.is_awaiting_current());
+        assert_eq!(app.guardrail.matched.as_ref().unwrap().command, command);
+        let writes = app.guardrail.confirm(app.guardrail.request_id()).unwrap();
+        assert_eq!(
+            writes,
+            vec![crate::terminal::guardrails::GuardedWrite::for_pane(
+                target.0,
+                target.1,
+                b"\r".to_vec()
+            )]
+        );
+        // Inspect and discard the pending Enter; never deliver the confirmed batch.
+        app.write_to_pty(b"Z");
+        assert_command_bytes(&mut app, expected.as_bytes());
+        assert!(!app.guardrail.is_awaiting_current());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_run_still_broadcasts_literal_text_to_selected_panes() {
+        let mut app = raw_command_app(4);
+        let shell = crate::config::ShellConfig {
+            program: Some("/bin/sh".into()),
+            args: vec!["-c".into(), "stty raw -echo; printf READY; dd bs=1 count=4 2>/dev/null | od -An -tx1; sleep 0.2".into()],
+            env: Default::default(),
+        };
+        let tab = app.tabs.as_mut().unwrap().active_tab_mut().unwrap();
+        let owner = tab.take_terminal_owner().unwrap();
+        let mut panes =
+            PaneManager::from_existing(owner, shell, 100, 1024 * 1024, 800.0, 480.0, 8.0, 16.0);
+        panes.split(SplitDirection::Vertical).unwrap();
+        let targets = panes.pane_ids();
+        let tab_id = tab.id;
+        tab.pane_manager = Some(panes);
+        let wait_all = |app: &mut App, expected: &str| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                app.process_pty_events();
+                let panes = app
+                    .tabs
+                    .as_ref()
+                    .unwrap()
+                    .active_tab()
+                    .unwrap()
+                    .pane_manager
+                    .as_ref()
+                    .expect("both raw readers must remain live until observed");
+                let outputs: Vec<_> = targets
+                    .iter()
+                    .map(|id| panes.get_pane(*id).unwrap().terminal.rows_text(0, 23))
+                    .collect();
+                if outputs.iter().all(|output| output.contains(expected)) {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "missing {expected}: {outputs:?}");
+                std::thread::yield_now();
+            }
+        };
+        wait_all(&mut app, "READY");
+        app.broadcast = BroadcastState::Active {
+            tab_id,
+            targets: targets.clone(),
+        };
+        app.run_custom_command("B");
+        app.write_to_pty(b"Z");
+        wait_all(&mut app, "15 42 0d 5a");
+    }
 
     #[test]
     fn dropped_paths_are_posix_quoted_without_adding_enter() {
