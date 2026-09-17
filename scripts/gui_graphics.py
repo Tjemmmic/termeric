@@ -94,9 +94,15 @@ def failed_capture_ready(records):
     except ValueError:
         return False
     starts = [row for row in records if row.get("event") == "started"]
+    holds = [row for row in records if row.get("event") == "graphics_failure_hold"]
     errors = [row for row in records if row.get("event") == "graphics_client_error"]
     return (len(starts) == 1 and type(starts[0].get("pid")) is int
             and starts[0]["pid"] > 0 and bool(errors)
+            and len(holds) == 1 and type(holds[0].get("timeout_seconds")) is int
+            and holds[0]["timeout_seconds"] == 10
+            and holds[0].get("pid") == starts[0]["pid"]
+            and records.index(holds[0]) < next(i for i, row in enumerate(records)
+                                             if row.get("event") == "graphics_clients_complete")
             and all(row.get("continuing") is True
                     and row.get("stage") in {"version", "execute", "validate-output"}
                     for row in errors))
@@ -115,6 +121,7 @@ def run_wayland_graphics(gui, binary, run_dir, env):
     run_dir.mkdir(parents=True, exist_ok=True)
     transcript = run_dir / "pty-transcript.jsonl"
     program, arguments = gui.fixture_command(transcript, external_graphics=True)
+    arguments.append("--hold-graphics-failure")
     app = gui.AppProcess(binary, run_dir, "wayland", program, arguments, env)
     report = {"schema": 4, "backend": "wayland", "clients": [],
               "coverage": "native client acceptance, local-media cleanup, and review-only capture; not pixel or real-desktop acceptance"}
@@ -148,11 +155,12 @@ def run_wayland_graphics(gui, binary, run_dir, env):
                 # pre-input private-compositor frame for review only; the
                 # original client failure remains the scenario outcome.
                 gui.time.sleep(0.25)
-                report["diagnostic_capture"] = {
-                    **capture_review_output(run_dir, app.env, "graphics-clients-failed.png"),
-                    "failed_run": True,
-                    "acceptance": False,
-                }
+                if app.process.poll() is None:
+                    report["diagnostic_capture"] = {
+                        **capture_review_output(run_dir, app.env, "graphics-clients-failed.png"),
+                        "failed_run": True,
+                        "acceptance": False,
+                    }
         except Exception as capture_error:
             # A secondary capture failure must not replace the client error
             # or prevent the existing failure-report/cleanup path.
@@ -164,6 +172,7 @@ def run_wayland_graphics(gui, binary, run_dir, env):
             report["clients"] = [row for row in records if row.get("event") == "graphics_client"]
             report["client_errors"] = [row for row in records if row.get("event") == "graphics_client_error"]
             report["completion"] = [row for row in records if row.get("event") == "graphics_clients_complete"]
+            report["failure_hold"] = [row for row in records if row.get("event") == "graphics_failure_hold"]
             (run_dir / "graphics-input.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         finally:
             try:

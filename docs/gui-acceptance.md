@@ -536,6 +536,14 @@ or scrolling is injected on this failure path. A secondary capture error is
 recorded separately and cannot mask the client failure or prevent cleanup.
 Incomplete, unsafe delivery/cleanup, ambiguous-owner, and exited-app failures
 still skip capture. Historical schema-3 failed runs did not collect this image.
+The standalone Wayland fixture explicitly opts into a signal-interruptible,
+ten-second failure hold, recorded before completion, so its PTY does not exit
+and remove the window before capture. Capture requires that exact single-owner
+hold marker; the original client exception is rethrown when the hold ends.
+The normal all-success path and the X11 fixture do not hold. For compositor
+buffer formats unsupported by the bounded screencopy helper, an isolated
+`WLR_RENDERER=pixman` retry can collect the diagnostic without changing the
+terminal's selected GPU backend or weakening the client oracle.
 This distinguishes a client that emitted
 nothing from a terminal that received output but never accepted it; it does not
 diagnose why an external client failed.

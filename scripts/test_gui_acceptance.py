@@ -459,13 +459,23 @@ esac
                     mock.patch.object(terminal_fixture, "require_media_target"), \
                     mock.patch.object(terminal_fixture, "wait_for_media_cleanup"), \
                     mock.patch.object(terminal_fixture, "wait_for_graphics_drain") as drain:
+                def hold():
+                    drain.assert_called_once_with(str(transcript))
+                    held = [json.loads(line) for line in transcript.read_text().splitlines()]
+                    self.assertEqual(held[-2]["event"], "graphics_failure_hold")
+                    self.assertEqual(held[-2]["timeout_seconds"], 10)
+                    self.assertEqual(held[-1]["event"], "graphics_clients_complete")
+                    self.assertIs(held[-1]["drained"], True)
+                hold_callback = mock.Mock(side_effect=hold)
                 with self.assertRaisesRegex(RuntimeError, "img2sixel produced no terminal output"):
-                    terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800), drain_output=True)
+                    terminal_fixture.render_external_graphics_clients(str(transcript), (40, 100, 800, 800), drain_output=True, hold_failure=hold_callback)
+                hold_callback.assert_called_once_with()
                 drain.assert_called_once_with(str(transcript))
                 self.assertEqual(run.call_count, 8)
                 self.assertEqual(emit.call_count, 7)
                 self.assertTrue(emit.call_args.args[0].endswith(payloads[-1]))
             records = [json.loads(line) for line in transcript.read_text().splitlines()]
+            records = [record for record in records if record["event"] != "graphics_failure_hold"]
             self.assertEqual(records[-3]["tool"], "timg-iterm2")
             self.assertEqual(records[-2]["tool"], "timg-sixel")
             self.assertEqual(records[-2]["event"], "graphics_client")
@@ -473,6 +483,18 @@ esac
             self.assertIs(records[-1]["drained"], True)
             errors = [record for record in records if record["event"] == "graphics_client_error"]
             self.assertEqual([record["tool"] for record in errors], ["img2sixel"])
+
+    def test_graphics_failure_hold_is_bounded_signal_interruptible_and_requires_drain(self):
+        with mock.patch.object(terminal_fixture.time, "monotonic", side_effect=[0, 0, 9.99, 10]), \
+                mock.patch.object(terminal_fixture.time, "sleep") as sleep:
+            terminal_fixture.hold_graphics_failure(lambda: True)
+            self.assertEqual(sleep.call_args_list, [mock.call(0.05), mock.call(0.05)])
+        with mock.patch.object(terminal_fixture.time, "monotonic", return_value=0), \
+                mock.patch.object(terminal_fixture.time, "sleep") as sleep:
+            terminal_fixture.hold_graphics_failure(mock.Mock(side_effect=[True, False]))
+            sleep.assert_called_once_with(0.05)
+        with self.assertRaisesRegex(ValueError, "requires parser drain"):
+            terminal_fixture.render_external_graphics_clients("unused", hold_failure=lambda: None)
 
     def test_graphics_drain_preserves_earlier_replies_and_accepts_fragmented_status(self):
         chunks = [b"\x1b_Gi=17;OK\x1b\\", b"\x1b[", b"0", b"n"]

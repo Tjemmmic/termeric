@@ -154,14 +154,21 @@ class GraphicsAcceptanceTests(unittest.TestCase):
         records[5] = {"event": "graphics_client_error", "tool": "img2sixel", "protocol": "sixel",
                       "stage": "validate-output", "error": "produced no terminal output", "continuing": True}
         records[-1]["failed"] = 1
+        records.insert(-1, {"event": "graphics_failure_hold", "pid": 123, "timeout_seconds": 10})
         return [{"event": "started", "pid": 123}] + records
 
     def test_failure_capture_requires_complete_drained_safe_single_owner(self):
         records = self.failed_completed_records()
         self.assertTrue(gui_graphics.failed_capture_ready(records))
         for changed in [records[:-1], records[1:], records + [records[0]], self.records,
+                        records[:-2] + [records[-1]], records + [records[-2]],
+                        records[:-2] + [records[-1], records[-2]],
                         records[:-1] + [{**records[-1], "drained": False}],
                         records[:-1] + [{**records[-1], "failed": 0}]]:
+            self.assertFalse(gui_graphics.failed_capture_ready(changed))
+        for key, value in [("pid", 124), ("timeout_seconds", 20), ("timeout_seconds", True)]:
+            changed = copy.deepcopy(records)
+            changed[-2][key] = value
             self.assertFalse(gui_graphics.failed_capture_ready(changed))
         for key, value in [("stage", "emit"), ("stage", "cleanup"), ("continuing", False), ("continuing", 1)]:
             changed = copy.deepcopy(records)

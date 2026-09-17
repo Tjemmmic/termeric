@@ -208,8 +208,11 @@ def render_external_graphics_clients(
     terminal_geometry: tuple[int, int, int, int] | None = None,
     *,
     drain_output: bool = False,
+    hold_failure=None,
 ) -> None:
     """Emit current Kitty, independent Sixel, and iTerm2 client output."""
+    if hold_failure is not None and not drain_output:
+        raise ValueError("graphics failure hold requires parser drain")
     image = os.path.join(
         os.path.dirname(transcript), f"graphics-client-{os.getpid()}.png"
     )
@@ -418,10 +421,27 @@ def render_external_graphics_clients(
         )
     if drain_output:
         wait_for_graphics_drain(transcript)
+    if first_error is not None and hold_failure is not None:
+        write_record(transcript, "graphics_failure_hold", timeout_seconds=10)
     write_record(transcript, "graphics_clients_complete", attempted=len(clients), failed=failed,
                  drained=drain_output)
     if first_error is not None:
-        raise first_error
+        try:
+            if hold_failure is not None:
+                hold_failure()
+        finally:
+            raise first_error
+
+
+def hold_graphics_failure(keep_running) -> None:
+    """Keep the failed fixture's terminal frame alive for at most ten seconds.
+
+    The private harness captures without injecting input, then terminates the
+    app. The main fixture's signal handler can end this hold promptly too.
+    """
+    deadline = time.monotonic() + 10
+    while keep_running() and time.monotonic() < deadline:
+        time.sleep(0.05)
 
 
 def wait_for_graphics_drain(transcript: str, timeout: float = 5.0) -> None:
@@ -484,6 +504,7 @@ def main() -> int:
     parser.add_argument("--exit-after", type=float)
     parser.add_argument("--soak-output", action="store_true")
     parser.add_argument("--skip-external-graphics", action="store_true")
+    parser.add_argument("--hold-graphics-failure", action="store_true")
     parser.add_argument("--scrollback-fixture", action="store_true")
     parser.add_argument("--background-fixture", action="store_true")
     args = parser.parse_args()
@@ -533,7 +554,11 @@ def main() -> int:
     if args.scrollback_fixture:
         render_scrollback_fixture(os.getpid())
     if not args.skip_external_graphics:
-        render_external_graphics_clients(args.transcript, drain_output=True)
+        render_external_graphics_clients(
+            args.transcript, drain_output=True,
+            hold_failure=(lambda: hold_graphics_failure(lambda: running))
+            if args.hold_graphics_failure else None,
+        )
     exit_deadline = (
         time.monotonic() + args.exit_after if args.exit_after is not None else None
     )
