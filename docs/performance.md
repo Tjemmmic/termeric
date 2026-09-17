@@ -558,6 +558,64 @@ rows with Termeric's internal Rust or WGPU metrics.
 
 ### Current local comparison evidence
 
+On 2026-09-17, clean source `49b3fabf62909e4a58183f61495d19131c68b10d`
+completed a schema-2 comparison against installed kitty 0.48.2 on the Ryzen 9
+7900X3D host. This used a private headless Sway/Xwayland display, not the
+operator's desktop or Xvfb. Sway used pixman; GL diagnostics and Termeric's
+adapter logs identified Mesa 26.2.3 llvmpipe/LLVM 22.1.8 software rendering.
+This is separate from the earlier AMD/radeonsi hardware-soak evidence.
+
+Each terminal had one warmup and five fresh measured processes, with rotated
+launch order, isolated configuration/private D-Bus, a shared 1 MiB workload,
+10,000-line retention, and two-second idle observations. All ten measured
+initial and final grids were exactly 100×30. Only these timing comparisons
+are permitted by the recorded contract (milliseconds):
+
+| Metric | Termeric median | Termeric p95 | kitty median | kitty p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Launch to visible | 194.79 | 201.18 | 361.83 | 379.44 |
+| Child stream to CSI-6n response | 76.42 | 96.34 | 22.85 | 25.26 |
+
+Termeric started sooner in this run; kitty processed/responded to this workload
+sooner. Startup includes child startup/title parsing, and PTY response does
+not measure compositor presentation. Five software-rendered samples do not
+establish native-hardware performance, interactive latency, or a general
+“faster terminal” winner.
+
+All process-resource observations were complete, with unchanged observed
+identities and the shared fixture excluded. Nevertheless, **RSS and idle CPU
+are not rankable**: native windows were 700×388 for Termeric and 1001×661 for
+kitty. The common numeric font size 12 means logical pixels in Termeric and
+points in kitty, not equal physical glyph size. Raw resource observations are
+retained without a memory-efficiency claim; the overall `comparable` flag is
+false even though the two individual timing contracts pass. Pixel-matched
+resource comparisons, native-hardware repeats, and broader terminal coverage
+remain open.
+
+The full local evidence is preserved in the ignored archive
+`target/terminal-comparison/2026-09-17-49b3fab-kitty.tar.gz`, SHA-256
+`69c25b9eeb9414b1adad22829b736db4b1ce74720aefc67f39366bd3b2bb7852`.
+It includes calibration and measured JSON, per-run fixture/launcher logs and
+configurations, display diagnostics, the private-display launcher, and an
+isolation sidecar. Caches/data/state directories are excluded. The authoritative
+report is `measured/results.json`; its original absolute temporary paths map
+to the retained relative `measured/runs/` tree inside the archive. This archive
+is local evidence, not a committed or published release artifact.
+
+The sidecar records identical clean source and executable hashes before and
+after the run. Termeric's release executable SHA-256 was
+`ee379a4ec1cba1002a7e6c6e411f3fc5dd6416bb22a99866f1038de16badcbbe`;
+kitty's was
+`940cbe42c8cf1dcb342f20b32ee35f51818bbcd8deffc11029f5766d844783a4`.
+This detects observed run-time drift, not signed build provenance. To repeat
+the local diagnostic, inspect the archived `run_private_comparison.py` and
+its checkout path, then use `--output` with a fresh directory, `--samples 5`,
+and `--warmups 1` on a clean release build. It wraps the existing comparison
+runner with private Sway/Xwayland isolation; it is not a new portable harness
+backend. No installed packages were changed or AI-provider commands invoked.
+
+### Historical dirty-tree comparison
+
 On 2026-09-02, a private-Xvfb run on an AMD Ryzen 9 7900X3D host compared the
 current dirty Termeric working tree with Arch Ghostty 1.3.1. The run used one
 warmup and five fresh measured processes per terminal, a 1 MiB shared workload,
