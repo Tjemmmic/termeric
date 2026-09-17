@@ -145,13 +145,7 @@ impl App {
                 tab.set_user_title(Some(rename.input.clone()));
             }
         } else if self.shortcuts_panel.is_active() {
-            use crate::ui::shortcuts_panel::ShortcutsKey;
-            for character in printable() {
-                let action = self
-                    .shortcuts_panel
-                    .handle_key(ShortcutsKey::Char(character), &self.shortcut_registry);
-                self.apply_shortcuts_action(action);
-            }
+            self.shortcuts_panel.insert_filter_text(text);
         } else if self.settings_panel.is_active() {
             for character in printable() {
                 let action = self.settings_panel.handle_key(

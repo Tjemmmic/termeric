@@ -4,8 +4,18 @@
 //! modeled after the command palette (OverlayAnimation, centered panel, search bar).
 
 use super::animation::OverlayAnimation;
-use super::text_input::TextInput;
+use super::text_input::{TextInput, TextInputEdit};
 use crate::input::keybindings::{BindableAction, KeyChord, ShortcutCategory, ShortcutRegistry};
+
+const MAX_FILTER_CHARACTERS: usize = 128;
+
+fn valid_filter_text(value: &str) -> bool {
+    value.len() <= MAX_FILTER_CHARACTERS * 4
+        && value.chars().count() <= MAX_FILTER_CHARACTERS
+        && !value
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+}
 
 /// Result of a user action in the shortcuts panel
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +44,6 @@ pub enum ShortcutsKey {
     Delete,
     /// A captured key chord during recording mode
     RecordedChord(KeyChord),
-    /// Character typed for search filter
-    Char(char),
     /// Backspace in search filter (non-recording mode)
     Backspace,
 }
@@ -489,16 +497,11 @@ impl ShortcutsPanel {
                 }
                 ShortcutsAction::None
             }
-            ShortcutsKey::Char(c) => {
-                self.filter.insert_char(c);
-                self.selected = 0;
-                self.scroll_offset = 0;
-                ShortcutsAction::None
-            }
             ShortcutsKey::Backspace => {
-                self.filter.backspace();
-                self.selected = 0;
-                self.scroll_offset = 0;
+                if self.filter.edit_grapheme(TextInputEdit::Backspace) {
+                    self.selected = 0;
+                    self.scroll_offset = 0;
+                }
                 ShortcutsAction::None
             }
             ShortcutsKey::RecordedChord(_) => ShortcutsAction::None,
@@ -520,10 +523,27 @@ impl ShortcutsPanel {
     }
 
     pub fn accessibility_set_filter(&mut self, value: &str) -> bool {
-        if value.chars().count() > 128 || value.chars().any(char::is_control) {
+        if self.recording || !valid_filter_text(value) {
             return false;
         }
         self.filter.replace(value);
+        self.selected = 0;
+        self.scroll_offset = 0;
+        true
+    }
+
+    /// Insert an entire keyboard/IME event or reject it unchanged. The same
+    /// scalar and single-line policy applies to semantic replacement.
+    pub fn insert_filter_text(&mut self, value: &str) -> bool {
+        if !self.is_active()
+            || self.recording
+            || value.is_empty()
+            || !valid_filter_text(value)
+            || self.filter.text().chars().count() + value.chars().count() > MAX_FILTER_CHARACTERS
+        {
+            return false;
+        }
+        self.filter.insert_text(value);
         self.selected = 0;
         self.scroll_offset = 0;
         true
@@ -677,10 +697,9 @@ mod tests {
         let all_count = all.len();
 
         // Type a filter
-        panel.handle_key(ShortcutsKey::Char('c'), &registry);
-        panel.handle_key(ShortcutsKey::Char('o'), &registry);
-        panel.handle_key(ShortcutsKey::Char('p'), &registry);
-        panel.handle_key(ShortcutsKey::Char('y'), &registry);
+        for character in ["c", "o", "p", "y"] {
+            assert!(panel.insert_filter_text(character));
+        }
         let filtered = panel.build_entries(&registry);
         assert!(filtered.len() < all_count);
         // Should find "Copy"
@@ -729,7 +748,7 @@ mod tests {
         let registry = ShortcutRegistry::new();
 
         panel.open();
-        panel.handle_key(ShortcutsKey::Char('t'), &registry);
+        assert!(panel.insert_filter_text("t"));
         assert!(!panel.filter.text().is_empty());
 
         // First escape clears filter
@@ -785,6 +804,66 @@ mod tests {
         assert_eq!(info.entries.len(), 5);
         assert_eq!(info.scroll_offset, info.total_rows - 5);
         assert!(info.scroll_offset + info.entries.len() <= info.total_rows);
+    }
+
+    #[test]
+    fn filter_input_and_replacement_share_scalar_limits_and_atomic_rejection() {
+        let mut panel = ShortcutsPanel::new();
+        assert!(!panel.insert_filter_text("hidden"));
+        panel.open();
+        for _ in 0..MAX_FILTER_CHARACTERS {
+            assert!(panel.insert_filter_text("🫚"));
+        }
+        assert_eq!(panel.filter.text().len(), MAX_FILTER_CHARACTERS * 4);
+        assert!(!panel.insert_filter_text("x"));
+        assert!(panel.accessibility_set_filter(&"x".repeat(127)));
+        panel.selected = 2;
+        panel.scroll_offset = 1;
+        for invalid in [
+            "e\u{301}",
+            "界界",
+            "\n",
+            "x\t",
+            "\0",
+            "\u{1b}",
+            "\u{85}",
+            "\u{2028}",
+            "\u{2029}",
+            &"x".repeat(513),
+        ] {
+            assert!(!panel.insert_filter_text(invalid));
+            assert_eq!(panel.filter.text(), "x".repeat(127));
+            assert_eq!(panel.filter.cursor(), 127);
+            assert_eq!((panel.selected, panel.scroll_offset), (2, 1));
+        }
+        assert!(panel.insert_filter_text("界"));
+        assert_eq!(panel.filter.text().chars().count(), 128);
+        assert_eq!((panel.selected, panel.scroll_offset), (0, 0));
+        for invalid in ["\n", "\t", "\u{2028}", "\u{2029}", &"x".repeat(129)] {
+            assert!(!panel.accessibility_set_filter(invalid));
+            assert_eq!(panel.filter.text().chars().count(), 128);
+        }
+        panel.start_recording(BindableAction::Copy);
+        assert!(!panel.insert_filter_text("new"));
+        assert!(!panel.accessibility_set_filter("new"));
+        assert!(panel.is_recording());
+        assert_eq!(panel.filter.text().chars().count(), 128);
+    }
+
+    #[test]
+    fn filter_backspace_removes_complete_graphemes() {
+        let mut panel = ShortcutsPanel::new();
+        let registry = ShortcutRegistry::new();
+        panel.open();
+        for cluster in ["e\u{301}", "👩\u{200d}💻", "🇺🇸"] {
+            assert!(panel.insert_filter_text(cluster));
+            assert_eq!(
+                panel.handle_key(ShortcutsKey::Backspace, &registry),
+                ShortcutsAction::None
+            );
+            assert!(panel.filter.text().is_empty());
+            assert_eq!(panel.filter.cursor(), 0);
+        }
     }
 
     #[test]

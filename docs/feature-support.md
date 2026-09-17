@@ -369,6 +369,13 @@ scrolled/animated geometry as painting and IME. Geometry, model, and raw-PTY
 tests pass; native pointer acceptance and text selection remain outstanding
 (see [input contract](accessibility-and-input.md)).
 
+Shortcut-editor filter typing, native character events, IME commits, and
+semantic replacement now enforce the same 128-scalar/512-byte single-line limit.
+Complete Unicode input events are retained, oversized commits are rejected
+atomically, and Backspace removes whole graphemes. Modifier/recording guards and
+raw-PTY tests cover ownership without persisting bindings; native IME/visual
+acceptance remains deferred (see [input contract](accessibility-and-input.md)).
+
 Shared palette query editing supports unmodified Left/Right/Home/End and
 whole-grapheme Backspace/Delete with insertion at the moved caret. Ctrl+Left/Right
 and Ctrl+Backspace/Delete use the same Unicode word-segment editing as search;

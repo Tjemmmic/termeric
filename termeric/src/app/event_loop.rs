@@ -950,6 +950,9 @@ impl ApplicationHandler<AppEvent> for App {
                             return;
                         }
 
+                        if self.handle_shortcuts_filter_text(&event.logical_key) {
+                            return;
+                        }
                         let shortcuts_key = match &event.logical_key {
                             Key::Named(NamedKey::Escape) => Some(ShortcutsKey::Escape),
                             Key::Named(NamedKey::ArrowUp) => Some(ShortcutsKey::Up),
@@ -957,11 +960,6 @@ impl ApplicationHandler<AppEvent> for App {
                             Key::Named(NamedKey::Enter) => Some(ShortcutsKey::Enter),
                             Key::Named(NamedKey::Backspace) => Some(ShortcutsKey::Backspace),
                             Key::Named(NamedKey::Delete) => Some(ShortcutsKey::Delete),
-                            Key::Character(c)
-                                if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                            {
-                                c.chars().next().map(ShortcutsKey::Char)
-                            }
                             _ => None,
                         };
 

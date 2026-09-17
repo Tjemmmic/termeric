@@ -357,6 +357,18 @@ row activation, keyboard selection, rendering, and AccessKit bounds all use
 scrollbar, preventing the previous selectable-row/rendered-row drift. Tests
 change only an in-memory registry and never persist user bindings.
 
+Shortcut-filter typing, complete native character events, IME commits, and
+semantic replacement now share a 128-Unicode-scalar ceiling (at most 512 UTF-8
+bytes), rejecting controls and Unicode line/paragraph separators. Keyboard and
+IME insertions are atomic: an event that would exceed the remaining allowance
+does not insert a partial prefix or change the current result selection.
+Complete combining/ZWJ sequences in a native character event are retained rather
+than reduced to their first scalar; Backspace removes a whole grapheme. Plain
+and Shift text, Space, and AltGraph text are accepted, while other modified text
+is consumed without insertion. Chord recording still owns its input and rejects
+filter mutations. Model, dispatch, and raw-PTY isolation tests pass without
+saving user bindings; native IME/visual acceptance remains deferred.
+
 Application information, errors, and plugin notices share a request-scoped
 information dialog. Titles are capped at 256 characters; stored notice content
 is capped at 512 lines and 4,096 characters per line with visible omission
