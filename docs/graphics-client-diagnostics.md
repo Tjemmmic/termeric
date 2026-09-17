@@ -114,6 +114,15 @@ adapter even while img2sixel emits nothing. It does not replace img2sixel or tur
 a partial run into a pass. The [Sixel/iTerm2 support status](feature-support.md)
 remains **Partial**.
 
+Current schema-4 Wayland runs can retain `graphics-clients-failed.png` for this
+independent producer failure after all eight outcomes and the parser-drain
+fence. The sidecar records it as a non-accepting, failed-run diagnostic, while
+the original client error still fails the scenario. No keys or scrolling are
+injected before that private-compositor capture. This makes the other clients'
+initial frame available for review without skipping img2sixel or weakening the
+oracle. The screenshot alone does not establish placement/scrolling correctness,
+and unsafe or incomplete transfers still abort without diagnostic capture.
+
 For matching a later bug report to this diagnosis, the fixture SHA-256 was
 `b816fdeb08edae3ec293de3a74cde3209961756ef5014f5cb409f6ba6b1ace73`;
 `/usr/bin/img2sixel` was

@@ -515,7 +515,7 @@ Delivery and local-media cleanup failures still abort immediately, because a
 partial protocol write or unconfirmed resource cleanup is not an independent
 client failure. Errors without the new continuation flag also fail immediately.
 The shared polling deadline is 200 seconds, covering the bounded per-client
-version/execute/cleanup waits and delivery margin. The schema-3 Wayland sidecar
+version/execute/cleanup waits and delivery margin. The schema-4 Wayland sidecar
 retains successful client records, client errors, and completion records even
 when the overall run fails. All-success acceptance requires exactly the eight
 ordered outcomes followed by one consistent completion marker, plus every
@@ -526,8 +526,17 @@ both clients, and unexpected extra acceptances fail closed. This is a combined
 protocol-adapter count, not a per-image pixel or placement oracle. The timg
 invocation explicitly limits output to one frame. Older seven-client/schema-2
 runs remain historical evidence, not equivalent acceptance for this lane.
-Partial results never satisfy the eight-client oracle, and a failure before
-capture does not produce a review PNG. This distinguishes a client that emitted
+Partial results never satisfy the eight-client oracle. After a complete,
+parser-drained run with only independent pre-emission failures, one fixture PTY
+owner, and a still-running app, the Wayland harness retains a hashed
+`graphics-clients-failed.png` under `diagnostic_capture`. It is explicitly marked
+`review_only: true`, `failed_run: true`, and `acceptance: false`; it never fills
+the successful `capture` field or replaces the original scenario error. No input
+or scrolling is injected on this failure path. A secondary capture error is
+recorded separately and cannot mask the client failure or prevent cleanup.
+Incomplete, unsafe delivery/cleanup, ambiguous-owner, and exited-app failures
+still skip capture. Historical schema-3 failed runs did not collect this image.
+This distinguishes a client that emitted
 nothing from a terminal that received output but never accepted it; it does not
 diagnose why an external client failed.
 

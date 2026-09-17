@@ -82,12 +82,41 @@ def graphics_clients_ready(records, log_contains, log_count):
     return graphics_clients_accepted(records, log_contains, log_count)
 
 
+def failed_capture_ready(records):
+    """Only drained, single-owner runs with independent pre-emission failures.
+
+    This admits diagnostic capture, never client or visual acceptance.
+    Incomplete/unsafe transfers must still abort without another capture wait.
+    """
+    try:
+        if not clients_complete(records):
+            return False
+    except ValueError:
+        return False
+    starts = [row for row in records if row.get("event") == "started"]
+    errors = [row for row in records if row.get("event") == "graphics_client_error"]
+    return (len(starts) == 1 and type(starts[0].get("pid")) is int
+            and starts[0]["pid"] > 0 and bool(errors)
+            and all(row.get("continuing") is True
+                    and row.get("stage") in {"version", "execute", "validate-output"}
+                    for row in errors))
+
+
+def capture_review_output(run_dir, env, name):
+    capture = run_dir / name
+    snapshot = capture_private_output(env)
+    snapshot.save(capture)
+    return {"path": capture.name, "size": list(snapshot.size),
+            "sha256": hashlib.sha256(capture.read_bytes()).hexdigest(),
+            "review_only": True}
+
+
 def run_wayland_graphics(gui, binary, run_dir, env):
     run_dir.mkdir(parents=True, exist_ok=True)
     transcript = run_dir / "pty-transcript.jsonl"
     program, arguments = gui.fixture_command(transcript, external_graphics=True)
     app = gui.AppProcess(binary, run_dir, "wayland", program, arguments, env)
-    report = {"schema": 3, "backend": "wayland", "clients": [],
+    report = {"schema": 4, "backend": "wayland", "clients": [],
               "coverage": "native client acceptance, local-media cleanup, and review-only capture; not pixel or real-desktop acceptance"}
     try:
         app.wait_ready("wayland")
@@ -101,12 +130,7 @@ def run_wayland_graphics(gui, binary, run_dir, env):
         # Capture before injecting keys or scrolling. This is retained for
         # review, not treated as proof that every accepted image is visible.
         gui.time.sleep(0.25)
-        capture = run_dir / "graphics-clients.png"
-        snapshot = capture_private_output(app.env)
-        snapshot.save(capture)
-        report["capture"] = {"path": capture.name, "size": list(snapshot.size),
-                             "sha256": hashlib.sha256(capture.read_bytes()).hexdigest(),
-                             "review_only": True}
+        report["capture"] = capture_review_output(run_dir, app.env, "graphics-clients.png")
         with native_keyboard_lifetime(gui, app, "wayland", duration_ms=30000):
             token = b"WAYLAND_GRAPHICS_READY"
             app.wayland_type(token.decode())
@@ -118,6 +142,21 @@ def run_wayland_graphics(gui, binary, run_dir, env):
         gui.assert_no_runtime_errors(app)
     except Exception as error:
         report["error"] = str(error)
+        try:
+            if failed_capture_ready(gui.read_records(transcript)) and app.process.poll() is None:
+                # No keys/scrolling are injected on this path. Preserve the
+                # pre-input private-compositor frame for review only; the
+                # original client failure remains the scenario outcome.
+                gui.time.sleep(0.25)
+                report["diagnostic_capture"] = {
+                    **capture_review_output(run_dir, app.env, "graphics-clients-failed.png"),
+                    "failed_run": True,
+                    "acceptance": False,
+                }
+        except Exception as capture_error:
+            # A secondary capture failure must not replace the client error
+            # or prevent the existing failure-report/cleanup path.
+            report["diagnostic_capture_error"] = str(capture_error)
         raise
     finally:
         try:

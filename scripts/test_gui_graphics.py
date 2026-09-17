@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -145,6 +146,85 @@ class GraphicsAcceptanceTests(unittest.TestCase):
                 mock.patch.object(gui_acceptance, "read_records", side_effect=OSError("read failed")):
             with self.assertRaisesRegex(OSError, "read failed"):
                 gui_graphics.run_wayland_graphics(gui_acceptance, Path("termeric"), Path(directory), {})
+            factory.return_value.stop_after_failure.assert_called_once_with()
+            factory.return_value.finish.assert_called_once_with()
+
+    def failed_completed_records(self):
+        records = copy.deepcopy(self.records)
+        records[5] = {"event": "graphics_client_error", "tool": "img2sixel", "protocol": "sixel",
+                      "stage": "validate-output", "error": "produced no terminal output", "continuing": True}
+        records[-1]["failed"] = 1
+        return [{"event": "started", "pid": 123}] + records
+
+    def test_failure_capture_requires_complete_drained_safe_single_owner(self):
+        records = self.failed_completed_records()
+        self.assertTrue(gui_graphics.failed_capture_ready(records))
+        for changed in [records[:-1], records[1:], records + [records[0]], self.records,
+                        records[:-1] + [{**records[-1], "drained": False}],
+                        records[:-1] + [{**records[-1], "failed": 0}]]:
+            self.assertFalse(gui_graphics.failed_capture_ready(changed))
+        for key, value in [("stage", "emit"), ("stage", "cleanup"), ("continuing", False), ("continuing", 1)]:
+            changed = copy.deepcopy(records)
+            changed[6][key] = value
+            self.assertFalse(gui_graphics.failed_capture_ready(changed))
+        for pid in [0, -1, True, "123"]:
+            self.assertFalse(gui_graphics.failed_capture_ready([{**records[0], "pid": pid}] + records[1:]))
+
+    def test_completed_failed_run_captures_diagnostics_but_never_becomes_a_pass(self):
+        records = self.failed_completed_records()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(gui_acceptance, "AppProcess") as factory, \
+                mock.patch.object(gui_acceptance, "read_records", return_value=records), \
+                mock.patch.object(gui_acceptance.time, "sleep"), \
+                mock.patch.object(gui_graphics, "capture_private_output") as capture:
+            app = factory.return_value
+            app.process.poll.return_value = None
+            snapshot = capture.return_value
+            snapshot.size = (4, 3)
+            snapshot.save.side_effect = lambda path: path.write_bytes(b"fixture capture")
+            with self.assertRaisesRegex(ValueError, "img2sixel.*no terminal output"):
+                gui_graphics.run_wayland_graphics(gui_acceptance, Path("termeric"), Path(directory), {})
+            capture.assert_called_once_with(app.env)
+            app.wayland_type.assert_not_called()
+            app.wayland_chord.assert_not_called()
+            app.stop_after_failure.assert_called_once_with()
+            app.finish.assert_called_once_with()
+            report = json.loads((Path(directory) / "graphics-input.json").read_text())
+            self.assertEqual(report["schema"], 4)
+            self.assertIn("img2sixel", report["error"])
+            self.assertNotIn("capture", report)
+            self.assertEqual(report["diagnostic_capture"], {
+                "path": "graphics-clients-failed.png", "size": [4, 3],
+                "sha256": hashlib.sha256(b"fixture capture").hexdigest(),
+                "review_only": True, "failed_run": True, "acceptance": False,
+            })
+            self.assertFalse(self.accepted(records))
+
+    def test_secondary_capture_failure_preserves_original_error_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(gui_acceptance, "AppProcess") as factory, \
+                mock.patch.object(gui_acceptance, "read_records", return_value=self.failed_completed_records()), \
+                mock.patch.object(gui_acceptance.time, "sleep"), \
+                mock.patch.object(gui_graphics, "capture_private_output", side_effect=RuntimeError("capture unavailable")):
+            factory.return_value.process.poll.return_value = None
+            with self.assertRaisesRegex(ValueError, "img2sixel.*no terminal output"):
+                gui_graphics.run_wayland_graphics(gui_acceptance, Path("termeric"), Path(directory), {})
+            report = json.loads((Path(directory) / "graphics-input.json").read_text())
+            self.assertEqual(report["diagnostic_capture_error"], "capture unavailable")
+            self.assertIn("img2sixel", report["error"])
+            self.assertNotIn("diagnostic_capture", report)
+            factory.return_value.stop_after_failure.assert_called_once_with()
+            factory.return_value.finish.assert_called_once_with()
+
+    def test_exited_app_skips_failed_run_capture(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(gui_acceptance, "AppProcess") as factory, \
+                mock.patch.object(gui_acceptance, "read_records", return_value=self.failed_completed_records()), \
+                mock.patch.object(gui_graphics, "capture_private_output") as capture:
+            factory.return_value.process.poll.return_value = 1
+            with self.assertRaisesRegex(ValueError, "img2sixel"):
+                gui_graphics.run_wayland_graphics(gui_acceptance, Path("termeric"), Path(directory), {})
+            capture.assert_not_called()
             factory.return_value.stop_after_failure.assert_called_once_with()
             factory.return_value.finish.assert_called_once_with()
 
