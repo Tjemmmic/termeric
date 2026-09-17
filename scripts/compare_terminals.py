@@ -495,22 +495,54 @@ def find_window(title: str, environment: dict[str, str], timeout: float) -> tupl
     raise TimeoutError(f"timed out finding visible X11 window titled {title!r}")
 
 
-def window_geometry(window: str, environment: dict[str, str]) -> dict[str, int]:
-    result = subprocess.run(
-        ["xdotool", "getwindowgeometry", "--shell", window],
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    )
-    values = {}
+def window_geometry(window: str, environment: dict[str, str]) -> dict[str, Any]:
+    # Geometry is required for resource comparisons, not for valid PTY/startup
+    # timings. Retain a failed observation instead of losing the whole sample.
+    try:
+        result = subprocess.run(
+            ["xdotool", "getwindowgeometry", "--shell", window],
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        return {"errors": [f"window geometry query failed: {type(error).__name__}"]}
+    values: dict[str, Any] = {}
+    dimensions_seen = set()
+    errors = []
     for line in result.stdout.splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            if value.lstrip("-").isdigit():
-                values[key.lower()] = int(value)
-    return {key: values[key] for key in ("x", "y", "width", "height") if key in values}
+        key, separator, value = line.partition("=")
+        key = key.lower()
+        if not separator or key not in ("x", "y", "width", "height"):
+            continue
+        pattern = r"[0-9]+" if key in ("width", "height") else r"-?[0-9]+"
+        number = None
+        if re.fullmatch(pattern, value):
+            try:
+                number = int(value)
+            except ValueError:
+                # Includes Python's limit on oversized integer text.
+                pass
+        if key in ("width", "height"):
+            if key in dimensions_seen:
+                errors.append(f"duplicate native-window {key}")
+            dimensions_seen.add(key)
+            if number is None or number <= 0:
+                errors.append(f"invalid native-window {key}")
+                continue
+        elif number is None:
+            # Optional coordinates do not establish resource comparability.
+            continue
+        values[key] = number
+    for key in ("width", "height"):
+        if key not in dimensions_seen:
+            errors.append(f"missing native-window {key}")
+    if errors:
+        values["errors"] = errors
+    return values
 
 
 def stat_fields(pid: int) -> tuple[int, int, int, int] | None:
@@ -737,6 +769,7 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
     observed_grids = set()
     initial_grids = set()
     observed_pixels = set()
+    pixel_reasons = []
     grid_reasons = []
     retention_reasons = []
     for terminal in completed:
@@ -749,7 +782,19 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
             )
             initial_grids.add(ready_grid)
             geometry = sample.get("window_geometry", {})
-            observed_pixels.add((geometry.get("width"), geometry.get("height")))
+            if (
+                not isinstance(geometry, dict)
+                or geometry.get("errors", []) != []
+                or any(
+                    type(geometry.get(key)) is not int or geometry[key] <= 0
+                    for key in ("width", "height")
+                )
+            ):
+                pixel_reasons.append(
+                    f"{terminal['terminal']}: missing, invalid, or failed native-window geometry observation"
+                )
+            else:
+                observed_pixels.add((geometry["width"], geometry["height"]))
             if grid != (settings.columns, settings.rows):
                 grid_reasons.append(
                     f"{terminal['terminal']}: observed grid {grid[0]}x{grid[1]} instead of "
@@ -767,7 +812,7 @@ def comparison_contract(terminals: list[dict[str, Any]], settings: BenchmarkSett
     if initial_grids and initial_grids != {(settings.columns, settings.rows)}:
         startup_reasons.append("one or more initial PTY grids differ from the requested grid")
     pty_reasons = common_reasons + grid_reasons + retention_reasons
-    resource_reasons = list(pty_reasons)
+    resource_reasons = pty_reasons + pixel_reasons
     if len(observed_pixels) > 1:
         resource_reasons.append("observed native-window pixel sizes differ across samples")
     resource_metric_reasons = {}

@@ -709,6 +709,13 @@ all ten measured samples, while correctly refusing resource ranking for unequal
 native window sizes. It does not promote hardware performance or platform
 acceptance (see [local comparison evidence](performance.md#current-local-comparison-evidence)).
 
+Resource ranking additionally requires valid positive integer window dimensions
+in every sample. Matching absent/malformed geometry is no longer treated as a
+match; query failures and duplicate dimension fields remain explicit, blocking
+RSS/idle ranking without discarding valid timing rows or process observations.
+Re-evaluation preserves all five recorded native reports' existing contracts;
+font/pixel calibration remains outstanding.
+
 Two clean `d6d5261` software-Xwayland follow-ups retain all twenty measured
 Termeric/kitty samples after the multicell-repair optimization. Termeric's PTY
 medians decreased relative to the earlier record, but overlapping samples,

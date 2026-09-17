@@ -1,4 +1,5 @@
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,6 +21,7 @@ from scripts.compare_terminals import (
     summarize,
     terminal_resources,
     terminal_summary,
+    window_geometry,
     x11_environment,
 )
 from scripts.terminal_benchmark_fixture import emit_workload
@@ -219,6 +221,80 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
         self.assertFalse(report["metrics"]["rss_kib"]["comparable"])
         self.assertFalse(report["metrics"]["idle_cpu_percent_one_core"]["comparable"])
         self.assertFalse(report["comparable"])
+
+    def test_window_geometry_parses_positive_dimensions_and_optional_signed_coordinates(self):
+        with patch("scripts.compare_terminals.subprocess.run") as run:
+            run.return_value.stdout = "WINDOW=42\nX=-10\nY=20\nWIDTH=1000\nHEIGHT=700\nSCREEN=0\n"
+            self.assertEqual(window_geometry("42", {}), {"x": -10, "y": 20, "width": 1000, "height": 700})
+            self.assertEqual(run.call_args.kwargs["timeout"], 5)
+            self.assertTrue(run.call_args.kwargs["check"])
+            run.return_value.stdout = "X=--10\nY=unknown\nWIDTH=1000\nHEIGHT=700\n"
+            self.assertEqual(window_geometry("42", {}), {"width": 1000, "height": 700})
+
+    def test_window_geometry_rejects_missing_duplicate_and_invalid_dimensions(self):
+        malformed = [
+            "", "WIDTH=1000\n", "HEIGHT=700\n",
+            "WIDTH=1000\nHEIGHT=700\nWIDTH=1000\n",
+            "WIDTH=1000\nHEIGHT=700\nHEIGHT=701\n",
+        ]
+        for dimension in ("WIDTH", "HEIGHT"):
+            other = "HEIGHT=700" if dimension == "WIDTH" else "WIDTH=1000"
+            for value in ("", "0", "-1", "--2", "1.0", "nan", "+1000", "١٠٠٠", "9" * 5000):
+                malformed.append(f"{dimension}={value}\n{other}\n")
+        for output in malformed:
+            with self.subTest(output=output[:80]), patch("scripts.compare_terminals.subprocess.run") as run:
+                run.return_value.stdout = output
+                geometry = window_geometry("42", {})
+                self.assertTrue(geometry["errors"])
+                first, second = sample(), sample()
+                first["window_geometry"] = second["window_geometry"] = geometry
+                report = comparison_contract([terminal("termeric", first), terminal("kitty", second)], SETTINGS)
+                self.assertEqual(report["ranking_permitted"], {
+                    "startup_to_visible_ms": True, "pty_response_ms": True,
+                    "rss_kib": False, "idle_cpu_percent_one_core": False,
+                })
+
+    def test_failed_window_query_is_an_explicit_unavailable_observation(self):
+        for error in (OSError("unreadable"), subprocess.CalledProcessError(1, ["xdotool"]), subprocess.TimeoutExpired(["xdotool"], 5)):
+            with self.subTest(error=type(error).__name__), patch("scripts.compare_terminals.subprocess.run", side_effect=error):
+                geometry = window_geometry("42", {})
+                self.assertNotIn("width", geometry)
+                self.assertNotIn("height", geometry)
+                self.assertIn(type(error).__name__, geometry["errors"][0])
+
+    def test_matching_missing_or_malformed_geometry_never_permits_resource_ranking(self):
+        geometries = [None, {}, [], True, "1000x700", {"width": 1000}, {"height": 700}]
+        for dimension in ("width", "height"):
+            for invalid in (None, 0, -1, True, 1000.0, "1000", float("nan"), float("inf"), [], {}):
+                geometries.append({**sample()["window_geometry"], dimension: invalid})
+        for error_field in (["query failed"], None, False, "", {}):
+            geometries.append({**sample()["window_geometry"], "errors": error_field})
+        for geometry in geometries:
+            with self.subTest(geometry=geometry):
+                first, second = sample(), sample()
+                first["window_geometry"] = second["window_geometry"] = geometry
+                report = comparison_contract([terminal("termeric", first), terminal("kitty", second)], SETTINGS)
+                self.assertEqual(report["ranking_permitted"], {
+                    "startup_to_visible_ms": True, "pty_response_ms": True,
+                    "rss_kib": False, "idle_cpu_percent_one_core": False,
+                })
+                self.assertEqual(report["observed_window_pixels"], [])
+        first, second = sample(), sample()
+        del first["window_geometry"], second["window_geometry"]
+        self.assertFalse(comparison_contract([terminal("termeric", first), terminal("kitty", second)], SETTINGS)["comparable"])
+
+    def test_one_bad_geometry_sample_cannot_be_hidden_by_matching_complete_samples(self):
+        first = terminal("termeric", sample())
+        bad = sample()
+        bad["window_geometry"] = {"width": 1000, "height": 700, "errors": ["duplicate width"]}
+        first["samples"].append(bad)
+        report = comparison_contract([first, terminal("kitty", sample())], SETTINGS)
+        self.assertEqual(report["observed_window_pixels"], [[1000, 700]])
+        for metric in ("rss_kib", "idle_cpu_percent_one_core"):
+            self.assertFalse(report["ranking_permitted"][metric])
+            self.assertTrue(any("geometry observation" in reason for reason in report["metrics"][metric]["reasons"]))
+        self.assertTrue(report["ranking_permitted"]["startup_to_visible_ms"])
+        self.assertTrue(report["ranking_permitted"]["pty_response_ms"])
 
     def test_grid_and_retention_drift_block_pty_ranking(self):
         report = comparison_contract(
@@ -431,6 +507,43 @@ class CrossTerminalBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["resources"]["observations"], {"before": before, "after": after})
         cleanup.assert_called_once()
         self.assertEqual(cleanup.call_args.args[3], {122: 9, 123: 10, 124: 20})
+
+    def test_geometry_timeout_retains_timing_resource_observations_and_cleanup(self):
+        observation = {
+            "status": "complete", "pids": [123], "errors": [],
+            "rss_kib": 100, "threads": 1, "fds": 2, "cpu_ticks": 3,
+            "processes": [{"pid": 123, "start_time_ticks": 10, "cpu_ticks": 3}],
+            "identities": [{"pid": 123, "start_time_ticks": 10}],
+        }
+        ready = {**sample()["fixture_ready"], "pid": 124}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch("scripts.compare_terminals.subprocess.Popen") as launch, \
+                patch("scripts.compare_terminals.subprocess.run", side_effect=subprocess.TimeoutExpired(["xdotool"], 5)), \
+                patch("scripts.compare_terminals.wait_for_file", side_effect=[ready, sample()["fixture"]]), \
+                patch("scripts.compare_terminals.find_window", return_value=("42", 123, 10.5)), \
+                patch("scripts.compare_terminals.terminal_resources", return_value=observation), \
+                patch("scripts.compare_terminals.stat_fields", return_value=(124, 124, 0, 20)), \
+                patch("scripts.compare_terminals.time.monotonic", side_effect=[10.0, 11.0, 12.0]), \
+                patch("scripts.compare_terminals.time.sleep"), \
+                patch("scripts.compare_terminals.terminate_run") as cleanup:
+            launch.return_value.pid = 123
+            result, _ = run_sample(
+                "kitty", "/fixture/kitty", Path(temporary) / "sample", SETTINGS,
+                1024, 20.0, 1.0, {"DISPLAY": ":99"},
+            )
+        self.assertEqual(result["startup_to_visible_ms"], 500.0)
+        self.assertEqual(result["fixture"]["pty_response_ms"], 1.0)
+        self.assertEqual(result["resources"]["rss_kib"], 100)
+        self.assertEqual(result["resources"]["idle_cpu_percent_one_core"], 0.0)
+        self.assertEqual(result["resources"]["observations"], {"before": observation, "after": observation})
+        self.assertIn("TimeoutExpired", result["window_geometry"]["errors"][0])
+        report = comparison_contract([terminal("termeric", result), terminal("kitty", sample())], SETTINGS)
+        self.assertEqual(report["ranking_permitted"], {
+            "startup_to_visible_ms": True, "pty_response_ms": True,
+            "rss_kib": False, "idle_cpu_percent_one_core": False,
+        })
+        cleanup.assert_called_once()
+        self.assertEqual(cleanup.call_args.args[3], {123: 10, 124: 20})
 
 
 if __name__ == "__main__":

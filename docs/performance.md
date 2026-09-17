@@ -556,6 +556,24 @@ which rankings are permitted and why. Tune `--window-width` and
 the complete JSON and per-run logs; do not combine these external end-to-end
 rows with Termeric's internal Rust or WGPU metrics.
 
+Equal *missing* pixel dimensions are not a match. Every sample must have
+positive integer width/height and no geometry-query errors before either
+resource metric can be ranked. Missing, null, boolean, fractional, nonpositive,
+or malformed dimensions block resource ranking, even when every terminal has
+the same bad values or other samples have matching valid dimensions. Only
+valid geometry enters the observed-pixel inventory. The X11 query has a
+five-second timeout, rejects missing/duplicate/invalid dimension fields, and
+retains query failures explicitly in `window_geometry.errors`; it does not
+discard otherwise valid timing or process-resource observations. Optional
+coordinates do not establish comparability. Startup and PTY timing eligibility
+remain governed by their separate contracts.
+
+Parser/contract and mocked launch-path regressions cover these failures without
+launching a real terminal. Re-evaluating the five retained schema-2 native
+reports at `49b3fab`, `d6d5261`, and `4081caa` (50 measured samples) leaves all
+their comparison contracts unchanged. Their actual pixel sizes still differ;
+this fix closes a false-positive path, not the pending calibration work.
+
 ### Current local comparison evidence
 
 On 2026-09-17, clean source `49b3fabf62909e4a58183f61495d19131c68b10d`
