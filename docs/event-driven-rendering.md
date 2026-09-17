@@ -40,6 +40,17 @@ reason list, including `background-task` and `accessibility` instead of an
 unexplained native redraw for those asynchronous paths; shutdown debug logging
 reports requested, rendered, and coalesced frame counts.
 
+Cursor movement uses a 150 ms `Instant`-based ease-out cubic transition, not
+repeated frame-delta interpolation. Repeated samples of the same target do not
+restart the clock; retargeting starts from the previous trajectory evaluated
+at that instant. Sampling the final position clears the active flag, so the
+scheduler cannot skip the endpoint frame merely because its deadline elapsed.
+Hidden movement, visibility changes, new tabs, and reduced motion snap
+immediately. Existing-tab switches remain animated. Only this presented
+transition sustains cursor-animation deadlines: live-grid movement hidden
+behind a synchronized-output snapshot does not manufacture redraws. Occluded
+windows catch up from the absolute clock on their next actual render.
+
 Synchronized-output mode is terminal-local. DECSET 2026 captures a bounded
 snapshot of that terminal's visible grid, terminal-local colors, and placed
 images at the exact parser boundary. Decoded image pixels use shared immutable
@@ -74,7 +85,11 @@ consumer only after they are queued. Synchronized-output tests cover the exact
 same-parser-call snapshot boundary, text/color/image isolation, repeated begin,
 deadline recovery, guaranteed final dirty state, and an unfocused pane. The
 Kitty animation scheduler tests cover exact frame boundaries, loading/finite
-loops, active-screen ownership, and one coalesced redraw request. The full
+loops, active-screen ownership, and one coalesced redraw request. Cursor
+movement tests additionally cover sparse/dense sampling at equal
+elapsed times, exact completion, retargeting without sampling-history drift,
+large previous-frame gaps, hidden/reappearing cursors, new/existing tab
+switches, reduced motion, and synchronized-output presentation ownership. The
 workspace suite also covers terminal output, close cleanup, overlay
 lifecycles, and surface-recovery guards.
 

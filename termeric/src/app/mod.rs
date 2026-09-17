@@ -1067,10 +1067,9 @@ pub struct App {
     text_blink_start: Instant,
     /// SGR blink phases drawn in the most recent frame.
     last_text_blink_phases: TextBlinkPhases,
-    /// Animated cursor display position (for smooth movement)
-    cursor_display_col: f32,
-    cursor_display_row: f32,
-    /// Last frame time for delta calculation
+    /// Absolute-clock cursor transition, independent of redraw cadence.
+    cursor_motion: crate::ui::cursor_motion::CursorMotion,
+    /// Last rendered frame time for presentation-deadline scheduling.
     last_frame_time: Instant,
     /// Last time we polled the config file for hot-reload
     last_config_check: Instant,
@@ -1084,8 +1083,6 @@ pub struct App {
     last_theme_mtime: Option<std::time::SystemTime>,
     /// Last known cursor visibility (for snap detection)
     last_cursor_visible: bool,
-    /// Last active tab ID (for animation state)
-    last_active_tab_id: Option<usize>,
     /// Highest tab ID we've seen (to detect truly new tabs)
     max_seen_tab_id: Option<usize>,
     /// Mouse input state
@@ -1366,8 +1363,7 @@ impl App {
             last_cursor_blink_visible: true,
             text_blink_start: Instant::now(),
             last_text_blink_phases: TextBlinkPhases::default(),
-            cursor_display_col: 0.0,
-            cursor_display_row: 0.0,
+            cursor_motion: crate::ui::cursor_motion::CursorMotion::default(),
             last_frame_time: Instant::now(),
             last_config_check: Instant::now(),
             last_config_mtime: use_system_state
@@ -1381,7 +1377,6 @@ impl App {
             active_theme_path,
             last_theme_mtime,
             last_cursor_visible: true,
-            last_active_tab_id: None,
             max_seen_tab_id: None,
             mouse_state: MouseState::new(),
             modifiers: ModifiersState::empty(),
@@ -2993,13 +2988,9 @@ impl App {
     }
 
     fn cursor_position_animation_active(&self) -> bool {
-        let cursor = self
-            .active_terminal()
-            .map(|terminal| terminal.grid().cursor());
-        cursor.is_some_and(|cursor| {
-            (self.cursor_display_col - cursor.col as f32).abs() >= 0.01
-                || (self.cursor_display_row - cursor.row as f32).abs() >= 0.01
-        })
+        // Only the presented cursor may sustain a transition. A synchronized
+        // output snapshot can intentionally differ from the live grid.
+        self.cursor_motion.is_active()
     }
 
     fn has_deadline_animation(&self) -> bool {
@@ -3264,12 +3255,24 @@ impl App {
         cursor_visible: bool,
         active_tab_id: Option<usize>,
     ) -> (f32, f32) {
-        let now = Instant::now();
-        let delta = now.duration_since(self.last_frame_time).as_secs_f32();
-        self.last_frame_time = now;
+        self.update_cursor_animation_at(
+            target_col,
+            target_row,
+            cursor_visible,
+            active_tab_id,
+            Instant::now(),
+        )
+    }
 
-        let target_col_f = target_col as f32;
-        let target_row_f = target_row as f32;
+    fn update_cursor_animation_at(
+        &mut self,
+        target_col: usize,
+        target_row: usize,
+        cursor_visible: bool,
+        active_tab_id: Option<usize>,
+        now: Instant,
+    ) -> (f32, f32) {
+        self.last_frame_time = now;
 
         // Check for snap conditions:
         // - Visibility change: cursor was hidden and reappears (e.g., command finished)
@@ -3288,38 +3291,18 @@ impl App {
 
         // Update tracking state
         self.last_cursor_visible = cursor_visible;
-        self.last_active_tab_id = active_tab_id;
         // Update max seen tab ID
         if let Some(current) = active_tab_id {
             self.max_seen_tab_id =
                 Some(self.max_seen_tab_id.map_or(current, |max| max.max(current)));
         }
 
-        // Snap immediately if cursor reappears or it's a truly new tab
-        if self.reduced_motion_enabled() || visibility_changed || is_new_tab {
-            self.cursor_display_col = target_col_f;
-            self.cursor_display_row = target_row_f;
-            return (self.cursor_display_col, self.cursor_display_row);
-        }
-
-        // Easing speed - higher = faster snap to target
-        // 15.0 gives a quick but visible ease (reaches target in ~100-150ms)
-        let ease_speed = 15.0;
-        let t = (ease_speed * delta).min(1.0);
-
-        // Lerp toward target
-        self.cursor_display_col += (target_col_f - self.cursor_display_col) * t;
-        self.cursor_display_row += (target_row_f - self.cursor_display_row) * t;
-
-        // Snap if very close to avoid endless tiny movements
-        if (self.cursor_display_col - target_col_f).abs() < 0.01 {
-            self.cursor_display_col = target_col_f;
-        }
-        if (self.cursor_display_row - target_row_f).abs() < 0.01 {
-            self.cursor_display_row = target_row_f;
-        }
-
-        (self.cursor_display_col, self.cursor_display_row)
+        // Hidden movement has no pixels to animate. New tabs, visibility
+        // transitions, and reduced motion retain their immediate placement.
+        let snap =
+            self.reduced_motion_enabled() || !cursor_visible || visibility_changed || is_new_tab;
+        self.cursor_motion
+            .update((target_col as f32, target_row as f32), now, snap)
     }
 
     /// Handle a plugin/custom keybinding action (SendText, RunCommand, PluginCommand).

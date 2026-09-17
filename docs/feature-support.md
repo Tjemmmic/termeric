@@ -785,6 +785,15 @@ not an implemented optimization, proof about every historical burst, or a
 steady-idle/hardware-GPU claim; see
 [the CPU-tail evidence](performance.md#cpu-tail-attribution-at-f9ad5d2).
 
+Cursor interpolation now uses a fixed 150 ms `Instant`-based ease-out
+transition, with deterministic retargeting and lifecycle tests. Hidden cursor
+movement snaps, and the scheduler no longer chases live-grid cursor positions
+behind synchronized-output snapshots. This corrects animation timing; it does
+not yet establish a native CPU reduction, especially where the old
+frame-dependent implementation accidentally snapped immediately. See
+[the transition contract](event-driven-rendering.md) and
+[the implementation boundary](performance.md#bounded-cursor-transition-implementation).
+
 ## Release gates
 
 Termeric may be tagged as a Linux beta only when all of these are true on the

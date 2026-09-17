@@ -1161,6 +1161,27 @@ and script, and all six run directories under
 byte-for-byte; caches/data/state are excluded. Forced teardown is not
 graceful-close acceptance. Original `/tmp/` paths map to archive names.
 
+### Bounded cursor-transition implementation
+
+The cursor's legacy `min(15 * frame_delta, 1)` recurrence has been replaced
+with a 150 ms absolute-clock ease-out transition. Repeated target samples do
+not restart it; changed targets retarget from the previous curve evaluated at
+that instant. The final sampled frame clears pending animation state. New
+tabs, cursor visibility transitions, all hidden movement, and reduced motion
+snap immediately; existing-tab switches continue to animate. Cursor scheduling
+now follows the presented transition rather than comparing against live-grid
+coordinates hidden by synchronized output.
+
+Deterministic tests cover identical results at equal elapsed time across sparse
+and dense frame schedules, fixed endpoints at different travel distances,
+retargeting and cancellation, delayed-frame catch-up, new/existing tabs,
+visibility, reduced motion, and synchronized-output ownership. This fixes a
+timing/lifecycle defect; it does **not** imply every CPU sample improves. The
+old implementation accidentally snapped after a sufficiently long frame gap,
+whereas a visible new transition now animates consistently. Native before/after
+evidence must retain that tradeoff, rather than comparing only the old slow
+tail or hiding new animation work with reduced motion.
+
 ## Profiling recipes
 
 The core resource soak now includes a persistent diff history with 80 synthetic
