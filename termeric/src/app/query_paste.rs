@@ -1,4 +1,4 @@
-//! Clipboard ownership for bounded single-line query fields.
+//! Clipboard ownership for bounded single-line queries and command forms.
 
 use super::*;
 
@@ -8,6 +8,7 @@ enum PasteTarget {
     Unicode,
     Domain,
     Search,
+    CommandsForm,
     Blocked,
     Terminal,
 }
@@ -38,11 +39,17 @@ impl App {
         if self.shortcuts_panel.is_active()
             || self.settings_panel.is_active()
             || self.session_panel.is_open()
-            || self.commands_panel.is_open()
             || self.tab_rename.is_some()
             || self.session_dropdown_open
         {
             return PasteTarget::Blocked;
+        }
+        if self.commands_panel.is_open() {
+            return if self.commands_panel.is_editing() {
+                PasteTarget::CommandsForm
+            } else {
+                PasteTarget::Blocked
+            };
         }
         if self.search.is_active() {
             return PasteTarget::Search;
@@ -84,13 +91,18 @@ impl App {
         if text.is_empty() {
             return false;
         }
-        if text.len() > crate::terminal::search::MAX_SEARCH_QUERY_BYTES
+        let limit = if target == PasteTarget::CommandsForm {
+            crate::ui::commands::panel::CommandsPanel::MAX_FORM_COMMAND_BYTES
+        } else {
+            crate::terminal::search::MAX_SEARCH_QUERY_BYTES
+        };
+        if text.len() > limit
             || text
                 .chars()
                 .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
         {
             self.toasts.warning(
-                "Query paste requires bounded single-line text without control characters",
+                "Field paste requires bounded single-line text without control characters",
             );
             return false;
         }
@@ -98,6 +110,7 @@ impl App {
             PasteTarget::Command => self.command_palette.insert_query_text(text),
             PasteTarget::Unicode => self.unicode_picker.insert_query_text(text),
             PasteTarget::Domain => self.domain_picker.insert_query_text(text),
+            PasteTarget::CommandsForm => self.commands_panel.insert_form_text(text),
             PasteTarget::Search => {
                 let cursor = self.search_cursor_pos;
                 let accepted = self
@@ -115,7 +128,7 @@ impl App {
         if accepted {
             self.ime.clear_preedit();
         } else {
-            self.toasts.warning("Query paste was not inserted: the field is read-only or its size limit was exceeded");
+            self.toasts.warning("Field paste was not inserted: the field is read-only or its size limit was exceeded");
         }
         self.redraw_scheduler
             .request(redraw_scheduler::RedrawReason::KeyboardInput);
@@ -132,6 +145,78 @@ mod tests {
     use crate::input::keybindings::{BindableAction, KeyChord};
     use crate::ui::text_input::TextInputEdit;
     use winit::keyboard::{Key, NamedKey};
+
+    #[test]
+    fn command_form_paste_honors_shortcuts_and_preserves_state_on_rejection() {
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.commands_panel.toggle();
+        assert!(app.clipboard_paste_blocked());
+        app.commands_panel.start_add();
+        app.modifiers = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert!(app.handle_query_paste_key(&Key::Character("v".into())));
+        let rebound = Key::Named(NamedKey::F8);
+        app.shortcut_registry.set_binding(
+            BindableAction::Paste,
+            KeyChord::from_key_lookup(&rebound, ModifiersState::empty()),
+        );
+        assert!(!app.handle_query_paste_key(&Key::Character("v".into())));
+        app.modifiers = ModifiersState::empty();
+        assert!(app.handle_query_paste_key(&rebound));
+        app.shortcut_registry.clear_binding(BindableAction::Paste);
+        assert!(!app.handle_query_paste_key(&rebound));
+        assert!(app.paste_clipboard_payload("az"));
+        app.commands_panel.form_edit(TextInputEdit::Left);
+        app.handle_ime_event(winit::event::Ime::Preedit("draft".into(), None));
+        for rejected in ["\n", "\t", "\u{2028}", &"x".repeat(257)] {
+            assert!(!app.paste_clipboard_payload(rejected));
+            assert_eq!(app.commands_panel.form_name.text(), "az");
+            assert_eq!(app.commands_panel.form_name.cursor(), 1);
+            assert!(app.ime.preedit().is_some());
+        }
+        assert!(app.paste_clipboard_payload("界"));
+        assert_eq!(app.commands_panel.form_name.text(), "a界z");
+        assert!(app.ime.preedit().is_none());
+        app.commands_panel.focus_command();
+        // The form's 16 KiB command limit is not the search field's 4 KiB limit.
+        assert!(app.paste_clipboard_payload(&"x".repeat(16 * 1024)));
+        assert!(!app.paste_clipboard_payload("界"));
+        assert_eq!(app.commands_panel.form_command.text().len(), 16 * 1024);
+        assert!(app.commands_panel.is_editing());
+        assert!(app.config.commands.is_empty()); // paste does not submit/save
+        assert!(app.redraw_scheduler.has_pending());
+    }
+
+    #[test]
+    fn command_form_paste_respects_higher_modal_owners_and_retained_search() {
+        for open in [
+            (|app: &mut App| app.settings_panel.toggle()) as fn(&mut App),
+            |app| app.shortcuts_panel.open(),
+            |app| app.session_panel.open_workspaces(),
+            |app| {
+                app.info_overlay.show("Notice", vec![]);
+            },
+        ] {
+            let mut app = App::new_headless(Config::default()).unwrap();
+            app.search.start();
+            app.commands_panel.toggle();
+            app.commands_panel.start_add();
+            assert_eq!(app.clipboard_paste_target(), PasteTarget::CommandsForm);
+            assert!(app.paste_clipboard_payload("form only"));
+            assert!(app.search.query().is_empty());
+            open(&mut app);
+            assert_eq!(app.clipboard_paste_target(), PasteTarget::Blocked);
+            assert!(!app.paste_clipboard_payload("hidden"));
+            assert_eq!(app.commands_panel.form_name.text(), "form only");
+            assert!(app.search.query().is_empty());
+        }
+        let mut app = App::new_headless(Config::default()).unwrap();
+        app.commands_panel.toggle();
+        app.commands_panel.start_add();
+        app.command_palette.open();
+        assert_eq!(app.clipboard_paste_target(), PasteTarget::Command);
+        assert!(app.paste_clipboard_payload("palette only"));
+        assert!(app.commands_panel.form_name.text().is_empty());
+    }
 
     #[test]
     fn query_paste_honors_rebound_and_disabled_shortcuts_without_reading_for_blocked_owners() {
@@ -290,6 +375,18 @@ mod tests {
         app.command_palette.edit_input(TextInputEdit::Home);
         assert!(!app.paste_clipboard_payload("\u{1b}[200~"));
         app.command_palette.close();
+        app.commands_panel.toggle();
+        app.commands_panel.start_add();
+        assert!(app.paste_clipboard_payload("inert name"));
+        assert!(!app.paste_clipboard_payload("\nexecute\n"));
+        assert!(!app.paste_clipboard_payload(&"x".repeat(257)));
+        app.commands_panel.focus_command();
+        assert!(app.paste_clipboard_payload("not executed; just field text"));
+        assert!(!app.paste_clipboard_payload("\u{1b}[201~"));
+        assert!(!app.paste_clipboard_payload(&"x".repeat(16 * 1024 + 1)));
+        app.commands_panel.cancel_edit();
+        assert!(!app.paste_clipboard_payload("browse must not write"));
+        app.commands_panel.close();
         app.search.cancel();
         assert!(app.paste_clipboard_payload("Z"));
         wait_for(&mut app, "5a");

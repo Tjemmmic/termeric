@@ -359,9 +359,13 @@ native responsiveness acceptance remains deferred (see [Unicode policy](unicode-
 Custom-command Name and Command fields now support whole-grapheme caret/deletion
 and Ctrl word editing, with bounded clipped/shaped caret-following text and
 matching IME candidate geometry. Automated model, geometry, modifier, and raw-PTY
-isolation tests pass; native visual/IME acceptance remains deferred. Selection,
-pointer caret placement, and clipboard insertion in these form fields remain
-unimplemented (see [input contract](accessibility-and-input.md)).
+isolation tests pass; native visual/IME acceptance remains deferred. Configured
+clipboard paste inserts atomically at the active form caret under the existing
+256-byte Name and 16 KiB Command limits, rejects multiline/control/oversized
+input without terminal fallback, and never submits the form. Hermetic clipboard
+routing tests pass; real-desktop clipboard acceptance is separate. Selection and
+pointer caret placement remain unimplemented
+(see [input contract](accessibility-and-input.md)).
 
 Shared palette query editing supports unmodified Left/Right/Home/End and
 whole-grapheme Backspace/Delete with insertion at the moved caret. Ctrl+Left/Right

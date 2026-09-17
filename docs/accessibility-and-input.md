@@ -312,8 +312,21 @@ IME candidates/preedit share the active field's animated/scaled geometry, and
 field changes retire stale composition. Existing byte limits and submission
 validation are unchanged. Model, geometry, modifier, and raw-PTY isolation tests
 pass without saving or executing commands. Native visual/IME acceptance remains
-deferred. Query selection, click-to-position within these form fields, and
-clipboard insertion into them are not implemented by this change.
+deferred. Selection and click-to-position within these form fields remain
+unimplemented.
+
+The configured Paste shortcut (Ctrl+Shift+V by default) inserts clipboard text
+at the active form caret without saving or executing it. Name retains its
+256-byte ceiling and Command its 16 KiB ceiling; the search query's smaller
+4 KiB limit does not restrict command forms. Empty, multiline, control-containing
+(including tabs and escape sequences), Unicode line/paragraph separator, and
+oversized pastes are rejected atomically without moving the caret or clearing
+pending composition. Successful insertion uses one UTF-8 splice and clears
+stale preedit. Higher-priority modal owners and the panel's browse mode keep
+pastes blocked; rejection never falls through to the terminal or a retained
+search. Hermetic shortcut, UTF-8 boundary, field-limit, ownership, and raw-PTY
+tests cover this path without accessing a real clipboard or submitting a command.
+Real-desktop clipboard/IME acceptance remains separate.
 
 The workspace manager and legacy-snapshot manager share a bounded modal model.
 Each visible entry is a named group with exact Load and Delete actions;

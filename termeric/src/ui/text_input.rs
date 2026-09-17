@@ -75,6 +75,13 @@ impl TextInput {
         self.cursor += c.len_utf8();
     }
 
+    /// Insert already-validated text with one splice, not one suffix move per
+    /// scalar. Callers own their field-specific size and content policy.
+    pub fn insert_text(&mut self, text: &str) {
+        self.buffer.insert_str(self.cursor, text);
+        self.cursor += text.len();
+    }
+
     /// Apply a whole-grapheme edit. Returns true only if text changed; moving
     /// the caret must not invalidate search results. Existing scalar-based
     /// methods remain unchanged for other consumers.
@@ -324,6 +331,19 @@ impl std::fmt::Display for TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_splice_preserves_utf8_suffix_and_advances_by_bytes() {
+        let mut input = TextInput::from("界z");
+        assert!(input.set_cursor_byte("界".len()));
+        input.insert_text("e\u{301}👩\u{200d}💻");
+        assert_eq!(input.text(), "界e\u{301}👩\u{200d}💻z");
+        assert_eq!(input.cursor(), input.text().len() - 1);
+        input.insert_text("");
+        assert_eq!(input.cursor(), input.text().len() - 1);
+        assert!(input.edit_grapheme(TextInputEdit::Backspace));
+        assert_eq!(input.text(), "界e\u{301}z");
+    }
 
     #[test]
     fn word_edits_skip_whitespace_and_keep_punctuation_and_emoji_segments() {

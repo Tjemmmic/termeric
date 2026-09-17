@@ -295,7 +295,7 @@ impl CommandsPanelLayout {
 
 impl CommandsPanel {
     const MAX_FORM_NAME_BYTES: usize = 256;
-    const MAX_FORM_COMMAND_BYTES: usize = 16 * 1024;
+    pub(crate) const MAX_FORM_COMMAND_BYTES: usize = 16 * 1024;
 
     pub fn new() -> Self {
         Self {
@@ -441,6 +441,33 @@ impl CommandsPanel {
         }
     }
 
+    /// Atomic clipboard insertion into the open form. Never truncate a
+    /// command, execute it, or change focus when the paste is rejected.
+    pub fn insert_form_text(&mut self, text: &str) -> bool {
+        if !self.is_open() {
+            return false;
+        }
+        let limit = match self.edit_mode {
+            EditMode::EditingName => Self::MAX_FORM_NAME_BYTES,
+            EditMode::EditingCommand => Self::MAX_FORM_COMMAND_BYTES,
+            EditMode::Browse => return false,
+        };
+        if text.is_empty()
+            || text.len() > limit
+            || text
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        {
+            return false;
+        }
+        let input = self.active_input().expect("editable field checked above");
+        if input.text().len().saturating_add(text.len()) > limit {
+            return false;
+        }
+        input.insert_text(text);
+        true
+    }
+
     /// Replace a form field from an assistive-technology value action. The
     /// same single-line and size limits apply as to typed input.
     pub fn accessibility_set_name(&mut self, value: &str) -> bool {
@@ -527,6 +554,64 @@ mod tests {
             layout.command_row(1).y,
             layout.command_row(0).y + layout.row_height
         );
+    }
+
+    #[test]
+    fn form_paste_is_atomic_at_the_caret_and_obeys_each_field_byte_limit() {
+        for name in [true, false] {
+            let mut panel = CommandsPanel::new();
+            panel.start_add();
+            assert!(!panel.insert_form_text("hidden"));
+            panel.toggle();
+            assert!(!panel.insert_form_text("browse"));
+            panel.start_add();
+            if !name {
+                panel.focus_command();
+            }
+            let limit = if name {
+                CommandsPanel::MAX_FORM_NAME_BYTES
+            } else {
+                CommandsPanel::MAX_FORM_COMMAND_BYTES
+            };
+            assert!(panel.insert_form_text("az"));
+            panel.form_edit(TextInputEdit::Left);
+            assert!(panel.insert_form_text("界e\u{301}👩\u{200d}💻"));
+            let value = "a界e\u{301}👩\u{200d}💻z";
+            assert_eq!(panel.active_input().unwrap().text(), value);
+            let cursor = value.len() - 1;
+            for rejected in [
+                "",
+                "two\nlines",
+                "two\rlines",
+                "\t",
+                "\0",
+                "\u{1b}[200~",
+                "\u{7f}",
+                "\u{85}",
+                "\u{2028}",
+                "\u{2029}",
+                &"x".repeat(limit + 1),
+            ] {
+                assert!(!panel.insert_form_text(rejected));
+                assert_eq!(panel.active_input().unwrap().text(), value);
+                assert_eq!(panel.active_input().unwrap().cursor(), cursor);
+            }
+            assert!(panel.insert_form_text(&"x".repeat(limit - value.len() - 3)));
+            assert!(!panel.insert_form_text("🫚")); // four bytes cannot fit in three
+            assert!(panel.insert_form_text("界"));
+            assert_eq!(panel.active_input().unwrap().text().len(), limit);
+            assert_eq!(panel.active_input().unwrap().cursor(), limit - 1);
+            assert!(!panel.insert_form_text("x"));
+            assert!(panel.active_input().unwrap().text().ends_with('z'));
+            let other = if name {
+                &panel.form_command
+            } else {
+                &panel.form_name
+            };
+            assert!(other.text().is_empty());
+            panel.cancel_edit();
+            assert!(!panel.insert_form_text("browse"));
+        }
     }
 
     #[test]
