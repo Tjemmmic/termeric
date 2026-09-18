@@ -3500,6 +3500,16 @@ mod unix {
             Ok(())
         }
 
+        fn create_directory(self, created: &mut Vec<CreatedPath>) -> io::Result<()> {
+            // Creation and identity capture share the retained parent. Restore
+            // access through the new directory's handle, never its old pathname.
+            fs::DirBuilder::new().mode(0o700).create(&self.path)?;
+            record_created(&self.path, CreatedKind::Directory, created)?;
+            let entry = created.last_mut().expect("created directory was recorded");
+            entry.path = self.original_path;
+            ensure_directory_access(entry)
+        }
+
         fn publish(self, temporary: impl Into<StagedFile>) -> io::Result<File> {
             let temporary = temporary.into();
             #[cfg(target_os = "linux")]
@@ -3703,10 +3713,7 @@ mod unix {
     }
 
     fn create_directory(path: &Path, created: &mut Vec<CreatedPath>) -> io::Result<()> {
-        fs::DirBuilder::new().mode(0o700).create(path)?;
-        record_created(path, CreatedKind::Directory, created)?;
-        let entry = created.last_mut().expect("created directory was recorded");
-        ensure_directory_access(entry)
+        PublicationTarget::open(path)?.create_directory(created)
     }
 
     fn ensure_directory_access(entry: &mut CreatedPath) -> io::Result<()> {
@@ -4681,6 +4688,148 @@ mod unix {
                     fs::metadata(&hardlink).unwrap().ino()
                 );
                 assert_eq!(fs::read_link(&symlink).unwrap(), PathBuf::from("file"));
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn directory_creation_rejects_existing_entries_and_symlink_ancestors() {
+            for kind in ["file", "directory", "symlink", "ancestor"] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("destination");
+                let outside = root.path().join("outside");
+                fs::create_dir(&outside).unwrap();
+                match kind {
+                    "file" => fs::write(&path, b"keep").unwrap(),
+                    "directory" => fs::create_dir(&path).unwrap(),
+                    "symlink" | "ancestor" => {
+                        std::os::unix::fs::symlink(&outside, &path).unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+                let before = fs::symlink_metadata(&path).unwrap();
+                let outside_before = fs::metadata(&outside).unwrap();
+                let destination = if kind == "ancestor" {
+                    path.join("new")
+                } else {
+                    path.clone()
+                };
+                let mut created = Vec::new();
+                assert!(
+                    create_directory(&destination, &mut created).is_err(),
+                    "{kind}"
+                );
+                assert!(
+                    created.is_empty(),
+                    "no cleanup authority on failed creation"
+                );
+                let after = fs::symlink_metadata(&path).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(after.permissions().mode(), before.permissions().mode());
+                let outside_after = fs::metadata(&outside).unwrap();
+                assert_eq!(
+                    (outside_after.mtime(), outside_after.mtime_nsec()),
+                    (outside_before.mtime(), outside_before.mtime_nsec())
+                );
+                assert!(!outside.join("new").exists());
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn implicit_directories_keep_logical_rollback_keys_and_private_modes() {
+            let root = tempdir().unwrap();
+            let existing = root.path().join("existing");
+            fs::create_dir(&existing).unwrap();
+            fs::set_permissions(&existing, Permissions::from_mode(0o750)).unwrap();
+            let parent = existing.join("first/second");
+            let mut created = Vec::new();
+            create_missing_parents(&parent.join("file"), &HashSet::new(), &mut created).unwrap();
+            assert_eq!(created.len(), 2);
+            for (entry, path) in created.iter().zip([existing.join("first"), parent]) {
+                assert_eq!(entry.path, path);
+                let metadata = fs::metadata(&path).unwrap();
+                assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+                assert_eq!(
+                    (metadata.dev(), metadata.ino()),
+                    (entry.device, entry.inode)
+                );
+                assert!(entry._identity_guard.is_some());
+            }
+            rollback_paths(&created);
+            assert!(!existing.join("first").exists());
+            assert!(existing.is_dir());
+            assert_eq!(
+                fs::metadata(&existing).unwrap().permissions().mode() & 0o777,
+                0o750
+            );
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn directory_creation_retains_parent_after_ancestor_replacement() {
+            for symbolic in [false, true] {
+                for replace_ancestor in [false, true] {
+                    let root = tempdir().unwrap();
+                    let ancestor = root.path().join("ancestor");
+                    let parent = ancestor.join("parent");
+                    fs::create_dir_all(&parent).unwrap();
+                    let path = parent.join("new-directory");
+                    let destination = PublicationTarget::open(&path).unwrap();
+                    let replaced = if replace_ancestor { &ancestor } else { &parent };
+                    let moved = root.path().join("moved");
+                    fs::rename(replaced, &moved).unwrap();
+                    let outside = root.path().join("outside");
+                    let replacement = if symbolic { &outside } else { replaced };
+                    fs::create_dir(replacement).unwrap();
+                    let replacement_parent = if replace_ancestor {
+                        let nested = replacement.join("parent");
+                        fs::create_dir(&nested).unwrap();
+                        nested
+                    } else {
+                        replacement.clone()
+                    };
+                    if symbolic {
+                        std::os::unix::fs::symlink(&outside, replaced).unwrap();
+                    }
+                    let before = fs::metadata(&replacement_parent).unwrap();
+                    let mut created = Vec::new();
+                    destination.create_directory(&mut created).unwrap();
+                    let moved_directory = if replace_ancestor {
+                        moved.join("parent/new-directory")
+                    } else {
+                        moved.join("new-directory")
+                    };
+                    let original = fs::metadata(&moved_directory).unwrap();
+                    assert!(original.is_dir());
+                    assert_eq!(original.permissions().mode() & 0o777, 0o700);
+                    assert!(fs::symlink_metadata(&path).is_err());
+                    assert_eq!(created.len(), 1);
+                    assert_eq!(created[0].path, path);
+                    assert_eq!(
+                        (original.dev(), original.ino()),
+                        (created[0].device, created[0].inode)
+                    );
+                    finalize_directory(&path, 0o555, Some(-1), &created).unwrap();
+                    let finalized = fs::metadata(&moved_directory).unwrap();
+                    assert_eq!(finalized.permissions().mode() & 0o777, 0o555);
+                    assert_eq!(
+                        (finalized.mtime(), finalized.mtime_nsec()),
+                        (-1, 999_999_999)
+                    );
+                    rollback_paths(&created);
+                    assert!(
+                        moved_directory.is_dir(),
+                        "moved entries may remain after rollback"
+                    );
+                    let after = fs::metadata(&replacement_parent).unwrap();
+                    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                    assert_eq!(after.permissions().mode(), before.permissions().mode());
+                    assert_eq!(
+                        (after.mtime(), after.mtime_nsec()),
+                        (before.mtime(), before.mtime_nsec())
+                    );
+                }
             }
         }
 

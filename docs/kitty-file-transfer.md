@@ -35,6 +35,14 @@ and failure paths have hermetic coverage; native client acceptance is deferred.
 - Mode bits limited to `0777`; setuid, setgid, and sticky bits are stripped.
   Directories use private `0700` assembly permissions, even with a restrictive
   umask, then receive the requested mode without adding owner permissions.
+  On Linux, declared directories and automatically created parents use
+  no-symlink `openat2` parent resolution followed by creation and identity capture
+  through the pinned parent's procfs reference. Replacing a parent or higher
+  ancestor after pinning cannot redirect those operations. Directory creation
+  therefore requires `openat2` and accessible procfs, with no original-path
+  fallback. Regressions cover parent/ancestor replacement, metadata on the
+  original directory, existing-entry refusal, private implicit-parent modes,
+  and ordinary rollback that preserves pre-existing ancestors.
   On Linux, unreadable newly created directories are pinned with `O_PATH` and
   recovered through their trusted `/proc/self/fd` references, never through the
   original destination path. This recovery requires accessible procfs; failure
@@ -144,9 +152,11 @@ Regressions replace parent/ancestor paths with directories and symlinks, check
 that creation and timestamps stay on the original link, preserve target content
 and metadata, retain literal relative/absolute/dangling targets, refuse existing
 file/directory/link destinations, and exercise ordinary rollback. This does not
-make link creation and identity capture atomic: same-type leaf substitutions
-between those operations, directory-creation races, and check-then-unlink
-cleanup remain separate limitations.
+make creation and identity capture atomic: same-type directory or symbolic-link
+leaf substitutions between those operations, staging-file creation through a
+mutable ancestor pathname, and check-then-unlink cleanup remain separate
+limitations. A moved original directory can retain created entries after
+best-effort rollback; pinning does not chase renamed paths for cleanup.
 
 Linux rollback bookkeeping retains created entry identities through file
 handles; symlink identities use metadata-only, no-follow handles.
