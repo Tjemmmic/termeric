@@ -2537,7 +2537,7 @@ mod unix {
         Directory,
         Regular {
             temporary: Option<NamedTempFile>,
-            decompressor: Option<Decompress>,
+            decompressor: Option<DownloadDecompressor>,
         },
         Symlink {
             target: Vec<u8>,
@@ -2545,6 +2545,11 @@ mod unix {
         HardLink {
             target: Vec<u8>,
         },
+    }
+
+    struct DownloadDecompressor {
+        decoder: Decompress,
+        finished: bool,
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2792,7 +2797,10 @@ mod unix {
                     temporary: None,
                     decompressor: (command.compression
                         == termeric_core::KittyFileTransferCompression::Zlib)
-                        .then(|| Decompress::new(true)),
+                        .then(|| DownloadDecompressor {
+                            decoder: Decompress::new(true),
+                            finished: false,
+                        }),
                 },
                 KittyFileTransferType::Symlink => EntryKind::Symlink { target: Vec::new() },
                 KittyFileTransferType::HardLink => EntryKind::HardLink { target: Vec::new() },
@@ -3359,7 +3367,7 @@ mod unix {
     }
 
     fn write_decompressed(
-        decompressor: &mut Decompress,
+        stream: &mut DownloadDecompressor,
         mut input: &[u8],
         is_last: bool,
         output: &mut File,
@@ -3367,6 +3375,20 @@ mod unix {
         declared_size: u64,
         cancellation: &AtomicBool,
     ) -> Result<(), String> {
+        if cancellation.load(Ordering::Acquire) {
+            return Err("transfer was canceled".into());
+        }
+        if stream.finished {
+            // Compression EOF does not finish the protocol entry. Empty data
+            // and end_data packets are valid; a second stream or any trailing
+            // payload is not, even when it arrives in a later packet.
+            return if input.is_empty() {
+                Ok(())
+            } else {
+                Err("data follows the end of the zlib stream".into())
+            };
+        }
+        let decompressor = &mut stream.decoder;
         let mut buffer = [0u8; DECOMPRESS_BUFFER_BYTES];
         loop {
             if cancellation.load(Ordering::Acquire) {
@@ -3398,9 +3420,10 @@ mod unix {
             *bytes_written += produced as u64;
             input = &input[consumed..];
             if status == Status::StreamEnd {
-                if !is_last || !input.is_empty() {
-                    return Err("zlib stream ended before end_data".into());
+                if !input.is_empty() {
+                    return Err("data follows the end of the zlib stream".into());
                 }
+                stream.finished = true;
                 return Ok(());
             }
             if input.is_empty() && produced < buffer.len() {
@@ -4151,6 +4174,216 @@ mod unix {
                 fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o640
             );
+        }
+
+        #[test]
+        fn zlib_stream_boundaries_are_independent_of_transfer_packets() {
+            for payload in [
+                Vec::new(),
+                b"compressed content".to_vec(),
+                vec![b'x'; 128 * 1024],
+            ] {
+                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+                encoder.write_all(&payload).unwrap();
+                let compressed = encoder.finish().unwrap();
+                assert!(compressed.len() < 4096);
+                for split in 0..=compressed.len() {
+                    for separate_end in [false, true] {
+                        let root = tempdir().unwrap();
+                        let path = root.path().join("file");
+                        let cancel = AtomicBool::new(false);
+                        let mut transaction = compressed_transaction(&path, payload.len());
+                        transaction
+                            .handle(
+                                command(
+                                    KittyFileTransferAction::Data,
+                                    "f",
+                                    None,
+                                    KittyFileTransferType::Regular,
+                                    &compressed[..split],
+                                ),
+                                &cancel,
+                            )
+                            .unwrap();
+                        transaction
+                            .handle(
+                                command(
+                                    if separate_end {
+                                        KittyFileTransferAction::Data
+                                    } else {
+                                        KittyFileTransferAction::EndData
+                                    },
+                                    "f",
+                                    None,
+                                    KittyFileTransferType::Regular,
+                                    &compressed[split..],
+                                ),
+                                &cancel,
+                            )
+                            .unwrap();
+                        if separate_end {
+                            // An empty non-final packet must not complete the
+                            // entry or reset a decoder that has reached EOF.
+                            transaction
+                                .handle(
+                                    command(
+                                        KittyFileTransferAction::Data,
+                                        "f",
+                                        None,
+                                        KittyFileTransferType::Regular,
+                                        b"",
+                                    ),
+                                    &cancel,
+                                )
+                                .unwrap();
+                            assert!(!transaction.entries["f"].complete);
+                            transaction
+                                .handle(
+                                    command(
+                                        KittyFileTransferAction::EndData,
+                                        "f",
+                                        None,
+                                        KittyFileTransferType::Regular,
+                                        b"",
+                                    ),
+                                    &cancel,
+                                )
+                                .unwrap();
+                        }
+                        assert!(!path.exists());
+                        transaction
+                            .handle(
+                                command(
+                                    KittyFileTransferAction::Finish,
+                                    "",
+                                    None,
+                                    KittyFileTransferType::Regular,
+                                    b"",
+                                ),
+                                &cancel,
+                            )
+                            .unwrap();
+                        assert_eq!(fs::read(&path).unwrap(), payload);
+                    }
+                }
+            }
+        }
+
+        fn compressed_transaction(path: &Path, size: usize) -> DownloadTransaction {
+            let mut transaction = DownloadTransaction::new("session".into());
+            let mut metadata = command(
+                KittyFileTransferAction::File,
+                "f",
+                Some(path),
+                KittyFileTransferType::Regular,
+                b"",
+            );
+            metadata.size = Some(size as i64);
+            metadata.compression = termeric_core::KittyFileTransferCompression::Zlib;
+            transaction
+                .handle(metadata, &AtomicBool::new(false))
+                .unwrap();
+            transaction
+        }
+
+        #[test]
+        fn invalid_zlib_framing_never_publishes_or_retains_staging() {
+            use KittyFileTransferAction::{Data, EndData};
+
+            let payload = b"compressed content";
+            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(payload).unwrap();
+            let compressed = encoder.finish().unwrap();
+            let mut corrupt = compressed.clone();
+            *corrupt.last_mut().unwrap() ^= 1;
+            let mut trailing = compressed.clone();
+            trailing.extend_from_slice(b"junk");
+            let mut concatenated = compressed.clone();
+            concatenated.extend_from_slice(&compressed);
+            for (name, size, packets) in [
+                (
+                    "truncated",
+                    payload.len(),
+                    vec![(EndData, compressed[..compressed.len() - 1].to_vec())],
+                ),
+                ("checksum", payload.len(), vec![(EndData, corrupt)]),
+                (
+                    "same-packet suffix",
+                    payload.len(),
+                    vec![(EndData, trailing)],
+                ),
+                (
+                    "same-packet second stream",
+                    payload.len(),
+                    vec![(EndData, concatenated)],
+                ),
+                (
+                    "later suffix",
+                    payload.len(),
+                    vec![(Data, compressed.clone()), (EndData, b"junk".to_vec())],
+                ),
+                (
+                    "later second stream",
+                    payload.len(),
+                    vec![(Data, compressed.clone()), (Data, compressed.clone())],
+                ),
+                (
+                    "missing end_data",
+                    payload.len(),
+                    vec![(Data, compressed.clone())],
+                ),
+                (
+                    "undersized declaration",
+                    payload.len() - 1,
+                    vec![(EndData, compressed.clone())],
+                ),
+                (
+                    "oversized declaration",
+                    payload.len() + 1,
+                    vec![(Data, compressed.clone()), (EndData, Vec::new())],
+                ),
+            ] {
+                let root = tempdir().unwrap();
+                let path = root.path().join("file");
+                let cancel = AtomicBool::new(false);
+                let mut transaction = compressed_transaction(&path, size);
+                let mut failure = None;
+                for (action, data) in packets {
+                    if let Err(error) = transaction.handle(
+                        command(action, "f", None, KittyFileTransferType::Regular, &data),
+                        &cancel,
+                    ) {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+                if failure.is_none() {
+                    failure = transaction
+                        .handle(
+                            command(
+                                KittyFileTransferAction::Finish,
+                                "",
+                                None,
+                                KittyFileTransferType::Regular,
+                                b"",
+                            ),
+                            &cancel,
+                        )
+                        .err();
+                }
+                assert_eq!(
+                    failure.expect(name).code,
+                    KittyFileTransferStatusCode::Invalid,
+                    "{name}"
+                );
+                assert!(!path.exists(), "published {name}");
+                drop(transaction);
+                assert_eq!(
+                    fs::read_dir(root.path()).unwrap().count(),
+                    0,
+                    "retained staging for {name}"
+                );
+            }
         }
 
         #[test]

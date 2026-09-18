@@ -19,7 +19,11 @@ and failure paths have hermetic coverage; native client acceptance is deferred.
   originating tab or pane.
 - Ordinary shell/profile terminals and attached live-domain panes on Linux.
 - Regular files, directories, symbolic links, and hard links.
-- Simple transmission with no compression or zlib compression.
+- Simple transmission with no compression or zlib compression. Compression EOF
+  is independent of packet boundaries: a complete stream may be followed by
+  empty `data` packets and an empty `end_data`. Only `end_data` completes the
+  entry, and only `finish` publishes it. Truncation, checksum errors, trailing
+  bytes, concatenated streams, and declared-size mismatches are rejected.
 - `send`, `file`, `data`, `end_data`, `cancel`, and `finish`, with canonical
   status/progress replies in the requesting terminal's S7C1T/S8C1T mode.
 - At most 4 active transfers, 1,024 entries per transfer, 4,096 decoded bytes
