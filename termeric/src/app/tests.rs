@@ -1,6 +1,23 @@
 use super::*;
 use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
+#[test]
+fn option_shaped_hyperlink_activation_is_refused_with_visible_feedback() {
+    let mut app = App::new_headless(Config::default()).unwrap();
+    app.handle_terminal_event(RoutedTerminalEvent {
+        origin: TerminalEventOrigin::Tab { tab_id: 0 },
+        event: TerminalEvent::HyperlinkActivated("--help".into()),
+    });
+    let toast = app.toasts.iter().last().unwrap();
+    assert_eq!(toast.severity, crate::ui::toast::ToastSeverity::Error);
+    assert!(
+        toast
+            .message
+            .contains("opener target must not start with '-'")
+    );
+    assert!(toast.message.contains("./-name"));
+}
+
 #[cfg(unix)]
 fn overflow_drag_fixture() -> App {
     let mut app = scrollbar_owner_fixture();

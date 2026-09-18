@@ -704,6 +704,8 @@ impl App {
                         log::info!("Opening hyperlink: {}", url);
                         if let Err(error) = crate::terminal::url::UrlDetector::open_url(url) {
                             log::error!("Failed to open URL: {}", error);
+                            let message = format!("Could not open {url:?}: {error}");
+                            self.toasts.error(message);
                         }
                         return;
                     }

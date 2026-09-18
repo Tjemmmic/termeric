@@ -71,6 +71,13 @@ remote-file mounting or access. This preserves the host distinction in
 [xdg-open](https://portland.freedesktop.org/doc/xdg-open.html) accepts file URIs.
 Side-effect-free tests inspect the actual launch command's single target
 argument and cwd; native file-handler acceptance remains deferred.
+Bare targets beginning with `-` are refused before launching an opener so a
+link or custom hint cannot become a helper option such as `--help`. Use an
+explicit relative path (`./-report.txt`) or an absolute path/file URI for such
+filenames. Quick select and hyperlink activation report launch/refusal errors
+as non-blocking error toasts. Tests exercise refusal through the public opener
+without spawning a child and verify application error feedback; this does not
+claim a general desktop-handler sandbox or native Windows option-policy audit.
 OSC 8 links take precedence over overlapping regex matches across every row of
 a wrapped link. Resize reflow rebuilds visible matches and their cell
 coordinates while preserving the chosen open/copy action. Configured

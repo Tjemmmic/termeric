@@ -858,6 +858,7 @@ impl App {
             TerminalEvent::HyperlinkActivated(url) => {
                 if let Err(e) = crate::terminal::url::UrlDetector::open_url(&url) {
                     log::error!("Failed to open URL: {}", e);
+                    self.toasts.error(format!("Could not open {url:?}: {e}"));
                 }
             }
             TerminalEvent::CursorVisibilityChanged(_) => {

@@ -170,7 +170,7 @@ impl UrlDetector {
         url: &str,
         working_directory: Option<&Path>,
     ) -> std::io::Result<()> {
-        Self::opener_command(url, working_directory).spawn()?;
+        Self::opener_command(url, working_directory)?.spawn()?;
         Ok(())
     }
 
@@ -178,7 +178,19 @@ impl UrlDetector {
     /// authority must never be discarded or its encoded path treated as a
     /// literal local filename. Building separately permits side-effect-free
     /// argument and working-directory tests of the actual launch path.
-    fn opener_command(url: &str, working_directory: Option<&Path>) -> std::process::Command {
+    fn opener_command(
+        url: &str,
+        working_directory: Option<&Path>,
+    ) -> std::io::Result<std::process::Command> {
+        // A single argument is not an option boundary. xdg-open has no
+        // portable end-of-options contract; do not let terminal-controlled
+        // text select a helper flag instead of a resource.
+        if url.starts_with('-') {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "opener target must not start with '-'; use an explicit path such as './-name'",
+            ));
+        }
         #[cfg(target_os = "linux")]
         let mut command = std::process::Command::new("xdg-open");
 
@@ -194,7 +206,7 @@ impl UrlDetector {
         {
             command.current_dir(working_directory);
         }
-        command
+        Ok(command)
     }
 
     fn is_explicit_relative_path(target: &str) -> bool {
@@ -647,6 +659,27 @@ mod tests {
     }
 
     #[test]
+    fn opener_rejects_option_shaped_targets() {
+        for target in [
+            "-",
+            "--",
+            "--help",
+            "--version",
+            "-a",
+            "--application=other",
+        ] {
+            let error = UrlDetector::opener_command(target, None).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("./-name"));
+            // The public entry point must fail before attempting to launch a
+            // helper, even when a trusted terminal cwd was supplied.
+            let error = UrlDetector::open_url_in_directory(target, Some(Path::new("/trusted/cwd")))
+                .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
     fn opener_preserves_file_uri_authorities() {
         for target in [
             "file://remote.example/home/user/Downloads",
@@ -655,7 +688,8 @@ mod tests {
             "FILE://Remote.Example/share/file.txt",
             "file://remote.example",
         ] {
-            let command = UrlDetector::opener_command(target, Some(Path::new("/trusted/cwd")));
+            let command =
+                UrlDetector::opener_command(target, Some(Path::new("/trusted/cwd"))).unwrap();
             assert_eq!(
                 command.get_args().collect::<Vec<_>>(),
                 [std::ffi::OsStr::new(target)]
@@ -673,7 +707,7 @@ mod tests {
             "file:/tmp/a%3Fb.txt",
             "file:///C:/Users/Example/a%20b.txt",
         ] {
-            let command = UrlDetector::opener_command(target, None);
+            let command = UrlDetector::opener_command(target, None).unwrap();
             assert_eq!(
                 command.get_args().collect::<Vec<_>>(),
                 [std::ffi::OsStr::new(target)]
@@ -686,13 +720,18 @@ mod tests {
         let cwd = Path::new("/trusted/cwd");
         for target in [
             "./a b;$(not-a-command).txt",
+            "./-report.txt",
+            "../--help",
+            ".\\-report.txt",
+            "/absolute/--help",
+            "file:///tmp/--help",
             "../file",
             ".\\file",
             "..\\file",
             "/absolute/a b.txt",
             "https://example.test/?x=a%20b&y=2",
         ] {
-            let command = UrlDetector::opener_command(target, Some(cwd));
+            let command = UrlDetector::opener_command(target, Some(cwd)).unwrap();
             assert_eq!(
                 command.get_args().collect::<Vec<_>>(),
                 [std::ffi::OsStr::new(target)]
