@@ -1,10 +1,32 @@
 //! Keep live selections consistent with text writes and explicit erasure.
 
 use super::Terminal;
-use crate::grid::Cell;
+use crate::grid::{Cell, Grid};
 use std::ops::Range;
 
 impl Terminal {
+    /// Split live grid mutation from selection damage without allocating a
+    /// damage list or touching the frozen presentation's separate selection.
+    pub(super) fn grid_with_selection_damage(
+        &mut self,
+    ) -> (&mut Grid, impl FnMut(Range<usize>, Range<usize>) + '_) {
+        let total_cols = self.cols;
+        let grid = if self.alt_screen_active {
+            &mut self.alt_grid
+        } else {
+            &mut self.grid
+        };
+        let selection = &mut self.selection;
+        (grid, move |rows, cols| {
+            if selection
+                .as_ref()
+                .is_some_and(|selection| selection.intersects_region(rows, cols, total_cols))
+            {
+                *selection = None;
+            }
+        })
+    }
+
     /// Apply the shared text erase policy and retire selections using actual
     /// damage, not the requested rectangle (protected glyphs can survive it).
     /// The callbacks add no damage queue, grid clone, or text/history scan.
@@ -20,21 +42,7 @@ impl Terminal {
             return;
         }
         let blank = self.erase_cell();
-        let total_cols = self.cols;
-        let grid = if self.alt_screen_active {
-            &mut self.alt_grid
-        } else {
-            &mut self.grid
-        };
-        let selection = &mut self.selection;
-        let mut damage = |rows, cols| {
-            if selection
-                .as_ref()
-                .is_some_and(|selection| selection.intersects_region(rows, cols, total_cols))
-            {
-                *selection = None;
-            }
-        };
+        let (grid, mut damage) = self.grid_with_selection_damage();
         grid.erase_multicells_with_damage(
             rows.clone(),
             cols.clone(),

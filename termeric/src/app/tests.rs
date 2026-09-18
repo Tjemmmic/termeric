@@ -3,6 +3,41 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_follows_rectangular_writes_without_resurrecting_destinations() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for copy in [false, true] {
+            for selected_source in [false, true] {
+                let mut app = if split {
+                    divider_owner_fixture()
+                } else {
+                    scrollbar_owner_fixture()
+                };
+                let terminal = app.active_terminal_mut().unwrap();
+                terminal.resize(12, 3);
+                terminal.process(b"\x1bc\x1b[3Janchor\r\nsource");
+                let row = i32::from(selected_source);
+                app.begin_native_selection(MouseButton::Left, Point::new(row, 0));
+                app.extend_native_selection(Point::new(row, 5));
+                app.active_terminal_mut().unwrap().process(if copy {
+                    b"\x1b[2;1;2;6;1;1;1;1$v"
+                } else {
+                    b"\x1b[88;1;1;1;6$x"
+                });
+                app.extend_native_selection(Point::new(row, 5));
+                app.finish_native_selection();
+                assert_eq!(
+                    app.native_selection_text().as_deref(),
+                    selected_source.then_some("source")
+                );
+                assert_eq!(app.mouse_state.selection.is_some(), selected_source);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_erased_selection_cannot_return_but_protected_selection_survives_selective_erase() {
     use termeric_core::Point;
     for split in [false, true] {

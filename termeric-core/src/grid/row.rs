@@ -250,32 +250,47 @@ impl Row {
 
     /// Replace a bounded range with an already snapshotted set of cells.
     /// Snapshotting at the caller makes overlapping rectangular copies safe.
-    pub(crate) fn replace_range(&mut self, start: usize, cells: &[Cell], blank: &Cell) {
+    pub(crate) fn replace_range(
+        &mut self,
+        start: usize,
+        cells: &[Cell],
+        blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>),
+    ) {
         let start = start.min(self.cells.len());
         let count = cells.len().min(self.cells.len().saturating_sub(start));
         if count == 0 {
             return;
         }
+        damage(start..start + count);
         self.cells[start..start + count].clone_from_slice(&cells[..count]);
         for cell in &mut self.cells[start..start + count] {
             cell.flags.insert(CellFlags::DIRTY);
         }
-        self.repair_wide_cells_with(blank);
+        self.repair_wide_cells_with_damage(blank, damage);
         self.dirty = true;
     }
 
     /// Fill a bounded range with one attributed character cell.
-    pub(crate) fn fill_range(&mut self, start: usize, end: usize, cell: &Cell, blank: &Cell) {
+    pub(crate) fn fill_range(
+        &mut self,
+        start: usize,
+        end: usize,
+        cell: &Cell,
+        blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>),
+    ) {
         let start = start.min(self.cells.len());
         let end = end.min(self.cells.len()).max(start);
         if start == end {
             return;
         }
+        damage(start..end);
         for target in &mut self.cells[start..end] {
             *target = cell.clone();
             target.flags.insert(CellFlags::DIRTY);
         }
-        self.repair_wide_cells_with(blank);
+        self.repair_wide_cells_with_damage(blank, damage);
         self.dirty = true;
     }
 
@@ -438,6 +453,14 @@ impl Row {
     /// Remove orphan leaders/spacers using the caller's active blank-cell
     /// background policy.
     fn repair_wide_cells_with(&mut self, blank: &Cell) {
+        self.repair_wide_cells_with_damage(blank, |_| {});
+    }
+
+    fn repair_wide_cells_with_damage(
+        &mut self,
+        blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>),
+    ) {
         // Structural edits materialize any old wrap padding as an ordinary
         // blank rather than allowing moved metadata to discard edited cells.
         self.wide_wrap_padding = false;
@@ -452,12 +475,14 @@ impl Row {
                     .get(col + 1)
                     .is_some_and(|cell| cell.flags.contains(CellFlags::WIDE_CHAR_SPACER));
                 if !paired {
+                    damage(col..col + 1);
                     self.cells[col] = blank.clone();
                     self.cells[col].flags.insert(CellFlags::DIRTY);
                 }
             } else if self.cells[col].flags.contains(CellFlags::WIDE_CHAR_SPACER) {
                 let paired = col > 0 && self.cells[col - 1].flags.contains(CellFlags::WIDE_CHAR);
                 if !paired {
+                    damage(col..col + 1);
                     self.cells[col] = blank.clone();
                     self.cells[col].flags.insert(CellFlags::DIRTY);
                 }
@@ -808,10 +833,10 @@ mod tests {
                 )
             }),
             ("replace", |row, cell| {
-                row.replace_range(2, std::slice::from_ref(cell), &Cell::default())
+                row.replace_range(2, std::slice::from_ref(cell), &Cell::default(), |_| {})
             }),
             ("fill", |row, cell| {
-                row.fill_range(2, 5, cell, &Cell::default())
+                row.fill_range(2, 5, cell, &Cell::default(), |_| {})
             }),
             ("attributes", |row, _| {
                 row.change_attributes_range(0, 8, true, |attrs| attrs.insert(CellAttrs::BOLD))

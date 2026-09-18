@@ -218,9 +218,21 @@ wide pairs and OSC 66 blocks extending beyond the requested rectangle, history,
 alternate/frozen screens, and single/split-pane native selection. Desktop
 painting and clipboard acceptance remain deferred.
 
-Fill/copy commands, standalone horizontal edits, new OSC 66 placement, and glyph
-erasure during other boundary-repair operations still need selection
-invalidation coverage; this is not a claim that every grid mutation is covered.
+DECFRA fill and DECCRA copy also report destination replacement and actual
+wide-pair/multicell repair damage. Reading a copy source does not invalidate its
+selection; overlap invalidates it only where destination writes or glyph repairs
+affect selected cells. Replacing selected cells retires the selection even when
+the new text is identical, while self-copy and rejected operations remain no-ops.
+Copy still snapshots its source before mutation; selection adds no further grid
+clone, damage list, or repair pass. Untouched history and frozen presentation
+selections remain isolated. Hermetic coverage includes 1,728 cellwise-reference
+cases across all selection shapes and reversed endpoints, overlap directions,
+clipping, origin/margin coordinates, protected wide/multicell boundary damage,
+and single/split-pane drag and release without invoking the desktop clipboard.
+
+Standalone horizontal edits, new OSC 66 placement, and glyph erasure during
+other boundary-repair operations still need selection invalidation coverage;
+this is not a claim that every grid mutation is covered.
 
 ## Filtered selection and accessible text
 

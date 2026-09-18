@@ -415,6 +415,14 @@ impl Grid {
     /// resize. Complete blocks are retained; every other descriptor becomes a
     /// normal BCE blank so a later cell can never resolve into stale content.
     pub(crate) fn repair_multicells(&mut self, blank: &Cell) {
+        self.repair_multicells_with_damage(blank, |_, _| {});
+    }
+
+    pub(crate) fn repair_multicells_with_damage(
+        &mut self,
+        blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>),
+    ) {
         let mut valid = HashMap::new();
         let mut has_descriptors = false;
         for row in 0..self.rows {
@@ -458,6 +466,7 @@ impl Grid {
                         })
                 });
                 if !keep && let Some(cell) = self.cell_mut(row, col) {
+                    damage(row..row + 1, col..col + 1);
                     *cell = blank.clone();
                     cell.flags.insert(CellFlags::DIRTY);
                 }

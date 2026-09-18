@@ -3540,20 +3540,25 @@ impl Terminal {
             })
             .collect();
         let blank = self.erase_cell();
-        self.grid_mut().erase_multicells_intersecting(
-            destination.top,
-            destination.top + height,
-            destination.left,
-            destination.left + width,
-            &blank,
-            false,
-        );
-        for (offset, cells) in snapshot.iter().enumerate() {
-            if let Some(row) = self.grid_mut().row_mut(destination.top + offset) {
-                row.replace_range(destination.left, cells, &blank);
+        {
+            let (grid, mut damage) = self.grid_with_selection_damage();
+            grid.erase_multicells_with_damage(
+                destination.top..destination.top + height,
+                destination.left..destination.left + width,
+                &blank,
+                false,
+                &mut damage,
+            );
+            for (offset, cells) in snapshot.iter().enumerate() {
+                let row_index = destination.top + offset;
+                if let Some(row) = grid.row_mut(row_index) {
+                    row.replace_range(destination.left, cells, &blank, |cols| {
+                        damage(row_index..row_index + 1, cols)
+                    });
+                }
             }
+            grid.repair_multicells_with_damage(&blank, damage);
         }
-        self.grid_mut().repair_multicells(&blank);
         self.graphics.copy_rect(
             self.alt_screen_active,
             source.top..source.top + height,
@@ -3611,17 +3616,21 @@ impl Terminal {
             multicell: Default::default(),
         };
         let blank = self.erase_cell();
-        self.grid_mut().erase_multicells_intersecting(
-            area.top,
-            area.bottom,
-            area.left,
-            area.right,
-            &blank,
-            false,
-        );
-        for row in area.top..area.bottom {
-            if let Some(row) = self.grid_mut().row_mut(row) {
-                row.fill_range(area.left, area.right, &fill, &blank);
+        {
+            let (grid, mut damage) = self.grid_with_selection_damage();
+            grid.erase_multicells_with_damage(
+                area.top..area.bottom,
+                area.left..area.right,
+                &blank,
+                false,
+                &mut damage,
+            );
+            for row_index in area.top..area.bottom {
+                if let Some(row) = grid.row_mut(row_index) {
+                    row.fill_range(area.left, area.right, &fill, &blank, |cols| {
+                        damage(row_index..row_index + 1, cols)
+                    });
+                }
             }
         }
         self.graphics.erase_rect(
@@ -7340,6 +7349,192 @@ mod tests {
             before, after,
             "Characters lost after expanding from 20 to 80 cols"
         );
+    }
+
+    #[test]
+    fn rectangular_write_selection_matches_cellwise_damage_across_selection_shapes() {
+        let commands: &[&[u8]] = &[
+            b"\x1b[88;1;3;2;5$x",
+            b"\x1b[1;1;2;4;1;2;3;1$v",
+            b"\x1b[2;3;3;6;1;1;1;1$v",
+            b"\x1b[1;1;3;8;1;99;99;1$v",
+            b"\x1b[9;1;1;3;8$x",       // Nonprintable fill: no-op.
+            b"\x1b[88;3;5;1;2$x",      // Reversed rectangle: no-op.
+            b"\x1b[1;1;3;8;1;1;1;1$v", // Self-copy: no-op.
+            b"\x1b[?69h\x1b[2;6s\x1b[2;3r\x1b[?6h\x1b[88;1;2;2;3$x",
+            b"\x1b[?69h\x1b[2;6s\x1b[2;3r\x1b[?6h\x1b[1;1;1;2;1;2;3;1$v",
+        ];
+        for &command in commands {
+            for ty in [
+                SelectionType::Simple,
+                SelectionType::Semantic,
+                SelectionType::Lines,
+                SelectionType::Block,
+            ] {
+                for index in 0..24 {
+                    for reverse in [false, true] {
+                        let mut term = Terminal::new(8, 3);
+                        term.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx");
+                        let point = Point::new(index / 8, index as usize % 8);
+                        let other = Point::new(1, 3);
+                        let (start, end) = if reverse {
+                            (other, point)
+                        } else {
+                            (point, other)
+                        };
+                        let mut selection = Selection::new(start, ty);
+                        selection.update(end);
+                        let original: Vec<_> = (0..3)
+                            .map(|row| term.grid().row(row).unwrap().clone())
+                            .collect();
+                        term.set_selection(Some(selection.clone()));
+                        term.process(command);
+                        let damaged = (0..3).any(|row| {
+                            (0..8).any(|col| {
+                                selection.contains(row as i32, col)
+                                    && original[row].get(col).unwrap().content
+                                        != term.grid().cell(row, col).unwrap().content
+                            })
+                        });
+                        assert_eq!(
+                            term.selection().is_none(),
+                            damaged,
+                            "command={command:?} type={ty:?} start={start:?} end={end:?}"
+                        );
+                        if !damaged {
+                            let current = term.selection().unwrap();
+                            assert_eq!(
+                                (current.start, current.end, current.ty, current.active),
+                                (
+                                    selection.start,
+                                    selection.end,
+                                    selection.ty,
+                                    selection.active
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rectangular_writes_invalidate_erased_wide_and_multicell_parts_outside_destination() {
+        for copy in [false, true] {
+            for wide in [false, true] {
+                for target_leader in [false, true] {
+                    let mut term = Terminal::new(12, 4);
+                    // Protection does not prevent DECFRA/DECCRA overwriting.
+                    term.process(b"\x1b[1\"q");
+                    if wide {
+                        term.process("界".as_bytes());
+                    } else {
+                        term.process(b"\x1b]66;s=2:w=2;A\x07");
+                    }
+                    term.process(b"\x1b[0\"q\x1b[4;10HZ");
+                    let covered = Point::new(if wide { 0 } else { 1 }, 1);
+                    let leader = Point::new(0, 0);
+                    let (target, selected) = if target_leader {
+                        (leader, covered)
+                    } else {
+                        (covered, leader)
+                    };
+                    term.set_selection(Some(Selection::new(selected, SelectionType::Block)));
+                    if copy {
+                        term.copy_rectangular_area(
+                            4,
+                            10,
+                            4,
+                            10,
+                            1,
+                            target.row as usize + 1,
+                            target.col + 1,
+                            1,
+                        );
+                    } else {
+                        term.fill_rectangular_area(
+                            b'Z' as u16,
+                            target.row as usize + 1,
+                            target.col + 1,
+                            target.row as usize + 1,
+                            target.col + 1,
+                        );
+                    }
+                    assert!(
+                        term.selection().is_none(),
+                        "copy={copy} wide={wide} target_leader={target_leader}"
+                    );
+                    assert!(
+                        term.grid()
+                            .cell(selected.row as usize, selected.col)
+                            .unwrap()
+                            .content
+                            .is_empty()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rectangular_copy_preserves_source_selection_and_valid_copied_multicells() {
+        let mut term = Terminal::new(12, 5);
+        term.process(b"\x1b]66;s=2:w=2;A\x07");
+        let source = term.grid().multicell_region_at(0, 0).unwrap();
+        term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+        // A clipped source produces no valid destination block, but reading it
+        // must not invalidate the selected, untouched original block.
+        term.copy_rectangular_area(1, 1, 1, 1, 1, 4, 8, 1);
+        assert_eq!(term.get_selection_text().as_deref(), Some("A"));
+        assert!(!term.grid().cell(3, 7).unwrap().multicell.is_present());
+        term.copy_rectangular_area(1, 1, source.bottom(), source.right(), 1, 4, 8, 1);
+        assert_eq!(term.get_selection_text().as_deref(), Some("A"));
+        assert!(term.grid().multicell_region_at(3, 7).is_some());
+    }
+
+    #[test]
+    fn rectangular_writes_keep_history_and_frozen_selection_but_retire_identical_replacement() {
+        for copy in [false, true] {
+            let command: &[u8] = if copy {
+                b"\x1b[2;1;2;6;1;1;1;1$v"
+            } else {
+                b"\x1b[97;1;1;1;6$x"
+            };
+            let mut term = Terminal::new(12, 3);
+            term.process(b"aaaaaa\r\naaaaaa");
+            let mut selection = Selection::new(Point::new(0, 5), SelectionType::Simple);
+            selection.update(Point::new(0, 0));
+            term.set_selection(Some(selection.clone()));
+            term.process(command);
+            assert!(term.selection().is_none()); // Even identical replacement retires the anchor.
+
+            term.set_selection(Some(selection.clone()));
+            term.process(b"\x1b[22J");
+            term.process(command);
+            assert_eq!(term.get_selection_text().as_deref(), Some("aaaaaa"));
+
+            term.process(b"\x1b[?1049hanchor\r\nsource");
+            term.set_selection(Some(selection));
+            term.process(b"\x1b[?2026h");
+            term.process(command);
+            assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+            term.process(b"\x1b[?2026l");
+            assert!(term.selection().is_none());
+        }
+    }
+
+    #[test]
+    fn rectangular_fill_and_copy_invalidate_selected_destination() {
+        for command in [b"\x1b[88;1;1;1;3$x".as_slice(), b"\x1b[1;5;1;7;1;1;1;1$v"] {
+            let mut term = Terminal::new(12, 3);
+            term.process(b"old new");
+            let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+            selection.update(Point::new(0, 2));
+            term.set_selection(Some(selection));
+            term.process(command);
+            assert!(term.selection().is_none(), "command={command:?}");
+        }
     }
 
     #[test]
