@@ -4,6 +4,7 @@
 //! and handling click-to-open functionality.
 
 use std::path::Path;
+use std::sync::Arc;
 
 /// A detected URL in the terminal
 #[derive(Clone, Debug)]
@@ -99,24 +100,6 @@ impl UrlDetector {
         }
 
         urls
-    }
-
-    fn detect_in_line_mapped(
-        &self,
-        text: &str,
-        row: usize,
-        byte_to_col: &[usize],
-    ) -> Vec<DetectedUrl> {
-        self.detect_in_line(text, row)
-            .into_iter()
-            .map(|mut url| {
-                let byte_start = url.start_col;
-                let byte_end = url.end_col + 1;
-                url.start_col = byte_to_col[byte_start.min(byte_to_col.len() - 1)];
-                url.end_col = byte_to_col[byte_end.min(byte_to_col.len() - 1)].saturating_sub(1);
-                url
-            })
-            .collect()
     }
 
     /// Find the end of a URL starting from the beginning of the string
@@ -258,13 +241,38 @@ impl UrlDetector {
 #[derive(Clone)]
 pub struct UrlCache {
     /// Detected URLs indexed by row
-    urls_by_row: Vec<Vec<DetectedUrl>>,
+    urls_by_row: Vec<Vec<Arc<DetectedUrl>>>,
     /// Number of rows in the cache
     rows: usize,
     /// Content fingerprint used to skip unchanged rows.
     row_fingerprints: Vec<Option<u64>>,
     detection_scans: u64,
     cache_hits: u64,
+}
+
+#[derive(Hash)]
+struct UrlCellSpan {
+    byte_start: usize,
+    byte_end: usize,
+    row: usize,
+    start_col: usize,
+    end_col: usize,
+}
+
+fn sort_disjoint_urls(urls: &mut Vec<DetectedUrl>) {
+    urls.sort_unstable_by(|left, right| {
+        left.start_col
+            .cmp(&right.start_col)
+            .then_with(|| right.end_col.cmp(&left.end_col))
+    });
+    let mut last_end = None;
+    urls.retain(|url| match last_end {
+        Some(end) if url.start_col <= end => false,
+        _ => {
+            last_end = Some(url.end_col);
+            true
+        }
+    });
 }
 
 impl UrlCache {
@@ -286,6 +294,96 @@ impl UrlCache {
         self.rows = rows;
     }
 
+    /// Scan only visible logical lines, sharing wrapped URL payloads between
+    /// their row indices. Hard breaks and viewport edges bound each scan.
+    pub fn update_grid(&mut self, grid: &termeric_core::Grid, detector: &UrlDetector) {
+        self.resize(grid.rows());
+        let offset = i32::try_from(grid.scroll_offset()).unwrap_or(i32::MAX);
+        let mut text = String::new();
+        let mut spans = Vec::new();
+        let mut first = 0;
+        for visual_row in 0..grid.rows() {
+            let row = grid.row_at_offset((visual_row as i32).saturating_sub(offset));
+            if let Some(row) = &row {
+                for col in row.reflow_columns() {
+                    let Some(cell) = row.get(col) else { continue };
+                    if cell.multicell.is_present() && !cell.multicell.is_leader() {
+                        continue;
+                    }
+                    let byte_start = text.len();
+                    match &cell.content {
+                        termeric_core::CellContent::Empty => text.push(' '),
+                        termeric_core::CellContent::Char(character) => text.push(*character),
+                        termeric_core::CellContent::Grapheme(grapheme) => text.push_str(grapheme),
+                    }
+                    spans.push(UrlCellSpan {
+                        byte_start,
+                        byte_end: text.len(),
+                        row: visual_row,
+                        start_col: col,
+                        end_col: col
+                            .saturating_add(cell.width().saturating_sub(1))
+                            .min(grid.cols().saturating_sub(1)),
+                    });
+                }
+            }
+            if row.is_none_or(|row| !row.is_wrapped()) || visual_row + 1 == grid.rows() {
+                self.update_logical_line(first, visual_row, &text, &spans, detector);
+                first = visual_row + 1;
+                text.clear();
+                spans.clear();
+            }
+        }
+    }
+
+    fn update_logical_line(
+        &mut self,
+        first: usize,
+        last: usize,
+        text: &str,
+        spans: &[UrlCellSpan],
+        detector: &UrlDetector,
+    ) {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        first.hash(&mut hasher);
+        last.hash(&mut hasher);
+        text.hash(&mut hasher);
+        spans.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+        if self.row_fingerprints[first..=last]
+            .iter()
+            .all(|old| *old == Some(fingerprint))
+        {
+            self.cache_hits += 1;
+            return;
+        }
+        for row in first..=last {
+            self.urls_by_row[row].clear();
+            self.row_fingerprints[row] = Some(fingerprint);
+        }
+        let mut urls = detector.detect_in_line(text, first);
+        // Disambiguate in byte coordinates before mapping to multiple rows.
+        sort_disjoint_urls(&mut urls);
+        for mut url in urls {
+            let start = spans.get(spans.partition_point(|span| span.byte_end <= url.start_col));
+            let end = spans.get(spans.partition_point(|span| span.byte_end <= url.end_col));
+            let (Some(start), Some(end)) = (start, end) else {
+                continue;
+            };
+            url.start_row = start.row;
+            url.start_col = start.start_col;
+            url.end_row = end.row;
+            url.end_col = end.end_col;
+            let url = Arc::new(url);
+            for row in url.start_row..=url.end_row {
+                self.urls_by_row[row].push(Arc::clone(&url));
+            }
+        }
+        self.detection_scans += 1;
+    }
+
     /// Detect URLs only when this visual row's text changed.
     #[cfg(test)]
     pub fn update_row(&mut self, row: usize, text: &str, detector: &UrlDetector) -> bool {
@@ -293,6 +391,7 @@ impl UrlCache {
     }
 
     /// Detect URLs using byte boundaries mapped back to terminal columns.
+    #[cfg(test)]
     pub fn update_row_mapped(
         &mut self,
         row: usize,
@@ -303,6 +402,7 @@ impl UrlCache {
         self.update_row_inner(row, text, Some(byte_to_col), detector)
     }
 
+    #[cfg(test)]
     fn update_row_inner(
         &mut self,
         row: usize,
@@ -310,49 +410,26 @@ impl UrlCache {
         byte_to_col: Option<&[usize]>,
         detector: &UrlDetector,
     ) -> bool {
-        use std::hash::{DefaultHasher, Hash, Hasher};
-
         if row >= self.rows {
             return false;
         }
-        let mut hasher = DefaultHasher::new();
-        text.hash(&mut hasher);
-        // Equal text does not necessarily imply equal terminal geometry. A
-        // wide grapheme, spacer repair, or presentation-grid replacement can
-        // move the same bytes to different terminal columns.
-        byte_to_col.hash(&mut hasher);
-        let fingerprint = hasher.finish();
-        if self.row_fingerprints[row] == Some(fingerprint) {
-            self.cache_hits += 1;
-            return false;
-        }
-        self.row_fingerprints[row] = Some(fingerprint);
-        let mut detected = match byte_to_col {
-            Some(map) => detector.detect_in_line_mapped(text, row, map),
-            None => detector.detect_in_line(text, row),
-        };
-        // Detection is grouped by scheme, not by textual position. Keep one
-        // positional index so cell hit tests are logarithmic in the number of
-        // URLs on the row instead of rescanning every match for every cell.
-        detected.sort_unstable_by(|left, right| {
-            left.start_col
-                .cmp(&right.start_col)
-                .then_with(|| right.end_col.cmp(&left.end_col))
-        });
-        // A URL may itself contain another recognized scheme in a query. The
-        // outer, earlier interval owns those cells; retaining nested intervals
-        // would make a single binary-search candidate ambiguous.
-        let mut last_end = None;
-        detected.retain(|url| match last_end {
-            Some(end) if url.start_col <= end => false,
-            _ => {
-                last_end = Some(url.end_col);
-                true
-            }
-        });
-        self.urls_by_row[row] = detected;
-        self.detection_scans += 1;
-        true
+        let column = |byte: usize| byte_to_col.map_or(byte, |map| map[byte.min(map.len() - 1)]);
+        let spans: Vec<_> = text
+            .char_indices()
+            .map(|(byte_start, character)| {
+                let byte_end = byte_start + character.len_utf8();
+                UrlCellSpan {
+                    byte_start,
+                    byte_end,
+                    row,
+                    start_col: column(byte_start),
+                    end_col: column(byte_end).saturating_sub(1),
+                }
+            })
+            .collect();
+        let scans = self.detection_scans;
+        self.update_logical_line(row, row, text, &spans, detector);
+        self.detection_scans != scans
     }
 
     pub fn metrics(&self) -> (u64, u64) {
@@ -363,9 +440,11 @@ impl UrlCache {
     pub fn url_at(&self, row: usize, col: usize) -> Option<&DetectedUrl> {
         let urls = self.urls_by_row.get(row)?;
         let candidate = urls
-            .partition_point(|url| url.start_col <= col)
+            .partition_point(|url| url.start_row < row || url.start_col <= col)
             .checked_sub(1)?;
-        urls.get(candidate).filter(|url| url.contains(row, col))
+        urls.get(candidate)
+            .map(Arc::as_ref)
+            .filter(|url| url.contains(row, col))
     }
 
     /// Check if a position is within any URL
@@ -377,6 +456,84 @@ impl UrlCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logical_url_cache_shares_payloads_and_invalidates_the_whole_line() {
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(8, 5);
+        terminal.process(b"xx https://example.test/x yy");
+        let mut cache = UrlCache::new(0);
+        cache.update_grid(terminal.grid(), &detector);
+        assert!(Arc::ptr_eq(
+            &cache.urls_by_row[0][0],
+            &cache.urls_by_row[3][0]
+        ));
+        let (scans, hits) = cache.metrics();
+        cache.update_grid(terminal.grid(), &detector);
+        assert_eq!(cache.metrics(), (scans, hits + 2));
+
+        terminal.process(b"\x1b[4;1Hy");
+        cache.update_grid(terminal.grid(), &detector);
+        assert_eq!(cache.metrics().0, scans + 1);
+        assert_eq!(cache.url_at(0, 3).unwrap().url, "https://example.test/y");
+        assert_eq!(cache.url_at(3, 0).unwrap().url, "https://example.test/y");
+
+        // Identical bytes with a new hard boundary must not reuse the group.
+        terminal.grid_mut().row_mut(0).unwrap().set_wrapped(false);
+        cache.update_grid(terminal.grid(), &detector);
+        assert!(cache.url_at(0, 3).is_none());
+        assert!(cache.url_at(3, 0).is_none());
+    }
+
+    #[test]
+    fn logical_url_cache_maps_wide_prefix_padding_and_resize() {
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(2, 12);
+        terminal.process("a界 https://e.test/x".as_bytes());
+        let mut cache = UrlCache::new(0);
+        cache.update_grid(terminal.grid(), &detector);
+        assert!(cache.url_at(0, 1).is_none()); // Synthetic wrap padding.
+        assert!(cache.url_at(1, 1).is_none()); // Wide spacer.
+        assert!(cache.url_at(2, 0).is_none()); // Real space.
+        assert_eq!(cache.url_at(2, 1).unwrap().url, "https://e.test/x");
+        terminal.resize(8, 12);
+        cache.update_grid(terminal.grid(), &detector);
+        assert!(cache.url_at(0, 3).is_none());
+        assert_eq!(cache.url_at(0, 4).unwrap().url, "https://e.test/x");
+        assert_eq!(cache.url_at(2, 3).unwrap().url, "https://e.test/x");
+        assert!(cache.url_at(2, 4).is_none());
+        assert!(cache.url_at(10, 0).is_none());
+    }
+
+    #[test]
+    fn logical_url_cache_reads_visible_history_and_keeps_outer_intervals() {
+        let detector = UrlDetector::new();
+        let mut terminal = termeric_core::Terminal::new(12, 6);
+        let text = "https://a.test/?next=http://b.test ftp://c.test";
+        terminal.process(text.as_bytes());
+        terminal.process(b"\r\nx\r\ny\r\nz\r\nw\r\nq\r\nr");
+        let mut cache = UrlCache::new(0);
+        cache.update_grid(terminal.grid(), &detector);
+        assert!(cache.url_at(0, 0).is_none());
+        let history = terminal.grid().scrollback_len();
+        terminal.grid_mut().set_scroll_offset(history);
+        cache.update_grid(terminal.grid(), &detector);
+        let outer = "https://a.test/?next=http://b.test";
+        for index in 0..outer.len() {
+            assert_eq!(cache.url_at(index / 12, index % 12).unwrap().url, outer);
+        }
+        let gap = outer.len();
+        assert!(cache.url_at(gap / 12, gap % 12).is_none());
+        for index in gap + 1..text.len() {
+            assert_eq!(
+                cache.url_at(index / 12, index % 12).unwrap().url,
+                "ftp://c.test"
+            );
+        }
+        terminal.grid_mut().set_scroll_offset(0);
+        cache.update_grid(terminal.grid(), &detector);
+        assert!(cache.url_at(0, 0).is_none());
+    }
 
     #[test]
     fn test_detect_simple_url() {

@@ -11191,3 +11191,20 @@ fn missing_automatic_multi_window_workspace_falls_back_but_explicit_cli_is_stric
     crate::workspace::set_test_workspaces_base_dir(None);
     AppState::set_test_state_path(None);
 }
+#[test]
+fn detected_url_cache_joins_soft_wrapped_visible_rows() {
+    let mut terminal = termeric_core::Terminal::new(8, 4);
+    terminal.process(b"xx https://example.test/x yy");
+    let mut cache = UrlCache::new(0);
+    let detector = UrlDetector::new();
+    update_visible_url_cache(&mut cache, terminal.grid(), &detector);
+    for (row, col) in [(0, 3), (0, 7), (1, 0), (1, 7), (2, 0), (2, 7), (3, 0)] {
+        assert_eq!(
+            cache.url_at(row, col).map(|url| url.url.as_str()),
+            Some("https://example.test/x"),
+            "row={row} col={col}"
+        );
+    }
+    assert!(cache.url_at(0, 2).is_none());
+    assert!(cache.url_at(3, 1).is_none());
+}

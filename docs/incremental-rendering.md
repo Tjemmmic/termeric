@@ -38,12 +38,21 @@ already-built geometry and causes stale prior-frame rows to rebuild safely. See
 [glyph atlas lifetime](glyph-atlas.md).
 
 Search highlight lookup is indexed by row and interval rather than scanning all
-matches for every cell. URL detection fingerprints both row text and its
-byte-to-terminal-column map, so unchanged geometry skips the detector without
-retaining stale columns after wide-cell changes. Detected intervals are ordered,
+matches for every cell. URL detection joins visible soft-wrapped rows and
+fingerprints each logical group's text, row boundaries, and byte-to-cell spans,
+so unchanged geometry skips the detector without retaining stale columns after
+wide-cell changes. Synthetic wide-wrap padding and wide spacers add no text;
+real spaces and hard breaks still separate URLs. Detected intervals are ordered,
 made non-overlapping, and binary-searched for cell lookup; each pane has its own
 cache. When a URL contains another recognized scheme, the outer URL owns the
-nested cells.
+nested cells. A multirow URL has one shared payload referenced by each covered
+row, not one copy of its string per row. Temporary mapping storage is bounded
+by visible cells, and no offscreen history scan or persistent text model is
+introduced. Cache metrics count logical-group scans/hits. Tests cover schemes
+split across rows, suffix edits, hard-break-only changes, Unicode geometry,
+resize, and compact history scrolled into view. Viewport edges still bound URL
+recognition; this does not establish complete URLs continuing beyond the view
+or change supported URL characters, schemes, or opener policy.
 
 ## Invalidation
 

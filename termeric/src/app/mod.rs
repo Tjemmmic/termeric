@@ -4347,34 +4347,7 @@ fn update_visible_url_cache(
     grid: &termeric_core::Grid,
     detector: &UrlDetector,
 ) {
-    let rows = grid.rows();
-    let cols = grid.cols();
-    cache.resize(rows);
-    for row in 0..rows {
-        let mut line = String::with_capacity(cols);
-        let mut byte_to_col = vec![0];
-        for col in 0..cols {
-            let Some(cell) = grid.cell_scrolled(row, col) else {
-                continue;
-            };
-            if cell.is_wide_char_spacer()
-                || (cell.multicell.is_present() && !cell.multicell.is_leader())
-            {
-                continue;
-            }
-            let start = line.len();
-            match &cell.content {
-                termeric_core::CellContent::Empty => line.push(' '),
-                termeric_core::CellContent::Char(character) => line.push(*character),
-                termeric_core::CellContent::Grapheme(grapheme) => line.push_str(grapheme),
-            }
-            let end = line.len();
-            byte_to_col.resize(end + 1, col);
-            byte_to_col[start] = col;
-            byte_to_col[end] = col + cell.width();
-        }
-        cache.update_row_mapped(row, &line, &byte_to_col, detector);
-    }
+    cache.update_grid(grid, detector);
 }
 
 fn cursor_opacity_at(blink: bool, elapsed_seconds: f32, period_seconds: f32) -> f32 {
