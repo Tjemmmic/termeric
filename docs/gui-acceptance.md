@@ -131,6 +131,15 @@ input afterward. Checker tests reject wrong owners, wrong scalars, missing
 fences, leaked keys, and duplicates. This is native keyboard/PTY evidence, not
 IME composition, screen-reader, query-viewport pixels, or real-desktop evidence.
 
+The 2026-09-18 clean release refresh at `6ab38bf` passed the current interaction
+and two-window fullscreen scenarios with all three renderer injections. Offline
+palette and Settings reconstruction accepted seventeen and eleven cases,
+respectively, and their artifact seals. The six-case mouse-ownership sidecar
+completed without error but is not separately sealed. This run used an explicit
+Noto Sans Mono profile on AMD/radeonsi OpenGL with visual comparisons skipped;
+it does not replace X11, default-font visual, native IME/Orca, or real-desktop
+acceptance. See the [exact command, identity, and limitations](renderer-recovery.md#release-build-wayland-refresh-2026-09-18).
+
 Historical clean local commit `2f7399d` passed the thirteen-case private-Sway lane
 with AMD/radeonsi OpenGL (`software=false` in the renderer diagnostics) and all
 three renderer-recovery injections enabled.

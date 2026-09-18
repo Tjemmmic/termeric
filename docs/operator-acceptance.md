@@ -28,7 +28,7 @@ sudo pacman -S --needed \
   orca at-spi2-core ibus \
   fcitx5 fcitx5-configtool fcitx5-gtk fcitx5-qt fcitx5-chinese-addons \
   mesa mesa-utils vulkan-swrast vulkan-tools \
-  noto-fonts noto-fonts-emoji \
+  ttf-dejavu noto-fonts noto-fonts-emoji \
   libnotify libpulse util-linux
 ```
 
@@ -53,6 +53,12 @@ cargo install cargo-fuzz
 
 The package groups serve these purposes:
 
+- [`ttf-dejavu`](https://archlinux.org/packages/extra/any/ttf-dejavu/) supplies
+  the fixture's default DejaVu Sans Mono primary font; `noto-fonts-emoji`
+  supplies the separately required Noto Color Emoji fallback. Noto fonts alone
+  do not satisfy the default profile. A custom installed primary is allowed
+  only with `--font-family` and `--skip-visual-checks` for GUI acceptance; that
+  does not establish the default visual baseline.
 - Xvfb, Openbox, Sway, and Weston provide disposable native X11 and Wayland
   sessions without driving the operator's desktop.
 - `xdotool`, `wtype`, `xclip`, and `wl-clipboard` inject native input and test

@@ -94,8 +94,62 @@ the private-Sway interaction and two-window fullscreen scenarios on an AMD
 Radeon RX 7900 XTX with all three injections enabled. The schema-3 records bind
 both runs to debug binary SHA-256
 `9cfc391dd5fd4b321c002c3afeb38568f677012fd25081e20e9ecaaae86541b0`.
-Equivalent current X11 evidence and portable vendor-GPU memory observation
-remain open.
+Equivalent current X11 evidence remains open. A separate validated local
+release-binary vendor-memory observation is now recorded in
+[resource soak evidence](resource-soak.md#2026-09-18-release-binary-refresh);
+portable signed vendor evidence remains absent.
+
+### Release-build Wayland refresh (2026-09-18)
+
+Clean `6ab38bf` passed the private-Sway `interaction` and `fullscreen` scenarios
+with all three injections enabled, using `target/release/termeric` SHA-256
+`da9140702571c8df8445407f01d1bf1f277884c17cd0f64a799dca33e9646817`.
+The adapter reported AMD Ryzen 9 7900X3D / `raphael_mendocino`, radeonsi OpenGL,
+`software=false`; this is not the earlier RX 7900 XTX configuration.
+The schema-6 result and schema-3 candidate record are retained locally at
+`/tmp/termeric-wayland-recovery-6ab38bf-release/results.json` with sibling logs
+and provenance. All six candidate checks passed before this documentation-only
+follow-up.
+
+Logs show lost/outdated-surface recovery and device recreation before continued
+PTY interaction, followed by keyboard-only copy, private-compositor bracketed
+paste, exact pane routing/closure, modal input checks, and native close. The
+two-window scenario observed fullscreen entry/exit resizing only the focused
+PTY, with the sibling remaining live until its own native close. Offline
+verifiers separately reconstructed all seventeen palette cases and eleven
+Settings cases and checked their two/three artifact seals. The six-case mouse
+ownership sidecar also completed without an error; it remains driver evidence,
+not an independently sealed proof. The palette/Settings verifiers do not
+independently re-prove recovery or fullscreen semantics; those remain harness
+assertions and retained logs.
+
+The command used an explicit installed Noto Sans Mono primary with Noto Color
+Emoji fallback and **skipped visual comparisons**:
+
+```bash
+env -u WLR_RENDERER -u LIBGL_ALWAYS_SOFTWARE WGPU_BACKEND=gl \
+  python3 scripts/gui_acceptance.py --backend wayland \
+  --scenario interaction --scenario fullscreen --start-sway \
+  --skip-visual-checks --font-family 'Noto Sans Mono' \
+  --force-surface-loss --force-surface-outdated --force-device-loss \
+  --require-clean --binary target/release/termeric \
+  --artifacts /tmp/termeric-wayland-recovery-6ab38bf-release
+python3 scripts/gui_palette_evidence.py \
+  /tmp/termeric-wayland-recovery-6ab38bf-release/results.json
+python3 scripts/gui_settings_evidence.py \
+  /tmp/termeric-wayland-recovery-6ab38bf-release/results.json
+```
+
+No user desktop or real provider was exercised. This does not establish X11,
+pixel-perfect visuals, native IME/Orca, physical device removal, or real-desktop
+policy. Xvfb and Openbox were unavailable on this host, so the X11 lane was not
+run or replaced by this Wayland result. The
+[operator prerequisites](operator-acceptance.md#arch-linux) now also include the
+default DejaVu primary-font package that was missing from the Arch command.
+Local `/tmp` bundles are not published or signed artifacts, and the GUI
+[provenance boundary](gui-acceptance.md) still applies.
+
+### GPU smoke and benchmark evidence
 
 On a real-GPU release host, set both `TERMERIC_GPU_SMOKE=1` and
 `TERMERIC_GPU_SMOKE_HARDWARE=1` to reject CPU adapters and run the identical
