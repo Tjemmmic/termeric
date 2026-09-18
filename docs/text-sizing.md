@@ -23,6 +23,15 @@ and local-domain attachment snapshots. Structural edits either preserve a
 complete block or erase it; malformed descriptors never gain authority over
 neighboring cells.
 
+Repair validates layout as well as anchor identity. A stray descriptor from a
+larger block cannot survive merely by pointing at the leader of a smaller,
+otherwise complete block. Such cells become background-color-erasure blanks;
+the valid block and unrelated cells remain unchanged. The regression covers
+every outside position for three larger layouts, empty and text-bearing
+orphans, row dirtiness, cached presence, and synchronized-output snapshot
+cleanup. This is a grid-state repair guarantee, not a claim that a particular
+native client was observed producing malformed descriptors.
+
 The renderer shapes OSC 66 text at a distinct font size through the bounded
 glyph atlas, aligns fractional render areas inside the full block, clips to the
 block and pane, and expands block, beam, and underline cursor geometry over the

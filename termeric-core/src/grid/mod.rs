@@ -15,7 +15,7 @@ pub use hyperlink::{Hyperlink, HyperlinkRegistry};
 pub use row::Row;
 pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, GridMemoryUsage, RowView};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use storage::GridStorage;
 
 /// Cursor position and state
@@ -336,7 +336,7 @@ impl Grid {
     /// resize. Complete blocks are retained; every other descriptor becomes a
     /// normal BCE blank so a later cell can never resolve into stale content.
     pub(crate) fn repair_multicells(&mut self, blank: &Cell) {
-        let mut valid = HashSet::new();
+        let mut valid = HashMap::new();
         let mut has_descriptors = false;
         for row in 0..self.rows {
             if !self.row_mut(row).is_some_and(Row::has_multicells) {
@@ -350,7 +350,7 @@ impl Grid {
                 if cell.multicell.is_leader()
                     && let Some(region) = self.multicell_region_at(row, col)
                 {
-                    valid.insert((region.top, region.left));
+                    valid.insert((region.top, region.left), region.descriptor);
                 }
             }
         }
@@ -369,7 +369,14 @@ impl Grid {
                     }
                     row.checked_sub(cell.multicell.relative_row())
                         .zip(col.checked_sub(cell.multicell.relative_col()))
-                        .is_some_and(|anchor| valid.contains(&anchor))
+                        .and_then(|anchor| valid.get(&anchor))
+                        .is_some_and(|leader| {
+                            // An orphan from a larger/different block can point
+                            // back to an otherwise valid leader. Anchor identity
+                            // alone does not make it part of that rectangle.
+                            leader.at(cell.multicell.relative_col(), cell.multicell.relative_row())
+                                == Some(cell.multicell)
+                        })
                 });
                 if !keep && let Some(cell) = self.cell_mut(row, col) {
                     *cell = blank.clone();
@@ -714,6 +721,98 @@ mod tests {
                 grid.row(row).unwrap().iter().collect::<Vec<_>>(),
                 cells.iter().collect::<Vec<_>>()
             );
+        }
+    }
+
+    #[test]
+    fn multicell_repair_rejects_foreign_descriptors_sharing_a_valid_anchor() {
+        let leader = MultiCell::new(
+            2,
+            1,
+            0,
+            0,
+            MultiCellAlignment::Start,
+            MultiCellAlignment::Start,
+            0,
+            0,
+        )
+        .unwrap();
+        let blank = Cell {
+            bg: Color::rgb(17, 31, 59),
+            ..Cell::default()
+        };
+        for (scale, width) in [(3, 1), (2, 2), (3, 2)] {
+            let foreign = MultiCell::new(
+                scale,
+                width,
+                1,
+                2,
+                MultiCellAlignment::Center,
+                MultiCellAlignment::End,
+                0,
+                0,
+            )
+            .unwrap();
+            for relative_row in 0..foreign.rows() {
+                for relative_col in 0..foreign.columns() {
+                    if relative_row < leader.rows() && relative_col < leader.columns() {
+                        continue;
+                    }
+                    for stray_text in [false, true] {
+                        let mut grid = Grid::new(10, 6);
+                        let (top, left) = (1, 2);
+                        for row in 0..leader.rows() {
+                            for col in 0..leader.columns() {
+                                let cell = grid.cell_mut(top + row, left + col).unwrap();
+                                cell.multicell = leader.at(col, row).unwrap();
+                                if row == 0 && col == 0 {
+                                    cell.set_grapheme("large");
+                                    cell.multicell = leader;
+                                }
+                            }
+                        }
+                        let (row, col) = (top + relative_row, left + relative_col);
+                        let cell = grid.cell_mut(row, col).unwrap();
+                        if stray_text {
+                            cell.set_char('x');
+                        }
+                        cell.multicell = foreign.at(relative_col, relative_row).unwrap();
+                        assert!(grid.multicell_region_at(top, left).is_some());
+                        assert!(grid.multicell_region_at(row, col).is_none());
+                        // Exercise cached presence and ensure repair preserves all
+                        // unrelated cells, not just the legitimate leader.
+                        for row in 0..grid.rows() {
+                            grid.row_mut(row).unwrap().has_multicells();
+                            grid.row_mut(row).unwrap().set_clean();
+                        }
+                        let before: Vec<_> = grid.iter_cells().map(|(_, _, c)| c.clone()).collect();
+                        // Synchronized-output capture uses the same repair path
+                        // on newly copied rows, with cold descriptor caches.
+                        let snapshot = grid.visible_snapshot();
+                        assert!(!snapshot.cell(row, col).unwrap().multicell.is_present());
+                        assert!(snapshot.cell(row, col).unwrap().content.is_empty());
+                        assert!(snapshot.multicell_region_at(top, left).is_some());
+                        assert!(grid.cell(row, col).unwrap().multicell.is_present());
+                        grid.repair_multicells(&blank);
+                        let mut erased = blank.clone();
+                        erased.flags.insert(CellFlags::DIRTY);
+                        assert_eq!(
+                            grid.cell(row, col),
+                            Some(&erased),
+                            "foreign={foreign:?} row={row} col={col} text={stray_text}"
+                        );
+                        for (r, c, cell) in grid.iter_cells() {
+                            if (r, c) != (row, col) {
+                                assert_eq!(cell, &before[r * grid.cols() + c]);
+                            }
+                        }
+                        for r in 0..grid.rows() {
+                            assert_eq!(grid.row(r).unwrap().is_dirty(), r == row);
+                        }
+                        assert!(grid.multicell_region_at(top, left).is_some());
+                    }
+                }
+            }
         }
     }
 
