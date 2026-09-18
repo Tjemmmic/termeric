@@ -3,6 +3,37 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_cannot_restore_text_replaced_by_multicell_placement() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for overwritten in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 4);
+            terminal.process(b"\x1bc\x1b[3Janchor\r\nother\x1b[H");
+            let row = if overwritten { 0 } else { 1 };
+            app.begin_native_selection(MouseButton::Left, Point::new(row, 0));
+            app.extend_native_selection(Point::new(row, 4));
+            app.active_terminal_mut()
+                .unwrap()
+                .process(b"\x1b]66;s=1:w=3;X\x07");
+            app.extend_native_selection(Point::new(row, 4));
+            app.finish_native_selection();
+            assert_eq!(
+                app.native_selection_text().as_deref(),
+                (!overwritten).then_some("other")
+            );
+            assert_eq!(app.mouse_state.selection.is_some(), !overwritten);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_selection_tracks_horizontal_motion_and_cannot_restore_deleted_cells() {
     use termeric_core::Point;
     for split in [false, true] {

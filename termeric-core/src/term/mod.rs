@@ -1055,16 +1055,21 @@ impl Terminal {
         }
         for (row, col) in collisions {
             let replace_with_spaces = !(top <= row && row < bottom && left <= col && col < right);
-            self.grid_mut()
-                .clear_multicell_at(row, col, &blank, replace_with_spaces);
+            let (grid, damage) = self.grid_with_selection_damage();
+            grid.clear_multicell_at_with_damage(row, col, &blank, replace_with_spaces, damage);
         }
 
         if self.mode.contains(TerminalMode::INSERT) {
-            self.grid_mut()
-                .erase_multicells_intersecting(top, bottom, left, cols, &blank, false);
-            for row in top..bottom {
-                if let Some(row) = self.grid_mut().row_mut(row) {
-                    row.insert_cells_bounded(left, cols, columns, &blank);
+            // Match ordinary insert-mode printing: shifted selections are
+            // retired, not remapped. Block erasure can extend beyond this span.
+            self.invalidate_selection_in_region(top..bottom, left..cols);
+            let (grid, mut damage) = self.grid_with_selection_damage();
+            grid.erase_multicells_with_damage(top..bottom, left..cols, &blank, false, &mut damage);
+            for row_index in top..bottom {
+                if let Some(row) = grid.row_mut(row_index) {
+                    row.insert_cells_bounded_with_damage(left, cols, columns, &blank, |cols| {
+                        damage(row_index..row_index + 1, cols)
+                    });
                 }
             }
         }
@@ -1088,6 +1093,7 @@ impl Terminal {
             .flags
             .set(CellFlags::PROTECTED, self.current_character_protected);
 
+        self.invalidate_selection_in_region(top..bottom, left..right);
         for relative_row in 0..rows {
             for relative_col in 0..columns {
                 let Some(descriptor) = leader_descriptor.at(relative_col, relative_row) else {
@@ -1109,6 +1115,15 @@ impl Terminal {
                         _ => return false,
                     };
                 }
+            }
+            // Replacing one ordinary wide half with a multicell must remove
+            // the other half, even when it lies outside the placed rectangle.
+            let row_index = top + relative_row;
+            let (grid, mut damage) = self.grid_with_selection_damage();
+            if let Some(row) = grid.row_mut(row_index) {
+                row.repair_multicell_placement_edges(left, right, &blank, |cols| {
+                    damage(row_index..row_index + 1, cols)
+                });
             }
         }
 
@@ -5482,6 +5497,153 @@ mod tests {
         let term = Terminal::new(80, 24);
         assert_eq!(term.cols(), 80);
         assert_eq!(term.rows(), 24);
+    }
+
+    #[test]
+    fn multicell_placement_selection_matches_actual_cell_damage() {
+        let commands: &[&[u8]] = &[
+            b"\x1b[2;3H\x1b]66;s=2:w=2;X\x07",
+            "\x1b[2;3H\x1b]66;s=2;A界\x07".as_bytes(),
+            b"\x1b[4h\x1b[2;3H\x1b]66;s=2:w=1;X\x07",
+            b"\x1b[2;3H\x1b]66;s=2:w=2:n=1:d=2:v=1:h=2;X\x07",
+            b"\x1b]66;s=0;invalid\x07",
+            b"\x1b]66;s=7:w=7;oversized\x07",
+            b"\x1b[H\x1b]66;s=1:w=1;a\x07", // Same scalar, new descriptor.
+        ];
+        let points = [
+            Point::new(0, 0),
+            Point::new(1, 2),
+            Point::new(1, 8),
+            Point::new(2, 1),
+            Point::new(3, 9),
+        ];
+        for &command in commands {
+            for ty in [
+                SelectionType::Simple,
+                SelectionType::Semantic,
+                SelectionType::Lines,
+                SelectionType::Block,
+            ] {
+                for start in points {
+                    for end in points {
+                        let mut term = Terminal::new(10, 4);
+                        term.process(b"abcdefghij\r\nklmnopqrst\r\nuvwxyz0123\r\n456789ABCD");
+                        let original: Vec<_> = (0..4)
+                            .map(|row| term.grid().row(row).unwrap().clone())
+                            .collect();
+                        let mut selection = Selection::new(start, ty);
+                        selection.update(end);
+                        term.set_selection(Some(selection.clone()));
+                        term.process(command);
+                        let damaged = (0..4).any(|row| {
+                            (0..10).any(|col| {
+                                let before = original[row].get(col).unwrap();
+                                let after = term.grid().cell(row, col).unwrap();
+                                selection.contains(row as i32, col)
+                                    && (before.content != after.content
+                                        || before.multicell != after.multicell)
+                            })
+                        });
+                        assert_eq!(
+                            term.selection().is_none(),
+                            damaged,
+                            "command={command:?} ty={ty:?} start={start:?} end={end:?}"
+                        );
+                        if !damaged {
+                            let actual = term.selection().unwrap();
+                            assert_eq!(
+                                (actual.start, actual.end, actual.ty, actual.active),
+                                (
+                                    selection.start,
+                                    selection.end,
+                                    selection.ty,
+                                    selection.active
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multicell_placement_repairs_wide_halves_and_invalidates_complete_collisions() {
+        for target in [2, 3] {
+            let mut term = Terminal::new(12, 4);
+            term.process("..\x1b[1\"q界\x1b[0\"q".as_bytes());
+            let selected = if target == 2 { 3 } else { 2 };
+            term.set_selection(Some(Selection::new(
+                Point::new(0, selected),
+                SelectionType::Block,
+            )));
+            term.grid_mut().set_cursor(0, target);
+            term.process(b"\x1b]66;s=1:w=1;X\x07");
+            assert!(term.selection().is_none());
+            let orphan = term.grid().cell(0, selected).unwrap();
+            assert!(orphan.content.is_empty());
+            assert!(!orphan.is_wide_char() && !orphan.is_wide_char_spacer());
+            assert_eq!(term.grid().cell(0, target).unwrap().content.to_text(), "X");
+            assert!(term.grid().multicell_region_at(0, target).is_some());
+        }
+        for target in [0, 2] {
+            for selected in [Point::new(0, 0), Point::new(1, 3)] {
+                let mut term = Terminal::new(12, 4);
+                term.process(b"\x1b]66;s=2:w=2;old\x07");
+                term.set_selection(Some(Selection::new(selected, SelectionType::Block)));
+                term.grid_mut().set_cursor(0, target);
+                term.process(b"\x1b]66;s=1:w=1;X\x07");
+                assert!(term.selection().is_none());
+                assert!(term.grid().multicell_region_at(1, 3).is_none());
+                assert!(term.grid().multicell_region_at(0, target).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn multicell_placement_skips_selected_lower_rows_but_insert_mode_erases_whole_blocks() {
+        let mut skipped = Terminal::new(12, 4);
+        skipped.process(b"\x1b]66;s=2:w=2;old\x07\x1b[2;1H");
+        skipped.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+        skipped.process(b"\x1b]66;s=1:w=1;X\x07");
+        assert_eq!(skipped.get_selection_text().as_deref(), Some("old"));
+        assert_eq!(skipped.grid().cell(1, 4).unwrap().content.to_text(), "X");
+
+        let mut shifted = Terminal::new(12, 4);
+        shifted.process(b"......\x1b]66;s=2:w=2;old\x07\x1b[2;1H\x1b[4h");
+        shifted.set_selection(Some(Selection::new(Point::new(0, 6), SelectionType::Block)));
+        shifted.process(b"\x1b]66;s=1:w=1;X\x07");
+        assert!(shifted.selection().is_none()); // Old leader is outside the inserted row/span.
+        assert!(shifted.grid().multicell_region_at(0, 6).is_none());
+    }
+
+    #[test]
+    fn multicell_placement_wraps_selection_into_history_and_isolates_frozen_alternate_screen() {
+        let mut term = Terminal::new(12, 3);
+        term.process(b"anchor");
+        let mut selection = Selection::new(Point::new(0, 5), SelectionType::Simple);
+        selection.update(Point::new(0, 0));
+        term.set_selection(Some(selection.clone()));
+        term.process(b"\x1b[3;11H\x1b]66;s=2:w=2;X\x07");
+        assert_eq!(term.selection().unwrap().start, Point::new(-2, 5));
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+        term.process(b"\x1b[?1049hanchor\x1b[H");
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[?2026h\x1b]66;s=2:w=2;X\x07");
+        assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
+        term.process(b"\x1b[?2026l");
+        assert!(term.selection().is_none());
+    }
+
+    #[test]
+    fn new_multicell_placement_retires_overwritten_selection() {
+        let mut term = Terminal::new(12, 4);
+        term.process(b"anchor\x1b[H");
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 5));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b]66;s=2:w=2;X\x07");
+        assert!(term.selection().is_none());
     }
 
     #[test]

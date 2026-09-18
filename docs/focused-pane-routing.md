@@ -244,9 +244,26 @@ count/margin cases, wide/multicell boundary repair, and single/split-pane mouse
 release and drag reconciliation. Insert-mode printing retains its separately
 documented invalidation policy; native desktop acceptance remains deferred.
 
-New OSC 66 placement and glyph erasure during other boundary-repair operations
-still need selection invalidation coverage; this is not a claim that every grid
-mutation is covered.
+New OSC 66 text placement invalidates selections over its destination and any
+whole old multicell block removed by a collision. Lower-row skips preserve the
+untouched old block's selection. Insert-mode placement retires selections in its
+shifted row spans, like ordinary insert-mode printing, and reports block erasure
+outside those spans. Placement now repairs orphan ordinary wide halves on each
+written row and reports that damage, including halves outside its rectangle.
+Since new multicell cells contain no ordinary wide halves, this repair checks
+only the two outside boundary cells rather than scanning a whole row per
+naturally segmented grapheme.
+This uses the shared live-grid damage callback without copying selected text or
+retaining a damage list. Placement-induced full-screen scrolling retains the
+existing history mapping, and hidden placement cannot change frozen selection.
+Coverage includes 700 cellwise placement/selection cases, natural-width Unicode
+segmentation, fractional sizing, rejected input, whole-block and wide-pair
+collisions, lower-row skips, insert mode, wrapping into history, frozen alternate
+screens, and single/split-pane native drag/release. Native painting and clipboard
+acceptance remain deferred.
+
+Glyph erasure during other boundary-repair operations still needs selection
+invalidation coverage; this is not a claim that every grid mutation is covered.
 
 ## Filtered selection and accessible text
 

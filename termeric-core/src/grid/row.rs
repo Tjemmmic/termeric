@@ -493,26 +493,55 @@ impl Row {
         // repair. Other mutation paths handle their own cache invalidation.
         self.multicells_present = None;
         for col in 0..self.cells.len() {
-            if self.cells[col].flags.contains(CellFlags::WIDE_CHAR) {
-                let paired = self
-                    .cells
-                    .get(col + 1)
-                    .is_some_and(|cell| cell.flags.contains(CellFlags::WIDE_CHAR_SPACER));
-                if !paired {
-                    damage(col..col + 1);
-                    self.cells[col] = blank.clone();
-                    self.cells[col].flags.insert(CellFlags::DIRTY);
-                }
-            } else if self.cells[col].flags.contains(CellFlags::WIDE_CHAR_SPACER) {
-                let paired = col > 0 && self.cells[col - 1].flags.contains(CellFlags::WIDE_CHAR);
-                if !paired {
-                    damage(col..col + 1);
-                    self.cells[col] = blank.clone();
-                    self.cells[col].flags.insert(CellFlags::DIRTY);
-                }
-            }
+            self.repair_wide_cell_with_damage(col, blank, &mut damage);
         }
         self.dirty = true;
+    }
+
+    /// A new multicell range contains no ordinary wide halves. Only the cells
+    /// immediately outside it can become orphaned; avoid a whole-row scan for
+    /// every naturally segmented OSC 66 grapheme.
+    pub(crate) fn repair_multicell_placement_edges(
+        &mut self,
+        start: usize,
+        end: usize,
+        blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>),
+    ) {
+        if start >= end || end > self.cells.len() {
+            return;
+        }
+        self.wide_wrap_padding = false;
+        self.multicells_present = None;
+        if start > 0 {
+            self.repair_wide_cell_with_damage(start - 1, blank, &mut damage);
+        }
+        if end < self.cells.len() {
+            self.repair_wide_cell_with_damage(end, blank, &mut damage);
+        }
+        self.dirty = true;
+    }
+
+    fn repair_wide_cell_with_damage(
+        &mut self,
+        col: usize,
+        blank: &Cell,
+        damage: &mut impl FnMut(std::ops::Range<usize>),
+    ) {
+        let orphaned = if self.cells[col].is_wide_char() {
+            !self
+                .cells
+                .get(col + 1)
+                .is_some_and(Cell::is_wide_char_spacer)
+        } else {
+            self.cells[col].is_wide_char_spacer()
+                && (col == 0 || !self.cells[col - 1].is_wide_char())
+        };
+        if orphaned {
+            damage(col..col + 1);
+            self.cells[col] = blank.clone();
+            self.cells[col].flags.insert(CellFlags::DIRTY);
+        }
     }
 
     fn plain_text(&self) -> String {
