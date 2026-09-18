@@ -921,10 +921,15 @@ impl GridStorage {
             } else {
                 // End of logical line — reflow and emit
                 let output_start = result.len();
-                Self::rewrap_line(&mut result, line_cells, new_cols);
+                let mapped_cursor = Self::rewrap_line_with_cursor(
+                    &mut result,
+                    line_cells,
+                    new_cols,
+                    cursor_cell_offset.take(),
+                );
 
                 // If cursor was in this logical line, compute its new position
-                if let Some(cell_offset) = cursor_cell_offset.take() {
+                if let Some(cell_offset) = mapped_cursor {
                     new_cursor = Some(Self::find_cursor_in_output(
                         &result,
                         output_start,
@@ -941,9 +946,14 @@ impl GridStorage {
         // Flush any remaining logical line
         if !line_cells.is_empty() {
             let output_start = result.len();
-            Self::rewrap_line(&mut result, line_cells, new_cols);
+            let mapped_cursor = Self::rewrap_line_with_cursor(
+                &mut result,
+                line_cells,
+                new_cols,
+                cursor_cell_offset.take(),
+            );
 
-            if let Some(cell_offset) = cursor_cell_offset.take() {
+            if let Some(cell_offset) = mapped_cursor {
                 new_cursor = Some(Self::find_cursor_in_output(
                     &result,
                     output_start,
@@ -966,10 +976,12 @@ impl GridStorage {
         cell_offset: usize,
         new_cols: usize,
     ) -> (usize, usize) {
-        // The cursor was at position `cell_offset` in the flat cell buffer.
-        // After re-wrapping at new_cols, row = cell_offset / new_cols, col = cell_offset % new_cols.
-        // But we need to account for the trimming of trailing empty cells and
-        // wide char boundary adjustments. Use a simple approach: row/col from offset.
+        // Rewrapping has already translated the source offset through inserted
+        // padding/spacers and removed spacers. Only final row/column conversion
+        // and the existing trailing-empty-cell clamp remain.
+        if new_cols == 0 {
+            return (output_start.min(output.len().saturating_sub(1)), 0);
+        }
         let row_within_line = cell_offset / new_cols;
         let col_within_line = cell_offset % new_cols;
         let output_row = output_start + row_within_line;
@@ -985,8 +997,21 @@ impl GridStorage {
 
     /// Re-wrap a single logical line (flat cell buffer) at the given column width
     /// and append the resulting rows to `output`.
-    fn rewrap_line(output: &mut Vec<Row>, mut cells: Vec<Cell>, cols: usize) {
+    fn rewrap_line(output: &mut Vec<Row>, cells: Vec<Cell>, cols: usize) {
+        let _ = Self::rewrap_line_with_cursor(output, cells, cols, None);
+    }
+
+    /// Translate one cursor offset alongside the cell moves, without allocating
+    /// a per-cell mapping. Comparisons use original source indices; only the
+    /// returned offset includes transformations before the cursor.
+    fn rewrap_line_with_cursor(
+        output: &mut Vec<Row>,
+        mut cells: Vec<Cell>,
+        cols: usize,
+        cursor: Option<usize>,
+    ) -> Option<usize> {
         use super::cell::CellFlags;
+        let mut mapped_cursor = cursor;
 
         // Trim trailing empty cells so padding doesn't inflate the line
         while cells
@@ -999,22 +1024,22 @@ impl GridStorage {
         // Empty logical line → emit one empty row
         if cells.is_empty() {
             output.push(Row::new(cols));
-            return;
+            return mapped_cursor;
         }
 
         if cols == 0 {
             output.push(Row::new(0));
-            return;
+            return mapped_cursor;
         }
 
         // Re-wrap by moving cells into their new rows. History resize used to
         // clone every rich cell here, doubling allocation traffic.
-        let mut cells = cells.into_iter().peekable();
+        let mut cells = cells.into_iter().enumerate().peekable();
         while cells.peek().is_some() {
             let mut row_cells: Vec<Cell> = Vec::with_capacity(cols);
 
             while row_cells.len() < cols && cells.peek().is_some() {
-                if cells.peek().is_some_and(|cell| {
+                if cells.peek().is_some_and(|(_, cell)| {
                     !cell.multicell.is_present()
                         && (cell.flags.contains(CellFlags::WIDE_CHAR)
                             || (!cell.content.is_empty()
@@ -1024,36 +1049,59 @@ impl GridStorage {
                     // grapheme in its sole cell without a wide flag and consume
                     // the old spacer; never discard user text during reflow.
                     if cols < 2 {
-                        let mut leader = cells.next().expect("peeked wide cell exists");
+                        let (_, mut leader) = cells.next().expect("peeked wide cell exists");
                         leader.flags.remove(CellFlags::WIDE_CHAR);
                         row_cells.push(leader);
-                        if cells.peek().is_some_and(|cell| cell.is_wide_char_spacer()) {
-                            cells.next();
+                        if cells
+                            .peek()
+                            .is_some_and(|(_, cell)| cell.is_wide_char_spacer())
+                        {
+                            let (index, _) = cells.next().expect("peeked spacer exists");
+                            if cursor.is_some_and(|offset| offset >= index) {
+                                mapped_cursor =
+                                    mapped_cursor.map(|offset| offset.saturating_sub(1));
+                            }
                         }
                         continue;
                     }
                     // Only 1 slot left on this row — pad and break to next row.
                     if row_cells.len() + 2 > cols {
+                        let index = cells.peek().expect("peeked wide cell exists").0;
+                        if cursor.is_some_and(|offset| offset >= index) {
+                            mapped_cursor = mapped_cursor.map(|offset| offset.saturating_add(1));
+                        }
                         row_cells.resize_with(cols, Cell::default);
                         break;
                     }
-                    let mut leader = cells.next().expect("peeked wide cell exists");
+                    let (index, mut leader) = cells.next().expect("peeked wide cell exists");
                     leader.flags.insert(CellFlags::WIDE_CHAR);
                     row_cells.push(leader);
                     // Push the spacer if it exists
-                    if cells.peek().is_some_and(|cell| cell.is_wide_char_spacer()) {
-                        row_cells.push(cells.next().expect("peeked spacer exists"));
+                    if cells
+                        .peek()
+                        .is_some_and(|(_, cell)| cell.is_wide_char_spacer())
+                    {
+                        row_cells.push(cells.next().expect("peeked spacer exists").1);
                     } else {
                         // Create spacer if missing
                         let mut spacer = Cell::default();
                         spacer.flags.insert(CellFlags::WIDE_CHAR_SPACER);
                         row_cells.push(spacer);
+                        if cursor.is_some_and(|offset| offset > index) {
+                            mapped_cursor = mapped_cursor.map(|offset| offset.saturating_add(1));
+                        }
                     }
-                } else if cells.peek().is_some_and(|cell| cell.is_wide_char_spacer()) {
+                } else if cells
+                    .peek()
+                    .is_some_and(|(_, cell)| cell.is_wide_char_spacer())
+                {
                     // Orphaned spacer (wide char was on previous row) — skip
-                    cells.next();
+                    let (index, _) = cells.next().expect("peeked spacer exists");
+                    if cursor.is_some_and(|offset| offset > index) {
+                        mapped_cursor = mapped_cursor.map(|offset| offset.saturating_sub(1));
+                    }
                 } else {
-                    row_cells.push(cells.next().expect("peeked cell exists"));
+                    row_cells.push(cells.next().expect("peeked cell exists").1);
                 }
             }
 
@@ -1063,6 +1111,7 @@ impl GridStorage {
             // All rows except the last are wrapped
             output.push(Row::from_cells(row_cells, !is_last));
         }
+        mapped_cursor
     }
 
     /// Get the number of lines in scrollback
@@ -1325,6 +1374,77 @@ mod tests {
         assert_eq!(new_col, 0);
         // The visible area should contain the last 3 rows of content
         assert_eq!(row_text(&storage, 2), "LINE9");
+    }
+
+    #[test]
+    fn reflow_cursor_tracks_wide_padding_and_one_column_collapse() {
+        let mut row = Row::new(5);
+        row.get_mut(0).unwrap().set_char('a');
+        row.get_mut(1).unwrap().set_char('b');
+        row.get_mut(2).unwrap().set_char('界');
+        row.get_mut(2).unwrap().flags.insert(CellFlags::WIDE_CHAR);
+        row.get_mut(3)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER);
+        row.get_mut(4).unwrap().set_char('Z');
+        for (width, positions) in [
+            (3, [(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)]),
+            (1, [(0, 0), (1, 0), (2, 0), (2, 0), (3, 0)]),
+        ] {
+            for (col, expected) in positions.into_iter().enumerate() {
+                let (_, cursor) =
+                    GridStorage::reflow_rows_with_cursor(vec![row.clone()], width, Some((0, col)));
+                assert_eq!(cursor, Some(expected), "width={width} original_col={col}");
+            }
+        }
+    }
+
+    #[test]
+    fn reflow_cursor_tracks_repaired_spacers_wrapped_lines_and_empty_tail() {
+        let mut unmarked = Row::new(2);
+        unmarked.get_mut(0).unwrap().set_char('界');
+        unmarked.get_mut(1).unwrap().set_char('Z');
+        let (output, cursor) =
+            GridStorage::reflow_rows_with_cursor(vec![unmarked], 2, Some((0, 1)));
+        assert_eq!(cursor, Some((1, 0)));
+        assert_eq!(output[1].get(0).unwrap().content.to_text(), "Z");
+
+        let mut orphan = Row::new(2);
+        orphan
+            .get_mut(0)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER);
+        orphan.get_mut(1).unwrap().set_char('Z');
+        let (_, cursor) = GridStorage::reflow_rows_with_cursor(vec![orphan], 2, Some((0, 1)));
+        assert_eq!(cursor, Some((0, 0)));
+
+        let mut row = Row::new(5);
+        row.get_mut(0).unwrap().set_char('a');
+        row.get_mut(1).unwrap().set_char('b');
+        row.get_mut(2).unwrap().set_char('界');
+        row.get_mut(2).unwrap().flags.insert(CellFlags::WIDE_CHAR);
+        row.get_mut(3)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER);
+        let (_, cursor) = GridStorage::reflow_rows_with_cursor(vec![row.clone()], 3, Some((0, 4)));
+        assert_eq!(
+            cursor,
+            Some((1, 2)),
+            "cursor in trimmed blank tail follows inserted padding"
+        );
+        row.get_mut(4).unwrap().set_char('Z');
+        row.set_wrapped(true);
+        let mut continuation = Row::new(5);
+        continuation.get_mut(0).unwrap().set_char('Q');
+        let (output, cursor) =
+            GridStorage::reflow_rows_with_cursor(vec![row, continuation], 3, Some((1, 0)));
+        assert_eq!(cursor, Some((2, 0)));
+        assert_eq!(output[2].get(0).unwrap().content.to_text(), "Q");
+        let (_, cursor) = GridStorage::reflow_rows_with_cursor(vec![Row::new(5)], 0, Some((0, 4)));
+        assert_eq!(cursor, Some((0, 0)));
     }
 
     #[test]

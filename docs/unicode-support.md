@@ -30,6 +30,15 @@ coordinates remain cell-based, but selection, search, detected-URL mapping,
 plain-text extraction, and session export emit the leader's complete grapheme
 once and never serialize the spacer as an extra space.
 
+Resize cursor mapping follows the actual reflow moves, including padding before
+a wide pair, insertion of a missing spacer, removal of an orphan spacer, and
+one-column collapse. A cursor on a collapsed spacer follows its leader. This
+uses one translated offset, not a per-cell mapping allocation; the existing
+clamp for trailing empty cells remains in place. Core regressions cover wrapped
+logical lines and blank tails, plus `ab界Z` shrinking from five columns to three
+or one followed by a write that must replace `Z`, not the wide grapheme. Native
+shell/IME resize behavior is not inferred from these parser/grid tests.
+
 The renderer sends complete multi-scalar clusters through advanced
 `cosmic-text` shaping even when optional programming ligatures are disabled.
 Native color-font glyphs retain RGBA pixels in a separate bounded atlas; mask

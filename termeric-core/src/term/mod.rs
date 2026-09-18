@@ -5807,6 +5807,37 @@ mod tests {
     }
 
     #[test]
+    fn resize_keeps_cursor_on_text_after_wide_character_reflow() {
+        for (cols, expected) in [(3, (1, 2)), (1, (3, 0))] {
+            let mut term = Terminal::new(5, 4);
+            term.process("ab界Z".as_bytes());
+            term.process(b"\x1b[1;5H");
+            term.resize(cols, 4);
+            let cursor = term.grid().cursor();
+            assert_eq!((cursor.row, cursor.col), expected);
+            assert_eq!(
+                term.grid()
+                    .cell(cursor.row, cursor.col)
+                    .unwrap()
+                    .content
+                    .to_text(),
+                "Z"
+            );
+            term.process(b"Q");
+            assert_eq!(
+                term.grid()
+                    .cell(expected.0, expected.1)
+                    .unwrap()
+                    .content
+                    .to_text(),
+                "Q"
+            );
+            assert!(term.rows_text(0, 3).contains('界'));
+            assert_wide_invariants(&term);
+        }
+    }
+
+    #[test]
     fn classic_csi_repetition_and_erasure_preserve_unicode_cells() {
         let mut term = Terminal::new(20, 3);
         term.process(b"\x1b[5b");
