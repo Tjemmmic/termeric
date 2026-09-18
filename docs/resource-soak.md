@@ -377,6 +377,75 @@ validator rather than `validate_soak.py`.
 
 ## Evidence and limitations
 
+### 2026-09-18 release-binary refresh
+
+Clean `946eb65` completed a schema-6 600-second displayed run using
+`target/release/termeric` under private headless Sway and AMD/radeonsi OpenGL
+(`software=false`). The binary was 25,994,904 bytes with SHA-256
+`da9140702571c8df8445407f01d1bf1f277884c17cd0f64a799dca33e9646817`, matching
+that candidate's validated release-preflight binary. All 24 checks passed;
+independent validation reconstructed the manifest, provenance, transcript,
+samples, resource summaries, and cleanup before this documentation-only update.
+The local bundle is `/tmp/termeric-native-soak-946eb65-release/results.json`
+and its sibling artifacts.
+
+The adapter reported `AMD Ryzen 9 7900X3D` / `raphael_mendocino` on
+Linux `7.2.6-arch2-1`; this is not a measurement of the RX 7900 XTX used in
+some earlier GUI acceptance records.
+
+All 954 samples supplied total and resident DRM memory. Peak process-attributed
+GPU resident memory was 115,601,408 bytes (110.2 MiB), with 4,096 bytes (4 KiB)
+first-to-last-quartile median growth. Peak RSS was 150,876 KiB (147.3 MiB), with
+1,008 KiB quartile growth. Thread and descriptor quartile growth was **+1/+3**,
+not zero. The inventories attribute those changes to `pty-reader` and
+`device-path`. All 478 one-child samples had exactly 20 threads and 23 fds;
+all 476 two-child samples had exactly 21 threads and 26 fds. This is consistent
+with the fixture's alternating pane state rather than monotonic accumulation
+in this record; it does not establish indefinite leak freedom.
+
+The workload produced 956 PTY progress records, 238 output resizes, 238 pane
+actions, and 612 accepted Kitty replacements. Peak concurrent children was two;
+all 120 observed children disappeared after normal native close. No recognized
+runtime/renderer error or driver failure was recorded. Image acknowledgements
+are protocol evidence, not a visual inspection of the displayed images.
+
+This run explicitly used installed **Noto Sans Mono** with Noto Color Emoji
+as the required fallback. Font inventory is not proof of rendered face or glyph
+coverage. The command was:
+
+```bash
+env -u WLR_RENDERER -u LIBGL_ALWAYS_SOFTWARE \
+  WGPU_BACKEND=gl TERMERIC_GUI_FONT_FAMILY='Noto Sans Mono' \
+  python3 scripts/run_native_gui_soak.py \
+  --duration-seconds 600 --require-clean --require-gpu-memory \
+  --binary target/release/termeric \
+  --artifacts /tmp/termeric-native-soak-946eb65-release
+python3 scripts/validate_native_gui_soak.py \
+  /tmp/termeric-native-soak-946eb65-release/results.json --source .
+```
+
+Three separate 30-second probe destinations preserve setup outcomes:
+
+- `/tmp/termeric-native-probe-946eb65-release`: failed before app launch because
+  the default DejaVu Sans Mono family was absent.
+- `/tmp/termeric-native-probe-946eb65-release-noto`: with Noto and an explicit
+  pixman compositor override, the workload completed on llvmpipe but correctly
+  failed required DRM coverage (0/49 samples); missing memory was not zero.
+- `/tmp/termeric-native-probe-946eb65-release-auto`: with the renderer overrides
+  removed, AMD/radeonsi passed all 24 checks and 49/49 required DRM samples.
+
+Both failed bundles validated only with `--allow-ineligible`; the successful
+probe validated normally. No probe samples were merged into the sustained run.
+No real provider, notification service, or user's desktop session was exercised.
+This is a local release-build observation, not a controlled comparison with the
+older builds/font profiles below, a whole-app CPU/power result, a specific
+notification-worker stress test, or proof of multi-day stability. Hosted history,
+other adapters/backends, real-desktop visuals/input/accessibility, and portable
+signed evidence remain open. Local `/tmp` bundles are not published artifacts;
+the exact-checkout/binary portability boundary above still applies.
+
+### Earlier observations
+
 On 2026-09-16, clean `bd70faa` completed a schema-6 600-second displayed run
 under private headless Sway with AMD/radeonsi OpenGL (`software=false`), requiring
 DRM memory on every sample. All 24 checks passed, and the independent validator

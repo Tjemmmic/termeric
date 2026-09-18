@@ -20,6 +20,18 @@ unavailable. Hosted history, vendor-GPU, real-desktop, and multi-day stability
 remain open; neither run establishes a low-memory ranking. See
 [the exact record and limitations](resource-soak.md#evidence-and-limitations).
 
+Release resource evidence refreshed 2026-09-18: clean `946eb65` passed all 24
+checks and independent validation for a 600-second private-Sway AMD/radeonsi
+OpenGL run of the release binary, with 954/954 required DRM samples. Peak RSS
+was 147.3 MiB with 1,008 KiB quartile growth; peak GPU resident memory was
+110.2 MiB with 4 KiB growth. Thread/fd quartile growth was +1/+3, with every
+sample matching one of the fixture's two pane-count resource states; all 120
+observed children were cleaned up. An explicit Noto font profile and separately
+retained failed/successful setup probes are documented in the
+[release refresh](resource-soak.md#2026-09-18-release-binary-refresh).
+This is not a matched comparison with earlier candidates or other terminals,
+a visual acceptance result, or evidence of multi-day stability.
+
 ## Bottom line
 
 Termeric's terminal engine is already credible enough to compete on breadth:
