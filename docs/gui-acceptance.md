@@ -8,6 +8,14 @@ data, cache, home directories, shell fixtures, private tmux runtimes/sockets,
 and documents. Its isolated font profile uses DejaVu Sans Mono as the primary
 and the separately installed Noto Color Emoji as a distinct fallback, matching
 the same duplicate-family validation applied to user configuration.
+Before every application launch, `fc-list` must report both exact families in
+that child's isolated HOME/XDG environment. Missing fonts are an explicit
+failure, not an accepted substitution. Each launch directory retains
+`font-profile.json`, including failed inventory probes; the top-level result
+also names the requested profile. This is an installed-family prerequisite,
+not a renderer-face fingerprint, glyph-coverage check, visual oracle, or proof
+that font files remained unchanged. The font sidecars are diagnostic artifacts,
+not part of the separately sealed palette/Settings proofs.
 Vim disables viminfo and user configuration, less disables user options,
 preprocessors, and history, and tmux uses an empty configuration explicitly.
 Private Weston and Sway sessions use owned, mode-0700 runtime directories under
@@ -272,6 +280,24 @@ uploaded CI evidence. No capability status is promoted by this refresh.
 
 ## Visual evidence
 
+When running semantic checks on a host without DejaVu Sans Mono, an explicitly
+installed alternative primary is allowed only with `--skip-visual-checks`:
+
+```bash
+WLR_RENDERER=pixman WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=true \
+python3 scripts/gui_acceptance.py --backend wayland --start-sway \
+  --scenario fullscreen --binary target/release/termeric --require-clean \
+  --font-family 'Noto Sans Mono' --skip-visual-checks \
+  --artifacts /tmp/termeric-fullscreen-noto
+```
+
+The color-emoji fallback is still required. Custom profiles cannot update
+default baselines, and scenarios that mandate pixel checks (such as background
+images) still reject `--skip-visual-checks`. Default CI retains DejaVu Sans Mono
+and Noto Color Emoji. An inherited `TERMERIC_GUI_FONT_FAMILY` cannot silently
+override the CLI choice. Historical successful runs without these prerequisites
+remain historical semantic observations, not font-controlled visual evidence.
+
 Native-window captures are retained as diagnostic artifacts. GPU-presented
 surfaces are not portably readable through X11 root-window capture, so CI does
 not call a blank root capture a visual pass. Instead, the GPU lane renders a
@@ -392,7 +418,7 @@ Build first:
 cargo build -p termeric --locked
 ```
 
-On Debian/Ubuntu, install `xvfb`, `xauth`, `xdotool`, `xclip`, `imagemagick`,
+On Debian/Ubuntu, install `xvfb`, `xauth`, `xdotool`, `xclip`, `imagemagick`, `fontconfig`,
 `python3-pil`, `fonts-dejavu-core`, `fonts-noto-color-emoji`, `vim`, `less`,
 `tmux`, `libsixel-bin`, `kitty` (for `kitten`), `timg`, `util-linux` (for
 `script`), `openbox`, `weston`, `sway`, `wtype`, Mesa's Vulkan drivers, and the

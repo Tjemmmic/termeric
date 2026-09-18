@@ -82,7 +82,7 @@ class GraphicsAcceptanceTests(unittest.TestCase):
 
     def test_wayland_graphics_declares_all_clients_and_private_input_tools(self):
         tools = required_tools("wayland", ["graphics"], False, True)
-        self.assertEqual(set(tools), {"tic", "kitten", "img2sixel", "timg", "wtype", "sway", "swaymsg"})
+        self.assertEqual(set(tools), {"fc-list", "tic", "kitten", "img2sixel", "timg", "wtype", "sway", "swaymsg"})
 
     def test_both_sixel_clients_require_two_acceptances_and_old_seven_client_shape_fails(self):
         for count in [0, 1, 3, True, "2"]:

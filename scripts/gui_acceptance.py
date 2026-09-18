@@ -36,6 +36,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.gui_candidate import GuiCandidate
+from scripts.gui_fonts import (
+    DEFAULT_PRIMARY, FALLBACK, PRIMARY_ENV, check_font_profile, validate_profile_options,
+)
 from scripts.gui_tab_placement import run_tab_overflow_scenario, run_tab_placement_scenario
 from scripts.gui_background import run_background_scenario
 from scripts.gui_mouse_routing import run_mouse_ownership_checks
@@ -110,7 +113,8 @@ def toml_string(value: str) -> str:
     return json.dumps(value)
 
 
-def write_config(path: Path, program: str, arguments: list[str]) -> None:
+def write_config(path: Path, program: str, arguments: list[str],
+                 font_family: str = DEFAULT_PRIMARY) -> None:
     args = ", ".join(toml_string(argument) for argument in arguments)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -119,8 +123,8 @@ program = {toml_string(program)}
 args = [{args}]
 
 [font]
-family = "DejaVu Sans Mono"
-fallback = ["Noto Color Emoji"]
+family = {toml_string(font_family)}
+fallback = [{toml_string(FALLBACK)}]
 size = 14.0
 line_height = 1.2
 ligatures = false
@@ -265,7 +269,8 @@ class AppProcess:
         isolated_home.mkdir(parents=True, exist_ok=True)
         tmux_runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
         tmux_runtime.chmod(0o700)
-        write_config(xdg_config / "termeric" / "config.toml", program, arguments)
+        font_family = inherited_env.get(PRIMARY_ENV, DEFAULT_PRIMARY)
+        write_config(xdg_config / "termeric" / "config.toml", program, arguments, font_family)
         spy_bin = make_desktop_spies(run_dir, self.desktop_events)
 
         self.env = dict(inherited_env)
@@ -303,6 +308,7 @@ class AppProcess:
             self.env["WINIT_UNIX_BACKEND"] = "wayland"
             self.env.pop("DISPLAY", None)
 
+        check_font_profile(run_dir, self.env, font_family)
         self._stdout = self.stdout_path.open("w", encoding="utf-8")
         self._stderr = self.log_path.open("w", encoding="utf-8")
         self.process = subprocess.Popen(
@@ -2084,7 +2090,7 @@ def required_tools(
     start_sway: bool,
     start_window_manager: bool = False,
 ) -> list[str]:
-    tools = ["tic"]
+    tools = ["tic", "fc-list"]
     if backend == "x11":
         tools.append("xdotool")
         if "tab-overflow" in scenarios:
@@ -2160,6 +2166,8 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
     parser.add_argument("--update-baselines", action="store_true")
     parser.add_argument("--require-clean", action="store_true",
                         help="pin a clean checkout's binary and refuse drift or reused artifacts")
+    parser.add_argument("--font-family", default=DEFAULT_PRIMARY,
+                        help="installed primary family; custom fonts require --skip-visual-checks")
     parser.add_argument(
         "--skip-visual-checks",
         action="store_true",
@@ -2188,6 +2196,11 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
         help="inject one device-loss event and prove whole-renderer recreation",
     )
     args = parser.parse_args()
+    try:
+        font_family = validate_profile_options(
+            args.font_family, args.skip_visual_checks, args.update_baselines)
+    except ValueError as error:
+        raise AcceptanceError(str(error)) from error
 
     binary = args.binary.absolute() if args.require_clean else args.binary.resolve()
     if args.require_clean and args.update_baselines:
@@ -2275,6 +2288,8 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
         scenario_binary = candidate.launch()
     artifacts.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
+    # Always replace inherited overrides with the explicit CLI profile.
+    environment[PRIMARY_ENV] = font_family
     terminfo = artifacts / "terminfo"
     terminfo.mkdir(parents=True, exist_ok=True)
     run(
@@ -2449,6 +2464,8 @@ def run_main(resources: ExitStack) -> tuple[str, list[str], Path]:
             force_device_loss=args.force_device_loss,
             binary_sha256=candidate.digest if candidate else None,
         )
+        document["font_profile"] = {"primary": font_family, "fallback": [FALLBACK],
+                                    "renderer_face": "not_observed"}
         if candidate:
             candidate.publish(document)
         else:

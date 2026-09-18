@@ -51,6 +51,7 @@ jobs:
       - name: Prove native GUI harness contracts
         run: |
           python3 -m unittest scripts.test_gui_acceptance
+          python3 -m unittest scripts.test_gui_fonts
           python3 -m unittest scripts.test_gui_candidate
           python3 -m unittest scripts.test_gui_tab_placement
           python3 -m unittest scripts.test_gui_wayland_pointer
@@ -274,13 +275,14 @@ jobs:
           sudo apt-get install -y pkg-config libfontconfig1-dev libwayland-dev \
             libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev \
             libvulkan-dev mesa-vulkan-drivers xvfb xauth xdotool xclip \
-            imagemagick ffmpeg python3-pil fonts-dejavu-core fonts-noto-color-emoji vim less tmux \
+            imagemagick ffmpeg python3-pil fontconfig fonts-dejavu-core fonts-noto-color-emoji vim less tmux \
             libsixel-bin timg kitty openbox sway weston wl-clipboard wtype util-linux
       - name: Build the native application
         run: cargo build -p termeric --locked
       - name: Check native harness record analysis
         run: |
           python3 -m unittest scripts/test_gui_acceptance.py
+          python3 -m unittest scripts.test_gui_fonts
           python3 -m unittest scripts.test_gui_candidate
           python3 -m unittest scripts.test_gui_tab_placement
           python3 -m unittest scripts.test_gui_wayland_pointer

@@ -55,7 +55,7 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             self.assertIn("[plugins.codex]\nenabled = false", document)
 
     def test_app_process_replaces_user_home_and_tmux_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+        with mock.patch.object(gui_acceptance, "check_font_profile"), tempfile.TemporaryDirectory() as directory, mock.patch.object(
             gui_acceptance.subprocess, "Popen", return_value=mock.Mock()
         ):
             run_dir = Path(directory) / "run"
@@ -79,7 +79,7 @@ class GuiAcceptanceRecordTests(unittest.TestCase):
             legacy: "1"
             for legacy, _ in gui_acceptance.RENDERER_INJECTION_ENV.values()
         }
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+        with mock.patch.object(gui_acceptance, "check_font_profile"), tempfile.TemporaryDirectory() as directory, mock.patch.object(
             gui_acceptance.subprocess, "Popen", return_value=mock.Mock()
         ):
             app = gui_acceptance.AppProcess(

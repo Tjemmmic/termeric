@@ -32,7 +32,7 @@ class BackgroundTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             background.pixel_probes(source, blank, viewport, "invalid", 1)
         self.assertEqual(gui.required_tools("wayland", ["background"], False, True),
-                         ["sway", "swaymsg", "tic", "wtype"])
+                         ["fc-list", "sway", "swaymsg", "tic", "wtype"])
 
 
 if __name__ == "__main__":

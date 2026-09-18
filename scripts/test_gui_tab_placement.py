@@ -85,9 +85,9 @@ class TabPlacementTests(unittest.TestCase):
 
     def test_native_tools_are_scenario_local_and_ci_selects_the_new_lane(self):
         self.assertEqual(gui.required_tools("wayland", ["tab-placement"], False, True),
-                         ["sway", "swaymsg", "tic", "wtype"])
+                         ["fc-list", "sway", "swaymsg", "tic", "wtype"])
         self.assertEqual(gui.required_tools("x11", ["tab-placement"], False, False, True),
-                         ["openbox", "tic", "xdotool"])
+                         ["fc-list", "openbox", "tic", "xdotool"])
         workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
         block = workflow.split("- name: Run Wayland keyboard, pane, and clipboard scenario", 1)[1].split("- name:", 1)[0]
         self.assertIn("--scenario tab-placement", block)
@@ -106,9 +106,9 @@ class TabPlacementTests(unittest.TestCase):
 
     def test_overflow_lane_is_selected_with_backend_local_tools(self):
         self.assertEqual(gui.required_tools("wayland", ["tab-overflow"], False, True),
-                         ["sway", "swaymsg", "tic", "wl-paste", "wtype"])
+                         ["fc-list", "sway", "swaymsg", "tic", "wl-paste", "wtype"])
         self.assertEqual(gui.required_tools("x11", ["tab-overflow"], False, False, True),
-                         ["openbox", "tic", "xclip", "xdotool"])
+                         ["fc-list", "openbox", "tic", "xclip", "xdotool"])
         workflow = (gui.ROOT / ".github/workflows/ci.yml").read_text()
         block = workflow.split("- name: Run Wayland keyboard, pane, and clipboard scenario", 1)[1].split("- name:", 1)[0]
         self.assertIn("--scenario tab-overflow", block)
