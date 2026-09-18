@@ -160,7 +160,7 @@ fn shell_logical_anchor(grid: &Grid, target_row: i32) -> Option<ShellLogicalAnch
             return Some(ShellLogicalAnchor { line, cell });
         }
         if row.is_wrapped() {
-            cell = cell.saturating_add(row.len());
+            cell = cell.saturating_add(row.reflow_unit_count());
         } else {
             line = line.saturating_add(1);
             cell = 0;
@@ -177,10 +177,11 @@ fn shell_row_from_anchor(grid: &Grid, target: ShellLogicalAnchor) -> Option<i32>
     for row_index in oldest..=newest {
         let row = grid.row_at_offset(row_index)?;
         if line == target.line {
-            if remaining < row.len() || !row.is_wrapped() {
+            let units = row.reflow_unit_count();
+            if remaining < units || !row.is_wrapped() {
                 return Some(row_index);
             }
-            remaining = remaining.saturating_sub(row.len());
+            remaining = remaining.saturating_sub(units);
         }
         if !row.is_wrapped() {
             if line == target.line {
@@ -5814,6 +5815,16 @@ mod tests {
         one_column.resize(4, 4);
         assert!(one_column.rows_text(0, 3).contains('界'));
         assert_wide_invariants(&one_column);
+    }
+
+    #[test]
+    fn shell_row_bookmark_tracks_wide_reflow_padding() {
+        let mut term = Terminal::new(5, 4);
+        term.process("ab界ZQ".as_bytes());
+        let anchor = shell_logical_anchor(term.grid(), 1).unwrap();
+        term.resize(3, 4);
+        assert_eq!(shell_row_from_anchor(term.grid(), anchor), Some(2));
+        assert_eq!(term.grid().row(2).unwrap().to_string(), "Q");
     }
 
     #[test]

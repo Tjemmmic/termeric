@@ -34,6 +34,21 @@ mode rather than silently operating on another pane. Search uses the existing
 grid and match index, including Unicode byte-to-cell mapping and retained
 scrollback. Search filter mode is not duplicated or hidden.
 
+Resize bookmarks count stable reflow units rather than physical columns: a
+wide grapheme counts once, its spacer and synthetic wrap padding do not count,
+and real blank cells remain positions. The same row-view iterator is used for
+shell prompt-row bookmarks and reads compact history without expanding rows or
+cloning grapheme payloads. Tests retain both copy endpoints, selection direction,
+and selected Unicode text through narrowing, one-column collapse, and widening,
+including fully archived logical lines. OSC 66 retains its physical-cell policy;
+this does not establish behavior for clipped/removed blocks or evicted history,
+nor native shell/IME resize acceptance.
+Compact rows retain one machine-word spacer count, included in their existing
+owned-byte accounting, so counting archived bookmark units is constant-time per
+row. The count is computed during both ordinary and recycling compaction; no
+per-cell bookmark table is retained. This is a resource bound, not a measured
+native resize-latency claim.
+
 ## Quick select
 
 Quick select labels visible OSC 8 links and configured regex matches with stable

@@ -322,13 +322,21 @@ fn logical_point(grid: &Grid, point: Point) -> LogicalPoint {
             continue;
         };
         if row_index == target {
+            let mut col = point.col.min(row.len().saturating_sub(1));
+            if row.get(col).is_some_and(|cell| cell.is_wide_char_spacer()) {
+                col = col.saturating_sub(1);
+            }
             return LogicalPoint {
                 line,
-                cell: cell + point.col.min(row.len().saturating_sub(1)),
+                cell: cell
+                    + row
+                        .reflow_columns()
+                        .take_while(|column| *column < col)
+                        .count(),
             };
         }
         if row.is_wrapped() {
-            cell += row.len();
+            cell += row.reflow_unit_count();
         } else {
             line += 1;
             cell = 0;
@@ -347,10 +355,15 @@ fn point_from_logical(grid: &Grid, target: LogicalPoint) -> Point {
             continue;
         };
         if line == target.line {
-            if remaining < row.len() || !row.is_wrapped() {
-                return Point::new(row_index, remaining.min(row.len().saturating_sub(1)));
+            let units = row.reflow_unit_count();
+            if remaining < units {
+                let col = row
+                    .reflow_columns()
+                    .nth(remaining)
+                    .expect("reflow unit count matches the immutable row view");
+                return Point::new(row_index, col);
             }
-            remaining = remaining.saturating_sub(row.len());
+            remaining = remaining.saturating_sub(units);
         }
         if !row.is_wrapped() {
             if line == target.line {
@@ -801,6 +814,66 @@ mod tests {
         let activated = mode.push_hint_key('a').unwrap();
         assert_eq!(activated.0.value, "https://example.test");
         assert_eq!(activated.1, HintAction::Copy);
+    }
+
+    #[test]
+    fn unicode_copy_bookmarks_follow_both_endpoints_through_width_changes() {
+        let mut terminal = Terminal::new(5, 6);
+        terminal.process("ab界ZQ".as_bytes());
+        let mut mode = CopyMode::default();
+        mode.enter(terminal.grid());
+        mode.jump_to(Point::new(0, 2), terminal.grid_mut());
+        mode.toggle_selection(SelectionType::Simple);
+        mode.jump_to(Point::new(1, 0), terminal.grid_mut());
+        for cols in [3, 1, 5, 3, 5] {
+            mode.prepare_reflow(terminal.grid());
+            terminal.resize(cols, 6);
+            mode.finish_reflow(terminal.grid_mut());
+            let selection = mode.selection().unwrap();
+            for (point, expected) in [(mode.cursor(), "Q"), (selection.start, "界")] {
+                assert_eq!(
+                    terminal
+                        .grid()
+                        .row_at_offset(point.row)
+                        .unwrap()
+                        .get(point.col)
+                        .unwrap()
+                        .content
+                        .to_text(),
+                    expected,
+                    "width={cols} point={point:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_history_selection_keeps_text_and_direction_through_reflow() {
+        for reverse in [false, true] {
+            let mut terminal = Terminal::new(5, 3);
+            terminal.process("ab界ZQ\r\nx\r\ny\r\nz".as_bytes());
+            assert_eq!(terminal.grid().scrollback_len(), 2);
+            let (start, end) = (Point::new(-2, 2), Point::new(-1, 0));
+            let (start, end) = if reverse { (end, start) } else { (start, end) };
+            let mut mode = CopyMode::default();
+            mode.enter(terminal.grid());
+            mode.jump_to(start, terminal.grid_mut());
+            mode.toggle_selection(SelectionType::Simple);
+            mode.jump_to(end, terminal.grid_mut());
+            for cols in [3, 1, 5] {
+                mode.prepare_reflow(terminal.grid());
+                terminal.resize(cols, 3);
+                mode.finish_reflow(terminal.grid_mut());
+                let selection = mode.selection().unwrap();
+                assert_eq!(selection.start > selection.end, reverse);
+                terminal.set_selection(Some(selection));
+                assert_eq!(
+                    terminal.get_selection_text().as_deref(),
+                    Some("界ZQ"),
+                    "width={cols} reverse={reverse}"
+                );
+            }
+        }
     }
 
     #[test]

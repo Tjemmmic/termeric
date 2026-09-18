@@ -194,6 +194,8 @@ struct CompactRow {
     cols: usize,
     wrapped: bool,
     wide_wrap_padding: bool,
+    /// Immutable structural count: bookmarks need not scan archived payloads.
+    wide_spacers: usize,
 }
 
 impl CompactRow {
@@ -208,7 +210,9 @@ impl CompactRow {
 
         let mut content = Vec::with_capacity(cells.len());
         let mut styles = Vec::new();
+        let mut wide_spacers = 0;
         for (column, cell) in cells.into_iter().enumerate() {
+            wide_spacers += usize::from(cell.is_wide_char_spacer());
             let style = CellStyle::from_cell(&cell);
             if styles
                 .last()
@@ -230,6 +234,7 @@ impl CompactRow {
             cols,
             wrapped,
             wide_wrap_padding,
+            wide_spacers,
         }
     }
 
@@ -248,8 +253,10 @@ impl CompactRow {
             .map_or(0, |column| column + 1);
         let mut content = Vec::with_capacity(retained_len);
         let mut styles = Vec::new();
+        let mut wide_spacers = 0;
         for (column, slot) in cells.iter_mut().take(retained_len).enumerate() {
             let cell = std::mem::take(slot);
+            wide_spacers += usize::from(cell.is_wide_char_spacer());
             let style = CellStyle::from_cell(&cell);
             if styles
                 .last()
@@ -275,6 +282,7 @@ impl CompactRow {
                 cols,
                 wrapped,
                 wide_wrap_padding,
+                wide_spacers,
             },
             Row::from_cells(cells, false),
         )
@@ -303,6 +311,7 @@ impl CompactRow {
             cols,
             wrapped,
             wide_wrap_padding,
+            ..
         } = self;
         let stored_len = content.len();
         let mut cells = Vec::with_capacity(if wrapped { cols } else { stored_len });
@@ -418,6 +427,37 @@ enum RowViewInner<'a> {
 }
 
 impl<'a> RowView<'a> {
+    /// Count bookmark units without expanding or scanning compact history.
+    pub fn reflow_unit_count(&self) -> usize {
+        match self.inner {
+            RowViewInner::Visible(_) => self.reflow_columns().count(),
+            RowViewInner::History(row) => row
+                .cols
+                .saturating_sub(row.wide_spacers)
+                .saturating_sub(usize::from(row.wide_wrap_padding)),
+        }
+    }
+
+    /// Physical columns that contribute stable cursor-bookmark units to reflow.
+    /// A wide grapheme counts once at any grid width; its spacer and synthetic
+    /// wrap padding do not count. Ordinary blanks remain units. OSC 66 cells
+    /// retain their physical-cell policy. This does not expand compact history
+    /// or clone grapheme payloads.
+    pub fn reflow_columns(&self) -> impl Iterator<Item = usize> + '_ {
+        let end = self
+            .len()
+            .saturating_sub(usize::from(self.has_wide_wrap_padding()));
+        (0..end).filter(|&col| match self.inner {
+            RowViewInner::Visible(row) => {
+                row.get(col).is_none_or(|cell| !cell.is_wide_char_spacer())
+            }
+            RowViewInner::History(row) => row
+                .content
+                .get(col)
+                .is_none_or(|cell| !cell.is_wide_spacer()),
+        })
+    }
+
     pub(crate) fn has_wide_wrap_padding(&self) -> bool {
         match self.inner {
             RowViewInner::Visible(row) => row.has_wide_wrap_padding(),
@@ -1531,6 +1571,72 @@ mod tests {
             assert_eq!(row_text(&storage, 0), if wrapped { "mid" } else { "top" });
             assert_eq!(storage.row(1).unwrap().is_wrapped(), wrapped);
         }
+    }
+
+    #[test]
+    fn reflow_columns_match_visible_and_compact_rows_without_losing_real_blanks() {
+        let mut row = Row::new(6);
+        row.get_mut(0).unwrap().set_char('a');
+        row.get_mut(1).unwrap().set_grapheme("👩\u{200d}💻");
+        row.get_mut(1).unwrap().flags.insert(CellFlags::WIDE_CHAR);
+        row.get_mut(2)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER);
+        row.get_mut(3).unwrap().bg_spec = ColorSpec::Indexed(4);
+        row.get_mut(4).unwrap().set_char(' ');
+        row.set_wrapped(true);
+        row.mark_wide_wrap_padding();
+        let expected = vec![0, 1, 3, 4];
+        assert_eq!(RowView::visible(&row).reflow_unit_count(), expected.len());
+        assert_eq!(
+            RowView::visible(&row).reflow_columns().collect::<Vec<_>>(),
+            expected
+        );
+        let compact = CompactRow::from_row(row.clone());
+        assert_eq!(
+            RowView::history(&compact).reflow_unit_count(),
+            expected.len()
+        );
+        assert_eq!(
+            RowView::history(&compact)
+                .reflow_columns()
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let (compact, _) = CompactRow::from_row_recycling(row.clone());
+        assert_eq!(
+            RowView::history(&compact).reflow_unit_count(),
+            expected.len()
+        );
+        assert_eq!(
+            RowView::history(&compact)
+                .reflow_columns()
+                .collect::<Vec<_>>(),
+            expected
+        );
+        row.get_mut(5).unwrap().set_char(' ');
+        assert_eq!(RowView::visible(&row).reflow_unit_count(), 5);
+        assert_eq!(
+            RowView::visible(&row).reflow_columns().collect::<Vec<_>>(),
+            vec![0, 1, 3, 4, 5]
+        );
+        let mut narrow = Row::new(1);
+        narrow.get_mut(0).unwrap().set_char('界');
+        assert_eq!(
+            RowView::visible(&narrow)
+                .reflow_columns()
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+        row.set_wrapped(false);
+        let mut compact = CompactRow::from_row(row);
+        assert!(compact.retarget_width_without_reflow(12));
+        let view = RowView::history(&compact);
+        assert_eq!(view.reflow_unit_count(), 11);
+        assert_eq!(view.reflow_unit_count(), view.reflow_columns().count());
+        let empty = CompactRow::from_row(Row::new(3));
+        assert_eq!(RowView::history(&empty).reflow_unit_count(), 3);
     }
 
     #[test]
