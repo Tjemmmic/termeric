@@ -629,15 +629,57 @@ fn prepare_socket_path(paths: &RuntimePaths) -> anyhow::Result<()> {
 }
 
 fn handle_client(
-    mut stream: UnixStream,
+    stream: UnixStream,
     expected_token: &str,
     state: SharedState,
 ) -> anyhow::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    handle_client_with_setup_timeout(stream, expected_token, state, Duration::from_secs(10))
+}
+
+fn read_client_setup_frame(
+    stream: &mut UnixStream,
+    timeout: Duration,
+) -> anyhow::Result<ClientFrame> {
+    struct SetupReader<'a> {
+        stream: &'a mut UnixStream,
+        deadline: Instant,
+    }
+    impl Read for SetupReader<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            let remaining = self.deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "domain connection setup frame deadline exceeded",
+                ));
+            }
+            self.stream.set_read_timeout(Some(remaining))?;
+            self.stream.read(bytes)
+        }
+    }
+
+    // A per-read timeout alone can be renewed forever by partial-frame input.
+    // Restore socket policy on both success and failure; an established relay
+    // must not inherit the setup deadline as an idle-disconnect timer.
+    let previous = stream.read_timeout()?;
+    let result = protocol::read_frame(&mut SetupReader {
+        stream,
+        deadline: Instant::now() + timeout,
+    });
+    stream.set_read_timeout(previous)?;
+    result
+}
+
+fn handle_client_with_setup_timeout(
+    mut stream: UnixStream,
+    expected_token: &str,
+    state: SharedState,
+    setup_timeout: Duration,
+) -> anyhow::Result<()> {
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     validate_peer(&stream)?;
     if let Err(message) = validate_hello(
-        protocol::read_frame::<ClientFrame>(&mut stream)?,
+        read_client_setup_frame(&mut stream, setup_timeout)?,
         expected_token,
     ) {
         protocol::write_frame(&mut stream, &ServerFrame::Error { message })?;
@@ -649,14 +691,15 @@ fn handle_client(
             version: protocol::PROTOCOL_VERSION,
         },
     )?;
-    stream.set_read_timeout(None)?;
-    // A client that stops reading is disconnected after a bounded interval;
-    // it can never pin a server thread forever or backpressure PTY draining.
+    // Bound individual blocked writes. Streaming queues separately enforce
+    // capacity and eviction; this is not an absolute whole-frame deadline.
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
-    let ClientFrame::Request { request } = protocol::read_frame(&mut stream)? else {
+    let ClientFrame::Request { request } = read_client_setup_frame(&mut stream, setup_timeout)?
+    else {
         anyhow::bail!("expected one domain request after negotiation");
     };
+    stream.set_read_timeout(None)?;
     if let Request::Attach { domain, pane } = request {
         return serve_attachment(stream, state, domain, pane);
     }

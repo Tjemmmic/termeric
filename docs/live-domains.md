@@ -237,6 +237,17 @@ panes across the daemon, 8 attachments per pane, and 8 topology subscribers per
 domain. Parser scrollback is capped at 100,000 lines and 8 MiB per pane.
 Existing core Kitty-image limits also apply independently.
 
+Connection setup gives the complete authentication frame and the complete
+first request separate ten-second read deadlines. Each deadline spans both
+the length header and JSON body; trickling partial bytes does not renew it.
+Authenticated clients that never submit a request are disconnected and release
+their client slot. The setup reader restores the preceding socket timeout on
+success and failure, and completed setup clears the read timeout before entering
+a long-lived attachment/subscription (uploads apply their own idle policy).
+Socket-only fixtures check slot release, partial-header/body deadlines, timeout
+restoration, and an established idle subscription surviving its setup budget.
+These are setup I/O limits, not a total request-execution or transfer deadline.
+
 PTY reader threads never write to client sockets. They publish into bounded
 64-frame queues; a full/disconnected subscriber is evicted. PTY attachment
 eviction now shuts down both directions of its socket immediately, using one
@@ -261,9 +272,10 @@ closure instead disconnects, without claiming the close frame was delivered.
 Socket-only tests reproduce failed initial publication without a later topology
 edit, check repeated slot reuse, exercise overflow/receiver-loss/full-close
 shutdown, and join real subscription workers after exact detach and normal
-domain closure while another subscriber remains live. Socket writes time
-out after five seconds, so slow clients cannot block PTY draining or cause an
-unbounded output queue. A topology subscriber retains at most one pending
+domain closure while another subscriber remains live. Individual established
+socket writes have a five-second timeout; this is not a total frame deadline.
+Bounded queues and eviction keep slow clients from blocking PTY draining or
+retaining unbounded output. A topology subscriber retains at most one pending
 lightweight snapshot before eviction; revision frames omit command argv, cwd,
 geometry, and attachment-count inspection metadata. Terminal snapshots are
 capped at 512 KiB. PTY input and terminal-generated replies likewise use one
