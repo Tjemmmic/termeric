@@ -298,6 +298,25 @@ and Noto Color Emoji. An inherited `TERMERIC_GUI_FONT_FAMILY` cannot silently
 override the CLI choice. Historical successful runs without these prerequisites
 remain historical semantic observations, not font-controlled visual evidence.
 
+On 2026-09-18 UTC, clean `8d4da08` verified both paths with the same release
+executable digest recorded above. The default-font negative control failed
+before opening the application log or launching Termeric, retained an explicit
+missing-DejaVu diagnostic, and marked its candidate ineligible. A separate
+Noto Sans Mono run found both requested families in the isolated inventory and
+passed private-Sway fullscreen with `skip_visual_checks=true`. Both used private
+D-Bus/Sway, headless pixman, and OpenGL llvmpipe; neither invoked providers.
+The respective `/tmp/termeric-gui-font-8d4da08-missing/results.json` and
+`/tmp/termeric-gui-font-8d4da08-installed/results.json` SHA-256 digests are
+`32ead6e32dfdc33e7579f28283d21900ac0c71ddbde232c829f088120fc266b6` and
+`d6adf5f876095e5fd310b22313e1fdde94666aa07a42d69b1038c77a6f4df07d`.
+The ignored local archive
+`target/terminal-comparison/2026-09-18-8d4da08-gui-fonts.tar.gz` retains both runs
+and launcher logs without disposable XDG caches/data/state. All 25 regular files
+were byte-verified; its SHA-256 is
+`3844c2d6ef5fb5e13993b486f7ee946f1d18938a03432499de7f79ba568a6c84`.
+This closes silent font substitution in the harness prerequisite, not native
+font-quality acceptance, actual renderer-face verification, or any platform gate.
+
 Native-window captures are retained as diagnostic artifacts. GPU-presented
 surfaces are not portably readable through X11 root-window capture, so CI does
 not call a blank root capture a visual pass. Instead, the GPU lane renders a
