@@ -238,7 +238,20 @@ domain. Parser scrollback is capped at 100,000 lines and 8 MiB per pane.
 Existing core Kitty-image limits also apply independently.
 
 PTY reader threads never write to client sockets. They publish into bounded
-64-frame queues; a full/disconnected subscriber is evicted. Socket writes time
+64-frame queues; a full/disconnected subscriber is evicted. PTY attachment
+eviction now shuts down both directions of its socket immediately, using one
+extra cloned descriptor per active attachment (within the existing attachment
+limits). This interrupts pending socket work instead of draining obsolete
+queued output first. Explicit detach also shuts down that exact connection.
+Input and resize dispatch revalidate the exact attachment ID and open-pane
+state under the eviction/mutation lock, so a frame already read before eviction
+cannot mutate the surviving pane or acquire a replacement attachment's authority.
+Normal closure still queues `Closed` after preceding output; if that frame
+cannot fit, the connection is shut down without claiming successful delivery.
+Local fixtures cover queue-full/disconnected-receiver shutdown, stale/replaced
+reader rejection, closed-pane refusal, and live replacement input/resize.
+These checks are not native remote-host acceptance. Topology subscriptions
+retain their separate bounded queue/teardown policy. Socket writes time
 out after five seconds, so slow clients cannot block PTY draining or cause an
 unbounded output queue. A topology subscriber retains at most one pending
 lightweight snapshot before eviction; revision frames omit command argv, cwd,

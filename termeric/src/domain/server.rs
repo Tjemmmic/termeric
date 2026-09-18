@@ -163,6 +163,25 @@ struct PaneRuntime {
 struct Attachment {
     id: u64,
     sender: SyncSender<ServerFrame>,
+    // A cloned descriptor lets queue eviction interrupt both socket workers
+    // without waiting for their pending reads/writes or draining stale output.
+    transport: UnixStream,
+}
+
+impl Attachment {
+    fn disconnect(&self) {
+        let _ = self.transport.shutdown(std::net::Shutdown::Both);
+    }
+
+    fn send_or_disconnect(&self, frame: ServerFrame) -> bool {
+        match self.sender.try_send(frame) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                self.disconnect();
+                false
+            }
+        }
+    }
 }
 
 struct TopologySubscriber {
@@ -2324,12 +2343,8 @@ fn publish_output(state: &SharedState, domain_id: &str, pane_id: u32, data: &[u8
         sequence: pane.sequence,
         data: data.to_vec(),
     };
-    pane.attachments.retain(
-        |attachment| match attachment.sender.try_send(frame.clone()) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
-        },
-    );
+    pane.attachments
+        .retain(|attachment| attachment.send_or_disconnect(frame.clone()));
     if let Some(title) = title_change
         && let Some(domain) = state.domains.get_mut(domain_id)
     {
@@ -2381,12 +2396,7 @@ fn close_pane(state: &SharedState, domain_id: &str, pane_id: u32, message: &str)
         // the completed child is reaped instead of retained as a zombie record.
         let _ = pane.pty.is_running();
         pane.closed = true;
-        let frame = ServerFrame::Closed {
-            exit_message: message.to_string(),
-        };
-        for attachment in pane.attachments.drain(..) {
-            let _ = attachment.sender.try_send(frame.clone());
-        }
+        pane.close_attachments(message);
     }
 
     if domain.tabs[tab_index].panes.len() > 1 {
@@ -2417,6 +2427,7 @@ fn serve_attachment(
     pane_id: u32,
 ) -> anyhow::Result<()> {
     validate_id("domain id", &domain_id)?;
+    let transport = stream.try_clone()?;
     let (attachment_id, receiver, snapshot, graphics_snapshot, sequence) = {
         let mut state_guard = state.lock().unwrap();
         let attachment_id = state_guard.next_attachment.fetch_add(1, Ordering::Relaxed);
@@ -2436,6 +2447,7 @@ fn serve_attachment(
             pane.attachments.push(Attachment {
                 id: attachment_id,
                 sender,
+                transport,
             });
         }
         (
@@ -2491,7 +2503,13 @@ fn serve_attachment(
     let reader = match thread::Builder::new()
         .name("termeric-domain-attach-input".into())
         .spawn(move || {
-            attachment_input_loop(reader_stream, &reader_state, &reader_domain, pane_id);
+            attachment_input_loop(
+                reader_stream,
+                &reader_state,
+                &reader_domain,
+                pane_id,
+                attachment_id,
+            );
             remove_attachment(&reader_state, &reader_domain, pane_id, attachment_id);
         }) {
         Ok(reader) => reader,
@@ -2596,12 +2614,18 @@ fn attachment_input_loop(
     state: &SharedState,
     domain_id: &str,
     pane_id: u32,
+    attachment_id: u64,
 ) {
     while let Ok(frame) = protocol::read_frame::<ClientFrame>(&mut stream) {
         let mut state = state.lock().unwrap();
         let Ok(pane) = find_pane_mut(&mut state, domain_id, pane_id) else {
             return;
         };
+        // Socket shutdown cannot retract a frame already read by this thread.
+        // Validate authority under the same lock used by eviction and mutation.
+        if pane.closed || !pane.attachments.iter().any(|item| item.id == attachment_id) {
+            return;
+        }
         match frame {
             ClientFrame::Input { data } if data.len() <= protocol::MAX_STREAM_CHUNK_BYTES => {
                 if queue_pane_input(&pane.input, data).is_err() {
@@ -2635,8 +2659,14 @@ fn attachment_input_loop(
 fn remove_attachment(state: &SharedState, domain_id: &str, pane_id: u32, attachment_id: u64) {
     let mut state = state.lock().unwrap();
     if let Ok(pane) = find_pane_mut(&mut state, domain_id, pane_id) {
-        pane.attachments
-            .retain(|attachment| attachment.id != attachment_id);
+        pane.attachments.retain(|attachment| {
+            if attachment.id == attachment_id {
+                attachment.disconnect();
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 
@@ -3029,7 +3059,7 @@ impl PaneRuntime {
             exit_message: message.to_string(),
         };
         for attachment in self.attachments.drain(..) {
-            let _ = attachment.sender.try_send(frame.clone());
+            attachment.send_or_disconnect(frame.clone());
         }
     }
 }
@@ -5199,6 +5229,33 @@ mod tests {
     }
 
     #[test]
+    fn attachment_queue_failure_disconnects_even_when_the_close_frame_cannot_fit() {
+        for disconnected in [false, true] {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let _receiver = (!disconnected).then_some(receiver);
+            let (transport, mut client) = UnixStream::pair().unwrap();
+            client
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let attachment = Attachment {
+                id: 1,
+                sender,
+                transport,
+            };
+            if !disconnected {
+                assert!(attachment.send_or_disconnect(ServerFrame::Output {
+                    sequence: 1,
+                    data: b"queued".to_vec(),
+                }));
+            }
+            assert!(!attachment.send_or_disconnect(ServerFrame::Closed {
+                exit_message: "fixture close".into(),
+            }));
+            assert_eq!(client.read(&mut [0; 1]).unwrap(), 0);
+        }
+    }
+
+    #[test]
     fn slow_subscriber_is_evicted_while_high_output_stays_memory_bounded() {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
@@ -5230,13 +5287,21 @@ mod tests {
             panic!("expected created domain");
         };
         let (sender, _receiver) = std::sync::mpsc::sync_channel(1);
+        let (transport, mut evicted_client) = UnixStream::pair().unwrap();
+        evicted_client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
         let (topology_sender, topology_receiver) = std::sync::mpsc::sync_channel(1);
         {
             let mut guard = state.lock().unwrap();
             find_pane_mut(&mut guard, &domain.id, 0)
                 .unwrap()
                 .attachments
-                .push(Attachment { id: 1, sender });
+                .push(Attachment {
+                    id: 1,
+                    sender,
+                    transport,
+                });
             let runtime = guard.domains.get_mut(&domain.id).unwrap();
             runtime.topology_subscribers.push(TopologySubscriber {
                 id: 1,
@@ -5256,12 +5321,114 @@ mod tests {
         publish_output(&state, &domain.id, 0, b"first\r\n");
         publish_output(&state, &domain.id, 0, b"second\r\n");
         assert_eq!(
+            evicted_client.read(&mut [0; 1]).unwrap(),
+            0,
+            "eviction must close the transport without draining its output queue"
+        );
+        assert_eq!(
             find_pane(&state.lock().unwrap(), &domain.id, 0)
                 .unwrap()
                 .attachments
                 .len(),
             0
         );
+
+        // Model input already read by the evicted reader: its pane still
+        // exists, but that attachment must no longer have mutation authority.
+        let (input_sender, input_receiver) = std::sync::mpsc::sync_channel(4);
+        let (original_input, original_size) = {
+            let mut guard = state.lock().unwrap();
+            let pane = find_pane_mut(&mut guard, &domain.id, 0).unwrap();
+            (
+                std::mem::replace(&mut pane.input, input_sender),
+                (pane.cols, pane.rows),
+            )
+        };
+        let (reader, mut client) = UnixStream::pair().unwrap();
+        for frame in [
+            ClientFrame::Resize {
+                cols: 91,
+                rows: 37,
+                pixel_width: 910,
+                pixel_height: 740,
+            },
+            ClientFrame::Input {
+                data: b"stale-input".to_vec(),
+            },
+            ClientFrame::Detach,
+        ] {
+            protocol::write_frame(&mut client, &frame).unwrap();
+        }
+        attachment_input_loop(reader, &state, &domain.id, 0, 1);
+        assert!(
+            matches!(
+                input_receiver.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "evicted attachment queued input"
+        );
+        {
+            let mut guard = state.lock().unwrap();
+            let pane = find_pane_mut(&mut guard, &domain.id, 0).unwrap();
+            assert_eq!(
+                (pane.cols, pane.rows),
+                original_size,
+                "evicted attachment resized pane"
+            );
+        }
+
+        // A replacement's presence must not revive the old reader. Conversely,
+        // a live reader for the exact new ID retains input and resize authority.
+        let (sender, _replacement_receiver) = std::sync::mpsc::sync_channel(4);
+        let (transport, _replacement_client) = UnixStream::pair().unwrap();
+        find_pane_mut(&mut state.lock().unwrap(), &domain.id, 0)
+            .unwrap()
+            .attachments
+            .push(Attachment {
+                id: 2,
+                sender,
+                transport,
+            });
+        for (reader_id, closed, accepted) in [(1, false, false), (2, true, false), (2, false, true)]
+        {
+            find_pane_mut(&mut state.lock().unwrap(), &domain.id, 0)
+                .unwrap()
+                .closed = closed;
+            let (reader, mut client) = UnixStream::pair().unwrap();
+            for frame in [
+                ClientFrame::Resize {
+                    cols: 91,
+                    rows: 37,
+                    pixel_width: 910,
+                    pixel_height: 740,
+                },
+                ClientFrame::Input {
+                    data: b"replacement-input".to_vec(),
+                },
+                ClientFrame::Detach,
+            ] {
+                protocol::write_frame(&mut client, &frame).unwrap();
+            }
+            attachment_input_loop(reader, &state, &domain.id, 0, reader_id);
+            let guard = state.lock().unwrap();
+            let pane = find_pane(&guard, &domain.id, 0).unwrap();
+            if accepted {
+                assert_eq!(input_receiver.try_recv().unwrap(), b"replacement-input");
+                assert_eq!(
+                    (pane.cols, pane.rows, pane.pixel_width, pane.pixel_height),
+                    (91, 37, 910, 740)
+                );
+            } else {
+                assert!(matches!(
+                    input_receiver.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                ));
+                assert_eq!((pane.cols, pane.rows), original_size);
+            }
+        }
+        find_pane_mut(&mut state.lock().unwrap(), &domain.id, 0)
+            .unwrap()
+            .input = original_input;
 
         let mut chunk = vec![b'x'; 4094];
         chunk.extend_from_slice(b"\r\n");
