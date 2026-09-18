@@ -79,6 +79,63 @@ impl Selection {
         self.active = false;
     }
 
+    /// Follow one vertical rectangle move without inventing a discontiguous
+    /// selection. Return false if selected cells are erased or only part of
+    /// the selection moves. Full-screen upward history archival is different:
+    /// its source rows survive and are handled by the terminal's history path.
+    pub(super) fn scroll_in_region(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+        delta: i32,
+        total_cols: usize,
+    ) -> bool {
+        if rows.is_empty() || cols.is_empty() || delta == 0 || total_cols == 0 {
+            return true;
+        }
+        let (Ok(top), Ok(bottom)) = (i32::try_from(rows.start), i32::try_from(rows.end)) else {
+            return false;
+        };
+        let (start, end) = self.bounds();
+        let first = start.row.max(top);
+        let last = end.row.min(bottom - 1);
+        if first > last {
+            return true;
+        }
+        // Stream selections have at most three column shapes: first row,
+        // last row, and interior rows. Block and line selections are uniform.
+        // Sampling these shapes keeps even very long history ranges O(1).
+        let sample_rows = |first: i32, last: i32| [first, last, first.saturating_add(1).min(last)];
+        let intersects = sample_rows(first, last).into_iter().any(|row| {
+            self.col_range(row, total_cols).is_some_and(|range| {
+                !range.is_empty() && *range.start() < cols.end && *range.end() >= cols.start
+            })
+        });
+        if !intersects {
+            return true;
+        }
+        if start.row < top || end.row >= bottom {
+            return false;
+        }
+        if !sample_rows(start.row, end.row).into_iter().all(|row| {
+            self.col_range(row, total_cols).is_some_and(|range| {
+                !range.is_empty() && *range.start() >= cols.start && *range.end() < cols.end
+            })
+        }) {
+            return false;
+        }
+        let (Some(first), Some(last)) = (start.row.checked_add(delta), end.row.checked_add(delta))
+        else {
+            return false;
+        };
+        if first < top || last >= bottom {
+            return false;
+        }
+        self.start.row += delta;
+        self.end.row += delta;
+        true
+    }
+
     /// Get the normalized bounds (start <= end)
     pub fn bounds(&self) -> (Point, Point) {
         if self.start <= self.end {
@@ -176,6 +233,72 @@ impl Selection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn region_selection_mapping_matches_a_cellwise_uniform_motion_oracle() {
+        let kinds = [
+            SelectionType::Simple,
+            SelectionType::Semantic,
+            SelectionType::Lines,
+            SelectionType::Block,
+        ];
+        let rectangles = [
+            (0..4, 0..4),
+            (1..3, 0..4),
+            (0..4, 1..3),
+            (1..4, 1..4),
+            (2..3, 2..3),
+            (0..0, 0..4),
+        ];
+        let points: Vec<_> = (-1..4)
+            .flat_map(|row| (0..4).map(move |col| Point::new(row, col)))
+            .collect();
+        for kind in kinds {
+            for &start in &points {
+                for &end in &points {
+                    let mut original = Selection::new(start, kind);
+                    original.update(end);
+                    let cells: Vec<_> = points
+                        .iter()
+                        .copied()
+                        .filter(|point| original.contains(point.row, point.col))
+                        .collect();
+                    for (rows, cols) in &rectangles {
+                        for delta in [-2, -1, 0, 1, 2] {
+                            let mut uniform = None;
+                            let mut expected_keep = true;
+                            for cell in &cells {
+                                let inside =
+                                    rows.contains(&(cell.row as usize)) && cols.contains(&cell.col);
+                                let movement = if inside { delta } else { 0 };
+                                if inside && !rows.contains(&((cell.row + movement) as usize)) {
+                                    expected_keep = false;
+                                }
+                                if uniform.is_some_and(|previous| previous != movement) {
+                                    expected_keep = false;
+                                }
+                                uniform = Some(movement);
+                            }
+                            let mut actual = original.clone();
+                            let keep =
+                                actual.scroll_in_region(rows.clone(), cols.clone(), delta, 4);
+                            assert_eq!(
+                                keep, expected_keep,
+                                "{kind:?} {start:?} {end:?} rows={rows:?} cols={cols:?} delta={delta}"
+                            );
+                            if keep {
+                                let shift = uniform.unwrap_or(0);
+                                assert_eq!(actual.start, Point::new(start.row + shift, start.col));
+                                assert_eq!(actual.end, Point::new(end.row + shift, end.col));
+                                assert_eq!(actual.ty, kind);
+                                assert_eq!(actual.active, original.active);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_point_ordering() {

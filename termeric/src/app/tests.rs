@@ -3,6 +3,46 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_follows_partial_scroll_and_cannot_revive_a_split_range() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for survives in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(8, 5);
+            terminal
+                .process(b"\x1bc\x1b[3J00aaaa00\r\n11bbbb11\r\n22cccc22\r\n33dddd33\r\n44eeee44");
+            app.begin_native_selection(
+                MouseButton::Left,
+                Point::new(2, if survives { 2 } else { 1 }),
+            );
+            app.extend_native_selection(Point::new(2, 5));
+            app.active_terminal_mut()
+                .unwrap()
+                .process(b"\x1b[2;4r\x1b[?69h\x1b[3;6s\x1b[S");
+            app.extend_native_selection(Point::new(1, 5));
+            app.finish_native_selection();
+            if survives {
+                assert_eq!(
+                    app.active_terminal().unwrap().selection().unwrap().start,
+                    Point::new(1, 2)
+                );
+                assert_eq!(app.native_selection_text().as_deref(), Some("cccc"));
+            } else {
+                assert!(app.active_terminal().unwrap().selection().is_none());
+                assert!(app.mouse_selection_source.is_none());
+                assert!(app.native_selection_text().is_none());
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_drag_keeps_the_terminal_shifted_anchor_after_output_scrolls() {
     use termeric_core::Point;
     let mut app = scrollbar_owner_fixture();

@@ -2031,6 +2031,21 @@ impl Terminal {
         self.clear_selection_if_evicted();
     }
 
+    fn shift_selection_in_region(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+        delta: i32,
+    ) {
+        // Only live state follows output; a synchronized snapshot owns its
+        // independent visible selection until the snapshot is released.
+        if let Some(selection) = &mut self.selection
+            && !selection.scroll_in_region(rows, cols, delta, self.cols)
+        {
+            self.selection = None;
+        }
+    }
+
     fn note_history_eviction(&mut self, evicted: usize) {
         if evicted == 0 {
             return;
@@ -2883,6 +2898,11 @@ impl Terminal {
                 }
             } else if full_width {
                 self.grid_mut().scroll_region_up(scroll_top, scroll_bottom);
+                self.shift_selection_in_region(
+                    scroll_top..scroll_bottom,
+                    scroll_left..scroll_right,
+                    -1,
+                );
             } else {
                 self.grid_mut().scroll_rect_up(
                     scroll_top,
@@ -2890,6 +2910,11 @@ impl Terminal {
                     scroll_left,
                     scroll_right,
                     &blank,
+                );
+                self.shift_selection_in_region(
+                    scroll_top..scroll_bottom,
+                    scroll_left..scroll_right,
+                    -1,
                 );
             }
         }
@@ -2953,6 +2978,7 @@ impl Terminal {
                     &blank,
                 );
             }
+            self.shift_selection_in_region(scroll_top..scroll_bottom, scroll_left..scroll_right, 1);
         }
         self.grid_mut().repair_multicells(&blank);
         self.graphics.scroll_down(
@@ -4923,6 +4949,11 @@ impl Terminal {
                         &blank,
                     );
                 }
+                self.shift_selection_in_region(
+                    cursor.row..scroll_bottom,
+                    scroll_left..scroll_right,
+                    1,
+                );
             }
             self.grid_mut().repair_multicells(&blank);
             self.graphics.scroll_down(
@@ -4980,6 +5011,11 @@ impl Terminal {
                         &blank,
                     );
                 }
+                self.shift_selection_in_region(
+                    cursor.row..scroll_bottom,
+                    scroll_left..scroll_right,
+                    -1,
+                );
             }
             self.grid_mut().repair_multicells(&blank);
             self.graphics.scroll_up(
@@ -7437,6 +7473,101 @@ mod tests {
             before, after,
             "Characters lost after expanding from 20 to 80 cols"
         );
+    }
+
+    #[test]
+    fn partial_scroll_keeps_selection_on_its_moved_text() {
+        let mut term = Terminal::new(8, 5);
+        term.process(b"zero\r\none\r\ntwo\r\nthree\r\nfour");
+        let mut selection = Selection::new(Point::new(2, 0), SelectionType::Simple);
+        selection.update(Point::new(2, 2));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[2;4r\x1b[S");
+        assert_eq!(term.selection().unwrap().start, Point::new(1, 0));
+        assert_eq!(term.get_selection_text().as_deref(), Some("two"));
+    }
+
+    #[test]
+    fn vertical_region_commands_preserve_survivors_and_clear_lost_or_split_selections() {
+        let commands: &[(&[u8], i32)] = &[
+            (b"\x1b[S", -1),
+            (b"\x1b[T", 1),
+            (b"\x1b[2;3H\x1b[L", 1),
+            (b"\x1b[2;3H\x1b[M", -1),
+            (b"\x1b[4;3H\n", -1),
+            (b"\x1b[2;3H\x1bM", 1),
+        ];
+        for partial_width in [false, true] {
+            for &(command, delta) in commands {
+                for kind in [
+                    SelectionType::Simple,
+                    SelectionType::Semantic,
+                    SelectionType::Block,
+                    SelectionType::Lines,
+                ] {
+                    for reverse in [false, true] {
+                        let mut term = Terminal::new(8, 5);
+                        term.process(
+                            b"00aaaa00\r\n11bbbb11\r\n22cccc22\r\n33dddd33\r\n44eeee44\x1b[2;4r",
+                        );
+                        if partial_width {
+                            term.process(b"\x1b[?69h\x1b[3;6s");
+                        }
+                        let (start, end) = if reverse { (5, 2) } else { (2, 5) };
+                        let mut selection = Selection::new(Point::new(2, start), kind);
+                        selection.update(Point::new(2, end));
+                        selection.finish();
+                        term.set_selection(Some(selection));
+                        let text = term.get_selection_text();
+                        term.process(command);
+                        if partial_width && kind == SelectionType::Lines {
+                            assert!(term.selection().is_none()); // A whole line splits at side margins.
+                        } else {
+                            let selection = term.selection().unwrap();
+                            assert_eq!(selection.start, Point::new(2 + delta, start));
+                            assert_eq!(selection.end, Point::new(2 + delta, end));
+                            assert!(!selection.active);
+                            assert_eq!(term.get_selection_text(), text);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn region_selection_preserves_outside_cells_and_rejects_erasure_or_mixed_motion() {
+        for (start, end, keep) in [
+            (Point::new(2, 0), Point::new(2, 1), true),
+            (Point::new(0, 2), Point::new(0, 5), true),
+            (Point::new(1, 2), Point::new(1, 5), false),
+            (Point::new(2, 1), Point::new(2, 5), false),
+            (Point::new(0, 2), Point::new(2, 5), false),
+        ] {
+            let mut term = Terminal::new(8, 5);
+            term.process(b"00aaaa00\r\n11bbbb11\r\n22cccc22\r\n33dddd33\r\n44eeee44\x1b[2;4r\x1b[?69h\x1b[3;6s");
+            let mut selection = Selection::new(start, SelectionType::Simple);
+            selection.update(end);
+            term.set_selection(Some(selection));
+            let text = term.get_selection_text();
+            term.process(b"\x1b[S");
+            assert_eq!(term.selection().is_some(), keep, "{start:?} {end:?}");
+            if keep {
+                assert_eq!(term.get_selection_text(), text);
+            }
+        }
+        let mut term = Terminal::new(8, 5);
+        term.process(b"zero\r\none\r\ntwo\r\nthree\r\nfour");
+        let mut selection = Selection::new(Point::new(2, 0), SelectionType::Simple);
+        selection.update(Point::new(2, 2));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[2;4r\x1b[?2026h\x1b[S");
+        assert_eq!(term.selection().unwrap().start.row, 2);
+        assert_eq!(term.get_selection_text().as_deref(), Some("two"));
+        term.process(b"\x1b[?2026l");
+        assert_eq!(term.selection().unwrap().start.row, 1);
+        term.process(b"\x1b[99S");
+        assert!(term.selection().is_none());
     }
 
     #[test]

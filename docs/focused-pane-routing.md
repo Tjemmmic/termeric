@@ -160,9 +160,27 @@ discards a selection only when an endpoint no longer has backing rows; visible
 and frozen selections survive when their own rows remain present. Hermetic
 tests cover forward/reversed/block/word/line selection, single/split panes,
 release without another move, archived viewports, and completed selection cache
-cleanup. Native acceptance remains deferred. This does not change the existing
-core policy for in-place text replacement or partial-margin row movement;
-comprehensive selection remapping for those mutations remains separate work.
+cleanup. Native acceptance remains deferred.
+
+Vertical movement inside partial-height or left/right-margin rectangles now
+uses one selection mapping policy for SU/SD, IL/DL, line feed, and reverse index.
+Selections outside the affected cells stay unchanged. A range wholly within
+the surviving source cells follows the same row displacement, preserving its
+direction, columns, type, and active/finished state. A range that loses cells
+or splits between moving and stationary cells is cleared: the current selection
+model cannot represent that discontiguous set without selecting unrelated text.
+Full-screen upward archival retains its distinct history-preserving path;
+full-screen downward scrolling uses the erasing rectangle policy.
+
+The range calculation samples only first/last/interior row shapes, so it is
+constant-time even for a selection extending far into history and adds no
+per-cell storage. A cellwise reference checks 48,000 small-grid combinations
+across all four selection types, reversed endpoints, stationary history,
+rectangles, and shifts. Protocol and headless single/split-pane tests cover
+survival, erased edges, mixed movement, frozen selection isolation, and native
+drag/release. Native acceptance remains deferred. In-place replacement and
+selection invalidation for glyphs erased by wide-cell/OSC 66 boundary repair
+remain separate from this coordinate-mapping change.
 
 ## Filtered selection and accessible text
 
