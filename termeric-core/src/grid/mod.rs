@@ -16,7 +16,10 @@ pub use row::Row;
 pub use storage::{CellRef, DEFAULT_SCROLLBACK_MEMORY_BYTES, GridMemoryUsage, RowView};
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use storage::GridStorage;
+
+static NEXT_GRID_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Cursor position and state
 #[derive(Clone, Copy, Debug, Default)]
@@ -53,6 +56,10 @@ pub struct Grid {
     cursor: Cursor,
     /// Current scroll offset into scrollback (0 = at bottom)
     scroll_offset: usize,
+    /// Instance identity prevents reset/replacement from reusing a revision.
+    identity: u64,
+    content_revision: u64,
+    row_mapping_revision: u64,
 }
 
 /// Validated rectangle occupied by one OSC 66 multicell text block.
@@ -90,7 +97,28 @@ impl Grid {
                 ..Default::default()
             },
             scroll_offset: 0,
+            identity: NEXT_GRID_ID.fetch_add(1, Ordering::Relaxed),
+            content_revision: 0,
+            row_mapping_revision: 0,
         }
+    }
+
+    /// O(1) stamp for text/attribute/width changes and row movement. Mutable
+    /// cell/row access conservatively invalidates it, even for a no-op write.
+    /// Cursor movement and viewport scrolling do not change searchable text.
+    pub fn content_revision(&self) -> (u64, u64) {
+        (self.identity, self.content_revision)
+    }
+
+    /// O(1) stamp for operations that can move or remove signed source rows.
+    /// In-place cell edits preserve coordinates; reset creates a new identity.
+    pub fn row_mapping_revision(&self) -> (u64, u64) {
+        (self.identity, self.row_mapping_revision)
+    }
+
+    fn mark_rows_changed(&mut self) {
+        self.content_revision = self.content_revision.wrapping_add(1);
+        self.row_mapping_revision = self.row_mapping_revision.wrapping_add(1);
     }
 
     /// Capture the cells exactly as they are currently presented, without
@@ -136,6 +164,9 @@ impl Grid {
 
     /// Resize the grid to new dimensions, reflowing text when columns change
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        if self.cols != cols || self.rows != rows {
+            self.mark_rows_changed();
+        }
         let (new_row, new_col) = self
             .storage
             .resize(cols, rows, self.cursor.row, self.cursor.col);
@@ -215,7 +246,9 @@ impl Grid {
 
     /// Get a mutable reference to a cell at the given position
     pub fn cell_mut(&mut self, row: usize, col: usize) -> Option<&mut Cell> {
-        self.storage.cell_mut(row, col)
+        let cell = self.storage.cell_mut(row, col)?;
+        self.content_revision = self.content_revision.wrapping_add(1);
+        Some(cell)
     }
 
     /// Resolve and validate the complete active-screen OSC 66 block covering
@@ -453,6 +486,7 @@ impl Grid {
 
     /// Scroll the grid up by one line, pushing the top line to scrollback
     pub fn scroll_up(&mut self) -> usize {
+        self.mark_rows_changed();
         let old_len = self.storage.scrollback_len();
         let was_at_max = self.scroll_offset > 0 && self.scroll_offset >= old_len;
 
@@ -476,6 +510,7 @@ impl Grid {
 
     /// Copy the active viewport into compact history without moving it.
     pub(crate) fn archive_visible(&mut self) -> usize {
+        self.mark_rows_changed();
         let old_len = self.storage.scrollback_len();
         let was_at_max = self.scroll_offset > 0 && self.scroll_offset >= old_len;
         let evicted = self.storage.archive_visible();
@@ -495,16 +530,19 @@ impl Grid {
 
     /// Scroll the grid down by one line (reverse scroll)
     pub fn scroll_down(&mut self) {
+        self.mark_rows_changed();
         self.storage.scroll_down();
     }
 
     /// Scroll a region up by one line
     pub fn scroll_region_up(&mut self, top: usize, bottom: usize) -> usize {
+        self.mark_rows_changed();
         self.storage.scroll_region_up(top, bottom)
     }
 
     /// Scroll a region down by one line
     pub fn scroll_region_down(&mut self, top: usize, bottom: usize) {
+        self.mark_rows_changed();
         self.storage.scroll_region_down(top, bottom);
     }
 
@@ -518,6 +556,7 @@ impl Grid {
         blank: &Cell,
     ) {
         self.storage.scroll_rect_up(top, bottom, left, right, blank);
+        self.mark_rows_changed();
     }
 
     /// Scroll a partial-width rectangle down by one row.
@@ -531,10 +570,12 @@ impl Grid {
     ) {
         self.storage
             .scroll_rect_down(top, bottom, left, right, blank);
+        self.mark_rows_changed();
     }
 
     /// Clear all cells in the visible grid
     pub fn clear(&mut self) {
+        self.content_revision = self.content_revision.wrapping_add(1);
         self.storage.clear();
         self.cursor = Cursor {
             visible: self.cursor.visible,
@@ -545,6 +586,9 @@ impl Grid {
 
     /// Clear a specific row
     pub fn clear_row(&mut self, row: usize) {
+        if row < self.rows {
+            self.content_revision = self.content_revision.wrapping_add(1);
+        }
         self.storage.clear_row(row);
     }
 
@@ -565,19 +609,30 @@ impl Grid {
 
     /// Clear the scrollback buffer
     pub fn clear_scrollback(&mut self) {
+        if self.scrollback_len() > 0 {
+            self.mark_rows_changed();
+        }
         self.storage.clear_scrollback();
         self.scroll_offset = 0;
     }
 
     /// Set the scrollback limit
     pub fn set_scrollback_limit(&mut self, limit: usize) {
+        let previous_len = self.scrollback_len();
         self.storage.set_scrollback_limit(limit);
+        if self.scrollback_len() != previous_len {
+            self.mark_rows_changed();
+        }
         self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
     }
 
     /// Set the maximum estimated memory owned by archived scrollback rows.
     pub fn set_scrollback_byte_limit(&mut self, limit: usize) {
+        let previous_len = self.scrollback_len();
         self.storage.set_scrollback_byte_limit(limit);
+        if self.scrollback_len() != previous_len {
+            self.mark_rows_changed();
+        }
         self.scroll_offset = self.scroll_offset.min(self.storage.scrollback_len());
     }
 
@@ -603,7 +658,9 @@ impl Grid {
 
     /// Get a mutable row from the grid
     pub fn row_mut(&mut self, row: usize) -> Option<&mut Row> {
-        self.storage.row_mut(row)
+        let row = self.storage.row_mut(row)?;
+        self.content_revision = self.content_revision.wrapping_add(1);
+        Some(row)
     }
 
     /// Iterate over all visible cells
@@ -706,6 +763,101 @@ fn is_bare_prompt(trimmed: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_revisions_cover_mutation_entry_points_and_separate_row_movement() {
+        type Mutation = fn(&mut Grid);
+        let mutations: &[(&str, Mutation, bool)] = &[
+            (
+                "cell",
+                |grid| grid.cell_mut(0, 0).unwrap().set_char('x'),
+                false,
+            ),
+            (
+                "row",
+                |grid| grid.row_mut(0).unwrap().set_wrapped(true),
+                false,
+            ),
+            ("clear row", |grid| grid.clear_row(0), false),
+            ("clear", Grid::clear, false),
+            (
+                "scroll up",
+                |grid| {
+                    grid.scroll_up();
+                },
+                true,
+            ),
+            ("scroll down", Grid::scroll_down, true),
+            (
+                "region up",
+                |grid| {
+                    grid.scroll_region_up(0, 1);
+                },
+                true,
+            ),
+            ("region down", |grid| grid.scroll_region_down(0, 1), true),
+            (
+                "rectangle up",
+                |grid| grid.scroll_rect_up(0, 1, 0, 1, &Cell::default()),
+                true,
+            ),
+            (
+                "rectangle down",
+                |grid| grid.scroll_rect_down(0, 1, 0, 1, &Cell::default()),
+                true,
+            ),
+            (
+                "archive",
+                |grid| {
+                    grid.archive_visible();
+                },
+                true,
+            ),
+            ("clear history", Grid::clear_scrollback, true),
+            ("row limit", |grid| grid.set_scrollback_limit(0), true),
+            ("byte limit", |grid| grid.set_scrollback_byte_limit(0), true),
+            ("resize", |grid| grid.resize(3, 3), true),
+        ];
+        for &(name, mutate, moves_rows) in mutations {
+            let mut grid = Grid::new(4, 2);
+            grid.cell_mut(0, 0).unwrap().set_char('a');
+            grid.scroll_up();
+            assert_eq!(grid.scrollback_len(), 1);
+            let content = grid.content_revision();
+            let mapping = grid.row_mapping_revision();
+            mutate(&mut grid);
+            assert_ne!(grid.content_revision(), content, "{name}");
+            assert_eq!(grid.row_mapping_revision() != mapping, moves_rows, "{name}");
+        }
+    }
+
+    #[test]
+    fn grid_revisions_ignore_navigation_and_distinguish_replacement_and_snapshot() {
+        let mut grid = Grid::new(4, 2);
+        grid.scroll_up();
+        let content = grid.content_revision();
+        let mapping = grid.row_mapping_revision();
+        grid.set_cursor(1, 2);
+        grid.set_cursor_visible(false);
+        grid.set_wrap_pending(true);
+        grid.set_scroll_offset(1);
+        grid.set_scrollback_limit(100);
+        grid.set_scrollback_byte_limit(1024 * 1024);
+        grid.resize(4, 2);
+        assert!(grid.cell_mut(100, 100).is_none());
+        assert!(grid.row_mut(100).is_none());
+        assert_eq!(grid.content_revision(), content);
+        assert_eq!(grid.row_mapping_revision(), mapping);
+        let snapshot = grid.visible_snapshot();
+        assert_ne!(snapshot.content_revision(), content);
+        let frozen = snapshot.content_revision();
+        grid.cell_mut(0, 0).unwrap().set_char('x');
+        assert_eq!(snapshot.content_revision(), frozen);
+        assert_ne!(
+            Grid::new(4, 2).content_revision(),
+            Grid::new(4, 2).content_revision()
+        );
+    }
 
     #[test]
     fn multicell_repair_leaves_ordinary_rows_clean_and_unchanged() {

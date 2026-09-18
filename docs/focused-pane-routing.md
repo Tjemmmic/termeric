@@ -76,24 +76,44 @@ Navigation changes only the presentation grid's scroll offset, preserving the
 hidden live viewport. There is no additional text or scrollback clone.
 
 Search binds results to the focused tab/pane, presented primary/alternate
-screen, synchronized snapshot lifetime, and grid dimensions. A change discards
-partial and completed results, then reschedules the existing query within the
+screen, synchronized snapshot lifetime, grid instance, dimensions, and content
+revision. A change discards partial and completed results, then reschedules the
+existing query within the
 usual per-frame budget. Query text, case/regex/filter controls, and confirmed
 versus editing state survive for global searches. Pending filter rows and
-counts remain hidden until the rescan finishes. This does not introduce general
-continuous rescanning for every ordinary output mutation.
+counts remain hidden until the rescan finishes. Ordinary output now invalidates
+both completed and partially scanned results, including in-place edits and
+scrollback rotation at a fixed history limit. Every bounded scan slice also
+checks its grid revision so rows from different versions cannot be combined.
+
+The grid keeps constant-size instance/content/row-mapping counters. Mutable
+cell/row access conservatively counts as a content change, even for a no-op
+write; cursor movement and user viewport scrolling do not. History eviction,
+row movement, reflow, and replacement invalidate source-row coordinates.
+Inactive owners and hidden writes behind a frozen presentation do not restart
+the focused displayed search. The existing compiled query, bounded result
+storage, and roughly 4 ms per-frame scan budget are reused; no text/history
+snapshot is added. A stream changing faster than a complete scan can finish
+may keep results pending until it quiets. Incremental changed-row indexing and
+continuous-output latency qualification remain future work, not an implied
+performance claim.
 
 Harvest's command-output scope uses live command-region coordinates, which are
 not interchangeable with a captured viewport. Starting it while synchronized
 output is frozen is explicitly refused; retry after release. An existing scope
-closes on source/screen/snapshot/geometry changes and consumes a pending query
-edit instead of silently widening it into a global search. Remapping command
-scopes into a frozen viewport is not implemented.
+closes on source/screen/snapshot/geometry or row-mapping changes and consumes a
+pending query edit instead of silently widening it into a global search.
+In-place edits rescan the same row scope without including neighboring output.
+Remapping moving command scopes or scopes into a frozen viewport is not
+implemented.
 
 Hermetic tests cover hidden text, partial and confirmed result invalidation,
 filter rows, timeout/restart, single and split panes, scroll isolation, resize,
-alternate screens, and strict command-scope invalidation. Native search-bar,
-screen-reader, and filter-painting acceptance of these newer paths remains
+alternate screens, same-shape edits, capped-history rotation, replacement grids,
+navigation/inactive-owner isolation, and strict command-scope invalidation.
+Copy and accessibility publication reconcile filtered projections before using
+their row coordinates, including when output arrives before the next render.
+Native search-bar, screen-reader, and filter-painting acceptance of these paths remains
 deferred. Native selection follows the contract below.
 
 ## Mouse selection presentation
@@ -153,8 +173,8 @@ display policy for selection or accessibility.
 Hermetic tests cover row mapping, word/line/reversed-block selection, multi-page
 drag/copy, index-storage reuse, query/toggle/focus invalidation, Unicode wrapping,
 and frozen filtered accessibility nodes. Native painting, clipboard, and Orca
-acceptance remain deferred. Ordinary-output search refresh and drag tracking
-remain separate concerns.
+acceptance remain deferred. Ordinary-output native drag tracking remains a
+separate concern; a changed search projection invalidates its filtered selection.
 
 ## Filtered link presentation
 

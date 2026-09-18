@@ -10,6 +10,15 @@ pub(super) struct SearchPresentation {
     alternate_screen: bool,
     cols: usize,
     rows: usize,
+    content_revision: (u64, u64),
+    row_mapping_revision: (u64, u64),
+}
+
+impl SearchPresentation {
+    fn same_coordinates(mut self, other: Self) -> bool {
+        self.content_revision = other.content_revision;
+        self == other
+    }
 }
 
 impl App {
@@ -30,15 +39,21 @@ impl App {
                 alternate_screen: terminal.presentation_alternate_screen_active(),
                 cols: grid.cols(),
                 rows: grid.rows(),
+                content_revision: grid.content_revision(),
+                row_mapping_revision: grid.row_mapping_revision(),
             })
         });
         if self.search_presentation == next {
             return false;
         }
         let previous = std::mem::replace(&mut self.search_presentation, next);
-        if self.search.is_scoped() && previous.is_some() {
+        if self.search.is_scoped()
+            && previous
+                .is_some_and(|previous| next.is_none_or(|next| !previous.same_coordinates(next)))
+        {
             // Command-region coordinates cannot be transferred across panes,
-            // reflow or a viewport-only snapshot. Never widen the user's scope.
+            // reflow, row movement or a viewport-only snapshot. In-place text
+            // edits may rescan the same scope; never silently widen that scope.
             self.search.cancel();
             self.search_cursor_pos = 0;
             self.toasts

@@ -3,6 +3,165 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn live_search_discards_completed_results_after_same_shape_text_changes() {
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bc\x1b[3Jneedle");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("needle", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.match_count(), 1);
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[H\x1b[2Kerased");
+    app.reconcile_search_presentation();
+    assert_eq!(app.search.match_count(), 0);
+    assert!(app.search.is_searching());
+    app.with_search_and_active_grid(|search, grid| search.finish(grid));
+    assert_eq!(app.search.match_count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn live_search_refresh_preserves_controls_confirmation_and_frozen_results() {
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1bc\x1b[3JNEEDLE");
+        app.search.start();
+        app.with_search_and_active_grid(|search, grid| {
+            search.toggle_regex(grid);
+            search.set_query("N.E+DL.", grid);
+            search.finish(grid);
+        });
+        app.search.toggle_filter();
+        app.search.confirm();
+        let generation = app.search.filter_generation();
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1b[H\x1b[?25l");
+        app.reconcile_search_presentation();
+        assert_eq!(app.search.filter_generation(), generation);
+        assert!(!app.search.is_searching());
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1b[2Kgone\r\nNEEEDLE");
+        app.reconcile_search_presentation();
+        assert!(app.search.is_searching());
+        assert!(!app.search.is_active());
+        assert!(app.search.filtered_rows(24).is_empty());
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        assert_eq!(app.search.query(), "N.E+DL.");
+        assert_eq!(app.search.match_count(), 1);
+        assert_eq!(app.search.filtered_rows(24), &[1]);
+
+        app.active_terminal_mut().unwrap().process(b"\x1b[?2026h");
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        let generation = app.search.filter_generation();
+        app.active_terminal_mut()
+            .unwrap()
+            .process(b"\x1b[H\x1b[2Jhidden");
+        app.reconcile_search_presentation();
+        assert_eq!(app.search.filter_generation(), generation);
+        assert_eq!(app.search.match_count(), 1);
+        app.active_terminal_mut().unwrap().process(b"\x1b[?2026l");
+        app.with_search_and_active_grid(|search, grid| search.finish(grid));
+        assert_eq!(app.search.match_count(), 0);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn live_command_search_rescans_in_place_but_rejects_moved_scope_rows() {
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(30, 3);
+    terminal.process(b"\x1bc\x1b[3Jneedle\r\nneedle");
+    assert!(app.start_command_output_search(0, 0));
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("needle", grid);
+        search.finish(grid);
+    });
+    assert_eq!(app.search.match_count(), 1);
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[H\x1b[2Kerased");
+    assert!(!app.reconcile_search_presentation());
+    assert!(app.search.is_scoped());
+    app.with_search_and_active_grid(|search, grid| search.finish(grid));
+    assert_eq!(app.search.match_count(), 0); // Never widens to the other row.
+    app.active_terminal_mut().unwrap().process(b"\x1b[3;1H\n");
+    assert!(app.reconcile_search_presentation());
+    assert!(!app.search.is_scoped());
+    assert!(!app.search.is_active());
+}
+
+#[cfg(unix)]
+#[test]
+fn live_search_ignores_inactive_output_and_viewport_navigation() {
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut().unwrap().process(b"needle");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("needle", grid);
+        search.finish(grid);
+    });
+    app.search.toggle_filter();
+    let generation = app.search.filter_generation();
+    assert_eq!(app.search.match_count(), 1);
+    app.tabs.as_mut().unwrap().all_tabs_mut()[1]
+        .focused_terminal_mut()
+        .unwrap()
+        .process(b"unrelated output\r\n");
+    app.active_terminal_mut()
+        .unwrap()
+        .grid_mut()
+        .set_scroll_offset(5);
+    app.reconcile_search_presentation();
+    assert_eq!(app.search.filter_generation(), generation);
+    assert_eq!(app.search.match_count(), 1);
+    assert!(!app.search.is_searching());
+}
+
+#[cfg(unix)]
+#[test]
+fn live_search_invalidates_filtered_copy_before_the_next_render() {
+    use termeric_core::Point;
+    let mut app = scrollbar_owner_fixture();
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1bc\x1b[3Jkeep first\r\nsecret\r\nkeep last");
+    app.search.start();
+    app.with_search_and_active_grid(|search, grid| {
+        search.set_query("keep", grid);
+        search.finish(grid);
+    });
+    app.search.toggle_filter();
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+    app.extend_native_selection(Point::new(1, 8));
+    app.finish_native_selection();
+    assert!(app.native_selection_text().is_some());
+    app.active_terminal_mut()
+        .unwrap()
+        .process(b"\x1b[H\x1b[2Khidden replacement");
+    // The headless fixture has no clipboard; the action must fail before any
+    // clipboard path, without needing a render to clear the old projection.
+    assert!(app.clipboard.is_none());
+    assert!(!app.copy_selection());
+    assert!(app.active_terminal().unwrap().selection().is_none());
+    assert!(app.search.is_searching());
+}
+
+#[cfg(unix)]
+#[test]
 fn filtered_links_resolve_the_displayed_semantic_target_not_an_intervening_row() {
     let mut app = scrollbar_owner_fixture();
     let terminal = app.active_terminal_mut().unwrap();

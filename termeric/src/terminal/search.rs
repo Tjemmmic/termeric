@@ -41,6 +41,7 @@ enum SearchRows {
 
 #[derive(Debug)]
 struct PendingSearch {
+    content_revision: (u64, u64),
     cols: usize,
     history_len: usize,
     visible_rows: usize,
@@ -50,6 +51,7 @@ struct PendingSearch {
 impl PendingSearch {
     fn new(grid: &Grid, candidate_rows: Option<Vec<i32>>) -> Self {
         Self {
+            content_revision: grid.content_revision(),
             cols: grid.cols(),
             history_len: grid.scrollback_len(),
             visible_rows: grid.rows(),
@@ -63,8 +65,9 @@ impl PendingSearch {
         }
     }
 
-    fn matches_shape(&self, grid: &Grid) -> bool {
-        self.cols == grid.cols()
+    fn matches_source(&self, grid: &Grid) -> bool {
+        self.content_revision == grid.content_revision()
+            && self.cols == grid.cols()
             && self.history_len == grid.scrollback_len()
             && self.visible_rows == grid.rows()
     }
@@ -471,7 +474,7 @@ impl Search {
     /// Re-run the current query against a different terminal grid while
     /// preserving the search controls and input state.
     pub fn refresh(&mut self, grid: &Grid) {
-        self.compile_regex_if_needed();
+        // Content changes do not alter the query or its compile/error state.
         self.begin_update(grid, None);
     }
 
@@ -627,14 +630,14 @@ impl Search {
 
     /// Consume at most `max_rows` rows of pending search work.
     ///
-    /// Returns `true` while more work remains. A grid geometry/history change
+    /// Returns `true` while more work remains. A grid content/geometry/history change
     /// invalidates partial results and restarts a full scan against the new
     /// shape so row offsets cannot be mixed across layouts.
     pub fn advance_rows(&mut self, grid: &Grid, max_rows: usize) -> bool {
         let Some(pending) = self.pending_search.as_ref() else {
             return false;
         };
-        if !pending.matches_shape(grid) {
+        if !pending.matches_source(grid) {
             self.begin_update(grid, None);
         }
 
@@ -1477,6 +1480,42 @@ mod tests {
 
         search.finish(terminal.grid());
         assert_eq!(search.match_count(), 200);
+    }
+
+    #[test]
+    fn pending_search_restarts_after_same_shape_edits_and_grid_replacement() {
+        let mut terminal = termeric_core::Terminal::new(30, 4);
+        terminal.process(b"needle\r\nneedle");
+        let mut search = Search::new();
+        search.set_query("needle", terminal.grid());
+        assert!(search.advance_rows(terminal.grid(), 1));
+        terminal.process(b"\x1b[H\x1b[2Kerased");
+        search.finish(terminal.grid());
+        assert_eq!(search.match_count(), 1);
+        assert_eq!(search.current().unwrap().row, 1);
+
+        search.refresh(terminal.grid());
+        assert!(search.advance_rows(terminal.grid(), 2));
+        let replacement = termeric_core::Terminal::new(30, 4);
+        search.finish(replacement.grid());
+        assert_eq!(search.match_count(), 0);
+    }
+
+    #[test]
+    fn pending_search_restarts_when_capped_history_rotates_without_changing_shape() {
+        let mut terminal = termeric_core::Terminal::new(30, 3);
+        terminal.grid_mut().set_scrollback_limit(4);
+        for index in 0..6 {
+            terminal.process(format!("old{index} needle\r\n").as_bytes());
+        }
+        assert_eq!(terminal.grid().scrollback_len(), 4);
+        let mut search = Search::new();
+        search.set_query("old0", terminal.grid());
+        assert!(search.advance_rows(terminal.grid(), 1));
+        terminal.process(b"newest\r\n");
+        assert_eq!(terminal.grid().scrollback_len(), 4);
+        search.finish(terminal.grid());
+        assert_eq!(search.match_count(), 0);
     }
 
     #[test]

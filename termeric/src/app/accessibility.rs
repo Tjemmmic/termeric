@@ -878,6 +878,7 @@ impl App {
         if !self.accessibility.active {
             return;
         }
+        self.reconcile_mouse_selection_presentation();
         let snapshot = self.accessibility_snapshot();
         let snapshot = self.with_toast_accessibility(snapshot);
         let update = self.accessibility.update(snapshot);

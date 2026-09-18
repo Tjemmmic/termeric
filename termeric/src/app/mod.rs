@@ -3932,6 +3932,9 @@ impl App {
     /// Copy selection to clipboard. Returns true if anything was copied so
     /// the caller can decide whether to consume the keybinding.
     fn copy_selection(&mut self) -> bool {
+        // Output may have invalidated a filtered projection since the last
+        // frame. Never copy its old row coordinates as an ordinary selection.
+        self.reconcile_mouse_selection_presentation();
         let Some(text) = (if self.copy_mode.is_active() {
             self.copy_mode_selection_text()
         } else {
