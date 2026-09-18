@@ -142,8 +142,27 @@ Core and headless app regressions cover hidden replacement text, clipped and
 reversed scrollback selections, word/line/block behavior, single/split panes,
 timeout/restart/resize/focus invalidation, and no hidden-coordinate fallback.
 Tests do not write the desktop clipboard. Native painting/clipboard acceptance
-remains deferred. Selection tracking during ordinary live-output drags retains
-its separate existing policy and is not established by these tests.
+remains deferred.
+
+During ordinary full-screen output scrolling, the terminal owns the shifted
+selection coordinates. Before drag updates and gesture finalization, the app
+copies that small canonical selection record into pointer state instead of
+reapplying its old anchor. This also covers viewport archival with ED 22 and
+user scrolling into history; no text or history is copied. Mouse-up, focus loss,
+and modal takeover share the same finalizer. Completed selection caches follow
+the same coordinates, and shifted endpoints reset positional multi-click state.
+A completed plain click still preserves the click history needed for word and
+line selection.
+
+Line/byte-limit eviction, explicit history clearing, and terminal reset cannot
+resurrect removed selections on the next move or release. Clearing history
+discards a selection only when an endpoint no longer has backing rows; visible
+and frozen selections survive when their own rows remain present. Hermetic
+tests cover forward/reversed/block/word/line selection, single/split panes,
+release without another move, archived viewports, and completed selection cache
+cleanup. Native acceptance remains deferred. This does not change the existing
+core policy for in-place text replacement or partial-margin row movement;
+comprehensive selection remapping for those mutations remains separate work.
 
 ## Filtered selection and accessible text
 
@@ -173,8 +192,8 @@ display policy for selection or accessibility.
 Hermetic tests cover row mapping, word/line/reversed-block selection, multi-page
 drag/copy, index-storage reuse, query/toggle/focus invalidation, Unicode wrapping,
 and frozen filtered accessibility nodes. Native painting, clipboard, and Orca
-acceptance remain deferred. Ordinary-output native drag tracking remains a
-separate concern; a changed search projection invalidates its filtered selection.
+acceptance remain deferred. A changed search projection invalidates its filtered
+selection rather than applying ordinary contiguous-range scroll tracking to it.
 
 ## Filtered link presentation
 

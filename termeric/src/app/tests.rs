@@ -3,6 +3,201 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_drag_keeps_the_terminal_shifted_anchor_after_output_scrolls() {
+    use termeric_core::Point;
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(12, 3);
+    terminal.process(b"\x1bc\x1b[3Janchor\r\nmiddle\r\ntail");
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+    app.extend_native_selection(Point::new(0, 5));
+    app.active_terminal_mut().unwrap().process(b"\r\nnext");
+    assert_eq!(
+        app.active_terminal().unwrap().selection().unwrap().start,
+        Point::new(-1, 0)
+    );
+    app.extend_native_selection(Point::new(0, 5));
+    assert_eq!(
+        app.active_terminal().unwrap().selection().unwrap().start,
+        Point::new(-1, 0)
+    );
+    assert_eq!(
+        app.native_selection_text().as_deref(),
+        Some("anchor      \nmiddle")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_release_keeps_scrolled_forward_reverse_block_word_and_line_selections() {
+    use termeric_core::{Point, SelectionType};
+    for split in [false, true] {
+        for kind in ["forward", "reverse", "block", "word", "line"] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 3);
+            terminal.process(b"\x1bc\x1b[3Jalpha beta\r\nmiddle\r\ntail");
+            let start = Point::new(
+                0,
+                if matches!(kind, "reverse" | "block") {
+                    4
+                } else {
+                    0
+                },
+            );
+            if kind == "block" {
+                app.modifiers = ModifiersState::ALT;
+            }
+            if matches!(kind, "word" | "line") {
+                app.mouse_state.click_count = if kind == "word" { 1 } else { 2 };
+                app.mouse_state.last_click_pos = Some(start);
+                app.mouse_state.last_click_time = Instant::now();
+            }
+            app.begin_native_selection(MouseButton::Left, start);
+            if !matches!(kind, "word" | "line") {
+                app.extend_native_selection(Point::new(0, if kind == "forward" { 4 } else { 0 }));
+            }
+            let expected = if kind == "line" {
+                "alpha beta"
+            } else {
+                "alpha"
+            };
+            assert_eq!(app.native_selection_text().as_deref(), Some(expected));
+            let before = app.active_terminal().unwrap().selection().unwrap().clone();
+            app.active_terminal_mut().unwrap().process(b"\r\nnext");
+            // This same finalizer handles mouse-up, focus loss, and modal takeover.
+            app.finish_native_pointer_gesture();
+            let selection = app.active_terminal().unwrap().selection().unwrap();
+            assert_eq!(
+                selection.start,
+                Point::new(before.start.row - 1, before.start.col)
+            );
+            assert_eq!(
+                selection.end,
+                Point::new(before.end.row - 1, before.end.col)
+            );
+            assert_eq!(selection.ty, before.ty);
+            if kind == "block" {
+                assert_eq!(selection.ty, SelectionType::Block);
+            }
+            assert!(!selection.active);
+            assert!(!app.mouse_pressed);
+            assert_eq!(
+                app.native_selection_text().as_deref(),
+                Some(expected),
+                "split={split} kind={kind}"
+            );
+            assert!(app.mouse_state.last_click_pos.is_none());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_drag_cannot_resurrect_evicted_cleared_or_reset_selection() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for cause in ["line limit", "byte limit", "clear history", "reset"] {
+            for release_only in [false, true] {
+                let mut app = if split {
+                    divider_owner_fixture()
+                } else {
+                    scrollbar_owner_fixture()
+                };
+                let terminal = app.active_terminal_mut().unwrap();
+                terminal.resize(12, 3);
+                terminal.process(b"\x1bc\x1b[3Janchor\r\nmiddle\r\ntail");
+                app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+                app.extend_native_selection(Point::new(0, 5));
+                let terminal = app.active_terminal_mut().unwrap();
+                terminal.process(b"\r\nnext");
+                match cause {
+                    "line limit" => terminal.set_scrollback_limits(0, 1024 * 1024),
+                    "byte limit" => terminal.set_scrollback_limits(100, 0),
+                    "clear history" => terminal.process(b"\x1b[3J"),
+                    "reset" => terminal.process(b"\x1bc"),
+                    _ => unreachable!(),
+                }
+                assert!(terminal.selection().is_none());
+                if !release_only {
+                    app.extend_native_selection(Point::new(0, 3));
+                }
+                app.finish_native_pointer_gesture();
+                assert!(!app.mouse_pressed, "{cause}");
+                assert!(app.mouse_selection_source.is_none());
+                assert!(app.mouse_state.selection.is_none());
+                assert!(app.active_terminal().unwrap().selection().is_none());
+                assert!(app.native_selection_text().is_none());
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_drag_tracks_archived_viewport_and_user_scrollback_without_reanchoring() {
+    use termeric_core::Point;
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(12, 3);
+    terminal.process(b"\x1bc\x1b[3Janchor\r\nmiddle\r\ntail");
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+    app.extend_native_selection(Point::new(0, 5));
+    app.active_terminal_mut().unwrap().process(b"\x1b[22J");
+    app.active_terminal_mut()
+        .unwrap()
+        .grid_mut()
+        .set_scroll_offset(3);
+    app.extend_native_selection(Point::new(-2, 5));
+    app.finish_native_selection();
+    let selection = app.active_terminal().unwrap().selection().unwrap();
+    assert_eq!(selection.start, Point::new(-3, 0));
+    assert_eq!(selection.end, Point::new(-2, 5));
+    assert_eq!(
+        app.native_selection_text().as_deref(),
+        Some("anchor      \nmiddle")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn native_completed_selection_cache_tracks_scroll_and_eviction_without_breaking_double_click() {
+    use termeric_core::{Point, SelectionType};
+    let mut app = scrollbar_owner_fixture();
+    let terminal = app.active_terminal_mut().unwrap();
+    terminal.resize(12, 3);
+    terminal.process(b"\x1bc\x1b[3Janchor\r\nmiddle\r\ntail");
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+    app.finish_native_selection();
+    assert!(app.mouse_state.selection.is_none());
+    assert_eq!(app.mouse_state.click_count, 1);
+    app.mouse_state.last_click_time = Instant::now();
+    app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+    assert_eq!(
+        app.active_terminal().unwrap().selection().unwrap().ty,
+        SelectionType::Semantic
+    );
+    app.finish_native_selection();
+    app.active_terminal_mut().unwrap().process(b"\r\nnext");
+    assert!(!app.reconcile_mouse_selection_presentation());
+    assert_eq!(
+        app.mouse_state.selection.as_ref().unwrap().start,
+        Point::new(-1, 0)
+    );
+    assert_eq!(app.native_selection_text().as_deref(), Some("anchor"));
+    app.active_terminal_mut().unwrap().process(b"\x1b[3J");
+    assert!(app.reconcile_mouse_selection_presentation());
+    assert!(app.mouse_state.selection.is_none());
+    assert!(app.mouse_selection_source.is_none());
+    assert!(app.native_selection_text().is_none());
+}
+
+#[cfg(unix)]
+#[test]
 fn live_search_discards_completed_results_after_same_shape_text_changes() {
     let mut app = scrollbar_owner_fixture();
     app.active_terminal_mut()

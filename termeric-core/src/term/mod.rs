@@ -1983,6 +1983,7 @@ impl Terminal {
     /// metadata whose backing history was removed.
     pub fn clear_scrollback(&mut self) {
         self.grid_mut().clear_scrollback();
+        self.clear_selection_if_evicted();
         if !self.alt_screen_active {
             self.shell.prompt_tracker.adjust_for_scroll(0, 0);
             self.retain_prompt_navigation(0);
@@ -7436,6 +7437,28 @@ mod tests {
             before, after,
             "Characters lost after expanding from 20 to 80 cols"
         );
+    }
+
+    #[test]
+    fn clearing_history_retires_only_selections_with_removed_backing_rows() {
+        let mut term = Terminal::new(12, 3);
+        term.process(b"history\r\nvisible\r\ntail\r\nlast");
+        let mut selection = Selection::new(Point::new(-1, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 6));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[3J");
+        assert_eq!(term.grid().scrollback_len(), 0);
+        assert!(term.selection().is_none());
+
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 6));
+        term.set_selection(Some(selection));
+        term.process(b"\x1b[3J");
+        assert_eq!(term.get_selection_text().as_deref(), Some("visible"));
+
+        // Removing hidden history must not remove a frozen visible selection.
+        term.process(b"\x1b[?2026h\r\nnew\r\nnew\r\nnew\x1b[3J");
+        assert_eq!(term.get_selection_text().as_deref(), Some("visible"));
     }
 
     #[test]

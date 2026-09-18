@@ -30,12 +30,35 @@ impl App {
 
     pub(super) fn reconcile_mouse_selection_presentation(&mut self) -> bool {
         self.reconcile_search_presentation();
-        if self.mouse_selection_source.is_none()
-            || self.mouse_selection_source == self.mouse_selection_presentation()
-        {
+        let Some(previous) = self.mouse_selection_source else {
             return false;
+        };
+        if Some(previous) == self.mouse_selection_presentation() {
+            if !self.mouse_pressed && self.mouse_state.selection.is_none() {
+                // A completed plain click intentionally has no selection;
+                // retain its click history so a second click can select a word.
+                return false;
+            }
+            if let Some(selection) = self
+                .active_terminal()
+                .and_then(termeric_core::Terminal::selection)
+                .cloned()
+            {
+                // The terminal shifts this canonical selection on full-screen
+                // output scrolling and drops it when history is evicted. Do
+                // not overwrite those changes with the pointer's old anchor.
+                if self.mouse_state.selection.as_ref().is_some_and(|previous| {
+                    previous.start != selection.start || previous.end != selection.end
+                }) {
+                    self.mouse_state.click_count = 0;
+                    self.mouse_state.last_click_pos = None;
+                }
+                self.mouse_state.selection = Some(selection);
+                return false;
+            }
+            // A cleared/evicted selection cannot be resurrected by movement,
+            // mouse-up, focus loss, or an overlay finishing the gesture.
         }
-        let previous = self.mouse_selection_source.unwrap();
         if (previous.filter_generation.is_some() || self.search.filter_generation().is_some())
             && let Some(tabs) = &mut self.tabs
             && let Some(origin) =
@@ -130,6 +153,7 @@ impl App {
     }
 
     pub(super) fn finish_native_selection(&mut self) {
+        self.reconcile_mouse_selection_presentation();
         let was_pressed = self.mouse_pressed;
         self.mouse_pressed = false;
         let _ = self.mouse_state.handle_release(MouseButton::Left);
