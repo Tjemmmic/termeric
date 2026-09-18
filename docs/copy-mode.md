@@ -177,6 +177,31 @@ argument and cwd, exercise pre-launch rejection, and verify local/remote/absent
 and frozen owner routing in single and split panes. No successful test launches
 a desktop handler; native file-handler acceptance remains deferred.
 
+Desktop openers have a separate process-wide limit of eight admitted launches,
+including helpers that are still starting. A full limit refuses another launch
+with visible feedback; there is no pending launch queue. Each admitted launch
+creates its waiter before spawning the helper, acknowledges the actual spawn
+result, and retains the child handle until `wait()` completes. This prevents
+ordinary exited helpers from accumulating as unreaped Unix children (Rust does
+not [reap a dropped child automatically](https://doc.rust-lang.org/std/process/struct.Child.html#warning)).
+Worker creation and spawn failures release the reservation, and a missing
+acknowledgement receiver does not abandon the child. These slots are shared by
+all windows in one Termeric process, not across separate Termeric processes or
+with the notification helper budget.
+
+The UI waits for spawn acknowledgement, not for the handler to exit. OS spawn
+latency is not deadline-bounded. Workers block in child wait rather than polling,
+and no opener worker remains after its child has been reaped. A long-running or
+hung handler continues to occupy a slot: Termeric does not kill an opened editor
+or browser to reclaim it. The limit covers direct helper children, not any
+descendants or applications activated by the desktop service. On Termeric process
+exit, normal OS child/orphan handling applies; the app does not wait for those
+applications to close. Successful spawning is not proof that the resource was
+opened; later nonzero exits and wait errors are logged, not reported as a second
+GUI completion. Tests use gated local fixture processes to verify slot pressure,
+spawn errors, successful/nonzero exits, reuse, and actual Unix reaping without
+opening a browser, file handler, or provider.
+
 Ctrl+click, quick-select opening, and routed hyperlink activation share one
 last pre-launch owner check. The tab must still exist and be neither closed nor
 closing; a pane route must still name an open pane. Dormant tab routes in split

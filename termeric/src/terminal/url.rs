@@ -6,6 +6,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+#[path = "url/opener.rs"]
+mod opener;
+
 /// A detected URL in the terminal
 #[derive(Clone, Debug)]
 pub struct DetectedUrl {
@@ -166,8 +169,7 @@ impl UrlDetector {
         url: &str,
         working_directory: Option<&Path>,
     ) -> std::io::Result<()> {
-        Self::opener_command(url, working_directory)?.spawn()?;
-        Ok(())
+        opener::launch(Self::opener_command(url, working_directory)?)
     }
 
     /// Leave URI interpretation to the desktop handler. In particular, a file
