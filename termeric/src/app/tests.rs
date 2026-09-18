@@ -3,6 +3,38 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_selection_cannot_restore_glyphs_erased_outside_vertical_edit_region() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        for wide in [false, true] {
+            let mut app = if split {
+                divider_owner_fixture()
+            } else {
+                scrollbar_owner_fixture()
+            };
+            let terminal = app.active_terminal_mut().unwrap();
+            terminal.resize(12, 5);
+            terminal.process(b"\x1bc\x1b[3J");
+            let point = if wide {
+                terminal.process("\x1b[3;3H界\x1b[?69h\x1b[4;8s\x1b[1;4H".as_bytes());
+                Point::new(2, 2)
+            } else {
+                terminal.process(b"\x1b]66;s=3;X\x07\x1b[2;5r");
+                Point::new(0, 0)
+            };
+            app.begin_native_selection(MouseButton::Left, point);
+            app.extend_native_selection(Point::new(point.row, point.col + 1));
+            app.active_terminal_mut().unwrap().process(b"\x1b[S");
+            app.extend_native_selection(Point::new(point.row, point.col + 1));
+            app.finish_native_selection();
+            assert!(app.native_selection_text().is_none());
+            assert!(app.mouse_state.selection.is_none());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_selection_cannot_restore_text_replaced_by_multicell_placement() {
     use termeric_core::Point;
     for split in [false, true] {

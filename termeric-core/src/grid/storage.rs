@@ -762,6 +762,7 @@ impl GridStorage {
         left: usize,
         right: usize,
         blank: &Cell,
+        mut damage: impl FnMut(usize, std::ops::Range<usize>),
     ) {
         let bottom = bottom.min(self.rows.len());
         let right = right.min(self.cols);
@@ -770,9 +771,11 @@ impl GridStorage {
         }
         for row in top..bottom - 1 {
             let (destinations, sources) = self.rows.split_at_mut(row + 1);
-            destinations[row].copy_range_from(&sources[0], left, right, blank);
+            destinations[row]
+                .copy_range_from(&sources[0], left, right, blank, |cols| damage(row, cols));
         }
-        self.rows[bottom - 1].erase_range(left, right, blank);
+        self.rows[bottom - 1]
+            .erase_range_with_damage(left, right, blank, |cols| damage(bottom - 1, cols));
         self.rows[bottom - 1].set_wrapped(false);
     }
 
@@ -785,6 +788,7 @@ impl GridStorage {
         left: usize,
         right: usize,
         blank: &Cell,
+        mut damage: impl FnMut(usize, std::ops::Range<usize>),
     ) {
         let bottom = bottom.min(self.rows.len());
         let right = right.min(self.cols);
@@ -793,9 +797,11 @@ impl GridStorage {
         }
         for row in (top + 1..bottom).rev() {
             let (sources, destinations) = self.rows.split_at_mut(row);
-            destinations[0].copy_range_from(&sources[row - 1], left, right, blank);
+            destinations[0].copy_range_from(&sources[row - 1], left, right, blank, |cols| {
+                damage(row, cols)
+            });
         }
-        self.rows[top].erase_range(left, right, blank);
+        self.rows[top].erase_range_with_damage(left, right, blank, |cols| damage(top, cols));
         self.rows[top].set_wrapped(false);
     }
 

@@ -5,6 +5,45 @@ use crate::grid::{Cell, Grid};
 use std::ops::Range;
 
 impl Terminal {
+    pub(super) fn erase_multicells_crossing_row_with_selection(
+        &mut self,
+        boundary: usize,
+        left: usize,
+        right: usize,
+        blank: &Cell,
+    ) {
+        let (grid, damage) = self.grid_with_selection_damage();
+        grid.erase_multicells_crossing_row(boundary, left, right, blank, damage);
+    }
+
+    pub(super) fn erase_multicells_in_region_with_selection(
+        &mut self,
+        rows: Range<usize>,
+        cols: Range<usize>,
+        blank: &Cell,
+    ) {
+        let (grid, damage) = self.grid_with_selection_damage();
+        grid.erase_multicells_with_damage(rows, cols, blank, false, damage);
+    }
+
+    pub(super) fn repair_multicells_with_selection(&mut self, blank: &Cell) {
+        let (grid, damage) = self.grid_with_selection_damage();
+        grid.repair_multicells_with_damage(blank, damage);
+    }
+
+    /// Selection coordinates must already follow the row move. Copy/erase
+    /// callbacks then report only additional glyph damage in destination space.
+    pub(super) fn scroll_rect_with_selection_damage(
+        &mut self,
+        rows: Range<usize>,
+        cols: Range<usize>,
+        blank: &Cell,
+        down: bool,
+    ) {
+        let (grid, damage) = self.grid_with_selection_damage();
+        grid.scroll_rect_with_damage(rows, cols, blank, down, damage);
+    }
+
     /// Split live grid mutation from selection damage without allocating a
     /// damage list or touching the frozen presentation's separate selection.
     pub(super) fn grid_with_selection_damage(

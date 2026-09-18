@@ -481,6 +481,7 @@ impl Grid {
         left: usize,
         right: usize,
         blank: &Cell,
+        mut damage: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>),
     ) {
         if boundary == 0 || boundary >= self.rows || left >= right {
             return;
@@ -499,7 +500,7 @@ impl Grid {
             }
         }
         for (row, col) in regions {
-            self.clear_multicell_at(row, col, blank, false);
+            self.clear_multicell_at_with_damage(row, col, blank, false, &mut damage);
         }
     }
 
@@ -598,7 +599,8 @@ impl Grid {
         right: usize,
         blank: &Cell,
     ) {
-        self.storage.scroll_rect_up(top, bottom, left, right, blank);
+        self.storage
+            .scroll_rect_up(top, bottom, left, right, blank, |_, _| {});
         self.mark_rows_changed();
     }
 
@@ -612,7 +614,26 @@ impl Grid {
         blank: &Cell,
     ) {
         self.storage
-            .scroll_rect_down(top, bottom, left, right, blank);
+            .scroll_rect_down(top, bottom, left, right, blank, |_, _| {});
+        self.mark_rows_changed();
+    }
+
+    pub(crate) fn scroll_rect_with_damage(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+        blank: &Cell,
+        down: bool,
+        mut damage: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>),
+    ) {
+        let report = |row, cols| damage(row..row + 1, cols);
+        if down {
+            self.storage
+                .scroll_rect_down(rows.start, rows.end, cols.start, cols.end, blank, report);
+        } else {
+            self.storage
+                .scroll_rect_up(rows.start, rows.end, cols.start, cols.end, blank, report);
+        }
         self.mark_rows_changed();
     }
 

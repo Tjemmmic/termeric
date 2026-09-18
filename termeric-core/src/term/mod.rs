@@ -2882,6 +2882,9 @@ impl Terminal {
 
     /// Scroll the screen up by n lines
     pub fn scroll_up(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
         self.invalidate_prompt_navigation_after_manual_scroll();
         let scroll_top = self.scroll_top;
         let scroll_bottom = self.scroll_bottom;
@@ -2891,26 +2894,23 @@ impl Terminal {
         let blank = self.erase_cell();
         for _ in 0..n {
             if full_width {
-                self.grid_mut().erase_multicells_crossing_row(
+                self.erase_multicells_crossing_row_with_selection(
                     scroll_top.saturating_add(1),
                     scroll_left,
                     scroll_right,
                     &blank,
                 );
-                self.grid_mut().erase_multicells_crossing_row(
+                self.erase_multicells_crossing_row_with_selection(
                     scroll_bottom.saturating_sub(1),
                     scroll_left,
                     scroll_right,
                     &blank,
                 );
             } else {
-                self.grid_mut().erase_multicells_intersecting(
-                    scroll_top,
-                    scroll_bottom,
-                    scroll_left,
-                    scroll_right,
+                self.erase_multicells_in_region_with_selection(
+                    scroll_top..scroll_bottom,
+                    scroll_left..scroll_right,
                     &blank,
-                    false,
                 );
             }
             if full_width && scroll_top == 0 && scroll_bottom == self.rows {
@@ -2933,21 +2933,20 @@ impl Terminal {
                     -1,
                 );
             } else {
-                self.grid_mut().scroll_rect_up(
-                    scroll_top,
-                    scroll_bottom,
-                    scroll_left,
-                    scroll_right,
-                    &blank,
-                );
                 self.shift_selection_in_region(
                     scroll_top..scroll_bottom,
                     scroll_left..scroll_right,
                     -1,
                 );
+                self.scroll_rect_with_selection_damage(
+                    scroll_top..scroll_bottom,
+                    scroll_left..scroll_right,
+                    &blank,
+                    false,
+                );
             }
         }
-        self.grid_mut().repair_multicells(&blank);
+        self.repair_multicells_with_selection(&blank);
         let preserve_history =
             !self.alt_screen_active && full_width && scroll_top == 0 && scroll_bottom == self.rows;
         let history_lines = self.grid().scrollback_len();
@@ -2963,6 +2962,9 @@ impl Terminal {
 
     /// Scroll the screen down by n lines
     pub fn scroll_down(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
         let scroll_top = self.scroll_top;
         let scroll_bottom = self.scroll_bottom;
         let scroll_left = self.scroll_left;
@@ -2971,45 +2973,41 @@ impl Terminal {
         let blank = self.erase_cell();
         for _ in 0..n {
             if full_width {
-                self.grid_mut().erase_multicells_crossing_row(
+                self.erase_multicells_crossing_row_with_selection(
                     scroll_top.saturating_add(1),
                     scroll_left,
                     scroll_right,
                     &blank,
                 );
-                self.grid_mut().erase_multicells_crossing_row(
+                self.erase_multicells_crossing_row_with_selection(
                     scroll_bottom.saturating_sub(1),
                     scroll_left,
                     scroll_right,
                     &blank,
                 );
             } else {
-                self.grid_mut().erase_multicells_intersecting(
-                    scroll_top,
-                    scroll_bottom,
-                    scroll_left,
-                    scroll_right,
+                self.erase_multicells_in_region_with_selection(
+                    scroll_top..scroll_bottom,
+                    scroll_left..scroll_right,
                     &blank,
-                    false,
                 );
             }
+            self.shift_selection_in_region(scroll_top..scroll_bottom, scroll_left..scroll_right, 1);
             if full_width && scroll_top == 0 && scroll_bottom == self.rows {
                 self.grid_mut().scroll_down();
             } else if full_width {
                 self.grid_mut()
                     .scroll_region_down(scroll_top, scroll_bottom);
             } else {
-                self.grid_mut().scroll_rect_down(
-                    scroll_top,
-                    scroll_bottom,
-                    scroll_left,
-                    scroll_right,
+                self.scroll_rect_with_selection_damage(
+                    scroll_top..scroll_bottom,
+                    scroll_left..scroll_right,
                     &blank,
+                    true,
                 );
             }
-            self.shift_selection_in_region(scroll_top..scroll_bottom, scroll_left..scroll_right, 1);
         }
-        self.grid_mut().repair_multicells(&blank);
+        self.repair_multicells_with_selection(&blank);
         self.graphics.scroll_down(
             self.alt_screen_active,
             scroll_top..scroll_bottom,
@@ -4804,6 +4802,9 @@ impl Terminal {
 
     /// Insert blank lines at cursor row within the scroll region
     pub fn insert_lines(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
         let cursor = self.grid().cursor();
         let scroll_bottom = self.scroll_bottom;
         let scroll_left = self.scroll_left;
@@ -4814,24 +4815,21 @@ impl Terminal {
             let blank = self.erase_cell();
             let full_width = scroll_left == 0 && scroll_right == self.cols;
             if !full_width {
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row,
-                    scroll_bottom,
-                    scroll_left,
-                    scroll_right,
+                self.erase_multicells_in_region_with_selection(
+                    cursor.row..scroll_bottom,
+                    scroll_left..scroll_right,
                     &blank,
-                    false,
                 );
             }
             for _ in 0..count {
                 if full_width {
-                    self.grid_mut().erase_multicells_crossing_row(
+                    self.erase_multicells_crossing_row_with_selection(
                         cursor.row.saturating_add(1),
                         scroll_left,
                         scroll_right,
                         &blank,
                     );
-                    self.grid_mut().erase_multicells_crossing_row(
+                    self.erase_multicells_crossing_row_with_selection(
                         scroll_bottom.saturating_sub(1),
                         scroll_left,
                         scroll_right,
@@ -4839,22 +4837,26 @@ impl Terminal {
                     );
                     self.grid_mut()
                         .scroll_region_down(cursor.row, scroll_bottom);
+                    self.shift_selection_in_region(
+                        cursor.row..scroll_bottom,
+                        scroll_left..scroll_right,
+                        1,
+                    );
                 } else {
-                    self.grid_mut().scroll_rect_down(
-                        cursor.row,
-                        scroll_bottom,
-                        scroll_left,
-                        scroll_right,
+                    self.shift_selection_in_region(
+                        cursor.row..scroll_bottom,
+                        scroll_left..scroll_right,
+                        1,
+                    );
+                    self.scroll_rect_with_selection_damage(
+                        cursor.row..scroll_bottom,
+                        scroll_left..scroll_right,
                         &blank,
+                        true,
                     );
                 }
-                self.shift_selection_in_region(
-                    cursor.row..scroll_bottom,
-                    scroll_left..scroll_right,
-                    1,
-                );
             }
-            self.grid_mut().repair_multicells(&blank);
+            self.repair_multicells_with_selection(&blank);
             self.graphics.scroll_down(
                 self.alt_screen_active,
                 cursor.row..scroll_bottom,
@@ -4867,6 +4869,9 @@ impl Terminal {
 
     /// Delete lines at cursor row within the scroll region
     pub fn delete_lines(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
         let cursor = self.grid().cursor();
         let scroll_bottom = self.scroll_bottom;
         let scroll_left = self.scroll_left;
@@ -4877,46 +4882,47 @@ impl Terminal {
             let blank = self.erase_cell();
             let full_width = scroll_left == 0 && scroll_right == self.cols;
             if !full_width {
-                self.grid_mut().erase_multicells_intersecting(
-                    cursor.row,
-                    scroll_bottom,
-                    scroll_left,
-                    scroll_right,
+                self.erase_multicells_in_region_with_selection(
+                    cursor.row..scroll_bottom,
+                    scroll_left..scroll_right,
                     &blank,
-                    false,
                 );
             }
             for _ in 0..count {
                 if full_width {
-                    self.grid_mut().erase_multicells_crossing_row(
+                    self.erase_multicells_crossing_row_with_selection(
                         cursor.row.saturating_add(1),
                         scroll_left,
                         scroll_right,
                         &blank,
                     );
-                    self.grid_mut().erase_multicells_crossing_row(
+                    self.erase_multicells_crossing_row_with_selection(
                         scroll_bottom.saturating_sub(1),
                         scroll_left,
                         scroll_right,
                         &blank,
                     );
                     self.grid_mut().scroll_region_up(cursor.row, scroll_bottom);
+                    self.shift_selection_in_region(
+                        cursor.row..scroll_bottom,
+                        scroll_left..scroll_right,
+                        -1,
+                    );
                 } else {
-                    self.grid_mut().scroll_rect_up(
-                        cursor.row,
-                        scroll_bottom,
-                        scroll_left,
-                        scroll_right,
+                    self.shift_selection_in_region(
+                        cursor.row..scroll_bottom,
+                        scroll_left..scroll_right,
+                        -1,
+                    );
+                    self.scroll_rect_with_selection_damage(
+                        cursor.row..scroll_bottom,
+                        scroll_left..scroll_right,
                         &blank,
+                        false,
                     );
                 }
-                self.shift_selection_in_region(
-                    cursor.row..scroll_bottom,
-                    scroll_left..scroll_right,
-                    -1,
-                );
             }
-            self.grid_mut().repair_multicells(&blank);
+            self.repair_multicells_with_selection(&blank);
             self.graphics.scroll_up(
                 self.alt_screen_active,
                 cursor.row..scroll_bottom,
@@ -5632,6 +5638,166 @@ mod tests {
         term.process(b"\x1b[?2026h\x1b]66;s=2:w=2;X\x07");
         assert_eq!(term.get_selection_text().as_deref(), Some("anchor"));
         term.process(b"\x1b[?2026l");
+        assert!(term.selection().is_none());
+    }
+
+    #[test]
+    fn vertical_commands_clear_selection_for_multicell_boundary_and_final_repair_damage() {
+        let commands: &[&[u8]] = &[
+            b"\x1b[S",
+            b"\x1b[T",
+            b"\x1b[L",
+            b"\x1b[M",
+            b"\x1b[6;1H\n",
+            b"\x1bM",
+        ];
+        for &command in commands {
+            for final_repair in [false, true] {
+                let mut term = Terminal::new(12, 6);
+                let selected = if final_repair {
+                    // Only the lower half lies in the moved region. Neither
+                    // early crossing-row scan sees the orphaned upper half.
+                    term.process(b"\x1b[3;1H\x1b]66;s=2;X\x07\x1b[4;6r\x1b[4;1H");
+                    Point::new(2, 0)
+                } else {
+                    term.process(b"\x1b]66;s=3;X\x07\x1b[2;6r\x1b[2;1H");
+                    Point::new(0, 0)
+                };
+                term.set_selection(Some(Selection::new(selected, SelectionType::Block)));
+                term.process(command);
+                assert!(
+                    term.selection().is_none(),
+                    "command={command:?} final_repair={final_repair}"
+                );
+                assert!(
+                    term.grid()
+                        .cell(selected.row as usize, 0)
+                        .unwrap()
+                        .content
+                        .is_empty()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn partial_width_vertical_edits_report_wide_damage_after_selection_motion() {
+        let commands: &[&[u8]] = &[
+            b"\x1b[S",
+            b"\x1b[T",
+            b"\x1b[L",
+            b"\x1b[M",
+            b"\x1b[5;4H\n",
+            b"\x1bM",
+        ];
+        for &command in commands {
+            for row in 0..5 {
+                for leader in [2, 7] {
+                    // Straddle either horizontal margin.
+                    for selected_col in [leader, leader + 1] {
+                        let mut term = Terminal::new(12, 5);
+                        term.grid_mut().set_cursor(row, leader);
+                        term.process("\x1b[1\"q界\x1b[0\"q".as_bytes());
+                        term.process(b"\x1b[?69h\x1b[4;8s\x1b[1;4H");
+                        term.set_selection(Some(Selection::new(
+                            Point::new(row as i32, selected_col),
+                            SelectionType::Block,
+                        )));
+                        term.process(command);
+                        assert!(
+                            term.selection().is_none(),
+                            "command={command:?} row={row} col={selected_col}"
+                        );
+                        assert!((0..5).all(|r| (0..12).all(|c| {
+                            let cell = term.grid().cell(r, c).unwrap();
+                            !cell.is_wide_char() && !cell.is_wide_char_spacer()
+                        })));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_glyph_damage_preserves_survivors_history_and_frozen_selection() {
+        for down in [false, true] {
+            let mut term = Terminal::new(12, 6);
+            term.process(b"\x1b[3;4H\x1b]66;s=2;X\x07");
+            term.set_selection(Some(Selection::new(Point::new(2, 3), SelectionType::Block)));
+            if down {
+                term.scroll_down(1);
+            } else {
+                term.scroll_up(1);
+            }
+            assert_eq!(
+                term.selection().unwrap().start.row,
+                if down { 3 } else { 1 }
+            );
+            assert_eq!(term.get_selection_text().as_deref(), Some("X"));
+
+            let mut wide = Terminal::new(12, 5);
+            wide.process("\x1b[3;5H界\x1b[?69h\x1b[4;8s\x1b[1;4H".as_bytes());
+            wide.set_selection(Some(Selection::new(Point::new(2, 4), SelectionType::Block)));
+            if down {
+                wide.scroll_down(1);
+            } else {
+                wide.scroll_up(1);
+            }
+            assert_eq!(
+                wide.selection().unwrap().start.row,
+                if down { 3 } else { 1 }
+            );
+            assert_eq!(wide.get_selection_text().as_deref(), Some("界"));
+        }
+
+        let mut history = Terminal::new(12, 6);
+        history.process(b"anchor\x1b[5;1H\x1b]66;s=2;X\x07");
+        let mut selection = Selection::new(Point::new(0, 5), SelectionType::Simple);
+        selection.update(Point::new(0, 0));
+        history.set_selection(Some(selection));
+        history.scroll_up(1);
+        assert_eq!(history.selection().unwrap().start.row, -1);
+        assert_eq!(history.get_selection_text().as_deref(), Some("anchor"));
+
+        let mut frozen = Terminal::new(12, 5);
+        frozen.process(b"\x1b[?1049h\x1b]66;s=3;X\x07\x1b[2;5r");
+        frozen.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+        frozen.process(b"\x1b[?2026h\x1b[S");
+        assert_eq!(frozen.get_selection_text().as_deref(), Some("X"));
+        frozen.process(b"\x1b[?2026l");
+        assert!(frozen.selection().is_none());
+    }
+
+    #[test]
+    fn partial_width_multicell_erasure_reports_outside_damage_but_zero_counts_do_nothing() {
+        for operation in 0..4 {
+            let mut term = Terminal::new(12, 5);
+            term.process(b"\x1b]66;s=2:w=2;X\x07\x1b[?69h\x1b[3;8s\x1b[1;3H");
+            term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+            for count in [0, 1] {
+                match operation {
+                    0 => term.scroll_up(count),
+                    1 => term.scroll_down(count),
+                    2 => term.insert_lines(count),
+                    _ => term.delete_lines(count),
+                }
+                if count == 0 {
+                    assert_eq!(term.get_selection_text().as_deref(), Some("X"));
+                } else {
+                    assert!(term.selection().is_none());
+                    assert!(term.grid().cell(0, 0).unwrap().content.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vertical_boundary_erasure_retires_selection_outside_the_scrolled_rows() {
+        let mut term = Terminal::new(12, 5);
+        term.process(b"\x1b]66;s=3:w=1;X\x07\x1b[2;5r");
+        term.set_selection(Some(Selection::new(Point::new(0, 0), SelectionType::Block)));
+        term.process(b"\x1b[S");
+        assert!(term.grid().cell(0, 0).unwrap().content.is_empty());
         assert!(term.selection().is_none());
     }
 

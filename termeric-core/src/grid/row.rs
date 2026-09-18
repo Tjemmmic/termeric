@@ -263,12 +263,13 @@ impl Row {
         left: usize,
         right: usize,
         blank: &Cell,
+        damage: impl FnMut(std::ops::Range<usize>),
     ) {
         let right = right.min(self.cells.len()).min(source.cells.len());
         let left = left.min(right);
         self.cells[left..right].clone_from_slice(&source.cells[left..right]);
         self.wrapped = false;
-        self.repair_wide_cells_with(blank);
+        self.repair_wide_cells_with_damage(blank, damage);
         self.dirty = true;
     }
 
@@ -883,6 +884,7 @@ mod tests {
                     2,
                     5,
                     &Cell::default(),
+                    |_| {},
                 )
             }),
             ("replace", |row, cell| {

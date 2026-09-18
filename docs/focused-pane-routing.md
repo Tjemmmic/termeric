@@ -262,8 +262,21 @@ collisions, lower-row skips, insert mode, wrapping into history, frozen alternat
 screens, and single/split-pane native drag/release. Native painting and clipboard
 acceptance remain deferred.
 
-Glyph erasure during other boundary-repair operations still needs selection
-invalidation coverage; this is not a claim that every grid mutation is covered.
+Vertical scrolling and insert/delete lines now include glyph damage beyond
+their movement rectangle. Whole-block boundary/intersection erasures report old
+coordinates before selection mapping; partial-width row copies, vacated-row
+erasure, and final descriptor repair report destination coordinates afterward.
+Thus an outside stationary selection is cleared when its glyph is actually
+erased, while intact moved glyphs retain their mapped selection. The callbacks
+reuse existing mutation/repair passes without a damage list or added history
+scan. Zero-count core scroll/line-edit calls do not erase blocks or move anchors.
+Hermetic tests cover SU/SD/IL/DL and scrolling LF/RI, both wide-character margins,
+vacated rows, early and final multicell repair, surviving wide/multicell glyphs,
+history, frozen alternate screens, and single/split-pane drag reconciliation.
+
+Other mutation paths, including resize/reflow and print-time boundary cleanup,
+still need a complete selection-damage audit; this is not a claim that every
+grid mutation is covered. Native desktop acceptance remains deferred.
 
 ## Filtered selection and accessible text
 
