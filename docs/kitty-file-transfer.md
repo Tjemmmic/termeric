@@ -82,6 +82,13 @@ preserved; the approval dialog calls out that the remote side controls symbolic
 link targets. The link destination itself remains subject to every path and
 no-overwrite check.
 
+Linux rollback bookkeeping uses metadata-only, no-follow handles to retain
+created entry identities. It does not open symbolic-link targets as data files,
+so links to FIFOs do not wait for a target writer. Local regressions cover
+writer-free FIFO-link commit, target preservation, dangling-link identity, and
+preserving a replacement link during rollback. General filesystem calls can
+still block; this fix does not eliminate ancestor-path replacement races.
+
 ## Consent and lifecycle
 
 Terminal output is untrusted. An initial `send` command only opens a modal; it

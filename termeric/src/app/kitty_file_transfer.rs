@@ -2508,7 +2508,7 @@ mod unix {
     use std::fs::{self, File, Permissions};
     use std::io::{self, Write};
     use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Component, Path, PathBuf};
     use tempfile::NamedTempFile;
 
@@ -3463,11 +3463,24 @@ mod unix {
     ) -> io::Result<()> {
         match fs::symlink_metadata(path) {
             Ok(metadata) => {
-                let identity_guard = File::open(path).ok().filter(|file| {
-                    file.metadata().is_ok_and(|opened| {
-                        opened.dev() == metadata.dev() && opened.ino() == metadata.ino()
-                    })
-                });
+                // Bookkeeping must never open a symbolic link's target: it
+                // could be a FIFO/device, and a followed handle would not pin
+                // the link's inode anyway. Linux O_PATH pins even dangling
+                // symlinks without opening their contents or requiring readers.
+                #[cfg(target_os = "linux")]
+                let flags = libc::O_PATH | libc::O_NOFOLLOW;
+                #[cfg(not(target_os = "linux"))]
+                let flags = libc::O_NOFOLLOW | libc::O_NONBLOCK;
+                let identity_guard = fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(flags)
+                    .open(path)
+                    .ok()
+                    .filter(|file| {
+                        file.metadata().is_ok_and(|opened| {
+                            opened.dev() == metadata.dev() && opened.ino() == metadata.ino()
+                        })
+                    });
                 created.push(CreatedPath {
                     path: path.to_path_buf(),
                     device: metadata.dev(),
@@ -4279,6 +4292,135 @@ mod unix {
                 fs::read_link(second).unwrap(),
                 PathBuf::from("../outside-target")
             );
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn fifo_symlink_commit_does_not_wait_for_a_target_writer() {
+            use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+
+            let root = tempdir().unwrap();
+            let fifo = root.path().join("pipe");
+            let link = root.path().join("link");
+            let fifo_name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+            // SAFETY: fifo_name is a live NUL-terminated path in a private tempdir.
+            assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+            let before = fs::symlink_metadata(&fifo).unwrap();
+            let worker_link = link.clone();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let cancel = AtomicBool::new(false);
+                let mut transaction = DownloadTransaction::new("session".into());
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::File,
+                            "s",
+                            Some(&worker_link),
+                            KittyFileTransferType::Symlink,
+                            b"",
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+                transaction
+                    .handle(
+                        command(
+                            KittyFileTransferAction::EndData,
+                            "s",
+                            None,
+                            KittyFileTransferType::Symlink,
+                            b"path:pipe",
+                        ),
+                        &cancel,
+                    )
+                    .unwrap();
+                let result = transaction.handle(
+                    command(
+                        KittyFileTransferAction::Finish,
+                        "",
+                        None,
+                        KittyFileTransferType::Regular,
+                        b"",
+                    ),
+                    &cancel,
+                );
+                sender.send(result).unwrap();
+            });
+            let observed = receiver.recv_timeout(Duration::from_secs(2));
+            let completed_without_writer = observed.is_ok();
+            // Rescue the old blocking implementation before asserting, so a
+            // failing regression never strands its worker or FIFO endpoint.
+            let result = match observed {
+                Ok(result) => result,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    let _rescue = fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&fifo)
+                        .unwrap();
+                    receiver.recv_timeout(Duration::from_secs(2)).unwrap()
+                }
+                Err(error) => panic!("transfer worker disconnected: {error}"),
+            };
+            worker.join().unwrap();
+            result.unwrap();
+            assert!(
+                completed_without_writer,
+                "symlink bookkeeping waited for a FIFO writer"
+            );
+            assert_eq!(fs::read_link(&link).unwrap(), PathBuf::from("pipe"));
+            let after = fs::symlink_metadata(&fifo).unwrap();
+            assert!(after.file_type().is_fifo());
+            assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()));
+            assert_eq!(
+                (before.mtime(), before.mtime_nsec()),
+                (after.mtime(), after.mtime_nsec())
+            );
+            let no_reader = fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+                .unwrap_err();
+            assert_eq!(no_reader.raw_os_error(), Some(libc::ENXIO));
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn rollback_identity_guard_pins_the_symlink_not_its_target() {
+            let root = tempdir().unwrap();
+            let target = root.path().join("target");
+            let link = root.path().join("link");
+            fs::write(&target, b"keep").unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let mut created = Vec::new();
+            record_created(&link, CreatedKind::Symlink, &mut created).unwrap();
+            let guard = created[0]
+                ._identity_guard
+                .as_ref()
+                .expect("pin the symlink inode");
+            let pinned = guard.metadata().unwrap();
+            assert!(pinned.file_type().is_symlink());
+            assert_eq!(
+                (pinned.dev(), pinned.ino()),
+                (created[0].device, created[0].inode)
+            );
+            // Unlink/recreate cannot reuse the still-pinned original inode.
+            fs::remove_file(&link).unwrap();
+            std::os::unix::fs::symlink("missing", &link).unwrap();
+            rollback_paths(&created);
+            assert_eq!(fs::read_link(&link).unwrap(), PathBuf::from("missing"));
+            assert_eq!(fs::read(&target).unwrap(), b"keep");
+            let mut replacement = Vec::new();
+            record_created(&link, CreatedKind::Symlink, &mut replacement).unwrap();
+            assert!(
+                replacement[0]._identity_guard.is_some(),
+                "pin dangling links too"
+            );
+            rollback_paths(&replacement);
+            assert!(fs::symlink_metadata(&link).is_err());
+            assert_eq!(fs::read(&target).unwrap(), b"keep");
         }
 
         #[test]
