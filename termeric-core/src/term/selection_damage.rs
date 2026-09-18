@@ -1,10 +1,38 @@
 //! Keep live selections consistent with text writes and explicit erasure.
 
-use super::Terminal;
+use super::{Point, SelectionType, Terminal};
 use crate::grid::{Cell, Grid};
 use std::ops::Range;
 
 impl Terminal {
+    pub(super) fn selection_reflow_points(&self) -> [Option<(i32, usize)>; 2] {
+        self.selection
+            .as_ref()
+            .filter(|selection| {
+                matches!(
+                    selection.ty,
+                    SelectionType::Simple | SelectionType::Semantic
+                )
+            })
+            .map_or([None; 2], |selection| {
+                [
+                    Some((selection.start.row, selection.start.col)),
+                    Some((selection.end.row, selection.end.col)),
+                ]
+            })
+    }
+
+    pub(super) fn restore_reflow_selection(&mut self, points: [Option<(i32, usize)>; 2]) {
+        if let Some(selection) = &mut self.selection {
+            if let [Some((start_row, start_col)), Some((end_row, end_col))] = points {
+                selection.start = Point::new(start_row, start_col);
+                selection.end = Point::new(end_row, end_col);
+            } else {
+                self.selection = None;
+            }
+        }
+    }
+
     /// Height-only resize preserves column geometry. Follow retained rows,
     /// then reject selections whose content was evicted or clipped rather
     /// than clamping their anchors onto unrelated text.
@@ -62,12 +90,12 @@ impl Terminal {
     pub(super) fn grid_with_selection_damage(
         &mut self,
     ) -> (&mut Grid, impl FnMut(Range<usize>, Range<usize>) + '_) {
-        let total_cols = self.cols;
         let grid = if self.alt_screen_active {
             &mut self.alt_grid
         } else {
             &mut self.grid
         };
+        let total_cols = grid.cols();
         let selection = &mut self.selection;
         (grid, move |rows, cols| {
             if selection

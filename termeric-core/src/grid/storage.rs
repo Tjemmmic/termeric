@@ -7,6 +7,45 @@ use std::fmt;
 use std::mem::size_of;
 use std::ops::Deref;
 
+// Two selection endpoints travel alongside the existing cursor. Fixed-size
+// tracking avoids a per-cell map or a second copy of retained history.
+type ReflowPoints = [Option<(usize, usize)>; 2];
+
+fn capture_line_points(
+    source: ReflowPoints,
+    row: usize,
+    cells: &[Cell],
+    base: usize,
+    offsets: &mut [Option<usize>; 2],
+) {
+    for (index, point) in source.into_iter().enumerate() {
+        if let Some((target_row, mut col)) = point
+            && target_row == row
+            && col < cells.len()
+        {
+            if cells[col].is_wide_char_spacer() && col > 0 && cells[col - 1].is_wide_char() {
+                col = col.saturating_sub(1);
+            }
+            offsets[index] = Some(base + col);
+        }
+    }
+}
+
+fn finish_line_points(
+    points: &mut ReflowPoints,
+    offsets: &mut [Option<usize>; 2],
+    first_row: usize,
+    cols: usize,
+) {
+    for (index, offset) in offsets.iter_mut().enumerate() {
+        if let Some(offset) = offset.take()
+            && cols > 0
+        {
+            points[index] = Some((first_row + offset / cols, offset % cols));
+        }
+    }
+}
+
 /// Default maximum scrollback lines
 const DEFAULT_SCROLLBACK_LIMIT: usize = 10_000;
 
@@ -822,6 +861,7 @@ impl GridStorage {
     /// Resize the grid with text reflow when columns change.
     /// Return the new cursor position and number of viewport rows archived.
     /// The row count is exact even when retention limits evict archive rows.
+    #[cfg(test)]
     pub fn resize(
         &mut self,
         new_cols: usize,
@@ -829,8 +869,27 @@ impl GridStorage {
         cursor_row: usize,
         cursor_col: usize,
     ) -> ((usize, usize), usize) {
+        self.resize_with_points(new_cols, new_rows, cursor_row, cursor_col, &mut [None; 2])
+    }
+
+    pub fn resize_with_points(
+        &mut self,
+        new_cols: usize,
+        new_rows: usize,
+        cursor_row: usize,
+        cursor_col: usize,
+        points: &mut [Option<(i32, usize)>; 2],
+    ) -> ((usize, usize), usize) {
         let old_cols = self.cols;
         let mut new_cursor = (cursor_row, cursor_col);
+        let history = self.scrollback.len();
+        let mut mapped = points.map(|point| {
+            point.and_then(|(row, col)| {
+                let row = history.checked_add_signed(row as isize)?;
+                (row < history + self.rows.len() && col < old_cols).then_some((row, col))
+            })
+        });
+        let mut evicted = 0;
 
         if new_cols != old_cols {
             // A wrapped history tail continues into the first visible row.
@@ -847,7 +906,12 @@ impl GridStorage {
             };
             let continuation = old_scrollback.split_off(boundary);
             let prefix_rows = continuation.len();
-            self.scrollback = Self::reflow_scrollback(old_scrollback, new_cols);
+            let mut prefix_points = mapped.map(|point| point.filter(|(row, _)| *row < boundary));
+            let mut visible_points = mapped.map(|point| {
+                point.and_then(|(row, col)| row.checked_sub(boundary).map(|row| (row, col)))
+            });
+            self.scrollback =
+                Self::reflow_scrollback_with_points(old_scrollback, new_cols, &mut prefix_points);
             self.recalculate_scrollback_bytes();
 
             // Expand only the crossing history line, moving its graphemes.
@@ -860,7 +924,12 @@ impl GridStorage {
                 .chain(old_visible);
             let cursor_info = Some((cursor_row.saturating_add(prefix_rows), cursor_col));
             let (reflowed, tracked_cursor) =
-                Self::reflow_rows_with_cursor(rows, new_cols, cursor_info);
+                Self::reflow_rows_with_points(rows, new_cols, cursor_info, &mut visible_points);
+            mapped = std::array::from_fn(|index| {
+                prefix_points[index].or_else(|| {
+                    visible_points[index].map(|(row, col)| (self.scrollback.len() + row, col))
+                })
+            });
             self.rows = reflowed;
             if let Some(pos) = tracked_cursor {
                 new_cursor = pos;
@@ -905,7 +974,7 @@ impl GridStorage {
             if max_push > 0 {
                 let visible = self.rows.split_off(max_push);
                 for row in std::mem::replace(&mut self.rows, visible) {
-                    self.push_scrollback(row);
+                    evicted += self.push_scrollback(row);
                 }
             }
             rows_pushed_top = max_push;
@@ -926,7 +995,19 @@ impl GridStorage {
         new_cursor.1 = new_cursor.1.min(new_cols.saturating_sub(1));
 
         // Enforce scrollback limit after reflow (reflow can change line count)
-        self.enforce_scrollback_limits();
+        evicted += self.enforce_scrollback_limits();
+
+        let history = self.scrollback.len();
+        *points = mapped.map(|point| {
+            point.and_then(|(row, col)| {
+                let row = row.checked_sub(evicted)?;
+                if row >= history + self.rows.len() || col >= new_cols {
+                    return None;
+                }
+                let signed = i64::try_from(row).ok()? - i64::try_from(history).ok()?;
+                Some((i32::try_from(signed).ok()?, col))
+            })
+        });
 
         self.cols = new_cols;
         (new_cursor, rows_pushed_top)
@@ -934,26 +1015,65 @@ impl GridStorage {
 
     /// Reflow compact history one logical line at a time. This avoids expanding
     /// the complete archive into a second full-width rich-cell buffer.
+    #[cfg(test)]
     fn reflow_scrollback(rows: VecDeque<CompactRow>, new_cols: usize) -> VecDeque<CompactRow> {
+        Self::reflow_scrollback_with_points(rows, new_cols, &mut [None; 2])
+    }
+
+    fn reflow_scrollback_with_points(
+        rows: VecDeque<CompactRow>,
+        new_cols: usize,
+        points: &mut ReflowPoints,
+    ) -> VecDeque<CompactRow> {
         let mut result = VecDeque::new();
         let mut logical_line = Vec::new();
+        let source = *points;
+        *points = [None; 2];
+        let mut offsets = [None; 2];
 
-        for mut row in rows {
+        for (row_index, mut row) in rows.into_iter().enumerate() {
             if logical_line.is_empty() && row.retarget_width_without_reflow(new_cols) {
+                for (index, point) in source.into_iter().enumerate() {
+                    if let Some((target_row, mut col)) = point
+                        && target_row == row_index
+                        && col < row.content.len()
+                    {
+                        if row.get(col).is_some_and(|cell| cell.is_wide_char_spacer()) {
+                            col = col.saturating_sub(1);
+                        }
+                        points[index] = Some((result.len(), col));
+                    }
+                }
                 result.push_back(row);
                 continue;
             }
             let wrapped = row.wrapped;
-            logical_line.extend(row.into_reflow_cells());
+            let cells = row.into_reflow_cells();
+            capture_line_points(source, row_index, &cells, logical_line.len(), &mut offsets);
+            logical_line.extend(cells);
             if !wrapped {
                 let mut reflowed = Vec::new();
-                Self::rewrap_line(&mut reflowed, std::mem::take(&mut logical_line), new_cols);
+                Self::rewrap_line_with_cursor(
+                    &mut reflowed,
+                    std::mem::take(&mut logical_line),
+                    new_cols,
+                    None,
+                    &mut offsets,
+                );
+                finish_line_points(points, &mut offsets, result.len(), new_cols);
                 result.extend(reflowed.into_iter().map(CompactRow::from_row));
             }
         }
         if !logical_line.is_empty() {
             let mut reflowed = Vec::new();
-            Self::rewrap_line(&mut reflowed, logical_line, new_cols);
+            Self::rewrap_line_with_cursor(
+                &mut reflowed,
+                logical_line,
+                new_cols,
+                None,
+                &mut offsets,
+            );
+            finish_line_points(points, &mut offsets, result.len(), new_cols);
             result.extend(reflowed.into_iter().map(CompactRow::from_row));
         }
         result
@@ -969,13 +1089,26 @@ impl GridStorage {
     /// and returns the new (row, col) in the output. This is critical for keeping
     /// the cursor at the correct position after resize, which prevents the shell's
     /// SIGWINCH response from corrupting content.
+    #[cfg(test)]
     fn reflow_rows_with_cursor(
         rows: impl IntoIterator<Item = Row>,
         new_cols: usize,
         cursor: Option<(usize, usize)>,
     ) -> (Vec<Row>, Option<(usize, usize)>) {
+        Self::reflow_rows_with_points(rows, new_cols, cursor, &mut [None; 2])
+    }
+
+    fn reflow_rows_with_points(
+        rows: impl IntoIterator<Item = Row>,
+        new_cols: usize,
+        cursor: Option<(usize, usize)>,
+        points: &mut ReflowPoints,
+    ) -> (Vec<Row>, Option<(usize, usize)>) {
         let mut result: Vec<Row> = Vec::new();
         let mut new_cursor: Option<(usize, usize)> = None;
+        let source = *points;
+        *points = [None; 2];
+        let mut offsets = [None; 2];
 
         // Group rows into logical lines using the `wrapped` flag.
         let mut line_cells: Vec<Cell> = Vec::new();
@@ -987,6 +1120,13 @@ impl GridStorage {
             let is_wrapped = row.is_wrapped();
             let row_len = row.len();
             let cells = row.into_reflow_cells();
+            capture_line_points(
+                source,
+                row_idx,
+                &cells,
+                if in_logical_line { line_cells.len() } else { 0 },
+                &mut offsets,
+            );
 
             if in_logical_line {
                 // Check if cursor is in this row of the logical line
@@ -1017,7 +1157,9 @@ impl GridStorage {
                     line_cells,
                     new_cols,
                     cursor_cell_offset.take(),
+                    &mut offsets,
                 );
+                finish_line_points(points, &mut offsets, output_start, new_cols);
 
                 // If cursor was in this logical line, compute its new position
                 if let Some(cell_offset) = mapped_cursor {
@@ -1042,7 +1184,9 @@ impl GridStorage {
                 line_cells,
                 new_cols,
                 cursor_cell_offset.take(),
+                &mut offsets,
             );
+            finish_line_points(points, &mut offsets, output_start, new_cols);
 
             if let Some(cell_offset) = mapped_cursor {
                 new_cursor = Some(Self::find_cursor_in_output(
@@ -1086,13 +1230,12 @@ impl GridStorage {
         (clamped_row, clamped_col)
     }
 
-    /// Re-wrap a single logical line (flat cell buffer) at the given column width
-    /// and append the resulting rows to `output`.
+    #[cfg(test)]
     fn rewrap_line(output: &mut Vec<Row>, cells: Vec<Cell>, cols: usize) {
-        let _ = Self::rewrap_line_with_cursor(output, cells, cols, None);
+        Self::rewrap_line_with_cursor(output, cells, cols, None, &mut [None; 2]);
     }
 
-    /// Translate one cursor offset alongside the cell moves, without allocating
+    /// Translate the cursor and selection offsets alongside the cell moves, without allocating
     /// a per-cell mapping. Comparisons use original source indices; only the
     /// returned offset includes transformations before the cursor.
     fn rewrap_line_with_cursor(
@@ -1100,9 +1243,20 @@ impl GridStorage {
         mut cells: Vec<Cell>,
         cols: usize,
         cursor: Option<usize>,
+        points: &mut [Option<usize>; 2],
     ) -> Option<usize> {
         use super::cell::CellFlags;
         let mut mapped_cursor = cursor;
+        let source = *points;
+        *points = [None; 2];
+        let first_row = output.len();
+        let mut record = |source_index, target| {
+            for (index, point) in source.into_iter().enumerate() {
+                if point == Some(source_index) {
+                    points[index] = Some(target);
+                }
+            }
+        };
 
         // Only default padding is disposable. Text-empty cells can still own
         // backgrounds, rendition, protection, hyperlinks, or block geometry.
@@ -1140,7 +1294,9 @@ impl GridStorage {
                     // grapheme in its sole cell without a wide flag and consume
                     // the old spacer; never discard user text during reflow.
                     if cols < 2 {
-                        let (_, mut leader) = cells.next().expect("peeked wide cell exists");
+                        let (index, mut leader) = cells.next().expect("peeked wide cell exists");
+                        let target = (output.len() - first_row) * cols + row_cells.len();
+                        record(index, target);
                         leader.flags.remove(CellFlags::WIDE_CHAR);
                         row_cells.push(leader);
                         if cells
@@ -1148,6 +1304,7 @@ impl GridStorage {
                             .is_some_and(|(_, cell)| cell.is_wide_char_spacer())
                         {
                             let (index, _) = cells.next().expect("peeked spacer exists");
+                            record(index, target);
                             if cursor.is_some_and(|offset| offset >= index) {
                                 mapped_cursor =
                                     mapped_cursor.map(|offset| offset.saturating_sub(1));
@@ -1166,6 +1323,7 @@ impl GridStorage {
                         break;
                     }
                     let (index, mut leader) = cells.next().expect("peeked wide cell exists");
+                    record(index, (output.len() - first_row) * cols + row_cells.len());
                     leader.flags.insert(CellFlags::WIDE_CHAR);
                     row_cells.push(leader);
                     // Push the spacer if it exists
@@ -1173,7 +1331,9 @@ impl GridStorage {
                         .peek()
                         .is_some_and(|(_, cell)| cell.is_wide_char_spacer())
                     {
-                        row_cells.push(cells.next().expect("peeked spacer exists").1);
+                        let (index, spacer) = cells.next().expect("peeked spacer exists");
+                        record(index, (output.len() - first_row) * cols + row_cells.len());
+                        row_cells.push(spacer);
                     } else {
                         // Rebuild coverage from the surviving leader after a
                         // one-column collapse. Preserve its hyperlink and
@@ -1197,7 +1357,9 @@ impl GridStorage {
                         mapped_cursor = mapped_cursor.map(|offset| offset.saturating_sub(1));
                     }
                 } else {
-                    row_cells.push(cells.next().expect("peeked cell exists").1);
+                    let (index, cell) = cells.next().expect("peeked cell exists");
+                    record(index, (output.len() - first_row) * cols + row_cells.len());
+                    row_cells.push(cell);
                 }
             }
 
@@ -1555,6 +1717,39 @@ mod tests {
         assert_eq!(new_col, 0);
         // The visible area should contain the last 3 rows of content
         assert_eq!(row_text(&storage, 2), "LINE9");
+    }
+
+    #[test]
+    fn reflow_points_drop_discarded_padding_and_orphan_spacers() {
+        let mut row = Row::new(5);
+        row.get_mut(0).unwrap().set_char('a');
+        let mut points = [Some((0, 0)), Some((0, 3))];
+        let compact = GridStorage::reflow_scrollback_with_points(
+            VecDeque::from([CompactRow::from_row(row.clone())]),
+            8,
+            &mut points,
+        );
+        assert_eq!(compact.len(), 1);
+        assert_eq!(points, [Some((0, 0)), None]);
+
+        row.get_mut(1)
+            .unwrap()
+            .flags
+            .insert(CellFlags::WIDE_CHAR_SPACER);
+        row.get_mut(2).unwrap().set_char('b');
+        for compact in [false, true] {
+            let mut points = [Some((0, 1)), Some((0, 2))];
+            if compact {
+                GridStorage::reflow_scrollback_with_points(
+                    VecDeque::from([CompactRow::from_row(row.clone())]),
+                    8,
+                    &mut points,
+                );
+            } else {
+                GridStorage::reflow_rows_with_points([row.clone()], 8, None, &mut points);
+            }
+            assert_eq!(points, [None, Some((0, 1))]);
+        }
     }
 
     #[test]

@@ -3,6 +3,36 @@ use crate::plugin::hooks::{HookResponse, Plugin, PluginCommand};
 
 #[cfg(unix)]
 #[test]
+fn native_width_resize_retains_reflowed_text_without_restoring_old_drag_geometry() {
+    use termeric_core::Point;
+    for split in [false, true] {
+        let mut app = if split {
+            divider_owner_fixture()
+        } else {
+            scrollbar_owner_fixture()
+        };
+        let terminal = app.active_terminal_mut().unwrap();
+        terminal.resize(5, 6);
+        terminal.process("\x1bc\x1b[3Jab界Zxy".as_bytes());
+        app.begin_native_selection(MouseButton::Left, Point::new(0, 0));
+        app.extend_native_selection(Point::new(1, 1));
+        app.active_terminal_mut().unwrap().resize(3, 6);
+        app.extend_native_selection(Point::new(0, 1));
+        app.finish_native_selection();
+        assert!(!app.mouse_pressed);
+        assert!(app.mouse_state.selection.is_none());
+        assert_eq!(
+            app.active_terminal()
+                .unwrap()
+                .get_selection_text()
+                .as_deref(),
+            Some("ab界Zxy")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_height_resize_keeps_canonical_text_but_cancels_old_drag_coordinates() {
     use termeric_core::Point;
     for split in [false, true] {

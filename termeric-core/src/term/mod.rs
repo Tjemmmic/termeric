@@ -2278,13 +2278,24 @@ impl Terminal {
             .filter_map(|row| shell_logical_anchor(&self.grid, row).map(|anchor| (row, anchor)))
             .collect::<Vec<_>>();
         let same_columns = self.cols == cols;
-        let primary_shift = self.grid.resize_with_row_shift(cols, rows);
+        let mut primary_points = if !same_columns && !self.alt_screen_active {
+            self.selection_reflow_points()
+        } else {
+            [None; 2]
+        };
+        let primary_shift = self
+            .grid
+            .resize_with_points(cols, rows, &mut primary_points);
         let resize_blank = Cell {
             flags: CellFlags::DIRTY,
             ..Cell::default()
         };
-        if same_columns && !self.alt_screen_active {
-            self.remap_selection_after_height_resize(primary_shift, rows);
+        if !self.alt_screen_active {
+            if same_columns {
+                self.remap_selection_after_height_resize(primary_shift, rows);
+            } else {
+                self.restore_reflow_selection(primary_points);
+            }
             self.repair_multicells_with_selection(&resize_blank);
         } else {
             self.grid.repair_multicells(&resize_blank);
@@ -2308,9 +2319,20 @@ impl Terminal {
                 row,
                 scroll_offset: self.grid.scroll_offset(),
             });
-        let alternate_shift = self.alt_grid.resize_with_row_shift(cols, rows);
-        if same_columns && self.alt_screen_active {
-            self.remap_selection_after_height_resize(alternate_shift, rows);
+        let mut alternate_points = if !same_columns && self.alt_screen_active {
+            self.selection_reflow_points()
+        } else {
+            [None; 2]
+        };
+        let alternate_shift = self
+            .alt_grid
+            .resize_with_points(cols, rows, &mut alternate_points);
+        if self.alt_screen_active {
+            if same_columns {
+                self.remap_selection_after_height_resize(alternate_shift, rows);
+            } else {
+                self.restore_reflow_selection(alternate_points);
+            }
             self.repair_multicells_with_selection(&resize_blank);
         } else {
             self.alt_grid.repair_multicells(&resize_blank);
@@ -6367,6 +6389,219 @@ mod tests {
             term.set_selection(Some(selection));
             assert_eq!(term.get_selection_text().as_deref(), Some("ab 界Z"));
         }
+    }
+
+    #[test]
+    fn stream_selection_reflow_round_trips_unicode_and_endpoint_direction() {
+        for ty in [SelectionType::Simple, SelectionType::Semantic] {
+            for reverse in [false, true] {
+                for spacer_start in [false, true] {
+                    let mut term = Terminal::new(5, 6);
+                    term.process("ab界Zxy".as_bytes());
+                    let mut start = Point::new(0, if spacer_start { 3 } else { 0 });
+                    let mut end = Point::new(1, 1);
+                    if reverse {
+                        std::mem::swap(&mut start, &mut end);
+                    }
+                    let mut selection = Selection::new(start, ty);
+                    selection.update(end);
+                    selection.finish();
+                    term.set_selection(Some(selection));
+                    let text = term.get_selection_text();
+                    for cols in [3, 1, 7, 2, 5] {
+                        term.resize(cols, 20);
+                        assert_eq!(
+                            term.get_selection_text(),
+                            text,
+                            "type={ty:?} reverse={reverse} spacer={spacer_start} cols={cols}"
+                        );
+                        let selection = term.selection().unwrap();
+                        assert_eq!(selection.ty, ty);
+                        assert!(!selection.active);
+                        assert_eq!(selection.start > selection.end, reverse);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reflow_selection_crosses_compact_history_viewport_boundary_without_aliasing() {
+        for reverse in [false, true] {
+            let mut term = Terminal::new(5, 2);
+            term.process("prefix\r\nab界ZxyzQrst".as_bytes());
+            let locate = |term: &Terminal, character| {
+                (-(term.grid().scrollback_len() as i32)..term.rows() as i32)
+                    .find_map(|row| {
+                        let cells = term.grid().row_at_offset(row).unwrap();
+                        (0..cells.len())
+                            .find(|&col| {
+                                cells
+                                    .get(col)
+                                    .is_some_and(|cell| cell.content.char() == Some(character))
+                            })
+                            .map(|col| Point::new(row, col))
+                    })
+                    .unwrap()
+            };
+            let mut start = locate(&term, 'a');
+            let mut end = locate(&term, 't');
+            if reverse {
+                std::mem::swap(&mut start, &mut end);
+            }
+            let mut selection = Selection::new(start, SelectionType::Simple);
+            selection.update(end);
+            term.set_selection(Some(selection));
+            for cols in [3, 1, 9, 4, 5] {
+                term.resize(cols, 2);
+                assert_eq!(
+                    term.get_selection_text().as_deref(),
+                    Some("ab界ZxyzQrst"),
+                    "cols={cols} reverse={reverse}"
+                );
+                assert_eq!(
+                    term.selection().unwrap().start > term.selection().unwrap().end,
+                    reverse
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reflow_selection_matches_retained_character_identities_across_history_limits() {
+        let locate = |term: &Terminal, character| {
+            (-(term.grid().scrollback_len() as i32)..term.rows() as i32).find_map(|row| {
+                let cells = term.grid().row_at_offset(row).unwrap();
+                (0..cells.len())
+                    .find(|&col| {
+                        cells
+                            .get(col)
+                            .is_some_and(|cell| cell.content.char() == Some(character))
+                    })
+                    .map(|col| Point::new(row, col))
+            })
+        };
+        for limit in [0, 1, 8] {
+            for cols in [1, 2, 4, 7, 12] {
+                for rows in [1, 3, 8] {
+                    for (first, last) in
+                        [('A', 'B'), ('C', 'J'), ('K', 'N'), ('O', 'V'), ('S', 'V')]
+                    {
+                        for reverse in [false, true] {
+                            let mut term = Terminal::new(8, 3);
+                            term.grid_mut().set_scrollback_limit(limit);
+                            term.process(b"AB\r\nCDEFGHIJ\r\nKLMN\r\nOPQRSTUV");
+                            let (Some(mut start), Some(mut end)) =
+                                (locate(&term, first), locate(&term, last))
+                            else {
+                                continue;
+                            };
+                            if reverse {
+                                std::mem::swap(&mut start, &mut end);
+                            }
+                            let mut selection = Selection::new(start, SelectionType::Simple);
+                            selection.update(end);
+                            term.set_selection(Some(selection));
+                            let original = term.get_selection_text();
+                            term.resize(cols, rows);
+                            if let (Some(mut start), Some(mut end)) =
+                                (locate(&term, first), locate(&term, last))
+                            {
+                                if reverse {
+                                    std::mem::swap(&mut start, &mut end);
+                                }
+                                let selection =
+                                    term.selection().expect("both selected endpoints survived");
+                                assert_eq!(
+                                    (selection.start, selection.end),
+                                    (start, end),
+                                    "limit={limit} cols={cols} rows={rows}"
+                                );
+                                assert_eq!(term.get_selection_text(), original);
+                            } else {
+                                assert!(
+                                    term.selection().is_none(),
+                                    "lost endpoint must not alias retained text"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn width_reflow_retires_evicted_clipped_padding_and_geometric_selections() {
+        for limit in [0, 1] {
+            let mut term = Terminal::new(8, 3);
+            term.grid_mut().set_scrollback_limit(limit);
+            term.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx");
+            let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+            selection.update(Point::new(0, 3));
+            term.set_selection(Some(selection));
+            term.resize(2, 2);
+            assert!(term.selection().is_none());
+        }
+        let mut clipped = Terminal::new(8, 3);
+        clipped.process(b"abcdefgh\r\nijklmnop\r\nqrstuvwx\x1b[H");
+        clipped.set_selection(Some(Selection::new(
+            Point::new(2, 1),
+            SelectionType::Simple,
+        )));
+        clipped.resize(2, 2);
+        assert!(clipped.selection().is_none());
+
+        for ty in [SelectionType::Block, SelectionType::Lines] {
+            let mut term = Terminal::new(8, 3);
+            term.process(b"abcdefgh");
+            let mut selection = Selection::new(Point::new(0, 0), ty);
+            selection.update(Point::new(0, 3));
+            term.set_selection(Some(selection));
+            term.resize(8, 4);
+            assert!(term.selection().is_some());
+            term.resize(4, 4);
+            assert!(term.selection().is_none());
+        }
+        let mut padding = Terminal::new(8, 3);
+        padding.process(b"a");
+        padding.set_selection(Some(Selection::new(
+            Point::new(0, 6),
+            SelectionType::Simple,
+        )));
+        padding.resize(4, 3);
+        assert!(padding.selection().is_none());
+    }
+
+    #[test]
+    fn width_reflow_maps_live_stream_selection_but_retires_frozen_projection() {
+        for alternate in [false, true] {
+            let mut term = Terminal::new(5, 6);
+            if alternate {
+                term.process(b"\x1b[?1049h");
+            }
+            term.process("ab界Zxy".as_bytes());
+            let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+            selection.update(Point::new(1, 1));
+            term.set_selection(Some(selection));
+            term.process(b"\x1b[?2026h");
+            term.resize(3, 6);
+            assert!(term.selection().is_none());
+            term.process(b"\x1b[?2026l");
+            assert_eq!(term.get_selection_text().as_deref(), Some("ab界Zxy"));
+        }
+    }
+
+    #[test]
+    fn width_resize_maps_existing_stream_selection_through_wide_padding() {
+        let mut term = Terminal::new(5, 4);
+        term.process("ab界Z".as_bytes());
+        let mut selection = Selection::new(Point::new(0, 0), SelectionType::Simple);
+        selection.update(Point::new(0, 4));
+        term.set_selection(Some(selection));
+        term.resize(3, 4);
+        assert_eq!(term.selection().unwrap().end, Point::new(1, 2));
+        assert_eq!(term.get_selection_text().as_deref(), Some("ab界Z"));
     }
 
     #[test]

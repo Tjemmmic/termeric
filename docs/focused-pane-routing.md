@@ -300,9 +300,26 @@ Hermetic tests use retained-row identities across cursor positions, heights,
 selection shapes/directions, and history limits, plus clipped multicells,
 primary/alternate frozen screens, and single/split-pane pointer reconciliation.
 
-Width-changing reflow still needs grapheme-level selection mapping; its old
-live anchors are not yet remapped by this height-only fix. This is not a claim
-that every grid mutation is covered. Native desktop acceptance remains deferred.
+Width-changing reflow now carries Simple/Semantic stream-selection endpoints
+alongside the existing cell moves. Two fixed-size tracking slots follow compact
+history, the history/viewport continuation, wide-character padding, one-column
+collapse/re-expansion, and final archival/eviction. No per-cell map or second
+copy of retained history is allocated. Valid wide-spacer anchors normalize to
+their grapheme leader; discarded padding, orphan spacers, evicted endpoints,
+and clipped bottom rows retire the selection rather than aliasing other text.
+Surviving stream selections retain their direction, type, and active state.
+Block and physical-line selections are deliberately retired on width changes:
+their old rectangular/row geometry cannot represent the same text after reflow.
+Actual multicell repair damage is checked against the new column geometry.
+Frozen projections and native drag geometry keep the resize policy above.
+
+Hermetic tests cover Unicode round trips, both endpoint directions, compact
+history fast paths, crossing history/viewport lines, retained-character identity
+across widths/heights/history limits, clipped and evicted endpoints, discarded
+padding/orphan spacers, frozen primary/alternate screens, and single/split-pane
+pointer reconciliation. This is not a claim that every grid mutation or the
+separate keyboard copy-mode bookmark lifecycle is covered. Native desktop
+acceptance remains deferred.
 
 ## Filtered selection and accessible text
 

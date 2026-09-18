@@ -170,12 +170,21 @@ impl Grid {
     /// Return the exact number of viewport rows archived during resize. This
     /// is a selection translation only when the column count is unchanged.
     pub(crate) fn resize_with_row_shift(&mut self, cols: usize, rows: usize) -> usize {
+        self.resize_with_points(cols, rows, &mut [None; 2])
+    }
+
+    pub(crate) fn resize_with_points(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        points: &mut [Option<(i32, usize)>; 2],
+    ) -> usize {
         if self.cols != cols || self.rows != rows {
             self.mark_rows_changed();
         }
         let ((new_row, new_col), rows_pushed_top) =
             self.storage
-                .resize(cols, rows, self.cursor.row, self.cursor.col);
+                .resize_with_points(cols, rows, self.cursor.row, self.cursor.col, points);
         self.cols = cols;
         self.rows = rows;
         self.cursor.row = new_row;
