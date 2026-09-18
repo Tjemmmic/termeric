@@ -2504,7 +2504,6 @@ mod unix {
     use super::*;
     use flate2::{Decompress, FlushDecompress, Status};
     use std::collections::{HashMap, HashSet};
-    #[cfg(any(test, not(target_os = "linux")))]
     use std::ffi::CString;
     use std::fs::{self, File, Permissions};
     use std::io::{self, Write};
@@ -3079,9 +3078,11 @@ mod unix {
                     .as_file()
                     .metadata()
                     .map_err(|error| TransactionError::io(&id, "inspect staging file", error))?;
-                let published = temporary
-                    .persist_noclobber(&entry.path)
-                    .map_err(|error| TransactionError::io(&id, "publish file", error.error))?;
+                let destination = PublicationTarget::open(&entry.path)
+                    .map_err(|error| TransactionError::io(&id, "pin destination parent", error))?;
+                let published = destination
+                    .publish(temporary)
+                    .map_err(|error| TransactionError::io(&id, "publish file", error))?;
                 created.push(CreatedPath {
                     path: entry.path.clone(),
                     device: identity.dev(),
@@ -3325,6 +3326,87 @@ mod unix {
             }
         }
         Ok(())
+    }
+
+    struct PublicationTarget {
+        #[cfg(target_os = "linux")]
+        parent: File,
+        path: PathBuf,
+    }
+
+    impl PublicationTarget {
+        fn open(path: &Path) -> io::Result<Self> {
+            let name = path.file_name().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "missing destination name")
+            })?;
+            let bytes = name.as_bytes();
+            if !path.is_absolute()
+                || bytes.is_empty()
+                || bytes.len() > 255
+                || bytes.contains(&0)
+                || path
+                    .components()
+                    .any(|part| matches!(part, Component::ParentDir))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "invalid publication destination",
+                ));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::fd::{AsRawFd, FromRawFd};
+
+                #[repr(C)]
+                struct OpenHow {
+                    flags: u64,
+                    mode: u64,
+                    resolve: u64,
+                }
+
+                let parent = CString::new(path.parent().unwrap().as_os_str().as_bytes())
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in parent"))?;
+                let how = OpenHow {
+                    flags: (libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
+                    mode: 0,
+                    resolve: libc::RESOLVE_NO_SYMLINKS,
+                };
+                // SAFETY: the NUL-terminated path and initialized open_how live
+                // throughout the call. Success returns a new owned descriptor.
+                let descriptor = unsafe {
+                    libc::syscall(
+                        libc::SYS_openat2,
+                        libc::AT_FDCWD,
+                        parent.as_ptr(),
+                        &how,
+                        std::mem::size_of::<OpenHow>(),
+                    )
+                };
+                if descriptor < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                // SAFETY: the successful syscall's descriptor has no other owner.
+                let parent = unsafe { File::from_raw_fd(descriptor as _) };
+                let path =
+                    PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd())).join(name);
+                Ok(Self { parent, path })
+            }
+            // Actual host transfers are Linux-only. Preserve the internal Unix
+            // transaction test implementation without claiming equivalent safety.
+            #[cfg(not(target_os = "linux"))]
+            Ok(Self { path: path.into() })
+        }
+
+        fn publish(self, temporary: NamedTempFile) -> io::Result<File> {
+            // Keep the parent descriptor alive until persistence completes. This
+            // deliberately follows only our own trusted procfs reference, never
+            // the original destination ancestors. The staging source is still
+            // named; protecting its name and rollback unlink races is separate.
+            let result = temporary.persist_noclobber(&self.path);
+            #[cfg(target_os = "linux")]
+            drop(self.parent);
+            result.map_err(|error| error.error)
+        }
     }
 
     fn stage_file(path: &Path) -> io::Result<NamedTempFile> {
@@ -4465,6 +4547,117 @@ mod unix {
         }
 
         #[test]
+        #[cfg(target_os = "linux")]
+        fn publication_retains_parent_after_ancestor_replacement() {
+            for symbolic in [false, true] {
+                for replace_ancestor in [false, true] {
+                    let root = tempdir().unwrap();
+                    let ancestor = root.path().join("ancestor");
+                    let parent = ancestor.join("parent");
+                    fs::create_dir_all(&parent).unwrap();
+                    let target = PublicationTarget::open(&parent.join("published")).unwrap();
+                    let mut staged = NamedTempFile::new_in(root.path()).unwrap();
+                    staged.write_all(b"payload").unwrap();
+                    prepare_staged_file(staged.as_file(), 0o400, Some(-1)).unwrap();
+                    let identity = staged.as_file().metadata().unwrap();
+                    let replaced = if replace_ancestor { &ancestor } else { &parent };
+                    let moved = root.path().join("moved");
+                    fs::rename(replaced, &moved).unwrap();
+                    let outside = root.path().join("outside");
+                    let replacement = if symbolic { &outside } else { replaced };
+                    fs::create_dir(replacement).unwrap();
+                    let replacement_parent = if replace_ancestor {
+                        let nested = replacement.join("parent");
+                        fs::create_dir(&nested).unwrap();
+                        nested
+                    } else {
+                        replacement.clone()
+                    };
+                    if symbolic {
+                        std::os::unix::fs::symlink(&outside, replaced).unwrap();
+                    }
+                    let before = fs::metadata(&replacement_parent).unwrap();
+                    let published = target.publish(staged).unwrap();
+                    let metadata = published.metadata().unwrap();
+                    assert_eq!(
+                        (metadata.dev(), metadata.ino()),
+                        (identity.dev(), identity.ino())
+                    );
+                    assert_eq!(metadata.permissions().mode() & 0o777, 0o400);
+                    assert_eq!((metadata.mtime(), metadata.mtime_nsec()), (-1, 999_999_999));
+                    let moved_parent = if replace_ancestor {
+                        moved.join("parent")
+                    } else {
+                        moved
+                    };
+                    assert_eq!(
+                        fs::read(moved_parent.join("published")).unwrap(),
+                        b"payload"
+                    );
+                    assert!(!replacement_parent.join("published").exists());
+                    let after = fs::metadata(&replacement_parent).unwrap();
+                    assert_eq!(
+                        (after.mtime(), after.mtime_nsec()),
+                        (before.mtime(), before.mtime_nsec())
+                    );
+                }
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn publication_refuses_symlink_parents_and_invalid_destinations() {
+            let root = tempdir().unwrap();
+            let directory = root.path().join("directory");
+            fs::create_dir_all(directory.join("nested")).unwrap();
+            let link = root.path().join("link");
+            std::os::unix::fs::symlink(&directory, &link).unwrap();
+            for path in [link.join("file"), link.join("nested/file")] {
+                assert!(PublicationTarget::open(&path).is_err());
+            }
+            for path in [
+                PathBuf::from("relative/file"),
+                PathBuf::from("/"),
+                directory.join("../escape"),
+                directory.join("bad\0name"),
+                directory.join("x".repeat(256)),
+            ] {
+                assert!(PublicationTarget::open(&path).is_err(), "{path:?}");
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn publication_never_overwrites_existing_symlinks() {
+            for dangling in [false, true] {
+                let root = tempdir().unwrap();
+                let victim = root.path().join("victim");
+                if !dangling {
+                    fs::write(&victim, b"keep").unwrap();
+                }
+                let destination = root.path().join("destination");
+                std::os::unix::fs::symlink(&victim, &destination).unwrap();
+                let before = fs::symlink_metadata(&destination).unwrap();
+                let staged = NamedTempFile::new_in(root.path()).unwrap();
+                let staging_path = staged.path().to_owned();
+                let error = PublicationTarget::open(&destination)
+                    .unwrap()
+                    .publish(staged)
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+                assert!(!staging_path.exists());
+                let after = fs::symlink_metadata(&destination).unwrap();
+                assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+                assert_eq!(fs::read_link(&destination).unwrap(), victim);
+                if dangling {
+                    assert!(!victim.exists());
+                } else {
+                    assert_eq!(fs::read(&victim).unwrap(), b"keep");
+                }
+            }
+        }
+
+        #[test]
         fn staged_file_metadata_is_complete_before_publication() {
             for mtime in [None, Some(-1), Some(0), Some(1_700_000_000_123_456_789)] {
                 for mode in [0o000, 0o400, 0o640] {
@@ -4484,7 +4677,10 @@ mod unix {
                     });
                     assert_eq!((prepared.mtime(), prepared.mtime_nsec()), expected);
                     assert_eq!(prepared.permissions().mode() & 0o777, mode);
-                    let published = staged.persist_noclobber(&destination).unwrap();
+                    let published = PublicationTarget::open(&destination)
+                        .unwrap()
+                        .publish(staged)
+                        .unwrap();
                     let after = published.metadata().unwrap();
                     assert_eq!((after.dev(), after.ino()), (prepared.dev(), prepared.ino()));
                     assert_eq!((after.mtime(), after.mtime_nsec()), expected);
@@ -4537,8 +4733,11 @@ mod unix {
             staged.write_all(b"new").unwrap();
             let staged_path = staged.path().to_path_buf();
             prepare_staged_file(staged.as_file(), 0o000, Some(-1)).unwrap();
-            let error = staged.persist_noclobber(&destination).unwrap_err();
-            assert_eq!(error.error.kind(), io::ErrorKind::AlreadyExists);
+            let error = PublicationTarget::open(&destination)
+                .unwrap()
+                .publish(staged)
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
             drop(error);
             assert!(!staged_path.exists());
             let after = fs::metadata(&destination).unwrap();

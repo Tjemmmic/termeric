@@ -79,7 +79,20 @@ accepted. Empty paths, NUL, traversal components, oversized components,
 non-directory or symbolic-link ancestors, existing destination entries,
 duplicates, and inconsistent sizes fail closed. Destination state is checked
 when metadata arrives and again immediately before commit. Regular-file
-publication uses no-clobber rename semantics.
+publication uses no-clobber semantics. On Linux, its destination parent is
+pinned with `openat2(RESOLVE_NO_SYMLINKS)` before publication, rejecting symlinks
+in any parent component. Publication addresses that retained directory through
+`/proc/self/fd`, so renaming or replacing a parent afterward cannot redirect
+the destination write. If renamed, the original directory receives the file,
+not the replacement at its old pathname. This requires `openat2` and accessible
+procfs; failure does not retry the original destination path. The `O_PATH`
+parent handle does not require directory read permission. See the
+[Linux resolution contract](https://man7.org/linux/man-pages/man2/openat2.2.html).
+Deterministic regressions replace both immediate parents and higher ancestors
+with directories or symlinks, and verify retained file identity/metadata,
+untouched replacements, and refusal to overwrite regular files or symlinks.
+This does not pin the named staging source, close ancestor races during other
+creation operations, or make rollback's identity-check-then-unlink atomic.
 
 Hard links may name only a regular file ID in the same transfer. Symbolic links
 support Kitty's `fid:`, `fid_abs:`, and `path:` forms. `fid` targets must name an
